@@ -16,10 +16,6 @@
     <div id="root" class="max-w-6xl mx-auto"></div>
 
     <script type="text/babel">
-        // When hosted (e.g. GitHub Pages), the viewer auto-loads this file
-        // from the same directory as the page. If the fetch fails (file
-        // missing, or opening the HTML locally via file://), the manual
-        // upload input still works as before.
         const DATA_URL = 'nodes.json';
 
         // Turn a normalized header key back into a display label,
@@ -174,8 +170,7 @@
         // ------------------------------------------------------------------
         // Signature labels: derive "inputs → output" type summaries from
         // each table, resolving "Same as <port>" references, so headings
-        // read e.g. "surfaceshader" or "boolean → float, integer" instead
-        // of just "Signature 2 of 3".
+        // read e.g. "surfaceshader" or "boolean → float, integer"
         // ------------------------------------------------------------------
         const SAME_AS_RE = /^same as\s+(\S+?)(?:\s+or\s+(.+))?$/i;
 
@@ -330,22 +325,7 @@
                     .catch(() => setAutoLoad('failed'));
             }, []);
 
-            const handleFileUpload = (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    try {
-                        const parsedData = JSON.parse(e.target.result);
-                        applyData(parsedData, file.name);
-                    } catch (error) {
-                        alert("Error parsing JSON file. Make sure it's valid.");
-                        console.error(error);
-                    }
-                };
-                reader.readAsText(file);
-            };
+            // (Manual upload removed: the page auto-loads DATA_URL only.)
 
             const toggleLib = (lib) => {
                 setExpandedLibs(prev => ({ ...prev, [lib]: !prev[lib] }));
@@ -357,9 +337,10 @@
             };
 
             // ----------------------------------------------------------------
-            // Documentation stats + "no docs" filter + name search
+            // Documentation stats + tristate doc filter + name search
             // ----------------------------------------------------------------
-            const [undocFilter, setUndocFilter] = React.useState(false);
+            // 'all' | 'documented' | 'undocumented'
+            const [docFilter, setDocFilter] = React.useState('all');
             const [searchQuery, setSearchQuery] = React.useState('');
 
             const stats = React.useMemo(() => {
@@ -382,13 +363,14 @@
             const treeData = React.useMemo(() => {
                 if (!jsonData) return jsonData;
                 const query = searchQuery.trim().toLowerCase();
-                if (!undocFilter && !query) return jsonData;
+                if (docFilter === 'all' && !query) return jsonData;
                 const filtered = {};
                 Object.entries(jsonData).forEach(([lib, groups]) => {
                     Object.entries(groups).forEach(([group, nodes]) => {
                         const kept = {};
                         Object.entries(nodes).forEach(([name, info]) => {
-                            if (undocFilter && !isUndocumented(info)) return;
+                            if (docFilter === 'undocumented' && !isUndocumented(info)) return;
+                            if (docFilter === 'documented' && isUndocumented(info)) return;
                             if (query && !name.toLowerCase().includes(query)) return;
                             kept[name] = info;
                         });
@@ -399,7 +381,7 @@
                     });
                 });
                 return filtered;
-            }, [jsonData, undocFilter, searchQuery]);
+            }, [jsonData, docFilter, searchQuery]);
 
             // While searching, show all matches regardless of stored
             // expansion state; clearing the query restores the prior state.
@@ -427,12 +409,11 @@
                 setExpandedGroups({});
             };
 
-            const toggleUndocFilter = () => {
-                const next = !undocFilter;
-                setUndocFilter(next);
-                if (next && jsonData) {
-                    // Expand everything that contains undocumented nodes so the
-                    // filtered view is a complete overview, not collapsed folders.
+            const applyDocFilter = (mode) => {
+                setDocFilter(mode);
+                if (mode === 'undocumented' && jsonData) {
+                    // The undocumented set is usually small: expand everything
+                    // containing such nodes so the view is a complete overview.
                     const libs = {}, groups = {};
                     Object.entries(jsonData).forEach(([lib, gs]) => {
                         Object.entries(gs).forEach(([group, nodes]) => {
@@ -469,57 +450,48 @@
                 <div className="space-y-6">
                     <div className="border-b border-gray-700 pb-4">
                         <h1 className="text-3xl font-bold text-blue-400">MaterialX Node Previewer</h1>
-                        <p className="text-gray-400 mt-2">Upload your generated <code>materialx_rich_docs.json</code> to preview the documentation.</p>
+                        <p className="text-gray-400 mt-2">Documentation browser for the MaterialX node libraries.</p>
                     </div>
 
-                    {/* Data source: auto-load status + manual upload/override */}
-                    <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700">
-                        {autoLoad === 'loading' && (
-                            <div className="text-sm text-gray-400">Loading <code>{DATA_URL}</code>…</div>
-                        )}
-                        {autoLoad === 'done' && dataSource === DATA_URL && (
-                            <div className="text-sm text-gray-400 mb-3">
-                                Loaded <code className="text-gray-200">{DATA_URL}</code> automatically.
-                                Upload a different file below to override.
-                            </div>
-                        )}
-                        {autoLoad === 'failed' && !jsonData && (
-                            <div className="text-sm text-gray-400 mb-3">
-                                No <code>{DATA_URL}</code> found next to this page — upload one below.
-                            </div>
-                        )}
-                        {autoLoad !== 'loading' && (
-                            <input
-                                type="file"
-                                accept=".json"
-                                onChange={handleFileUpload}
-                                className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
-                            />
-                        )}
-                    </div>
+                    {/* Data source status: visible only while loading or on failure */}
+                    {autoLoad === 'loading' && (
+                        <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
+                            Loading <code>{DATA_URL}</code>…
+                        </div>
+                    )}
+                    {autoLoad === 'failed' && (
+                        <div className="bg-gray-800 p-4 rounded-lg shadow border border-amber-700/60 text-sm text-gray-300">
+                            Could not load <code className="text-amber-400">{DATA_URL}</code>.
+                        </div>
+                    )}
 
                     {jsonData && stats && (
                         <div className="flex items-center gap-3 flex-wrap text-sm">
                             <span className="bg-gray-800 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg">
                                 <span className="font-semibold text-white">{stats.total}</span> nodes total
                             </span>
-                            <button
-                                onClick={stats.undoc > 0 ? toggleUndocFilter : undefined}
-                                disabled={stats.undoc === 0}
-                                title={stats.undoc === 0
-                                    ? "Every node has documentation"
-                                    : (undocFilter ? "Click to show all nodes again" : "Click to show only nodes without documentation")}
-                                className={`px-3 py-1.5 rounded-lg border transition-colors ${
-                                    stats.undoc === 0
-                                        ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-default'
-                                        : undocFilter
-                                            ? 'bg-amber-600 border-amber-500 text-white'
-                                            : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700 cursor-pointer'
-                                }`}
-                            >
-                                <span className="font-semibold">{stats.undoc}</span> without docs
-                                {undocFilter && <span className="ml-2 text-amber-100 text-xs">✕ filtering — click to clear</span>}
-                            </button>
+                            <span className="bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-lg text-gray-300">
+                                <span className={`font-semibold ${stats.undoc > 0 ? 'text-amber-400' : 'text-white'}`}>{stats.undoc}</span> without docs
+                            </span>
+                            <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
+                                {[
+                                    { mode: 'all', label: 'Show all' },
+                                    { mode: 'documented', label: 'Only documented' },
+                                    { mode: 'undocumented', label: 'Only undocumented' },
+                                ].map(({ mode, label }, i) => (
+                                    <button
+                                        key={mode}
+                                        onClick={() => applyDocFilter(mode)}
+                                        className={`px-3 py-1.5 transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
+                                            docFilter === mode
+                                                ? 'bg-blue-600 text-white'
+                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                                        }`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     )}
 
@@ -528,56 +500,66 @@
 
                             {/* Left Sidebar: Hierarchical Tree Menu */}
                             <div className="md:col-span-1 bg-gray-800 p-4 rounded-lg shadow border border-gray-700 max-h-[75vh] overflow-y-auto custom-scrollbar">
-                                <div className="flex items-center justify-between mb-4 border-b border-gray-700 pb-2">
-                                    <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
-                                        Node Library
-                                        {undocFilter && <span className="ml-2 normal-case tracking-normal text-amber-400 font-normal">(no docs only)</span>}
-                                    </h3>
-                                    <div className="flex items-center gap-1">
-                                        <button
-                                            onClick={expandAll}
-                                            title="Expand all"
-                                            className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />
-                                            </svg>
-                                        </button>
-                                        <button
-                                            onClick={collapseAll}
-                                            title="Collapse all"
-                                            className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
-                                            </svg>
-                                        </button>
+                                {/* Sticky header: title, expand/collapse, search stay
+                                    visible while the tree scrolls underneath. Negative
+                                    margins make the block span the container's padding
+                                    so scrolled content can't peek through at the edges. */}
+                                <div className="sticky top-0 z-10 bg-gray-800 -mx-4 -mt-4 px-4 pt-4 pb-1 mb-2">
+                                    <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
+                                        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+                                            Node Library
+                                            {docFilter !== 'all' && (
+                                                <span className="ml-2 normal-case tracking-normal text-amber-400 font-normal">
+                                                    ({docFilter === 'undocumented' ? 'no docs only' : 'documented only'})
+                                                </span>
+                                            )}
+                                        </h3>
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={expandAll}
+                                                title="Expand all"
+                                                className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                            >
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />
+                                                </svg>
+                                            </button>
+                                            <button
+                                                onClick={collapseAll}
+                                                title="Collapse all"
+                                                className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                            >
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
+                                                </svg>
+                                            </button>
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="relative mb-3">
-                                    <input
-                                        type="text"
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                        placeholder="Search nodes..."
-                                        className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                                    />
-                                    {searchQuery && (
-                                        <button
-                                            onClick={() => setSearchQuery('')}
-                                            title="Clear search"
-                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
-                                        >
-                                            ✕
-                                        </button>
+                                    <div className="relative pb-2">
+                                        <input
+                                            type="text"
+                                            value={searchQuery}
+                                            onChange={(e) => setSearchQuery(e.target.value)}
+                                            placeholder="Search nodes..."
+                                            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                        />
+                                        {searchQuery && (
+                                            <button
+                                                onClick={() => setSearchQuery('')}
+                                                title="Clear search"
+                                                className="absolute right-2 top-[0.9rem] -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                                            >
+                                                ✕
+                                            </button>
+                                        )}
+                                    </div>
+                                    {matchCount !== null && (
+                                        <div className="text-xs text-gray-500 pb-1">
+                                            {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+                                        </div>
                                     )}
                                 </div>
-                                {matchCount !== null && (
-                                    <div className="text-xs text-gray-500 mb-2">
-                                        {matchCount} {matchCount === 1 ? 'match' : 'matches'}
-                                    </div>
-                                )}
-                                {(undocFilter || forceOpen) && Object.keys(treeData).length === 0 && (
+                                {(docFilter !== 'all' || forceOpen) && Object.keys(treeData).length === 0 && (
                                     <div className="text-xs text-gray-500 italic">No matching nodes.</div>
                                 )}
                                 <div className="space-y-1 text-sm">
