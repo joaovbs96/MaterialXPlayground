@@ -470,8 +470,12 @@
                             <span className="bg-gray-800 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg">
                                 <span className="font-semibold text-white">{stats.total}</span> nodes total
                             </span>
-                            <span className="bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-lg text-gray-300">
-                                <span className={`font-semibold ${stats.undoc > 0 ? 'text-amber-400' : 'text-white'}`}>{stats.undoc}</span> without docs
+                            <span className={`px-3 py-1.5 rounded-lg border ${
+                                stats.undoc > 0
+                                    ? 'bg-gray-800 border-amber-700/60 text-amber-400'
+                                    : 'bg-gray-800 border-gray-700 text-gray-500'
+                            }`}>
+                                <span className="font-semibold">{stats.undoc}</span> without docs
                             </span>
                             <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
                                 {[
@@ -499,20 +503,16 @@
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
 
                             {/* Left Sidebar: Hierarchical Tree Menu */}
-                            <div className="md:col-span-1 bg-gray-800 p-4 rounded-lg shadow border border-gray-700 max-h-[75vh] overflow-y-auto custom-scrollbar">
+                            <div className="md:col-span-1 bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[75vh] overflow-y-auto custom-scrollbar">
                                 {/* Sticky header: title, expand/collapse, search stay
-                                    visible while the tree scrolls underneath. Negative
-                                    margins make the block span the container's padding
-                                    so scrolled content can't peek through at the edges. */}
-                                <div className="sticky top-0 z-10 bg-gray-800 -mx-4 -mt-4 px-4 pt-4 pb-1 mb-2">
+                                    visible while the tree scrolls underneath. The scroll
+                                    container itself is unpadded; the sticky block and the
+                                    tree wrapper carry their own padding so the sticky
+                                    element sits flush at top with no overlap. */}
+                                <div className="sticky top-0 z-10 bg-gray-800 px-4 pt-4 pb-1">
                                     <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
                                         <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
                                             Node Library
-                                            {docFilter !== 'all' && (
-                                                <span className="ml-2 normal-case tracking-normal text-amber-400 font-normal">
-                                                    ({docFilter === 'undocumented' ? 'no docs only' : 'documented only'})
-                                                </span>
-                                            )}
                                         </h3>
                                         <div className="flex items-center gap-1">
                                             <button
@@ -559,7 +559,8 @@
                                         </div>
                                     )}
                                 </div>
-                                {(docFilter !== 'all' || forceOpen) && Object.keys(treeData).length === 0 && (
+                                <div className="px-4 pb-4 pt-1">
+                                {docFilter !== 'all' && !forceOpen && Object.keys(treeData).length === 0 && (
                                     <div className="text-xs text-gray-500 italic">No matching nodes.</div>
                                 )}
                                 <div className="space-y-1 text-sm">
@@ -619,6 +620,7 @@
                                             )}
                                         </div>
                                     ))}
+                                </div>
                                 </div>
                             </div>
 
