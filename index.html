@@ -10,7 +10,7 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
+
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 
@@ -21,11 +21,36 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen p-3 sm:p-8 font-sans">
-    <div id="root" class="max-w-6xl mx-auto"></div>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-2 sm:p-6 font-sans">
+    <div id="root" class="max-w-[1600px] mx-auto"></div>
 
     <script type="text/babel">
         const DATA_URL = 'nodes.json';
+
+        // Project links (shown in the top menu + footer).
+        const REPO_URL = 'https://github.com/joaovbs96/MaterialXNodeDocs';
+        const ISSUES_URL = REPO_URL + '/issues';
+        const SPEC_DOCS_URL = 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification';
+
+        // Permalinks: a node is addressed by lib/group/name in the URL hash,
+        // e.g. #/stdlib/math/add — hash routing needs no server config, so it
+        // works as-is on GitHub Pages. These convert between a selection and
+        // the hash both ways.
+        const selToHash = (sel) =>
+            sel ? '#/' + [sel.lib, sel.group, sel.name].map(encodeURIComponent).join('/') : '';
+        const hashToSel = (data, hash) => {
+            if (!data || !hash) return null;
+            const body = hash.replace(/^#\/?/, '');
+            if (!body) return null;
+            const parts = body.split('/').map((s) => { try { return decodeURIComponent(s); } catch (e) { return s; } });
+            if (parts.length < 3) return null;
+            const name = parts.slice(2).join('/'); // names shouldn't contain '/', but be safe
+            const [lib, group] = parts;
+            if (data[lib] && data[lib][group] && data[lib][group][name]) {
+                return { lib, group, name, info: data[lib][group][name] };
+            }
+            return null;
+        };
 
         // Turn a normalized header key back into a display label,
         // e.g. "accepted_values" -> "Accepted Values".
@@ -211,6 +236,46 @@
             return [];
         };
 
+        // Build port tables (same shape the viewer renders) directly from a
+        // node's MaterialX nodedefs, for nodes with NO spec documentation. One
+        // table per nodedef (overload/signature); inputs first, then outputs.
+        // `vecToArray` normalizes the MaterialX vector<->array binding.
+        const buildAutoTablesFromDefs = (defs) => {
+            const tables = [];
+            for (const def of defs) {
+                const ports = {};
+                let anyEnum = false;
+                const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
+                    : (def.getInputs ? def.getInputs() : null));
+                for (const inp of inputs) {
+                    let dv = '', enumv = '';
+                    try { dv = (inp.getValueString && inp.getValueString()) || ''; } catch (e) { /* none */ }
+                    try { enumv = (inp.getAttribute && inp.getAttribute('enum')) || ''; } catch (e) { /* none */ }
+                    const row = { description: '', type: inp.getType(), default: dv };
+                    if (enumv) { row.accepted_values = enumv; anyEnum = true; }
+                    ports[inp.getName()] = row;
+                }
+                const outs = vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
+                    : (def.getOutputs ? def.getOutputs() : null));
+                if (outs.length === 0) {
+                    let t = 'output';
+                    try { t = def.getType(); } catch (e) { /* keep */ }
+                    ports['out'] = { description: 'Output', type: t, default: '' };
+                } else {
+                    for (const out of outs) {
+                        ports[out.getName()] = { description: 'Output', type: out.getType(), default: '' };
+                    }
+                }
+                if (Object.keys(ports).length) {
+                    const headers = anyEnum
+                        ? ['port', 'description', 'type', 'default', 'accepted_values']
+                        : ['port', 'description', 'type', 'default'];
+                    tables.push({ headers, ports });
+                }
+            }
+            return tables;
+        };
+
         // A node counts as undocumented when it has no port tables, no
         // notes, and no real description (the parser emits the fallback
         // string "No documentation available." for spec-less nodedefs).
@@ -379,6 +444,16 @@
                         locateFile: (path) => './js/' + path,
                     }))
                     .then((mx) => {
+                        // Expose the MaterialX library version (from the JS API)
+                        // for the top-menu badge; broadcast so the UI can update
+                        // whenever the WASM finishes loading.
+                        try {
+                            const ver = (mx.getVersionString && mx.getVersionString()) || null;
+                            if (ver) {
+                                window.__mtlxVersion = ver;
+                                window.dispatchEvent(new CustomEvent('mtlx-version', { detail: ver }));
+                            }
+                        } catch (e) { /* version is optional */ }
                         // WebGL 2 targets ESSL (GLSL ES 3.00) — NOT the desktop
                         // GLSL generator, whose #version 400 output won't compile
                         // in a browser. Build the generator + context once and
@@ -554,6 +629,28 @@
             } catch (_) { /* fall through to generic handling */ }
             if (e && e.message) return e.message;
             return String(e);
+        };
+
+        // CRITICAL WRITE PRIMITIVE — verified against the deployed
+        // wasm: the JS binding of setValueString is the TYPED
+        // setValue(value, type="string"), so writing a value RETYPES the
+        // input to "string". This single binding quirk caused every
+        // string-typed export and the colorspace nodedef failures. Writing
+        // the raw `value` attribute never touches the type.
+        const mxWriteValue = (inp, str, type) => {
+            try {
+                if (typeof inp.setAttribute === 'function') {
+                    inp.setAttribute('value', String(str));
+                    return;
+                }
+            } catch (e) { /* fall through */ }
+            try {
+                // Two-arg form sets value AND the correct type explicitly.
+                inp.setValueString(String(str), type || inp.getType());
+                return;
+            } catch (e) { /* fall through */ }
+            inp.setValueString(String(str));
+            try { if (type) inp.setType(type); } catch (e) { /* best-effort */ }
         };
 
         // MaterialX JS marshals std::vector either as a real JS array or as a
@@ -1140,6 +1237,8 @@
             });
             // Metadata for the .mtlx export (node element type, kind).
             const exportMetaRef = React.useRef(null);
+            // Live document + created node handles for the doc-based export.
+            const exportDocRef = React.useRef(null);
 
             // Write a plain JS value (number / bool / array) into the matching
             // three.js uniform. Arrays map onto Vector2/3/4 via .set(...).
@@ -1232,72 +1331,81 @@
             // nodes get a surfacematerial wrapper for drop-in use.
             const onExportMtlx = () => {
                 const meta = exportMetaRef.current;
-                if (!meta) return;
-                const esc = (s) => String(s)
-                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+                const ed = exportDocRef.current;
+                if (!meta || !ed || !ed.instance || !ed.doc) return;
                 const num = (n) => String(parseFloat(Number(n).toFixed(6)));
                 const fmt = (p, v) => {
                     if (p.type === 'boolean') return v ? 'true' : 'false';
-                    if (p.type === 'string') return esc(String(v));
                     if (Array.isArray(v)) return v.map(num).join(', ');
+                    if (p.type === 'string' || p.type === 'filename') return String(v);
                     return num(v);
                 };
-                // The previewed node's instance name mirrors the live graph so
-                // the wrappers reference it correctly.
-                const nodeInst = meta.kind === 'color' ? 'preview_node'
-                    : (meta.kind === 'bsdf' ? 'preview_bsdf' : 'preview_surface');
-                const lines = [
-                    '<?xml version="1.0"?>',
-                    '<materialx version="1.39">',
-                    '  <' + meta.nodeName + ' name="' + nodeInst + '" type="' + esc(meta.nodeType) + '">',
-                ];
+                // 1) Update the SAME document shadergen consumed with the
+                //    current UI values. Inputs not yet on the instance are
+                //    created bare and then copyContentFrom the nodedef's own
+                //    input element — the type attribute transfers verbatim in
+                //    C++, so no type string crosses the JS/wasm boundary
+                //    (both addInput's type argument and setType produced
+                //    string-typed inputs in this build).
+                // Numeric-tolerant equality against the nodedef default: a
+                // parameter the user left (or returned) at its default adds
+                // nothing to the file.
+                const eqDefault = (a, b) => {
+                    if (a == null || b == null) return false;
+                    if (Array.isArray(a) && Array.isArray(b)) {
+                        return a.length === b.length
+                            && a.every((x2, i2) => Math.abs(Number(x2) - Number(b[i2])) < 1e-6);
+                    }
+                    if (typeof a === 'number' || typeof b === 'number') {
+                        return Math.abs(Number(a) - Number(b)) < 1e-6;
+                    }
+                    return String(a) === String(b);
+                };
+                const typeReport = [];
                 for (const p of params) {
-                    if (p.readonly) continue; // geometric/stream defaults: leave to the nodedef
-                    const v = values[p.uniform] !== undefined ? values[p.uniform] : p.def;
-                    if (p.type === 'filename') {
-                        // Emitted when a file was picked OR a colorspace was
-                        // chosen (the attribute is meaningful even with an empty
-                        // value). The value is the picked file's NAME — place
-                        // the image next to the .mtlx.
-                        const csv = values['cs::' + p.input];
-                        if (v || csv) {
-                            lines.push('    <input name="' + esc(p.input) + '" type="filename" value="' + esc(v || '')
-                                + '"' + (csv ? ' colorspace="' + esc(csv) + '"' : '') + '/>');
-                        }
-                        continue;
-                    }
+                    if (p.readonly) continue;
+                    const v = values[p.uniform];
+                    if (p.type === 'filename' && !v) continue; // colorspace-only file inputs already sit on the doc
                     if (v == null) continue;
-                    lines.push('    <input name="' + esc(p.input) + '" type="' + esc(p.type) + '" value="' + fmt(p, v) + '"/>');
+                    try {
+                        if (p.type !== 'filename' && eqDefault(v, p.def)) {
+                            // Back at the nodedef default → make sure no stale
+                            // input (e.g. from an earlier export or override)
+                            // lingers on the instance, then omit it.
+                            if (ed.instance.getInput && ed.instance.getInput(p.input)) {
+                                try { ed.instance.removeInput(p.input); }
+                                catch (e2) { try { ed.instance.removeChild(p.input); } catch (e3) { /* leave it */ } }
+                            }
+                            continue;
+                        }
+                        const inp = ed.ensureInput(p.input, p.type);
+                        mxWriteValue(inp, fmt(p, v), p.type);
+                        let got = '?';
+                        try { got = String(inp.getType()); } catch (e2) { /* keep ? */ }
+                        typeReport.push(p.input + ':' + got + (got === p.type ? '' : ' (WANTED ' + p.type + ')'));
+                    } catch (e) { /* keep exporting the rest */ }
                 }
-                lines.push('  </' + meta.nodeName + '>');
-
-                // Re-emit the SAME wrappers the preview builds, so the exported
-                // document renders identically to what's on screen and is a
-                // complete, valid MaterialX graph on its own.
-                if (meta.kind === 'color') {
-                    let srcName = nodeInst;
-                    if (meta.outType !== 'color3' || meta.outputName) {
-                        const outAttr = meta.outputName ? ' output="' + esc(meta.outputName) + '"' : '';
-                        lines.push('  <convert name="preview_convert" type="color3">');
-                        lines.push('    <input name="in" type="' + esc(meta.outType) + '" nodename="' + nodeInst + '"' + outAttr + '/>');
-                        lines.push('  </convert>');
-                        srcName = 'preview_convert';
-                    }
-                    lines.push('  <surface_unlit name="preview_surface" type="surfaceshader">');
-                    lines.push('    <input name="emission_color" type="color3" nodename="' + srcName + '"/>');
-                    lines.push('  </surface_unlit>');
-                } else if (meta.kind === 'bsdf') {
-                    lines.push('  <surface name="preview_surface" type="surfaceshader">');
-                    lines.push('    <input name="bsdf" type="BSDF" nodename="' + nodeInst + '"/>');
-                    lines.push('  </surface>');
+                console.log('export input types (non-default only) →', typeReport.join(', ') || '(all at defaults)');
+                // 2) Serialize the DOCUMENT itself — no options, no
+                //    predicate, no fallback. The standard library is attached
+                //    via setDataLibrary (referenced, not contained), so the
+                //    plain write emits exactly the preview graph.
+                let xml = null;
+                try {
+                    xml = ed.mx.writeToXmlString(ed.doc);
+                } catch (e) {
+                    console.error('writeToXmlString failed:', mxErr(ed.mx, e));
+                    setError('Export failed: ' + mxErr(ed.mx, e));
+                    return;
                 }
-                // All three kinds terminate at a `preview_surface` surfaceshader;
-                // wrap it in a material so the document is directly renderable.
-                lines.push('  <surfacematerial name="M_' + esc(meta.nodeName) + '" type="material">');
-                lines.push('    <input name="surfaceshader" type="surfaceshader" nodename="preview_surface"/>');
-                lines.push('  </surfacematerial>');
-                lines.push('</materialx>', '');
-                const blob = new Blob([lines.join('\n')], { type: 'application/xml' });
+                if (xml.indexOf('<nodedef') !== -1) {
+                    // Should be impossible with setDataLibrary; surface loudly
+                    // rather than shipping a corrupted file.
+                    console.error('export unexpectedly contains library definitions — is setDataLibrary bound in this build?');
+                    setError('Export failed: document unexpectedly contains the standard library.');
+                    return;
+                }
+                const blob = new Blob([xml], { type: 'application/xml' });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
                 a.download = meta.nodeName + '.mtlx';
@@ -1356,25 +1464,40 @@
                         // surface_unlit.emission (converting to color3 first if
                         // needed). Everything else isn't a color surface.
                         const doc = mx.createDocument();
-                        doc.importLibrary(stdlib);
+                        // setDataLibrary REFERENCES the standard library
+                        // (nodedef matching, validation, and shadergen all
+                        // consult it) without making it part of the document —
+                        // so a plain writeToXmlString(doc) contains only OUR
+                        // nodes. importLibrary would bake megabytes of stdlib
+                        // into the doc, and the JS binding of XmlWriteOptions
+                        // exposes only writeXIncludeEnable (elementPredicate is
+                        // NOT bound), so there is no way to filter at write
+                        // time. Verified: all preview kinds generate and export
+                        // cleanly through the data library.
+                        if (typeof doc.setDataLibrary === 'function') {
+                            doc.setDataLibrary(stdlib);
+                        } else {
+                            // Ancient binding without setDataLibrary — exports
+                            // would include the library. Loud, not silent:
+                            console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
+                            doc.importLibrary(stdlib);
+                        }
 
                         // Translation graphs (nodedef nodegroup "translation",
                         // e.g. standard_surface_to_gltf_pbr) convert between
                         // shading models — rendering one directly is meaningless.
+                        let translationDef = null;
                         try {
                             const defs0 = vecToArray(doc.getMatchingNodeDefs(nodeName));
                             const grp = defs0.length && defs0[0].getNodeGroup ? String(defs0[0].getNodeGroup()) : '';
-                            if (grp.toLowerCase() === 'translation') {
-                                const eN = new Error(`No preview for "${nodeName}" — translation graphs convert between shading models and aren't directly renderable.`);
-                                eN.isNotice = true;
-                                throw eN;
-                            }
-                        } catch (probeErr) {
-                            if (probeErr.isNotice) throw probeErr;
-                            /* nodegroup probe is best-effort */
-                        }
+                            if (grp.toLowerCase() === 'translation') translationDef = defs0[0];
+                        } catch (probeErr) { /* nodegroup probe is best-effort */ }
 
-                        const rk = resolveNodeKind(doc, nodeName);
+                        // Translation graphs get their own kind: translation
+                        // node + target shader + material, wired automatically.
+                        const rk = translationDef
+                            ? { kind: 'translation', outType: 'multioutput', outputName: null, multiOutput: true, types: [] }
+                            : resolveNodeKind(doc, nodeName);
                         const { kind, outType, outputName, multiOutput, types } = rk;
                         // Element type for the .mtlx export: color-kind nodes use
                         // their resolved output type ('multioutput' when several),
@@ -1382,7 +1505,7 @@
                         exportMetaRef.current = {
                             nodeName,
                             kind,
-                            nodeType: kind === 'color'
+                            nodeType: (kind === 'color' || kind === 'translation')
                                 ? (multiOutput ? 'multioutput' : outType)
                                 : (rk.type || (kind === 'bsdf' ? 'BSDF' : 'surfaceshader')),
                             // Wiring needed to re-emit the EXACT previewed graph
@@ -1428,59 +1551,166 @@
                                         // input, not its value. Ensure the input
                                         // exists (empty value is valid) and tag it;
                                         // the CMS bakes the transform at codegen.
-                                        let inp = (nodeInst.getInput && nodeInst.getInput(inputName)) || null;
-                                        if (!inp) {
-                                            inp = nodeInst.addInput(inputName, 'filename');
-                                            try { inp.setValueString(''); } catch (e2) { /* ok */ }
-                                        }
-                                        forceType(inp, 'filename');
+                                        const inp = ensureTypedInput(nodeInst, inputName, 'filename');
                                         if (typeof inp.setColorSpace === 'function') inp.setColorSpace(String(value));
                                         else inp.setAttribute('colorspace', String(value));
                                         continue;
                                     }
-                                    let inp = (nodeInst.getInput && nodeInst.getInput(inputName)) || null;
-                                    if (!inp) inp = nodeInst.addInput(inputName, type || 'string');
-                                    forceType(inp, type || 'string');
-                                    inp.setValueString(Array.isArray(value) ? value.join(', ') : String(value));
+                                    const inp = ensureTypedInput(nodeInst, inputName, type || 'string');
+                                    mxWriteValue(inp, Array.isArray(value) ? value.join(', ') : String(value), type || 'string');
                                 } catch (e) { /* best-effort per input */ }
                             }
                         };
 
+                        // The previewed node instance + every node we create,
+                        // kept for the doc-based .mtlx export.
+                        let previewInstance = null;
+                        const createdNodes = [];
+                        // Create-or-fetch an input on `inst`, guaranteeing its
+                        // TYPE. In this wasm build both addInput's type argument
+                        // and setType have produced string-typed inputs, so NO
+                        // type string crosses the JS/wasm boundary on the
+                        // primary path: the input is created bare, then
+                        // copyContentFrom transfers the nodedef input's type
+                        // (and default) verbatim inside C++. A verification +
+                        // loud warning covers any remaining drift.
+                        const ensureTypedInput = (inst, inputName, wantedType) => {
+                            let inp = (inst.getInput && inst.getInput(inputName)) || null;
+                            let how = 'existing';
+                            if (!inp) {
+                                let defInput = null;
+                                try {
+                                    const cat = inst.getCategory ? inst.getCategory() : nodeName;
+                                    for (const d of vecToArray(doc.getMatchingNodeDefs(cat))) {
+                                        defInput = (d.getInput && d.getInput(inputName)) || null;
+                                        if (defInput) break;
+                                    }
+                                } catch (e) { defInput = null; }
+                                inp = inst.addInput(inputName);
+                                how = 'added-bare';
+                                if (defInput) {
+                                    try {
+                                        inp.copyContentFrom(defInput);
+                                        how = 'copied-from-nodedef';
+                                        // The copy brings the nodedef's UI/doc
+                                        // metadata along — meaningless on an
+                                        // instance and noisy in exports.
+                                        for (const attr2 of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
+                                            'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues']) {
+                                            try { inp.removeAttribute(attr2); } catch (e2) { /* absent */ }
+                                        }
+                                    } catch (e) { /* verify below */ }
+                                }
+                            }
+                            let got = '';
+                            try { got = String(inp.getType()); } catch (e) { got = '?'; }
+                            if (wantedType && got !== wantedType && how !== 'copied-from-nodedef') {
+                                try {
+                                    if (typeof inp.setType === 'function') inp.setType(wantedType);
+                                    else inp.setAttribute('type', wantedType);
+                                    got = String(inp.getType());
+                                } catch (e) { /* keep got */ }
+                            }
+                            if (wantedType && got !== wantedType) {
+                                console.warn('ensureTypedInput: "' + inputName + '" is "' + got + '" (wanted "' + wantedType + '"), path=' + how);
+                            }
+                            return inp;
+                        };
+                        const addTypedInput = (node, name2, type2) => ensureTypedInput(node, name2, type2);
+
                         if (kind === 'surface') {
                             renderable = doc.addNode(nodeName, 'preview_surface', 'surfaceshader');
                             applyOverrides(renderable);
+                            previewInstance = renderable;
+                            createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'bsdf') {
-                            applyOverrides(doc.addNode(nodeName, 'preview_bsdf', 'BSDF'));
+                            previewInstance = doc.addNode(nodeName, 'preview_bsdf', 'BSDF');
+                            applyOverrides(previewInstance);
+                            createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
-                            renderable.addInput('bsdf', 'BSDF').setNodeName('preview_bsdf');
+                            addTypedInput(renderable, 'bsdf', 'BSDF').setNodeName('preview_bsdf');
+                            createdNodes.push(renderable);
+                            needsLighting = true;
+                        } else if (kind === 'translation') {
+                            // Translation node (multi-output) + the TARGET shader
+                            // it translates to + a material. Every translation
+                            // output wires to the target's same-named input —
+                            // outputs carry an `_out` suffix the inputs don't
+                            // (verified against real MaterialX: all four stdlib
+                            // translation nodes map fully and generate).
+                            previewInstance = doc.addNode(nodeName, 'preview_node', 'multioutput');
+                            applyOverrides(previewInstance);
+                            createdNodes.push(previewInstance);
+                            const targetCat = nodeName.split('_to_')[1];
+                            renderable = doc.addNode(targetCat, 'preview_surface', 'surfaceshader');
+                            createdNodes.push(renderable);
+                            for (const out of vecToArray(translationDef.getOutputs ? translationDef.getOutputs() : null)) {
+                                const oName = out.getName();
+                                const iName = oName.slice(-4) === '_out' ? oName.slice(0, -4) : oName;
+                                const oT = out.getType ? out.getType() : 'color3';
+                                const oTypeStr = (oT && oT.getName) ? oT.getName() : String(oT);
+                                const inp = addTypedInput(renderable, iName, oTypeStr);
+                                inp.setNodeName('preview_node');
+                                inp.setAttribute('output', oName);
+                            }
+                            const mat = doc.addNode('surfacematerial', 'preview_material', 'material');
+                            addTypedInput(mat, 'surfaceshader', 'surfaceshader').setNodeName('preview_surface');
+                            createdNodes.push(mat);
                             needsLighting = true;
                         } else if (kind === 'color') {
                             // Multi-output nodes must be instantiated as
                             // 'multioutput'; the tapped output is selected via
                             // the downstream input's `output` attribute.
-                            applyOverrides(doc.addNode(nodeName, 'preview_node', multiOutput ? 'multioutput' : outType));
+                            previewInstance = doc.addNode(nodeName, 'preview_node', multiOutput ? 'multioutput' : outType);
+                            applyOverrides(previewInstance);
+                            createdNodes.push(previewInstance);
                             let srcName = 'preview_node';
                             if (outType !== 'color3' || outputName) {
                                 // Bridge the tapped output into a color3 emission.
                                 const conv = doc.addNode('convert', 'preview_convert', 'color3');
-                                connectToPreview(conv.addInput('in', outType), 'preview_node');
+                                connectToPreview(addTypedInput(conv, 'in', outType), 'preview_node');
+                                createdNodes.push(conv);
                                 srcName = 'preview_convert';
                             }
                             renderable = doc.addNode('surface_unlit', 'preview_surface', 'surfaceshader');
+                            createdNodes.push(renderable);
                             // surface_unlit's `emission` port is a FLOAT weight
                             // (default 1.0); the color3 belongs on `emission_color`.
                             // Adding an `emission` input typed color3 mismatches
                             // the nodedef's declared float, so NO nodedef matches
                             // the node instance → "Could not find a nodedef for
                             // node 'preview_surface'" for every color-kind node.
-                            renderable.addInput('emission_color', 'color3').setNodeName(srcName);
+                            addTypedInput(renderable, 'emission_color', 'color3').setNodeName(srcName);
                         } else {
                             const shown = (types || []).join(', ') || 'unknown';
                             const eN = new Error(`No preview for "${nodeName}" — it outputs ${shown}, which isn't a viewable color surface.`);
                             eN.isNotice = true; // informational, not a failure
                             throw eN;
                         }
+
+                        // Every preview graph carries a material so the doc is
+                        // directly renderable and exports as-is. (Translation
+                        // previews created theirs above.)
+                        if (kind !== 'translation') {
+                            try {
+                                const mat0 = doc.addNode('surfacematerial', 'preview_material', 'material');
+                                addTypedInput(mat0, 'surfaceshader', 'surfaceshader').setNodeName('preview_surface');
+                                createdNodes.push(mat0);
+                            } catch (matErr) { /* export falls back to wrapper-less doc */ }
+                        }
+
+                        // Doc-based export source: the LIVE pre-generation
+                        // document + the nodes we created. The export writes UI
+                        // values into these and serializes the DOCUMENT — never
+                        // the generated shader's uniform view.
+                        exportDocRef.current = {
+                            mx, doc,
+                            instance: previewInstance,
+                            created: createdNodes,
+                            // Closure keeps doc/nodedef context alive for export.
+                            ensureInput: (n2, t2) => ensureTypedInput(previewInstance, n2, t2),
+                        };
 
                         // Before generating: dump the constructed graph and run
                         // validate(), so graph-construction mistakes (bad convert
@@ -1668,7 +1898,7 @@
                         // (numeric/vector/color/bool/filename → edit in place); a
                         // string/enum input has no uniform, so editing it
                         // regenerates the shader (see `overrides`).
-                        const targetNode = kind === 'color' ? 'preview_node'
+                        const targetNode = (kind === 'color' || kind === 'translation') ? 'preview_node'
                             : (kind === 'bsdf' ? 'preview_bsdf' : 'preview_surface');
 
                         // Map introspected public uniforms back to input names,
@@ -2295,9 +2525,107 @@
             );
         };
 
+        // Auto-generated port table for nodes with no spec documentation:
+        // reads inputs/outputs (name, type, default, enum) directly from the
+        // node's nodedefs in the loaded standard library. Clearly disclaimed
+        // as machine-generated, since it is NOT part of the official docs.
+        const NodeDefPortsTable = ({ nodeName }) => {
+            const [rows, setRows] = React.useState(null); // null = loading
+            React.useEffect(() => {
+                let alive = true;
+                setRows(null);
+                getMxEnv().then(({ stdlib }) => {
+                    if (!alive) return;
+                    const byName = {};
+                    const order = [];
+                    const record = (el, kindLabel) => {
+                        const nm = el.getName();
+                        const key = kindLabel + ':' + nm;
+                        let ty = '';
+                        try { const t = el.getType && el.getType(); ty = (t && t.getName) ? t.getName() : String(t || ''); } catch (e) { ty = ''; }
+                        let val = '';
+                        try { val = (el.getValueString && el.getValueString()) || ''; } catch (e) { val = ''; }
+                        let en = '';
+                        try { en = (el.getAttribute && el.getAttribute('enum')) || ''; } catch (e) { en = ''; }
+                        if (!byName[key]) {
+                            byName[key] = { name: nm, kind: kindLabel, types: [], value: val, enums: en };
+                            order.push(key);
+                        }
+                        if (ty && byName[key].types.indexOf(ty) === -1) byName[key].types.push(ty);
+                    };
+                    try {
+                        for (const def of vecToArray(stdlib.getMatchingNodeDefs(nodeName))) {
+                            for (const inp of vecToArray(def.getInputs ? def.getInputs() : null)) record(inp, 'input');
+                            for (const out of vecToArray(def.getOutputs ? def.getOutputs() : null)) record(out, 'output');
+                        }
+                    } catch (e) { /* nodedef read is best-effort */ }
+                    if (alive) setRows(order.map((k) => byName[k]));
+                }).catch(() => { if (alive) setRows([]); });
+                return () => { alive = false; };
+            }, [nodeName]);
+            if (rows === null) {
+                return <div className="text-sm text-gray-500 italic">Reading ports from the nodedef…</div>;
+            }
+            if (!rows.length) {
+                return (
+                    <div className="bg-gray-900 border border-gray-700 rounded p-4 text-sm text-gray-500 italic">
+                        No specific ports defined or extracted for this node.
+                    </div>
+                );
+            }
+            return (
+                <div>
+                    <div className="text-xs text-amber-400/80 bg-amber-950/30 border border-amber-800/40 rounded px-3 py-2 mb-3">
+                        {'\u26A0'} This table was generated automatically from the node's nodedef in the standard library — it is not part of the official specification documents.
+                    </div>
+                    <div className="overflow-x-auto bg-gray-900 border border-gray-700 rounded-lg">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="text-left text-xs uppercase tracking-wider text-gray-400 border-b border-gray-700">
+                                    <th className="px-3 py-2">Port</th>
+                                    <th className="px-3 py-2">Kind</th>
+                                    <th className="px-3 py-2">Type(s)</th>
+                                    <th className="px-3 py-2">Default</th>
+                                    <th className="px-3 py-2">Accepted values</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((r) => (
+                                    <tr key={r.kind + ':' + r.name} className="border-b border-gray-800 last:border-0 align-top">
+                                        <td className="px-3 py-2 font-mono text-blue-300">{r.name}</td>
+                                        <td className="px-3 py-2 text-gray-400">{r.kind}</td>
+                                        <td className="px-3 py-2 font-mono text-purple-300">{r.types.join(', ')}</td>
+                                        <td className="px-3 py-2 font-mono text-amber-300 break-all">{r.value}</td>
+                                        <td className="px-3 py-2 font-mono text-green-300 break-words">{r.enums}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
         function App() {
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
+            const [copied, setCopied] = React.useState(false);
+            // Auto-generated port tables (from the nodedef) for undocumented
+            // nodes: { name, status: 'loading'|'ready'|'unavailable', tables }.
+            const [autoDoc, setAutoDoc] = React.useState(null);
+            // MaterialX library version (from the JS API), shown in the top menu.
+            const [mtlxVersion, setMtlxVersion] = React.useState(window.__mtlxVersion || null);
+            React.useEffect(() => {
+                if (window.__mtlxVersion) { setMtlxVersion(window.__mtlxVersion); return undefined; }
+                const onVer = (e) => setMtlxVersion(e.detail || window.__mtlxVersion || null);
+                window.addEventListener('mtlx-version', onVer);
+                // Warm the MaterialX module so the version resolves even before a
+                // preview renders (it caches; previews reuse it). One-time load
+                // only — the resource cost the "3D previews" toggle guards is the
+                // per-node render loop, not this.
+                getMxEnv().catch(() => {});
+                return () => window.removeEventListener('mtlx-version', onVer);
+            }, []);
 
             // Resolve doc links that point at a spec #node-... anchor to a
             // node in the loaded database (anchors and node names both get
@@ -2360,6 +2688,15 @@
                 setSelectedNode(null);
                 setDataSource(source);
 
+                // A permalink (#/lib/group/name) wins over the default first node.
+                const fromHash = hashToSel(parsedData, window.location.hash);
+                if (fromHash) {
+                    setExpandedLibs({ [fromHash.lib]: true });
+                    setExpandedGroups({ [`${fromHash.lib}-${fromHash.group}`]: true });
+                    setSelectedNode(fromHash);
+                    return;
+                }
+
                 // Expand the first library and group by default for convenience
                 const firstLib = Object.keys(parsedData)[0];
                 if (firstLib) {
@@ -2381,6 +2718,91 @@
                     }
                 }
             };
+
+            // Keep the address bar in sync with the selection (permalink), and
+            // react to back/forward + manual hash edits. pushState updates the
+            // bar WITHOUT firing hashchange, so no feedback loop; popstate
+            // handles history navigation.
+            React.useEffect(() => {
+                if (!selectedNode) return;
+                const h = selToHash(selectedNode);
+                if (window.location.hash !== h) {
+                    try { history.pushState(null, '', h); } catch (e) { window.location.hash = h; }
+                }
+            }, [selectedNode]);
+            React.useEffect(() => {
+                if (!jsonData) return undefined;
+                const onNav = () => {
+                    const sel = hashToSel(jsonData, window.location.hash);
+                    if (sel) {
+                        setExpandedLibs((p) => Object.assign({}, p, { [sel.lib]: true }));
+                        setExpandedGroups((p) => Object.assign({}, p, { [`${sel.lib}-${sel.group}`]: true }));
+                        setSelectedNode(sel);
+                    }
+                };
+                window.addEventListener('hashchange', onNav);
+                window.addEventListener('popstate', onNav);
+                return () => {
+                    window.removeEventListener('hashchange', onNav);
+                    window.removeEventListener('popstate', onNav);
+                };
+            }, [jsonData]);
+
+            const copyPermalink = () => {
+                const loc = window.location;
+                const url = loc.origin + loc.pathname + loc.search + selToHash(selectedNode);
+                const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1500); };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(url).then(done, () => {
+                        window.prompt('Copy this link:', url);
+                    });
+                } else {
+                    window.prompt('Copy this link:', url);
+                }
+            };
+
+            // For nodes with NO documentation, read the ports/types straight
+            // from the MaterialX nodedef (via the WASM API) and synthesize a
+            // table on the fly. Guarded so a stale fetch can't overwrite a
+            // newer selection.
+            React.useEffect(() => {
+                if (!selectedNode || !isUndocumented(selectedNode.info)) {
+                    setAutoDoc(null);
+                    return undefined;
+                }
+                const name = selectedNode.name;
+                let alive = true;
+                setAutoDoc({ name, status: 'loading', tables: [] });
+                getMxEnv()
+                    .then(({ mx, stdlib }) => {
+                        if (!alive) return;
+                        const doc = mx.createDocument();
+                        // setDataLibrary REFERENCES the standard library
+                        // (nodedef matching, validation, and shadergen all
+                        // consult it) without making it part of the document —
+                        // so a plain writeToXmlString(doc) contains only OUR
+                        // nodes. importLibrary would bake megabytes of stdlib
+                        // into the doc, and the JS binding of XmlWriteOptions
+                        // exposes only writeXIncludeEnable (elementPredicate is
+                        // NOT bound), so there is no way to filter at write
+                        // time. Verified: all preview kinds generate and export
+                        // cleanly through the data library.
+                        if (typeof doc.setDataLibrary === 'function') {
+                            doc.setDataLibrary(stdlib);
+                        } else {
+                            // Ancient binding without setDataLibrary — exports
+                            // would include the library. Loud, not silent:
+                            console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
+                            doc.importLibrary(stdlib);
+                        }
+                        const defs = vecToArray(doc.getMatchingNodeDefs(name));
+                        const tables = buildAutoTablesFromDefs(defs);
+                        if (!alive) return;
+                        setAutoDoc({ name, status: tables.length ? 'ready' : 'unavailable', tables });
+                    })
+                    .catch(() => { if (alive) setAutoDoc({ name, status: 'unavailable', tables: [] }); });
+                return () => { alive = false; };
+            }, [selectedNode]);
 
             // Auto-load the JSON sitting next to the page (works on any web
             // host incl. GitHub Pages; fails silently on file:// or 404,
@@ -2523,9 +2945,17 @@
             );
 
             const portTables = selectedNode ? getPortTables(selectedNode.info) : [];
+            // For undocumented nodes, fall back to the nodedef-generated tables.
+            const autoReady = autoDoc && selectedNode && autoDoc.name === selectedNode.name
+                && autoDoc.status === 'ready';
+            const isAutoTable = portTables.length === 0 && autoReady && autoDoc.tables.length > 0;
+            const autoLoading = autoDoc && selectedNode && autoDoc.name === selectedNode.name
+                && autoDoc.status === 'loading';
+            const effectiveTables = portTables.length > 0 ? portTables
+                : (isAutoTable ? autoDoc.tables : []);
             // One shared column set for all tables of the selected node,
             // so the stacked tables align perfectly.
-            const columns = portTables.length > 0 ? unionColumns(portTables) : [];
+            const columns = effectiveTables.length > 0 ? unionColumns(effectiveTables) : [];
             // Footnote references: map key -> {n, url, text}, numbered by
             // order of first appearance (the parser preserves that order).
             const references = (selectedNode && selectedNode.info.references) || [];
@@ -2533,23 +2963,49 @@
             references.forEach((r, i) => { refs[r.key] = { n: i + 1, url: r.url, text: r.text }; });
 
             return (
-                <div className="space-y-6">
+                <div className="space-y-4 sm:space-y-6">
                     <div className="border-b border-gray-700 pb-4 flex items-start justify-between gap-4 flex-wrap">
                         <div>
-                            <h1 className="text-3xl font-bold text-blue-400">MaterialX Node Previewer</h1>
-                            <p className="text-gray-400 mt-2">Documentation browser for the MaterialX node libraries.</p>
+                            <h1 className="text-2xl sm:text-3xl font-bold text-blue-400">MaterialX Node Previewer</h1>
+                            <p className="text-gray-400 mt-1 sm:mt-2 text-sm sm:text-base">Documentation browser for the MaterialX node libraries.</p>
                         </div>
-                        <button
-                            onClick={togglePreviews}
-                            title="Globally enable/disable the WebGL node previews (saves resources on slow machines)"
-                            className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex-none mt-1 ${
-                                showPreviews
-                                    ? 'bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700'
-                                    : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700'
-                            }`}
-                        >
-                            3D previews: {showPreviews ? 'On' : 'Off'}
-                        </button>
+                        <div className="flex items-center gap-2 flex-wrap mt-1">
+                            <a
+                                href={REPO_URL} target="_blank" rel="noopener noreferrer"
+                                title="View the source code on GitHub"
+                                className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors flex items-center gap-1.5"
+                            >
+                                <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="currentColor" aria-hidden="true">
+                                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                                </svg>
+                                Source code
+                            </a>
+                            <a
+                                href={ISSUES_URL} target="_blank" rel="noopener noreferrer"
+                                title="Report a bug or request a feature"
+                                className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                            >
+                                Feedback / issues
+                            </a>
+                            <a
+                                href={SPEC_DOCS_URL} target="_blank" rel="noopener noreferrer"
+                                title="MaterialX specification & documentation (version reported by the MaterialX JS API)"
+                                className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 transition-colors"
+                            >
+                                Spec/Docs: {mtlxVersion ? 'v' + mtlxVersion : '…'}
+                            </a>
+                            <button
+                                onClick={togglePreviews}
+                                title="Globally enable/disable the WebGL node previews (saves resources on slow machines)"
+                                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                                    showPreviews
+                                        ? 'bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700'
+                                        : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700'
+                                }`}
+                            >
+                                3D previews: {showPreviews ? 'On' : 'Off'}
+                            </button>
+                        </div>
                     </div>
 
                     {/* Data source status: visible only while loading or on failure */}
@@ -2599,7 +3055,7 @@
                     )}
 
                     {jsonData && (
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-6">
 
                             {/* Left Sidebar: Hierarchical Tree Menu */}
                             <div className="md:col-span-1 bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-[75vh] overflow-y-auto custom-scrollbar">
@@ -2758,6 +3214,27 @@
                                                         Official spec {'\u2197'}
                                                     </a>
                                                 )}
+                                                <button
+                                                    onClick={copyPermalink}
+                                                    title="Copy a direct link to this node"
+                                                    className={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
+                                                        copied
+                                                            ? 'bg-green-700/30 border-green-600/60 text-green-300'
+                                                            : 'bg-gray-700 border-gray-600 text-gray-300 hover:text-white hover:border-blue-500/60'
+                                                    }`}
+                                                >
+                                                    {copied ? (
+                                                        <React.Fragment>
+                                                            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-7.5 7.5a1 1 0 01-1.4 0L3.3 9.7a1 1 0 011.4-1.4l3.3 3.29 6.8-6.79a1 1 0 011.4 0z" clipRule="evenodd"/></svg>
+                                                            Copied
+                                                        </React.Fragment>
+                                                    ) : (
+                                                        <React.Fragment>
+                                                            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="currentColor" aria-hidden="true"><path d="M8.5 3A3.5 3.5 0 005 6.5v1a1 1 0 002 0v-1A1.5 1.5 0 018.5 5h5A1.5 1.5 0 0115 6.5v5A1.5 1.5 0 0113.5 13h-1a1 1 0 000 2h1a3.5 3.5 0 003.5-3.5v-5A3.5 3.5 0 0013.5 3h-5z"/><path d="M6.5 7A3.5 3.5 0 003 10.5v5A3.5 3.5 0 006.5 19h5a3.5 3.5 0 003.5-3.5v-1a1 1 0 00-2 0v1a1.5 1.5 0 01-1.5 1.5h-5A1.5 1.5 0 015 15.5v-5A1.5 1.5 0 016.5 9h1a1 1 0 000-2h-1z"/></svg>
+                                                            Copy link
+                                                        </React.Fragment>
+                                                    )}
+                                                </button>
                                             </div>
                                         </div>
 
@@ -2775,25 +3252,39 @@
                                             className="text-gray-300 leading-relaxed mb-8 text-base sm:text-lg"
                                         />
 
-                                        {/* One rendered table per markdown table in the spec */}
-                                        {portTables.length > 0 ? (
+                                        {/* Port tables: from the spec, or — for
+                                            undocumented nodes — synthesized from
+                                            the MaterialX nodedef with a disclaimer. */}
+                                        {effectiveTables.length > 0 ? (
                                             <div className="space-y-6">
-                                                {portTables.map((table, i) => {
+                                                {isAutoTable && (
+                                                    <div className="bg-blue-950/40 border border-blue-800/60 text-blue-200/90 text-sm rounded-lg px-4 py-3 flex items-start gap-2">
+                                                        <span aria-hidden="true">{'\u2139\uFE0F'}</span>
+                                                        <span>
+                                                            <span className="font-semibold text-blue-200">Auto-generated from the nodedef.</span>{' '}
+                                                            This node has no specification documentation, so its ports,
+                                                            types, and defaults were read directly from the MaterialX
+                                                            node definition. Descriptions are unavailable and the
+                                                            details may differ from an official write-up.
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                {effectiveTables.map((table, i) => {
                                                     const label = signatureLabel(table);
                                                     return (
                                                         <div key={i}>
-                                                            {portTables.length > 1 && (
+                                                            {effectiveTables.length > 1 && (
                                                                 <div className="flex items-baseline gap-2 mb-2">
                                                                     {label ? (
                                                                         <span className="font-mono text-xs sm:text-sm text-gray-200 break-words min-w-0">{label}</span>
                                                                     ) : (
                                                                         <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                                                                            Signature {i + 1} of {portTables.length}
+                                                                            Signature {i + 1} of {effectiveTables.length}
                                                                         </span>
                                                                     )}
                                                                     {label && (
                                                                         <span className="text-xs text-gray-500">
-                                                                            {i + 1} / {portTables.length}
+                                                                            {i + 1} / {effectiveTables.length}
                                                                         </span>
                                                                     )}
                                                                 </div>
@@ -2803,10 +3294,12 @@
                                                     );
                                                 })}
                                             </div>
-                                        ) : (
+                                        ) : autoLoading ? (
                                             <div className="bg-gray-900 border border-gray-700 rounded p-4 text-sm text-gray-500 italic">
-                                                No specific ports defined or extracted for this node.
+                                                Generating a port table from the node definition…
                                             </div>
+                                        ) : (
+                                            <NodeDefPortsTable nodeName={selectedNode.name} />
                                         )}
 
                                         {/* Notes: prose after/between tables (sub-headings, equations, ...) */}
@@ -2857,7 +3350,7 @@
                         The 3D node previews and parameter values shown here are under development and may not
                         match reference renders. For any bugs, please report them in the {' '}
                         <a
-                            href="https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification"
+                            href={ISSUES_URL}
                             target="_blank" rel="noopener noreferrer"
                             className="underline text-amber-200 hover:text-amber-100"
                         >
