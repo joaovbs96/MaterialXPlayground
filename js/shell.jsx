@@ -143,7 +143,11 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
-            'js/doc-ui.jsx',
+            'js/docs/doc-links.jsx',
+            'js/docs/rich-text.jsx',
+            'js/docs/port-tables.jsx',
+            'js/docs/impl-matrix.jsx',
+            'js/docs/sidebar.jsx',
             'js/node-preview.jsx',
         ],
         app: 'js/docs-app.jsx',

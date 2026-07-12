@@ -1652,6 +1652,9 @@ const MTLX_ICON_PATHS = {
     'copy-check': { filled: false, inner: '<path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /><path d="M11 14l1.5 1.5l3 -3" />' },
     'pin': { filled: false, inner: '<path d="M9 4v6l-2 4v2h10v-2l-2 -4v-6" /><path d="M12 16l0 5" /><path d="M8 4l8 0" />' },
     'pin-filled': { filled: true, inner: '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M8 4a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a1 1 0 0 1 -1 1v5.532l2.629 5.256a1 1 0 0 1 -.895 1.212l-.099 0h-4.635l0 4a1 1 0 0 1 -.883 .993l-.117 .007a1 1 0 0 1 -.993 -.883l-.007 -.117l0 -4h-4.635a1 1 0 0 1 -.99 -1.141l.017 -.088l2.628 -5.239v-5.532a1 1 0 0 1 -1 -1z" />' },
+    'chevron-right': { filled: false, inner: '<path d="M9 6l6 6l-6 6"/>' },
+    'chevron-down': { filled: false, inner: '<path d="M6 9l6 6l6 -6"/>' },
+    'check': { filled: false, inner: '<path d="M5 12l5 5l10 -10"/>' },
 };
 
 // React component (plain createElement — this file stays JSX-free).
