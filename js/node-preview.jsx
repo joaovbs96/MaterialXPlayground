@@ -8,7 +8,13 @@
         // parameter panel go side-by-side starting at the md: breakpoint
         // instead of lg:, since the iframe never reaches lg: width.
         const EMBED = !!window.__MTLX_EMBED;
-        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable }) => {
+        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable, active = true }) => {
+            // Lets a future multi-view shell pause this preview's WebGL render
+            // loop while its parent view is backgrounded, without unmounting.
+            // Standalone index.html never passes this prop, so it defaults true
+            // and nothing changes there.
+            const activeRef = React.useRef(active);
+            activeRef.current = active;
             // Node categories are NOT unique across libraries ('add' exists in
             // stdlib [math] AND pbrlib [pbr: BSDF/EDF/VDF]) — nodeName alone
             // cannot identify the selected node. nodeKey does, and drives
@@ -724,6 +730,7 @@
                             autoRotate: rotating,
                             envBackground: envBg,
                             isMounted: () => mounted,
+                            isActive: () => activeRef.current,
                             debugKind: kind,
                         });
                         if (!view) return; // unmounted mid-setup (already disposed)

@@ -16,6 +16,17 @@
 (function () {
     'use strict';
 
+    // Are we running inside the single-page shell (index.html — also served
+    // as the bare "/" directory root, e.g. on GitHub Pages), which hosts the
+    // docs/viewer/graph views as hash-routed views instead of separate
+    // pages? When true, nav links must switch views via hash instead of
+    // navigating to another page. Every shell-only behavior below is
+    // guarded behind this flag so classic (non-shell) pages are unaffected.
+    // The old standalone pages (material-viewer.html, node-graph.html,
+    // app.html) are now just redirect stubs that never load this script, so
+    // the non-shell branch below is retained only as dead-code safety.
+    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname);
+
     // The site name. Change it here and it changes everywhere
     // (header, and — via window.SITE_TITLE — anything React renders).
     var SITE_TITLE = 'MaterialX Playground';
@@ -30,17 +41,33 @@
     LINKS.issues = LINKS.repo + '/issues';
 
     // Pages of the site, in nav order. `match` tests location.pathname;
-    // index.html is also the "/" default.
+    // index.html is also the "/" default. Inside the shell (app.html) the
+    // three views live behind hash routes instead: docs is the canonical
+    // "#/" (or any hash that isn't a shell route), viewer is "#!viewer",
+    // graph is "#!graph".
     var NAV = [
-        { id: 'docs', label: 'Node Library & Documentation', href: 'index.html', match: /(^|\/)(index\.html)?$/ },
-        { id: 'viewer', label: 'Material Viewer', href: 'material-viewer.html', match: /material-viewer\.html$/ },
-        { id: 'graph', label: 'Node Graph Editor', href: 'node-graph.html', match: /node-graph\.html$/ },
+        { id: 'docs', label: 'Node Library & Documentation', href: 'index.html', shellHref: '#/', match: /(^|\/)(index\.html)?$/ },
+        { id: 'viewer', label: 'Material Viewer', href: 'material-viewer.html', shellHref: '#!viewer', match: /material-viewer\.html$/ },
+        { id: 'graph', label: 'Node Graph Editor', href: 'node-graph.html', shellHref: '#!graph', match: /node-graph\.html$/ },
     ];
 
-    var path = window.location.pathname || '';
+    // Given the current hash, which shell view is active? Anything that
+    // isn't the viewer/graph hash route falls back to docs (this includes
+    // "#/", "", and any docs-internal hash like "#/some/node").
+    function shellActiveId(hash) {
+        if (hash === '#!viewer') { return 'viewer'; }
+        if (hash === '#!graph') { return 'graph'; }
+        return 'docs';
+    }
+
     var activeId = 'docs';
-    for (var i = 0; i < NAV.length; i++) {
-        if (NAV[i].match.test(path)) { activeId = NAV[i].id; }
+    if (IS_SHELL) {
+        activeId = shellActiveId(window.location.hash || '');
+    } else {
+        var path = window.location.pathname || '';
+        for (var i = 0; i < NAV.length; i++) {
+            if (NAV[i].match.test(path)) { activeId = NAV[i].id; }
+        }
     }
 
     var tabBase = 'flex items-center px-3 sm:px-4 border-b-2 transition-colors text-sm font-medium';
@@ -49,7 +76,9 @@
 
     var tabs = NAV.map(function (item) {
         var active = item.id === activeId;
-        return '<a href="' + item.href + '"' +
+        var href = IS_SHELL ? item.shellHref : item.href;
+        return '<a href="' + href + '"' +
+            (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="' + tabBase + (active ? tabOn : tabOff) + '">' +
             item.label + '</a>';
@@ -59,8 +88,9 @@
         '<header class="sticky top-0 z-40 border-b border-gray-800 bg-gray-900/95 backdrop-blur">' +
             '<div class="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 flex items-stretch gap-2 sm:gap-5">' +
 
-                // Brand: logo mark + site title (links home).
-                '<a href="index.html" class="flex items-center gap-2 shrink-0 group" title="' + SITE_TITLE + '">' +
+                // Brand: logo mark + site title (links home). Inside the
+                // shell "home" means the docs view, not a page navigation.
+                '<a href="' + (IS_SHELL ? '#/' : 'index.html') + '" class="flex items-center gap-2 shrink-0 group" title="' + SITE_TITLE + '">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="icon icon-tabler icons-tabler-filled icon-tabler-inner-shadow-bottom-right w-6 h-6 text-blue-400 group-hover:text-blue-300 transition-colors">' +
                         '<path d="M7.113213314864547,17.836439757602623 C3.962962545544091,14.629149767071237 4.00919965907034,9.475663485904064 7.216489095788643,6.325413260547549 C10.423779086320033,3.1751624912270877 15.577264823523263,3.221399050940242 18.72751559284372,6.428689041471628 C21.87776581820023,9.635978478189926 21.831529802451016,14.789464769206242 18.624239811919622,17.939715538526702 C15.416950375201322,21.08996576388322 10.26346354022106,21.04372919432092 7.113213314864547,17.836439757602623 C7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 ZM8.91732412511588,9.218661251949928 C9.232340172246467,9.539381057705786 9.747706415252441,9.544005421136866 10.068426774821386,9.228988830042336 C11.67202746503994,7.653906962497572 14.248858155804163,7.677026030285823 15.823940023348927,9.280626720504376 C16.138956614443458,9.601347080073324 16.654322867298575,9.605970345727371 16.975042673054432,9.290954298596784 C17.29576247881029,8.975938251466197 17.300386842241373,8.460572008460225 16.985370251146843,8.139851648891277 C14.780255745376962,5.894810793347922 11.172692558751647,5.86244409647454 8.92765170320829,8.067558602244421 C8.606931343639342,8.382575193338951 8.602308077985294,8.897941446194071 8.91732412511588,9.218661251949928 C8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 Z" fill="#ffffff" />' +
                         '<path d="M12,2 C17.523000717163086,2 22,6.4770002365112305 22,12 C22,17.523000717163086 17.523000717163086,22 12,22 C6.4770002365112305,22 2,17.523000717163086 2,12 C2,6.4770002365112305 6.4770002365112305,2 12,2 C12,2 12,2 12,2 ZM18,11 C17.447715759277344,11 17,11.447714805603027 17,12 C17,14.76142406463623 14.76142406463623,17 12,17 C11.447714805603027,17 11,17.447715759277344 11,18 C11,18.552284240722656 11.447714805603027,19 12,19 C15.86599349975586,19 19,15.86599349975586 19,12 C19,11.447714805603027 18.552284240722656,11 18,11 C18,11 18,11 18,11 Z" fill="currentColor" />' +
@@ -96,6 +126,26 @@
 
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
+
+    // Shell only: the header is static innerHTML, so when the hash changes
+    // (view switch) re-apply the active/inactive classes on the nav anchors
+    // by hand instead of re-rendering the whole header.
+    if (IS_SHELL) {
+        window.addEventListener('hashchange', function () {
+            var newActiveId = shellActiveId(window.location.hash || '');
+            for (var j = 0; j < NAV.length; j++) {
+                var el = document.querySelector('[data-nav="' + NAV[j].id + '"]');
+                if (!el) { continue; }
+                var isActive = NAV[j].id === newActiveId;
+                el.className = tabBase + (isActive ? tabOn : tabOff);
+                if (isActive) {
+                    el.setAttribute('aria-current', 'page');
+                } else {
+                    el.removeAttribute('aria-current');
+                }
+            }
+        });
+    }
 
     // Version badge: the engine (mtlx-engine.js) sets window.__mtlxVersion and
     // dispatches 'mtlx-version' once the WASM reports itself.

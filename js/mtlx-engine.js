@@ -441,6 +441,178 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
     return inp;
 };
 
+// ------------------------------------------------------------------
+// Drag & drop ingestion pipeline — shared by node-graph.html and
+// material-viewer.html. Both pages accept a single .mtlx file, a
+// .mtlx plus loose files, a .mtlx plus a (sub)folder, or a .zip
+// containing any of the above.
+// ------------------------------------------------------------------
+
+// Normalize a path for matching: forward slashes, lowercase, no
+// leading ./ or /.
+const normPath = (p) => String(p || '')
+    .replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+
+// Directory-aware DataTransfer traversal. Returns { relPath: File }.
+const readDroppedItems = async (dataTransfer) => {
+    const map = {};
+    const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+    const entries = items
+        .map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry() : null))
+        .filter(Boolean);
+    if (!entries.length) {
+        // Fallback: flat file list (no folder structure available).
+        for (const f of Array.from(dataTransfer.files || [])) map[f.name] = f;
+        return map;
+    }
+    const readEntry = (entry, prefix) => new Promise((resolve) => {
+        if (entry.isFile) {
+            entry.file((f) => { map[prefix + entry.name] = f; resolve(); }, () => resolve());
+        } else if (entry.isDirectory) {
+            const reader = entry.createReader();
+            const sub = [];
+            const readBatch = () => reader.readEntries((batch) => {
+                if (!batch.length) {
+                    Promise.all(sub.map((e2) => readEntry(e2, prefix + entry.name + '/'))).then(resolve);
+                    return;
+                }
+                sub.push(...batch);
+                readBatch(); // readEntries returns results in batches
+            }, () => resolve());
+            readBatch();
+        } else resolve();
+    });
+    await Promise.all(entries.map((e) => readEntry(e, '')));
+    return map;
+};
+
+// Expand any .zip files in the map into their contents (in place).
+const expandZips = async (map) => {
+    for (const key of Object.keys(map)) {
+        if (!/\.zip$/i.test(key)) continue;
+        const file = map[key];
+        delete map[key];
+        if (!window.JSZip) {
+            throw new Error('JSZip failed to load from the CDN — .zip drops are unavailable.');
+        }
+        const zip = await JSZip.loadAsync(file);
+        const names = Object.keys(zip.files);
+        for (const name of names) {
+            const entry = zip.files[name];
+            if (entry.dir) continue;
+            map[name] = await entry.async('blob');
+        }
+    }
+    return map;
+};
+
+// Find a dropped file for a path referenced inside the document:
+// exact normalized match → unique suffix match → unique basename match.
+const findFileForRef = (fileMap, ref) => {
+    const want = normPath(ref);
+    if (!want) return null;
+    const keys = Object.keys(fileMap);
+    const norm = {};
+    for (const k of keys) norm[normPath(k)] = k;
+    if (norm[want]) return { key: norm[want], how: 'exact' };
+    const suffix = keys.filter((k) => normPath(k).endsWith('/' + want) || normPath(k) === want);
+    if (suffix.length === 1) return { key: suffix[0], how: 'suffix' };
+    const base = want.split('/').pop();
+    const byBase = keys.filter((k) => normPath(k).split('/').pop() === base);
+    if (byBase.length === 1) return { key: byBase[0], how: 'basename' };
+    return null;
+};
+
+// Inline <xi:include href="..."/> from the dropped files (MaterialX
+// documents may be split across files; readFromXmlString can't reach
+// our in-memory map). Missing includes are dropped with a warning.
+const resolveIncludes = async (xml, fileMap, fromDir, visited) => {
+    visited = visited || new Set();
+    // href may not be the first attribute and may be single-quoted —
+    // any tag this regex misses would be handed to MaterialX, which
+    // would try (and fail) to fetch it over HTTP itself.
+    const INC = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>(?:\s*<\/xi:include>)?/g;
+    const parts = [];
+    let last = 0, m;
+    while ((m = INC.exec(xml)) !== null) {
+        parts.push(xml.slice(last, m.index));
+        last = m.index + m[0].length;
+        const href = m[1] || m[2];
+        const refPath = fromDir ? fromDir + '/' + href : href;
+        const hit = findFileForRef(fileMap, refPath) || findFileForRef(fileMap, href);
+        if (!hit || visited.has(hit.key)) {
+            console.warn('xi:include not resolvable from dropped files:', href);
+            parts.push('<!-- unresolved include: ' + href.replace(/--/g, '- -') + ' -->');
+            continue;
+        }
+        visited.add(hit.key);
+        let inc = await fileMap[hit.key].text();
+        const incDir = hit.key.indexOf('/') >= 0 ? hit.key.slice(0, hit.key.lastIndexOf('/')) : '';
+        inc = await resolveIncludes(inc, fileMap, incDir, visited);
+        // Strip the XML declaration and the outer <materialx> wrapper,
+        // keeping only its children.
+        inc = inc.replace(/<\?xml[^>]*\?>/, '');
+        inc = inc.replace(/<materialx\b[^>]*>/, '').replace(/<\/materialx>\s*$/, '');
+        parts.push(inc);
+    }
+    parts.push(xml.slice(last));
+    return parts.join('');
+};
+
+// Session-lifetime texture cache, keyed by file identity (not by
+// node/uniform), so re-binding the SAME dropped file after a
+// docRev-triggered view rebuild reuses the already-decoded
+// THREE.Texture instead of kicking off a fresh async TextureLoader
+// load — that async gap is what let the checker placeholder flash
+// on every committed parameter edit.
+const TEXTURE_CACHE = new Map();
+const textureCacheKey = (blob, fallback) => {
+    if (blob && blob.name != null && blob.size != null && blob.lastModified != null) {
+        return blob.name + '|' + blob.size + '|' + blob.lastModified;
+    }
+    return fallback; // e.g. the fileMap key, when identity fields are missing
+};
+
+// After the view is up: bind dropped textures onto the shader's
+// filename sampler uniforms by their document-referenced paths.
+// Cache hits assign synchronously; cache misses fall back to the
+// async TextureLoader path. `onBound` (optional) is invoked once per
+// texture that finishes binding (sync for cache hits, async
+// otherwise) so callers can re-render as textures land.
+// Returns { bound: [...], missing: [...] } for the UI report.
+const bindDroppedTextures = (view, fileMap, onBound) => {
+    const bound = [], missing = [];
+    for (const u of view.introspected) {
+        if (u.type !== 'filename') continue;
+        let ref = '';
+        try {
+            if (typeof u.data === 'string') ref = u.data;
+            else if (u.data != null) ref = String(u.data);
+        } catch (e) { ref = ''; }
+        if (!ref) continue; // no file reference recorded
+        const hit = findFileForRef(fileMap, ref);
+        if (!hit) { missing.push(ref); continue; }
+        const blob = fileMap[hit.key];
+        const cacheKey = textureCacheKey(blob, hit.key);
+        const cached = TEXTURE_CACHE.get(cacheKey);
+        if (cached) {
+            if (view.uniforms[u.name]) view.uniforms[u.name].value = cached;
+            if (onBound) onBound();
+        } else {
+            const url = URL.createObjectURL(blob);
+            new THREE.TextureLoader().load(url, (tex) => {
+                configureLoadedTexture(tex);
+                TEXTURE_CACHE.set(cacheKey, tex);
+                if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                URL.revokeObjectURL(url);
+                if (onBound) onBound();
+            }, undefined, () => URL.revokeObjectURL(url));
+        }
+        bound.push(ref + '  →  ' + hit.key);
+    }
+    return { bound, missing };
+};
+
 // Enumerate a ShaderStage's uniform variables via MaterialX shader
 // introspection — the official viewer's approach (§7.1). Returns
 // [{ name, type, data }] where data is the raw getData() payload of
@@ -1059,7 +1231,12 @@ const COLORSPACES = ['srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709',
 const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
-    autoRotate = true, envBackground = false, isMounted = () => true, debugKind = '',
+    autoRotate = true, envBackground = false,
+    // isMounted: lifecycle — false is PERMANENT (component unmounted); the
+    // render loop terminates and in-flight init aborts. isActive: visibility —
+    // false is TEMPORARY (view backgrounded in the multi-view shell); the loop
+    // keeps scheduling frames but skips all render work until it flips back.
+    isMounted = () => true, isActive = () => true, debugKind = '',
     // Initial camera pull-back. 3.6 is the classic roomy framing; small
     // square previews pass ~2.55 so the radius-1 shape fills the frame.
     cameraDistance = 3.6,
@@ -1365,6 +1542,7 @@ const createMtlxRenderView = async ({
                 const animate = () => {
                     if (stopped || !isMounted()) return;
                     reqId = requestAnimationFrame(animate);
+                    if (!isActive()) return;
                     if (controls) {
                         controls.update(); // damping + autoRotate
                     } else if (fallbackSpin) {
@@ -1508,6 +1686,8 @@ Object.assign(window, {
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     findConvertChain, ensureTypedInput,
+    normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes,
+    TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
     getDefaultTexture, configureLoadedTexture,
