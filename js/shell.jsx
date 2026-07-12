@@ -151,11 +151,20 @@ const VIEW_DEPS = {
         globalName: 'MaterialViewerApp',
     },
     graph: {
-        css: ['https://unpkg.com/reactflow@11.11.4/dist/style.css'],
+        css: [
+            'https://unpkg.com/reactflow@11.11.4/dist/style.css',
+        ],
         scripts: [
             'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
             'https://unpkg.com/reactflow@11.11.4/dist/umd/index.js',
             'https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js',
+            // Lazy-loaded only because the "Document" dialog (XmlDialog in
+            // js/graph-app.jsx) wants XML syntax highlighting — not needed
+            // for the rest of the graph view. Core bundle + the xml language
+            // pack explicitly, so highlighting works even if a given CDN
+            // build's "common languages" set ever drops markup/xml.
+            'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js',
         ],
         babelScripts: [],
         app: 'js/graph-app.jsx',

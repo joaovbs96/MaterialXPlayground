@@ -1011,6 +1011,13 @@
                             setNotice(built.notice || 'This document has nothing to preview.');
                             setLoading(false);
                             setLastFrame(null);
+                            lastFrameRef.current = null;
+                            if (canvasRef.current) {
+                                const c = canvasRef.current;
+                                const w = c.width, h = c.height;
+                                c.width = 0; c.height = 0;
+                                c.width = w; c.height = h;
+                            }
                             return;
                         }
                         setLabel(built.label || '');
@@ -1384,6 +1391,20 @@
             React.useEffect(() => () => {
                 if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             }, []);
+            // Syntax highlighting via highlight.js (lazy-loaded per the
+            // graph view's manifest in js/shell.jsx — see VIEW_DEPS.graph).
+            // Purely cosmetic: if the CDN script hasn't landed yet, failed
+            // to load, or throws for any reason, fall back to the plain
+            // <pre>{xml}</pre> text below rather than showing a blank/
+            // broken dialog.
+            const highlighted = React.useMemo(() => {
+                if (typeof window === 'undefined' || !window.hljs || typeof window.hljs.highlight !== 'function') return null;
+                try {
+                    return window.hljs.highlight(xml, { language: 'xml' }).value;
+                } catch (e) {
+                    return null;
+                }
+            }, [xml]);
             if (!open) return null;
 
             // navigator.clipboard needs a secure context; some browsers also
@@ -1439,7 +1460,11 @@
                                 <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
                             </div>
                         </div>
-                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">{xml}</pre>
+                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">
+                            {highlighted != null
+                                ? <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+                                : xml}
+                        </pre>
                     </div>
                 </div>
             );
@@ -1689,7 +1714,7 @@
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
-                                            <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor((c.signatures[0] || {}).type || '') }} />
+                                            <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(typeFilter || (c.signatures[0] || {}).type || '') }} />
                                             <span className="truncate">{c.category}</span>
                                             {c.signatures.length > 1 && (
                                                 <span className="ml-auto flex-none text-[9px] text-gray-500" title="This category has several signatures — pick one in the properties panel after adding">{c.signatures.length} sigs</span>
@@ -1742,6 +1767,16 @@
         function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
             const [draft, setDraft] = React.useState(inp.value || '');
             React.useEffect(() => { setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
+            // Raw per-component TEXT for vector/color inputs — kept separate
+            // from the numeric `comps` derived below so the <input>'s value
+            // is always exactly what the user typed (see commentary at the
+            // vecN branch of control() for why this matters for caret pos).
+            const [compText, setCompText] = React.useState(
+                () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr)
+            );
+            React.useEffect(() => {
+                setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr));
+            }, [nodeId, inp.name, inp.value]);
             const onCommitRef = React.useRef(onCommit);
             onCommitRef.current = onCommit;
             const inpValRef = React.useRef(inp.value || '');
@@ -1757,6 +1792,20 @@
             };
             const commitSoon = (v) => {
                 setDraft(v);
+                if (onLive) onLive(v);
+                pendingRef.current = v;
+                if (timerRef.current) clearTimeout(timerRef.current);
+                timerRef.current = setTimeout(flush, 300);
+            };
+            // Like commitSoon, but the DRAFT shown to the user (`raw`, e.g.
+            // the exact text just typed, possibly "-", "1.", "") can differ
+            // from the VALUE that gets committed to the document (`v`, a
+            // canonicalized number string) — controlled numeric <input>s
+            // reset their caret to the end whenever `.value` is reassigned
+            // to something other than what's currently displayed, so
+            // reformatting on every keystroke makes backspace unusable.
+            const commitSoonRaw = (raw, v) => {
+                setDraft(raw);
                 if (onLive) onLive(v);
                 pendingRef.current = v;
                 if (timerRef.current) clearTimeout(timerRef.current);
@@ -1850,13 +1899,29 @@
                 // color3/4 and vector2/3/4: per-component spinners; colors
                 // additionally get the native picker on the RGB part.
                 if (vecN) {
-                    const comps = parseComps(draft, vecN);
-                    const setComp = (i, s) => {
+                    // Numeric components (for the color picker + committing)
+                    // derive from the RAW per-component text, not the other
+                    // way around — see compText's declaration up top.
+                    const comps = compText.map((s) => {
                         const n = parseFloat(s);
-                        if (isNaN(n)) return;
-                        const nv = comps.slice();
-                        nv[i] = isColor ? Math.max(0, Math.min(1, n)) : n;
-                        commitSoon(nv.map(numStr).join(', '));
+                        return isFinite(n) ? n : 0;
+                    });
+                    const setComp = (i, raw) => {
+                        const nv = compText.slice();
+                        nv[i] = raw;
+                        setCompText(nv);
+                        const n = parseFloat(raw);
+                        if (isNaN(n)) return; // e.g. "", "-", "1." — keep displaying, don't commit yet
+                        const clamped = isColor ? Math.max(0, Math.min(1, n)) : n;
+                        const nums = nv.map((s2, j) => {
+                            if (j === i) return clamped;
+                            const n2 = parseFloat(s2);
+                            return isFinite(n2) ? n2 : 0;
+                        });
+                        // `draft` (the whole-vector string) isn't bound to
+                        // any input's value directly anymore — it only
+                        // needs to hold the canonical committed value.
+                        commitSoon(nums.map(numStr).join(', '));
                     };
                     const chan = isColor ? 'RGBA' : 'XYZW';
                     const fmt = (n) => Math.round(Number(n) * 1000) / 1000; // display only
@@ -1880,20 +1945,27 @@
                                         onChange={(e) => {
                                             const nv = hexToRgb(e.target.value);
                                             if (vecN === 4) nv.push(comps[3]);
+                                            setCompText(nv.map(numStr));
                                             commitSoon(nv.map(numStr).join(', '));
                                         }}
                                     />
                                 )}
-                                {comps.map((c, i) => (
+                                {compText.map((s, i) => (
                                     <input
                                         key={i} type="number"
                                         min={isColor ? 0 : undefined} max={isColor ? 1 : undefined}
                                         step={0.01}
                                         title={chan[i] + (isColor ? ' (linear, 0-1)' : '')}
                                         className={'w-full min-w-0 px-1 py-0.5 ' + boxCls}
-                                        value={fmt(c)}
+                                        value={s}
                                         onChange={(e) => setComp(i, e.target.value)}
-                                        onBlur={(e) => { e.target.value = String(fmt(c)); }}
+                                        onBlur={(e) => {
+                                            const v = String(fmt(comps[i]));
+                                            e.target.value = v;
+                                            const nv = compText.slice();
+                                            nv[i] = v;
+                                            setCompText(nv);
+                                        }}
                                     />
                                 ))}
                             </div>
@@ -1924,12 +1996,19 @@
                             <input
                                 type="number"
                                 className={(hasRange ? 'w-16 flex-none' : 'w-full min-w-0') + ' px-1 py-0.5 ' + boxCls}
-                                step={step} value={curN}
+                                step={step} value={draft}
                                 onChange={(e) => {
-                                    const n = parse(e.target.value);
-                                    if (!isNaN(n)) commitSoon(numStr(n));
+                                    const raw = e.target.value;
+                                    const n = parse(raw);
+                                    // Bind to the raw typed text, not a
+                                    // reparsed/reformatted number — see
+                                    // commitSoonRaw's comment. Intermediate
+                                    // states like "", "-", "1." stay
+                                    // displayed but don't commit.
+                                    if (!isNaN(n)) commitSoonRaw(raw, numStr(n));
+                                    else setDraft(raw);
                                 }}
-                                onBlur={(e) => { e.target.value = String(curN); }}
+                                onBlur={() => setDraft(numStr(curN))}
                             />
                         </div>
                     );
@@ -2184,6 +2263,13 @@
             const previewViewRef = React.useRef(null);
             const scopeRef = React.useRef('');
             scopeRef.current = scope;
+            // Set right before setScope('') at a scope-EXIT call site (e.g.
+            // 'g:' + the nodegraph name just left) so the flow-rebuild
+            // effect below can select/highlight it in the parent scope and
+            // aim the preview at it, instead of the default "wipe selection
+            // on scope change" behavior. Consumed (and cleared) by that
+            // effect on the next run.
+            const pendingScopeSelectRef = React.useRef(null);
             // { stack: [{xml, scope, tag}], index, savedIndex }. index === -1
             // means an empty stack (no document loaded yet).
             const undoStateRef = React.useRef({ stack: [], index: -1, savedIndex: -1 });
@@ -2389,7 +2475,7 @@
                 const onDbl = (e) => {
                     const t = e.target;
                     if (!(t instanceof Element)) return;
-                    if (t.closest('button, a, input, select, textarea')) return;
+                    if (t.closest('button, a, input, select, textarea, .react-flow__handle')) return;
                     const nodeEl = t.closest('.react-flow__node');
                     if (!nodeEl) return;
                     const id = nodeEl.getAttribute('data-id') || '';
@@ -2419,7 +2505,10 @@
                         // Never delete on Backspace; just step up one scope
                         // level. Always prevent default so it can't trigger
                         // browser back-navigation.
-                        if (scopeRef.current) setScope('');
+                        if (scopeRef.current) {
+                            pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                            setScope('');
+                        }
                         e.preventDefault();
                         return;
                     }
@@ -2706,7 +2795,17 @@
             // positions are preserved; the Arrange button re-lays out.
             React.useEffect(() => {
                 if (!parsed) return;
-                setSelectedId(null); // the old selection belongs to the old scope
+                const pending = pendingScopeSelectRef.current;
+                if (pending) {
+                    // Just stepped out of a nodegraph via Backspace or the
+                    // breadcrumb — select/preview the nodegraph we left,
+                    // instead of wiping the selection (consumed below by
+                    // the flow-rebuild effect, which marks it .selected).
+                    setSelectedId(pending);
+                    setPreviewSel({ scope, id: pending });
+                } else {
+                    setSelectedId(null); // the old selection belongs to the old scope
+                }
             }, [parsed, scope]);
             // Where we came from: whether this rebuild is ENTERING or
             // LEAVING a nodegraph (a scope change within the same document)
@@ -2720,14 +2819,26 @@
                 if (!parsed) return;
                 const switchedScope = cameFrom.parsed === parsed
                     && cameFrom.scope !== scope;
+                // Consume the pending post-scope-exit selection (set by the
+                // Backspace handler / breadcrumb button) — the effect above
+                // already pointed selectedId/previewSel at it; this one
+                // needs to mark it .selected on the freshly built flow, the
+                // same way focusNode() does.
+                const pendingSelect = pendingScopeSelectRef.current;
+                pendingScopeSelectRef.current = null;
                 try {
                     const { descs, edges } = buildScope(parsed, scope);
-                    setFlow(toFlow(descs, edges, {
+                    const built = toFlow(descs, edges, {
                         portMode: globalPortsRef.current,
                         onOpenScope: setScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
-                    }));
+                    });
+                    setFlow(pendingSelect ? {
+                        edges: built.edges,
+                        nodes: built.nodes.map((n) =>
+                            n.selected === (n.id === pendingSelect) ? n : Object.assign({}, n, { selected: n.id === pendingSelect })),
+                    } : built);
                     setError(null);
                     // Queued after the setFlow above, so it acts on the flow
                     // we just built.
@@ -4988,7 +5099,10 @@
                         {parsed && (
                             <>
                                 <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
-                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => setScope('')}>
+                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
+                                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                                        setScope('');
+                                    }}>
                                         {parsed.label}
                                     </button>
                                     {scope && <span className="text-gray-500"> {'\u25B8'} </span>}

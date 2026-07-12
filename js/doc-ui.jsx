@@ -786,10 +786,19 @@
             return (stripped || target || '').toUpperCase();
         };
 
+        // Confirmed by reading libraries/targets/{genmsl,genslangl,essl}.mtlx in the
+        // vendored MaterialX standard library: these three targets are declared
+        // inherit="genglsl", so a nodedef with no explicit implementation for one of
+        // them still renders fine via the inherited GLSL source at generation time.
+        // Revisit this map if the vendored library version changes.
+        const TARGET_INHERITANCE = { essl: 'genglsl', genmsl: 'genglsl', genslang: 'genglsl' };
+
         // Cached once per page load: nodedefName -> { targets: Set<string>,
-        // graph: boolean }. `graph: true` means the nodedef's implementation
-        // is a <nodegraph> (works for every target) rather than a per-target
-        // source-code implementation.
+        // inherited: Set<string>, graph: boolean }. `graph: true` means the
+        // nodedef's implementation is a <nodegraph> (works for every target)
+        // rather than a per-target source-code implementation. `inherited`
+        // holds targets that have no explicit implementation but resolve via
+        // TARGET_INHERITANCE from a target that does (e.g. genmsl -> genglsl).
         let implIndexPromise = null;
         function getImplIndex() {
             if (!implIndexPromise) {
@@ -800,7 +809,7 @@
                     impls.forEach((impl) => {
                         const nodedefName = safe(() => impl.getAttribute('nodedef'), null);
                         if (!nodedefName) return;
-                        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), graph: false };
+                        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
                         const ngAttr = safe(() => impl.getAttribute('nodegraph'), '');
                         if (ngAttr) {
                             index[nodedefName].graph = true;
@@ -809,16 +818,46 @@
                         const target = safe(() => impl.getAttribute('target'), null);
                         if (target) index[nodedefName].targets.add(target);
                     });
+                    // MaterialX also lets a <nodegraph> serve directly as a
+                    // function implementation when it carries a `nodedef`
+                    // attribute itself, with no separate <implementation>
+                    // element pointing at it — this is the dominant pattern
+                    // in the standard library (274+ occurrences vs. only 2
+                    // uses of the indirect <implementation nodegraph="...">
+                    // link handled above). Mirrors graph-app.jsx's
+                    // getNodeGraphs()/implGraphNames two-shape handling.
+                    const nodegraphs = vecToArray(safe(() => stdlib.getNodeGraphs(), []));
+                    nodegraphs.forEach((g) => {
+                        const nodedefName = safe(() => g.getAttribute('nodedef'), null);
+                        if (!nodedefName) return;
+                        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
+                        index[nodedefName].graph = true;
+                    });
+                    // Resolve target inheritance: a nodedef with no explicit
+                    // implementation for an inheriting target (e.g. genmsl)
+                    // still renders via the parent target's (genglsl's)
+                    // implementation if that one exists. Record such targets
+                    // separately in `inherited` so the UI can distinguish
+                    // "explicit override" from "works via inheritance".
+                    Object.values(index).forEach((entry) => {
+                        Object.entries(TARGET_INHERITANCE).forEach(([child, parent]) => {
+                            if (entry.targets.has(parent) && !entry.targets.has(child)) {
+                                entry.inherited.add(child);
+                            }
+                        });
+                    });
                     return index;
                 })();
             }
             return implIndexPromise;
         }
 
-        // props: { nodeName, signature } — signature is currently informational
-        // only (a re-render trigger alongside nodeName); the component derives
-        // its own per-signature grouping from the live nodedefs so it stays in
-        // sync with whichever overload is selected without extra plumbing.
+        // props: { nodeName, signature } — the component derives its own
+        // per-signature grouping (bySig, keyed by nodeDefSigKey) from the live
+        // nodedefs, then uses `signature` to pick out just the row for the
+        // currently selected overload, falling back to showing every row
+        // (collapsed when identical) if `signature` isn't provided or doesn't
+        // match anything.
         function ImplTargetMatrix({ nodeName, signature }) {
             const [state, setState] = React.useState({ status: 'idle', rows: [], allTargets: [] });
 
@@ -847,28 +886,52 @@
                             let outType = '';
                             try { outType = def.getType(); } catch (e) { /* none */ }
                             if (!bySig[key]) {
-                                bySig[key] = { key, type: outType, targets: new Set(), graph: false };
+                                bySig[key] = { key, type: outType, targets: new Set(), inherited: new Set(), graph: false };
                                 order.push(key);
                             }
                             const info = defName && index[defName];
                             if (info) {
                                 if (info.graph) bySig[key].graph = true;
                                 info.targets.forEach((t) => bySig[key].targets.add(t));
+                                info.inherited.forEach((t) => bySig[key].inherited.add(t));
                             }
                         });
 
                         const sigRows = order.map((key) => bySig[key]);
                         const sameImpl = (a, b) => a.graph === b.graph
                             && a.targets.size === b.targets.size
-                            && [...a.targets].every((t) => b.targets.has(t));
-                        // Collapse to a single row when every signature shares
-                        // the exact same implementation set — the common case.
-                        const rows = sigRows.length > 1 && sigRows.every((r) => sameImpl(r, sigRows[0]))
-                            ? [sigRows[0]] : sigRows;
+                            && [...a.targets].every((t) => b.targets.has(t))
+                            && a.inherited.size === b.inherited.size
+                            && [...a.inherited].every((t) => b.inherited.has(t));
+                        // When the caller tells us which signature/overload is
+                        // currently selected (and it matches one we built),
+                        // show only that row — don't let the other overloads'
+                        // rows leak into the currently-selected node's matrix.
+                        // Only fall back to the "collapse if identical" /
+                        // "show every row" behavior when we have no usable
+                        // signature match (e.g. no signature prop, or a
+                        // mismatch against bySig — defensive, so we still show
+                        // something rather than nothing).
+                        let rows;
+                        if (signature && bySig[signature]) {
+                            rows = [bySig[signature]];
+                        } else {
+                            // Collapse to a single row when every signature
+                            // shares the exact same implementation set — the
+                            // common case.
+                            rows = sigRows.length > 1 && sigRows.every((r) => sameImpl(r, sigRows[0]))
+                                ? [sigRows[0]] : sigRows;
+                        }
 
                         const allTargets = new Set();
-                        Object.values(index).forEach((info) => info.targets.forEach((t) => allTargets.add(t)));
-                        sigRows.forEach((r) => r.targets.forEach((t) => allTargets.add(t)));
+                        Object.values(index).forEach((info) => {
+                            info.targets.forEach((t) => allTargets.add(t));
+                            info.inherited.forEach((t) => allTargets.add(t));
+                        });
+                        sigRows.forEach((r) => {
+                            r.targets.forEach((t) => allTargets.add(t));
+                            r.inherited.forEach((t) => allTargets.add(t));
+                        });
 
                         if (alive) {
                             setState({ status: 'ready', rows, allTargets: [...allTargets].sort() });
@@ -907,19 +970,29 @@
                                             Graph (all targets)
                                         </span>
                                     ) : targets.length ? (
-                                        targets.map((t) => (
-                                            <span
-                                                key={t}
-                                                title={t}
-                                                className={badgeBase + (
-                                                    row.targets.has(t)
-                                                        ? ' border-green-700/60 bg-green-950/30 text-green-400'
-                                                        : ' border-gray-700 bg-gray-900 text-gray-600'
-                                                )}
-                                            >
-                                                {row.targets.has(t) ? '✓' : '–'} {friendlyTargetLabel(t)}
-                                            </span>
-                                        ))
+                                        targets.map((t) => {
+                                            const explicit = row.targets.has(t);
+                                            const inherited = !explicit && row.inherited.has(t);
+                                            return (
+                                                <span
+                                                    key={t}
+                                                    title={
+                                                        inherited
+                                                            ? 'Inherited from GLSL — no explicit implementation, but MaterialX falls back to the GLSL source at generation time.'
+                                                            : t
+                                                    }
+                                                    className={badgeBase + (
+                                                        explicit
+                                                            ? ' border-green-700/60 bg-green-950/30 text-green-400'
+                                                            : inherited
+                                                                ? ' border-green-800/40 border-dashed bg-green-950/10 text-green-600'
+                                                                : ' border-gray-700 bg-gray-900 text-gray-600'
+                                                    )}
+                                                >
+                                                    {explicit ? '✓' : inherited ? '✓*' : '–'} {friendlyTargetLabel(t)}
+                                                </span>
+                                            );
+                                        })
                                     ) : (
                                         <span className="text-gray-600 italic">No implementations found.</span>
                                     )}

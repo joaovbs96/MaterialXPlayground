@@ -1321,23 +1321,23 @@
                                     <button
                                         onClick={onExportMtlx}
                                         title="Download this node with the current values as a .mtlx document"
-                                        className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                                     >
-                                        Export .mtlx
+                                        <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                                     </button>
                                     <button
                                         onClick={sendToEditor}
                                         title="Open this node in the node graph editor"
-                                        className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors inline-flex items-center gap-1"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                                     >
                                         <MtlxIcon name="share" className="w-3.5 h-3.5" />
-                                        Send to Editor
                                     </button>
                                     <button
                                         onClick={onResetDefaults}
-                                        className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        title="Reset to default"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                                     >
-                                        Reset to default
+                                        <MtlxIcon name="restore" className="w-3.5 h-3.5" />
                                     </button>
                                 </div>
                             </div>
