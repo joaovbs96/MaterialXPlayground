@@ -17,7 +17,7 @@ const HOME_CARDS = [
         href: '#!viewer',
         icon: 'camera',
         title: 'Material Viewer',
-        desc: 'Load and preview materials on a shaderball with real-time shader generation, HDR environments, and .mtlx export.',
+        desc: 'Load and preview materials with real-time rendering.',
     },
     {
         href: '#!graph',
@@ -42,8 +42,8 @@ function HomeApp({ active } = {}) {
                 </svg>
                 <h1 className="text-3xl sm:text-4xl font-bold text-gray-100">{title}</h1>
                 <p className="text-gray-400 text-sm sm:text-base max-w-2xl mx-auto">
-                    An interactive, open-source, in-browser playground — powered by the official MaterialX WASM
-                    build — to browse the standard MaterialX node library, preview materials in real-time 3D, and
+                    An interactive, open-source, in-browser playground to browse the standard
+                    MaterialX node library, preview materials in real-time 3D, and
                     build node graphs visually.
                 </p>
             </div>
