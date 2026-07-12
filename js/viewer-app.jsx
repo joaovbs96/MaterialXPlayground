@@ -136,40 +136,24 @@
             // OFF by default: the model starts still; the rotate button
             // switches the camera turntable on/off (applied live, and passed
             // at creation so it survives material/geometry regens).
-            const [rotating, setRotating] = React.useState(false);
-            const toggleRotating = () => setRotating((r) => {
-                const nr = !r;
-                if (viewRef.current && viewRef.current.setAutoRotate) viewRef.current.setAutoRotate(nr);
-                return nr;
-            });
+            const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
             // Environment map shown as the visible background (IBL is always on).
-            const [envBg, setEnvBg] = React.useState(false);
-            const toggleEnvBg = () => setEnvBg((v) => {
-                const nv = !v;
-                if (viewRef.current && viewRef.current.setEnvBackground) viewRef.current.setEnvBackground(nv);
-                return nv;
-            });
+            const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
             // Fullscreen: the CONTAINER div goes fullscreen (not the canvas),
             // so the overlaid viewport controls stay visible. The engine's
             // ResizeObserver resizes the render buffer automatically.
             const viewportRef = React.useRef(null);
-            const [isFullscreen, setIsFullscreen] = React.useState(false);
-            React.useEffect(() => watchFullscreen(
-                (el) => setIsFullscreen(!!el && el === viewportRef.current)
-            ), []);
-            const onToggleFullscreen = () => toggleFullscreen(viewportRef.current);
+            const [isFullscreen, onToggleFullscreen] = useFullscreen(viewportRef);
             // PNG snapshot of the current frame, named after material + geometry.
             const takeScreenshot = () => {
                 const view = viewRef.current;
                 if (!view || !view.snapshot) return;
-                let url = null;
-                try { url = view.snapshot(); } catch (e) { setError('Screenshot failed: ' + String(e && e.message || e)); return; }
-                if (!url) return;
                 const matName = (renderables[chosenMat] && renderables[chosenMat].name) || 'material';
-                const a = document.createElement('a');
-                a.download = (matName + '_' + geom).replace(/[^\w.-]+/g, '_') + '.png';
-                a.href = url;
-                a.click();
+                try {
+                    downloadSnapshot(view, matName + '_' + geom);
+                } catch (e) {
+                    setError('Screenshot failed: ' + String(e && e.message || e));
+                }
             };
             // Hand the currently loaded document off to the node graph editor:
             // serialize it, stash the loose (non-.mtlx) files alongside it, and
@@ -190,9 +174,7 @@
                     if (!/\.mtlx$/i.test(k)) files[k] = fileMapRef.current[k];
                 });
                 const name = (chosenMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
-                window.__mtlxPendingImport = { xml, name, files };
-                window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
-                window.location.hash = '#!graph';
+                openInGraphEditor({ xml, name, files });
             };
 
             const ingest = async (map) => {
@@ -261,50 +243,11 @@
             // child element crossed.
             const ingestRef = React.useRef(ingest);
             ingestRef.current = ingest;
-            React.useEffect(() => {
-                let depth = 0;
-                const hasFiles = (e) => {
-                    const t = e.dataTransfer && e.dataTransfer.types;
-                    return !!t && Array.from(t).indexOf('Files') >= 0;
-                };
-                const onEnter = (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    e.preventDefault();
-                    depth += 1;
-                    setDragOver(true);
-                };
-                const onOver = (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    e.preventDefault(); // required, or the browser navigates to the file
-                };
-                const onLeave = (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    depth = Math.max(0, depth - 1);
-                    if (depth === 0) setDragOver(false);
-                };
-                const onDropAnywhere = async (e) => {
-                    if (!activeRef.current) return;
-                    if (!hasFiles(e)) return;
-                    e.preventDefault();
-                    depth = 0;
-                    setDragOver(false);
-                    const map = await readDroppedItems(e.dataTransfer);
-                    ingestRef.current(map);
-                };
-                window.addEventListener('dragenter', onEnter);
-                window.addEventListener('dragover', onOver);
-                window.addEventListener('dragleave', onLeave);
-                window.addEventListener('drop', onDropAnywhere);
-                return () => {
-                    window.removeEventListener('dragenter', onEnter);
-                    window.removeEventListener('dragover', onOver);
-                    window.removeEventListener('dragleave', onLeave);
-                    window.removeEventListener('drop', onDropAnywhere);
-                };
-            }, []);
+            useWindowFileDrop({
+                activeRef,
+                onFiles: (map) => ingestRef.current(map),
+                onDragState: setDragOver,
+            });
 
             // Warm the MaterialX WASM + environment map on mount, instead of
             // paying for them on the first drop. Also resolves the version
@@ -546,14 +489,41 @@
                                 </div>
                             )}
                             <div ref={viewportRef} className="relative rounded-lg overflow-hidden bg-gray-900" style={{ minHeight: '18rem' }}>
-                                {busy && (
-                                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70">
-                                        {status && <span className="text-sm text-gray-300 animate-pulse">{status}</span>}
-                                        <div className="mtlx-loading-bar w-56" />
-                                    </div>
-                                )}
+                                <LoadingOverlay
+                                    show={busy}
+                                    label={status}
+                                    className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
+                                    labelClassName="text-sm text-gray-300 animate-pulse"
+                                    barWidthClass="w-56"
+                                />
                                 {renderables.length > 0 && (
-                                    <div className="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end">
+                                    <ViewportControls
+                                        containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
+                                        selectClassName="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                        buttonClassName={(active) => `inline-flex items-center text-[11px] px-2 py-1 rounded border transition-colors ${
+                                            active
+                                                ? 'bg-blue-600/80 border-blue-500 text-white'
+                                                : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
+                                        }`}
+                                        geom={geom}
+                                        onGeomChange={setGeom}
+                                        rotating={rotating}
+                                        onToggleRotating={toggleRotating}
+                                        envBg={envBg}
+                                        onToggleEnvBg={toggleEnvBg}
+                                        onScreenshot={takeScreenshot}
+                                        isFullscreen={isFullscreen}
+                                        onToggleFullscreen={onToggleFullscreen}
+                                        trailingChildren={
+                                            <button
+                                                onClick={sendToEditor}
+                                                title="Open this material in the node graph editor"
+                                                className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                            >
+                                                <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                            </button>
+                                        }
+                                    >
                                         {/* Geometry lives here permanently; the material
                                             picker surfaces only in fullscreen, where the
                                             sidebar is out of reach. */}
@@ -569,60 +539,7 @@
                                                 ))}
                                             </select>
                                         )}
-                                        <select
-                                            value={geom}
-                                            onChange={(e) => setGeom(e.target.value)}
-                                            title="Preview geometry"
-                                            className="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                                        >
-                                            {['shaderball', 'sphere', 'cube'].map((g) => (
-                                                <option key={g} value={g}>{g}</option>
-                                            ))}
-                                        </select>
-                                        <button
-                                            onClick={toggleRotating}
-                                            title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
-                                            className={`inline-flex items-center text-[11px] px-2 py-1 rounded border transition-colors ${
-                                                rotating
-                                                    ? 'bg-blue-600/80 border-blue-500 text-white'
-                                                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
-                                            }`}
-                                        >
-                                            <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                            onClick={toggleEnvBg}
-                                            title={envBg ? 'Hide the environment map background' : 'Show the environment map as background (lighting is unaffected)'}
-                                            className={`inline-flex items-center text-[11px] px-2 py-1 rounded border transition-colors ${
-                                                envBg
-                                                    ? 'bg-blue-600/80 border-blue-500 text-white'
-                                                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
-                                            }`}
-                                        >
-                                            <MtlxIcon name="environment" className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                            onClick={takeScreenshot}
-                                            title="Save a PNG screenshot of the current view"
-                                            className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                        >
-                                            <MtlxIcon name="camera" className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                            onClick={sendToEditor}
-                                            title="Open this material in the node graph editor"
-                                            className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                        >
-                                            <MtlxIcon name="share" className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                            onClick={onToggleFullscreen}
-                                            title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-                                            className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                        >
-                                            <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-                                        </button>
-                                    </div>
+                                    </ViewportControls>
                                 )}
                                 <canvas
                                     ref={canvasRef}

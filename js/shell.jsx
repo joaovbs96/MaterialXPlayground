@@ -142,6 +142,7 @@ const VIEW_DEPS = {
             'js/spec-parser.js',
         ],
         babelScripts: [
+            'js/shared/mtlx-ui.jsx',
             'js/doc-ui.jsx',
             'js/node-preview.jsx',
         ],
@@ -153,7 +154,9 @@ const VIEW_DEPS = {
         scripts: [
             'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
         ],
-        babelScripts: [],
+        babelScripts: [
+            'js/shared/mtlx-ui.jsx',
+        ],
         app: 'js/viewer-app.jsx',
         globalName: 'MaterialViewerApp',
     },
@@ -173,7 +176,9 @@ const VIEW_DEPS = {
             'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js',
             'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js',
         ],
-        babelScripts: [],
+        babelScripts: [
+            'js/shared/mtlx-ui.jsx',
+        ],
         app: 'js/graph-app.jsx',
         globalName: 'NodeGraphApp',
     },
@@ -199,11 +204,11 @@ function Shell() {
     React.useEffect(() => {
         const parseHash = () => {
             if (EMBED) return 'docs';
-            const h = window.location.hash;
-            if (h === '#!viewer') return 'viewer';
-            if (h === '#!graph') return 'graph';
-            if (h === '#!docs' || h.indexOf('#/') === 0) return 'docs';
-            return 'home';
+            // js/site-header.js (a synchronous plain script loaded before
+            // this one) is the single source of truth for hash->view
+            // routing; the inline fallback is defensive-only and should
+            // never actually run.
+            return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
         };
         const onNav = () => setActiveView(parseHash());
         setActiveView(parseHash());

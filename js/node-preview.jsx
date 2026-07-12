@@ -92,44 +92,27 @@
             // the rotate button switches the camera turntable on/off, applied
             // live via the render view (survives regens because creation
             // options read the current value from a fresh effect closure).
-            const [rotating, setRotating] = React.useState(false);
+            const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
             const controlsRef = React.useRef(null);
-            const toggleRotating = () => setRotating((r) => {
-                const nr = !r;
-                if (viewRef.current && viewRef.current.setAutoRotate) viewRef.current.setAutoRotate(nr);
-                return nr;
-            });
             // Fullscreen: the viewport CONTAINER goes fullscreen so the
             // geometry/pause controls overlay stays usable; the canvas is
             // h-full and the engine's ResizeObserver handles the buffer.
             const viewportRef = React.useRef(null);
-            const [isFullscreen, setIsFullscreen] = React.useState(false);
-            React.useEffect(() => watchFullscreen(
-                (el) => setIsFullscreen(!!el && el === viewportRef.current)
-            ), []);
+            const [isFullscreen, toggleFullscreenView] = useFullscreen(viewportRef);
             // Environment map as visible background (mirrors the material
             // viewer). Applied live via the view; regens re-apply it because
             // the creation options read the current value (the effect re-runs
             // with a fresh closure). Only offered when the view actually has
             // an environment (lit previews) — see envAvail below.
-            const [envBg, setEnvBg] = React.useState(false);
+            const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
             const [envAvail, setEnvAvail] = React.useState(false);
-            const toggleEnvBg = () => setEnvBg((v) => {
-                const nv = !v;
-                if (viewRef.current && viewRef.current.setEnvBackground) viewRef.current.setEnvBackground(nv);
-                return nv;
-            });
             // PNG snapshot named after the node + geometry.
             const takeScreenshot = () => {
                 const view = viewRef.current;
                 if (!view || !view.snapshot) return;
-                let url = null;
-                try { url = view.snapshot(); } catch (e) { return; }
-                if (!url) return;
-                const a = document.createElement('a');
-                a.download = (nodeName + '_' + geom).replace(/[^\w.-]+/g, '_') + '.png';
-                a.href = url;
-                a.click();
+                try {
+                    downloadSnapshot(view, nodeName + '_' + geom);
+                } catch (e) { /* best-effort */ }
             };
             // Metadata for the .mtlx export (node element type, kind).
             const exportMetaRef = React.useRef(null);
@@ -311,12 +294,7 @@
             const onExportMtlx = () => {
                 const built = buildExportXml();
                 if (!built) return;
-                const blob = new Blob([built.xml], { type: 'application/xml' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = built.meta.nodeName + '.mtlx';
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                downloadXml(built.xml, built.meta.nodeName + '.mtlx');
             };
 
             // Hand this preview graph off to the node graph editor, the same
@@ -327,9 +305,7 @@
                 const built = buildExportXml();
                 if (!built) return;
                 const name = (built.meta && built.meta.nodeName) || 'node';
-                window.__mtlxPendingImport = { xml: built.xml, name, files: null };
-                window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
-                window.location.hash = '#!graph';
+                openInGraphEditor({ xml: built.xml, name, files: null });
             };
 
             React.useEffect(() => {
@@ -1251,66 +1227,21 @@
                         className={EMBED ? "relative w-full md:flex-1 md:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"}
                         style={isFullscreen ? { height: '100%' } : undefined}
                     >
-                        {loading && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 z-10 bg-gray-900/80">
-                                <span className="animate-pulse">Generating 3D Preview...</span>
-                                <div className="mtlx-loading-bar w-48" />
-                            </div>
-                        )}
+                        <LoadingOverlay show={loading} label="Generating 3D Preview..." />
                         {/* Viewport controls: geometry picker + rotation pause.
                             Drag orbits, wheel/pinch zooms (OrbitControls). */}
-                        {(
-                            <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
-                                <select
-                                    value={geom}
-                                    onChange={(e) => pickGeom(e.target.value)}
-                                    title="Preview geometry"
-                                    className="h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                                >
-                                    {['shaderball', 'sphere', 'cube'].map((g) => (
-                                        <option key={g} value={g}>{g}</option>
-                                    ))}
-                                </select>
-                                <button
-                                    onClick={toggleRotating}
-                                    title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
-                                    className={`h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
-                                        rotating
-                                            ? 'bg-blue-600/80 border-blue-500 text-white'
-                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
-                                    }`}
-                                >
-                                    <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
-                                </button>
-                                {envAvail && (
-                                    <button
-                                        onClick={toggleEnvBg}
-                                        title={envBg ? 'Hide the environment map background' : 'Show the environment map as background (lighting is unaffected)'}
-                                        className={`h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
-                                            envBg
-                                                ? 'bg-blue-600/80 border-blue-500 text-white'
-                                                : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
-                                        }`}
-                                    >
-                                        <MtlxIcon name="environment" className="w-3.5 h-3.5" />
-                                    </button>
-                                )}
-                                <button
-                                    onClick={takeScreenshot}
-                                    title="Save a PNG screenshot of the current view"
-                                    className="h-6 inline-flex items-center text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                >
-                                    <MtlxIcon name="camera" className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                    onClick={() => toggleFullscreen(viewportRef.current)}
-                                    title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-                                    className="h-6 inline-flex items-center text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                >
-                                    <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-                                </button>
-                            </div>
-                        )}
+                        <ViewportControls
+                            geom={geom}
+                            onGeomChange={pickGeom}
+                            rotating={rotating}
+                            onToggleRotating={toggleRotating}
+                            envBg={envBg}
+                            onToggleEnvBg={toggleEnvBg}
+                            envAvail={envAvail}
+                            onScreenshot={takeScreenshot}
+                            isFullscreen={isFullscreen}
+                            onToggleFullscreen={toggleFullscreenView}
+                        />
                         <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
                     </div>
                     {params.length > 0 && (

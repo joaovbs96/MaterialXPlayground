@@ -326,6 +326,8 @@ const vecToArray = (v) => {
 const mxSafe = (fn, fb) => { try { const v = fn(); return v == null ? fb : v; } catch (e) { return fb; } };
 const mxElCat = (el) => mxSafe(() => el.getCategory(), '');
 const mxElType = (el) => mxSafe(() => String(el.getType()), '');
+const mxElName = (el) => mxSafe(() => el.getName(), '');
+const mxElAttr = (el, name) => mxSafe(() => el.getAttribute(name), '');
 
 // Shortest chain of `convert` hops fromType->toType using ONLY the
 // conversions the loaded library actually defines. This matters because
@@ -1711,6 +1713,7 @@ Object.assign(window, {
     getMxEnv, DEBUG_SHADERS,
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
+    mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
     findConvertChain, ensureTypedInput,
     normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,

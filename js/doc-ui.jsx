@@ -671,7 +671,13 @@
         // (e.g. oren_nayar_diffuse_bsdf → #node-oren-nayar-diffuse-bsdf).
         // GitHub resolves those fragments to user-content-prefixed ids.
         const SPEC_BASE = 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/';
+        // Delegates to spec-parser.js's identical mapping (js/spec-parser.js's
+        // specFileForLibrary) when it's loaded, so the two copies can't drift;
+        // the inline fallback keeps this file working standalone.
         const specFileForLib = (lib) => {
+            if (window.MtlxSpecParser && window.MtlxSpecParser.specFileForLibrary) {
+                return window.MtlxSpecParser.specFileForLibrary(lib);
+            }
             const base = (lib || '').split('/')[0];
             if (base === 'pbrlib' || base === 'bxdf') return 'MaterialX.PBRSpec.md';
             if (base === 'nprlib') return 'MaterialX.NPRSpec.md';
@@ -770,13 +776,8 @@
         // certification tool (best-effort: falls back to an empty matrix on
         // any WASM binding mismatch rather than throwing).
         // ------------------------------------------------------------------
-        // Every MaterialX API call goes through `safe`, same convention as
-        // graph-app.jsx's local helper of the same name (not a window
-        // global — this file needs its own copy).
-        const safe = (fn, fallback) => {
-            try { const v = fn(); return v == null ? fallback : v; } catch (e) { return fallback; }
-        };
-
+        // Every MaterialX API call goes through mxSafe (js/mtlx-engine.js),
+        // same convention as graph-app.jsx's local `safe` helper.
         const IMPL_TARGET_LABELS = {
             genglsl: 'GLSL', genessl: 'ESSL', genosl: 'OSL', genmdl: 'MDL', genmsl: 'MSL',
         };
@@ -804,18 +805,18 @@
             if (!implIndexPromise) {
                 implIndexPromise = (async () => {
                     const { stdlib } = await getMxEnv();
-                    const impls = vecToArray(safe(() => stdlib.getImplementations(), []));
+                    const impls = vecToArray(mxSafe(() => stdlib.getImplementations(), []));
                     const index = {};
                     impls.forEach((impl) => {
-                        const nodedefName = safe(() => impl.getAttribute('nodedef'), null);
+                        const nodedefName = mxSafe(() => impl.getAttribute('nodedef'), null);
                         if (!nodedefName) return;
                         if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
-                        const ngAttr = safe(() => impl.getAttribute('nodegraph'), '');
+                        const ngAttr = mxSafe(() => impl.getAttribute('nodegraph'), '');
                         if (ngAttr) {
                             index[nodedefName].graph = true;
                             return;
                         }
-                        const target = safe(() => impl.getAttribute('target'), null);
+                        const target = mxSafe(() => impl.getAttribute('target'), null);
                         if (target) index[nodedefName].targets.add(target);
                     });
                     // MaterialX also lets a <nodegraph> serve directly as a
@@ -826,9 +827,9 @@
                     // uses of the indirect <implementation nodegraph="...">
                     // link handled above). Mirrors graph-app.jsx's
                     // getNodeGraphs()/implGraphNames two-shape handling.
-                    const nodegraphs = vecToArray(safe(() => stdlib.getNodeGraphs(), []));
+                    const nodegraphs = vecToArray(mxSafe(() => stdlib.getNodeGraphs(), []));
                     nodegraphs.forEach((g) => {
-                        const nodedefName = safe(() => g.getAttribute('nodedef'), null);
+                        const nodedefName = mxSafe(() => g.getAttribute('nodedef'), null);
                         if (!nodedefName) return;
                         if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
                         index[nodedefName].graph = true;
@@ -869,7 +870,7 @@
                     try {
                         const { stdlib } = await getMxEnv();
                         const index = await getImplIndex();
-                        const defs = vecToArray(safe(() => stdlib.getMatchingNodeDefs(nodeName), []));
+                        const defs = vecToArray(mxSafe(() => stdlib.getMatchingNodeDefs(nodeName), []));
                         if (!defs.length) { if (alive) setState({ status: 'empty', rows: [], allTargets: [] }); return; }
 
                         // One entry per TYPE SIGNATURE (nodeDefSigKey, same key
@@ -881,7 +882,7 @@
                         defs.forEach((def) => {
                             let key = null;
                             try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
-                            const defName = safe(() => def.getName(), null);
+                            const defName = mxSafe(() => def.getName(), null);
                             if (!key) key = defName || String(order.length);
                             let outType = '';
                             try { outType = def.getType(); } catch (e) { /* none */ }

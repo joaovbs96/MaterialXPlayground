@@ -321,12 +321,7 @@
             const [docFilter, setDocFilter] = React.useState('all');
             // Help popup (the "?" button in the stats row).
             const [showHelp, setShowHelp] = React.useState(false);
-            React.useEffect(() => {
-                if (!showHelp) return undefined;
-                const onKey = (e) => { if (e.key === 'Escape') setShowHelp(false); };
-                window.addEventListener('keydown', onKey);
-                return () => window.removeEventListener('keydown', onKey);
-            }, [showHelp]);
+            useEscapeToClose(() => setShowHelp(false), showHelp);
             const [searchQuery, setSearchQuery] = React.useState('');
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
