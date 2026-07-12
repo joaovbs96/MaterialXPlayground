@@ -65,20 +65,6 @@ function HomeApp({ active } = {}) {
                     </a>
                 ))}
             </div>
-
-            {/* Footer strip */}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-4 text-sm text-gray-500 border-t border-gray-800 pt-6">
-                <span>Powered by MaterialX{version ? ' v' + version : ''}</span>
-                <span className="hidden sm:inline text-gray-700">|</span>
-                <a
-                    href={links.repo}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-gray-400 hover:text-gray-200 underline transition-colors"
-                >
-                    Open source on GitHub
-                </a>
-            </div>
         </div>
     );
 }
