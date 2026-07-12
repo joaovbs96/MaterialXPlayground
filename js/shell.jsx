@@ -128,6 +128,13 @@ __scriptCache.set('js/mtlx-engine.js', Promise.resolve());
 // declaration (global-lexical scope, not module scope). See the
 // __scriptCache pre-seed right after loadJsxApp's definition above.
 const VIEW_DEPS = {
+    home: {
+        css: [],
+        scripts: [],
+        babelScripts: [],
+        app: 'js/home-app.jsx',
+        globalName: 'HomeApp',
+    },
     docs: {
         css: ['https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css'],
         scripts: [
@@ -176,24 +183,27 @@ const VIEW_DEPS = {
 // Shell component
 // ------------------------------------------------------------------
 function Shell() {
-    const [activeView, setActiveView] = React.useState('docs');
+    const [activeView, setActiveView] = React.useState('home');
     const [viewState, setViewState] = React.useState({
+        home: { mounted: false, status: 'idle' },
         docs: { mounted: false, status: 'idle' },
         viewer: { mounted: false, status: 'idle' },
         graph: { mounted: false, status: 'idle' },
     });
 
-    // Hash router: '#!viewer' / '#!graph' select those views; anything
-    // else (including empty, and legacy '#/lib/group/name' docs
-    // permalinks) means docs and is left untouched for docs-app.jsx's
-    // own hash-based selection logic to consume unmodified.
+    // Hash router: '#!viewer' / '#!graph' select those views; '#!docs' or
+    // any hash starting with '#/' (legacy '#/lib/group/name' docs
+    // permalinks) means docs, left untouched for docs-app.jsx's own
+    // hash-based selection logic to consume unmodified; everything else
+    // (empty, '#', '#!home') means the home landing view.
     React.useEffect(() => {
         const parseHash = () => {
             if (EMBED) return 'docs';
             const h = window.location.hash;
             if (h === '#!viewer') return 'viewer';
             if (h === '#!graph') return 'graph';
-            return 'docs';
+            if (h === '#!docs' || h.indexOf('#/') === 0) return 'docs';
+            return 'home';
         };
         const onNav = () => setActiveView(parseHash());
         setActiveView(parseHash());
@@ -244,6 +254,7 @@ function Shell() {
     React.useEffect(() => {
         if (EMBED) return;
         const titles = {
+            home: 'MaterialX Playground',
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
@@ -284,6 +295,7 @@ function Shell() {
         //        taken out of flow) box size is irrelevant to how
         //        NodeGraphApp paints.
         const wrapClass = {
+            home: 'p-2 sm:p-6 flex-1',
             docs: EMBED ? 'p-2 flex-1 md:min-h-0' : 'p-2 sm:p-6 flex-1 md:min-h-0',
             viewer: 'p-2 sm:p-6 flex-1',
             graph: '',
@@ -304,7 +316,12 @@ function Shell() {
             );
         } else if (st.status === 'ready' && window[dep.globalName]) {
             const rendered = React.createElement(window[dep.globalName], { active: isActive });
-            if (view === 'docs') {
+            if (view === 'home') {
+                // Mirrors the viewer wrapper contract: HomeApp handles its
+                // own inner max-width/centering, this just matches the
+                // other views' wrapper contract.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+            } else if (view === 'docs') {
                 // Reconstructs index.html's #root (`max-w-[1600px] mx-auto
                 // md:h-full`) so App's own `md:h-full` resolves correctly.
                 content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
@@ -334,6 +351,7 @@ function Shell() {
         // definite height from `flex-1` in the real <body>'s flex column).
         // Deliberately NOT `position: relative` — see the graph case above.
         <div className="h-full w-full flex flex-col">
+            {renderView('home')}
             {renderView('docs')}
             {renderView('viewer')}
             {renderView('graph')}
