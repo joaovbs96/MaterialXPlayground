@@ -8,7 +8,7 @@
         // parameter panel go side-by-side starting at the md: breakpoint
         // instead of lg:, since the iframe never reaches lg: width.
         const EMBED = !!window.__MTLX_EMBED;
-        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, enabled, onEnable }) => {
+        const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable }) => {
             // Node categories are NOT unique across libraries ('add' exists in
             // stdlib [math] AND pbrlib [pbr: BSDF/EDF/VDF]) — nodeName alone
             // cannot identify the selected node. nodeKey does, and drives
@@ -22,7 +22,8 @@
             // preferredDef (a specific nodedef NAME, e.g. to disambiguate
             // float-amplitude overloads that share an output type) is more
             // precise than preferredType and wins when both key the identity.
-            const identKey = nodeKey + '::' + (preferredDef || preferredType || 'auto');
+            const identKey = nodeKey + '::' + (preferredDef || preferredType || 'auto')
+                + '::' + (disabledNotice ? 'off' : 'on');
             const canvasRef = React.useRef(null);
             // The live three.js uniforms object — mutated directly by the
             // parameter UI so edits render on the next frame with no shader
@@ -351,6 +352,14 @@
                     let mxRef = null;
 
                     try {
+                        // The docs page already knows the selected signature's
+                        // exact input/output types and decided previewability
+                        // there (index.html) — bail before any WASM/doc work.
+                        if (disabledNotice) {
+                            const eD = new Error(disabledNotice);
+                            eD.isNotice = true;
+                            throw eD;
+                        }
                         const { mx, gen, genContext, stdlib, lightData } = await getMxEnv();
                         mxRef = mx;
                         if (!mounted) return;
@@ -435,52 +444,6 @@
                             ? { kind: 'translation', outType: 'multioutput', outputName: null, multiOutput: true, types: [] }
                             : resolveNodeKind(doc, nodeName, defMatchesIdentity, preferredType || null, preferredDef || null);
                         const { kind, outType, outputName, multiOutput, types } = rk;
-                        // Closure-modifier nodes (BSDF/EDF/VDF output that ALSO
-                        // takes a BSDF/EDF/VDF input — e.g. pbrlib multiply/add/mix,
-                        // ND_multiply_bsdfC) fail WebGL shader compilation in the
-                        // WASM shadergen/stdlib build ('closureData undeclared', no
-                        // matching overload) — a mismatch we cannot fix here. Show
-                        // the notice instead of attempting to compile. Elemental
-                        // BSDFs (closure output, NO closure inputs, e.g.
-                        // oren_nayar_diffuse_bsdf) and `surface` (closure inputs,
-                        // surfaceshader output) are unaffected and must keep working.
-                        // The gate keys off the SELECTED DEF's own types, not
-                        // rk.outType — resolveNodeKind's bsdf/surface returns spread
-                        // `{type: ...}` and have no outType field, so an outType-based
-                        // outer condition would never fire for kind 'bsdf'.
-                        try {
-                            const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
-                            // Search the pinned preferredDef against the UNFILTERED def
-                            // list: filterDefs' identity filter can exclude the selected
-                            // cross-library def, which would silently disable this gate.
-                            const allMatchingDefs = vecToArray(doc.getMatchingNodeDefs(nodeName));
-                            let closureDef = preferredDef
-                                ? allMatchingDefs.find((d) => d.getName && d.getName() === preferredDef)
-                                : null;
-                            if (!closureDef && outType) {
-                                closureDef = filterDefs(allMatchingDefs).find((d) => d.getType && d.getType() === outType) || null;
-                            }
-                            // No trustworthy signature info -> nothing to gate on (elemental
-                            // defaults must not be blocked).
-                            if (closureDef) {
-                                const defOutTypes = [closureDef.getType && closureDef.getType()]
-                                    .concat(vecToArray(closureDef.getActiveOutputs ? closureDef.getActiveOutputs() : null)
-                                        .map((o) => { try { return o.getType(); } catch (e) { return null; } }));
-                                const closureOut = defOutTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1);
-                                if (closureOut) {
-                                    const closureInTypes = vecToArray(closureDef.getActiveInputs ? closureDef.getActiveInputs() : null)
-                                        .map((i) => { try { return i.getType(); } catch (e) { return null; } });
-                                    if (closureInTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1)) {
-                                        const eG = new Error(`No preview for "${nodeName}" — closure-modifier nodes (BSDF/EDF/VDF in and out) can't be compiled by the WebGL shader generator.`);
-                                        eG.isNotice = true;
-                                        throw eG;
-                                    }
-                                }
-                            }
-                        } catch (gateErr) {
-                            if (gateErr && gateErr.isNotice) throw gateErr;
-                            // Binding/inspection error — fall through to normal behavior.
-                        }
                         // Element type for the .mtlx export: color-kind nodes use
                         // their resolved output type ('multioutput' when several),
                         // shader/bsdf kinds use the nodedef's declared type.
@@ -489,7 +452,7 @@
                             kind,
                             nodeType: (kind === 'color' || kind === 'translation')
                                 ? (multiOutput ? 'multioutput' : outType)
-                                : (rk.type || (kind === 'bsdf' ? 'BSDF' : 'surfaceshader')),
+                                : (rk.type || (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'))),
                             // Wiring needed to re-emit the EXACT previewed graph
                             // (unlit/surface wrappers included) as a valid doc.
                             outType,
@@ -506,57 +469,9 @@
                             if (outputName) input.setAttribute('output', outputName);
                         };
 
-                        // Find the shortest chain of `convert` hops that turns
-                        // `fromType` into `toType`, USING ONLY CONVERSIONS THE
-                        // LOADED LIBRARY ACTUALLY DEFINES. Returns a list of
-                        // intermediate/target types ([] when no convert is
-                        // needed, null when unreachable).
-                        //
-                        // This must be discovered, not assumed: instantiating a
-                        // convert for a pair with no nodedef (the old code did
-                        // color3→color3 for multi-output color taps, and
-                        // vector2→color3 in one hop) doesn't fail at graph
-                        // construction — the generator quietly resolves the
-                        // instance against the first convert nodedef with the
-                        // right OUTPUT type and emits a call whose argument
-                        // type doesn't match the emitted function (GLSL:
-                        // "'NG_convert_float_color3' : no matching overloaded
-                        // function found").
-                        const findConvertChain = (fromType, toType) => {
-                            if (fromType === toType) return [];
-                            const typeStr = (t) => (t && t.getName) ? t.getName() : String(t || '');
-                            // convert nodedefs -> directed edges inType -> outType
-                            const edges = {};
-                            for (const def of vecToArray(doc.getMatchingNodeDefs('convert'))) {
-                                const ins = vecToArray(def.getInputs ? def.getInputs() : null);
-                                if (ins.length !== 1) continue;
-                                const inT = typeStr(ins[0].getType ? ins[0].getType() : '');
-                                const outT = typeStr(def.getType ? def.getType() : '');
-                                if (!inT || !outT || outT === 'multioutput') continue;
-                                (edges[inT] = edges[inT] || new Set()).add(outT);
-                            }
-                            // BFS, shortest chain wins (converts are cheap but
-                            // each hop is another generated function).
-                            const prev = { [fromType]: null };
-                            let frontier = [fromType];
-                            while (frontier.length) {
-                                const next = [];
-                                for (const t of frontier) {
-                                    for (const n of edges[t] || []) {
-                                        if (n in prev) continue;
-                                        prev[n] = t;
-                                        if (n === toType) {
-                                            const chain = [];
-                                            for (let c = toType; c !== fromType; c = prev[c]) chain.unshift(c);
-                                            return chain;
-                                        }
-                                        next.push(n);
-                                    }
-                                }
-                                frontier = next;
-                            }
-                            return null;
-                        };
+                        // findConvertChain(doc, fromType, toType) now lives in
+                        // js/mtlx-engine.js (loaded before this script) and is
+                        // used here as a window global.
 
                         // Apply string/enum overrides (from the parameter panel)
                         // onto the node instance before generation, so they take
@@ -585,12 +500,12 @@
                                         // input, not its value. Ensure the input
                                         // exists (empty value is valid) and tag it;
                                         // the CMS bakes the transform at codegen.
-                                        const inp = ensureTypedInput(nodeInst, inputName, 'filename');
+                                        const inp = ensureTypedInput(doc, nodeInst, inputName, 'filename');
                                         if (typeof inp.setColorSpace === 'function') inp.setColorSpace(String(value));
                                         else inp.setAttribute('colorspace', String(value));
                                         continue;
                                     }
-                                    const inp = ensureTypedInput(nodeInst, inputName, type || 'string');
+                                    const inp = ensureTypedInput(doc, nodeInst, inputName, type || 'string');
                                     mxWriteValue(inp, Array.isArray(value) ? value.join(', ') : String(value), type || 'string');
                                 } catch (e) { /* best-effort per input */ }
                             }
@@ -600,85 +515,12 @@
                         // kept for the doc-based .mtlx export.
                         let previewInstance = null;
                         const createdNodes = [];
-                        // Create-or-fetch an input on `inst`, guaranteeing its
-                        // TYPE. In this wasm build both addInput's type argument
-                        // and setType have produced string-typed inputs, so NO
-                        // type string crosses the JS/wasm boundary on the
-                        // primary path: the input is created bare, then
-                        // copyContentFrom transfers the nodedef input's type
-                        // (and default) verbatim inside C++. A verification +
-                        // loud warning covers any remaining drift.
-                        const ensureTypedInput = (inst, inputName, wantedType) => {
-                            let inp = (inst.getInput && inst.getInput(inputName)) || null;
-                            let how = 'existing';
-                            if (!inp) {
-                                let defInput = null;
-                                try {
-                                    const cat = inst.getCategory ? inst.getCategory() : nodeName;
-                                    // Prefer the def whose input TYPE matches the
-                                    // wanted type. Categories like `convert` have
-                                    // MANY nodedefs sharing the input name 'in'
-                                    // with different types — copying from the
-                                    // first def found (the float variant) used to
-                                    // stamp `float` onto vector inputs, making
-                                    // the generator resolve the WRONG convert
-                                    // nodedef and emit a call whose argument type
-                                    // doesn't match the emitted function
-                                    // ("'NG_convert_float_color3' : no matching
-                                    // overloaded function found" for every
-                                    // vector2/vector3-output node preview).
-                                    for (const d of vecToArray(doc.getMatchingNodeDefs(cat))) {
-                                        const cand = (d.getInput && d.getInput(inputName)) || null;
-                                        if (!cand) continue;
-                                        if (!defInput) defInput = cand; // fallback: first found
-                                        let candType = '';
-                                        try { candType = String(cand.getType()); } catch (e2) { candType = ''; }
-                                        if (wantedType && candType === wantedType) { defInput = cand; break; }
-                                    }
-                                } catch (e) { defInput = null; }
-                                inp = inst.addInput(inputName);
-                                how = 'added-bare';
-                                if (defInput) {
-                                    try {
-                                        inp.copyContentFrom(defInput);
-                                        how = 'copied-from-nodedef';
-                                        // The copy brings the nodedef's UI/doc
-                                        // metadata along — meaningless on an
-                                        // instance and noisy in exports.
-                                        for (const attr2 of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
-                                            'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues']) {
-                                            try { inp.removeAttribute(attr2); } catch (e2) { /* absent */ }
-                                        }
-                                    } catch (e) { /* verify below */ }
-                                }
-                            }
-                            let got = '';
-                            try { got = String(inp.getType()); } catch (e) { got = '?'; }
-                            // Enforce the caller's type UNCONDITIONALLY. The old
-                            // exemption for the copied-from-nodedef path let a
-                            // wrong-typed copy (see above) survive — the caller
-                            // knows the graph typing; the copy only supplies
-                            // defaults/metadata.
-                            if (wantedType && got !== wantedType) {
-                                try {
-                                    if (typeof inp.setType === 'function') inp.setType(wantedType);
-                                    else inp.setAttribute('type', wantedType);
-                                    got = String(inp.getType());
-                                    // A copied default VALUE (e.g. float "0.0")
-                                    // is malformed for the corrected type —
-                                    // drop it; these inputs get connected or
-                                    // explicitly re-valued anyway.
-                                    if (how === 'copied-from-nodedef') {
-                                        try { inp.removeAttribute('value'); } catch (e2) { /* absent */ }
-                                    }
-                                } catch (e) { /* keep got */ }
-                            }
-                            if (wantedType && got !== wantedType) {
-                                console.warn('ensureTypedInput: "' + inputName + '" is "' + got + '" (wanted "' + wantedType + '"), path=' + how);
-                            }
-                            return inp;
-                        };
-                        const addTypedInput = (node, name2, type2) => ensureTypedInput(node, name2, type2);
+                        // ensureTypedInput(doc, node, inputName, wantedType) now
+                        // lives in js/mtlx-engine.js (loaded before this
+                        // script) and is used here as a window global. This
+                        // page's own inputs are always on the in-scope `doc`
+                        // above, so `addTypedInput` is a thin alias binding it.
+                        const addTypedInput = (node, name2, type2) => ensureTypedInput(doc, node, name2, type2);
 
                         if (kind === 'surface') {
                             renderable = doc.addNode(nodeName, 'preview_surface', 'surfaceshader');
@@ -694,6 +536,15 @@
                             createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
                             addTypedInput(renderable, 'bsdf', 'BSDF').setNodeName('preview_bsdf');
+                            createdNodes.push(renderable);
+                            needsLighting = true;
+                        } else if (kind === 'edf') {
+                            previewInstance = doc.addNode(nodeName, 'preview_edf', 'EDF');
+                            if (preferredDef) { try { previewInstance.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
+                            applyOverrides(previewInstance);
+                            createdNodes.push(previewInstance);
+                            renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
+                            addTypedInput(renderable, 'edf', 'EDF').setNodeName('preview_edf');
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'translation') {
@@ -731,51 +582,79 @@
                             if (preferredDef) { try { previewInstance.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
-                            // Bridge the tapped output into a color3 emission
-                            // through convert node(s) — but only hops the
-                            // loaded library actually defines, and NO convert
-                            // at all when the tap is already color3 (a
-                            // color3→color3 convert has no nodedef; see
-                            // findConvertChain).
                             let srcName = 'preview_node';
                             let srcIsPreviewNode = true;
-                            const chain = findConvertChain(outType, 'color3');
-                            if (chain === null) {
-                                const eC = new Error(`No preview for "${nodeName}" — the library defines no convert path from ${outType} to color3.`);
-                                eC.isNotice = true;
-                                throw eC;
+                            // Prefer a direct convert chain straight to
+                            // surfaceshader — most viewable simple types have a
+                            // one-hop convert-to-surfaceshader nodedef, which
+                            // skips the surface_unlit/emission_color detour
+                            // below entirely. Both paths bottom out in an
+                            // unlit surface_unlit, so needsLighting stays
+                            // false (its default) either way.
+                            const direct = findConvertChain(doc, outType, 'surfaceshader');
+                            if (direct !== null) {
+                                let prevType = outType;
+                                direct.forEach((toType, i) => {
+                                    const isLast = i === direct.length - 1;
+                                    // The last hop lands on 'preview_surface' so
+                                    // the shared material-wiring step below
+                                    // (which taps 'preview_surface' by name)
+                                    // picks it up unchanged.
+                                    const conv = doc.addNode('convert', isLast ? 'preview_surface' : 'preview_convert' + (i || ''), toType);
+                                    const inp = addTypedInput(conv, 'in', prevType);
+                                    if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
+                                    else inp.setNodeName(srcName);
+                                    createdNodes.push(conv);
+                                    srcName = isLast ? 'preview_surface' : 'preview_convert' + (i || '');
+                                    srcIsPreviewNode = false;
+                                    prevType = toType;
+                                    if (isLast) renderable = conv;
+                                });
+                            } else {
+                                // Fall back: bridge the tapped output into a
+                                // color3 emission through convert node(s) — but
+                                // only hops the loaded library actually
+                                // defines, and NO convert at all when the tap
+                                // is already color3 (a color3→color3 convert
+                                // has no nodedef; see findConvertChain).
+                                const chain = findConvertChain(doc, outType, 'color3');
+                                if (chain === null) {
+                                    const eC = new Error(`No preview for "${nodeName}" — the library defines no convert path from ${outType} to color3. Try it in the node graph editor.`);
+                                    eC.isNotice = true;
+                                    throw eC;
+                                }
+                                let prevType = outType;
+                                chain.forEach((toType, i) => {
+                                    const conv = doc.addNode('convert', 'preview_convert' + (i || ''), toType);
+                                    const inp = addTypedInput(conv, 'in', prevType);
+                                    // The FIRST hop taps the preview node (and, for
+                                    // multi-output nodes, carries the `output`
+                                    // selection); later hops chain convert→convert.
+                                    if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
+                                    else inp.setNodeName(srcName);
+                                    createdNodes.push(conv);
+                                    srcName = 'preview_convert' + (i || '');
+                                    srcIsPreviewNode = false;
+                                    prevType = toType;
+                                });
+                                renderable = doc.addNode('surface_unlit', 'preview_surface', 'surfaceshader');
+                                createdNodes.push(renderable);
+                                // surface_unlit's `emission` port is a FLOAT weight
+                                // (default 1.0); the color3 belongs on `emission_color`.
+                                // Adding an `emission` input typed color3 mismatches
+                                // the nodedef's declared float, so NO nodedef matches
+                                // the node instance → "Could not find a nodedef for
+                                // node 'preview_surface'" for every color-kind node.
+                                const emiss = addTypedInput(renderable, 'emission_color', 'color3');
+                                // No convert chain: emission_color taps preview_node
+                                // directly and must carry the `output` selection
+                                // itself for multi-output color3 taps.
+                                if (srcIsPreviewNode) connectToPreview(emiss, 'preview_node');
+                                else emiss.setNodeName(srcName);
                             }
-                            let prevType = outType;
-                            chain.forEach((toType, i) => {
-                                const conv = doc.addNode('convert', 'preview_convert' + (i || ''), toType);
-                                const inp = addTypedInput(conv, 'in', prevType);
-                                // The FIRST hop taps the preview node (and, for
-                                // multi-output nodes, carries the `output`
-                                // selection); later hops chain convert→convert.
-                                if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
-                                else inp.setNodeName(srcName);
-                                createdNodes.push(conv);
-                                srcName = 'preview_convert' + (i || '');
-                                srcIsPreviewNode = false;
-                                prevType = toType;
-                            });
-                            renderable = doc.addNode('surface_unlit', 'preview_surface', 'surfaceshader');
-                            createdNodes.push(renderable);
-                            // surface_unlit's `emission` port is a FLOAT weight
-                            // (default 1.0); the color3 belongs on `emission_color`.
-                            // Adding an `emission` input typed color3 mismatches
-                            // the nodedef's declared float, so NO nodedef matches
-                            // the node instance → "Could not find a nodedef for
-                            // node 'preview_surface'" for every color-kind node.
-                            const emiss = addTypedInput(renderable, 'emission_color', 'color3');
-                            // No convert chain: emission_color taps preview_node
-                            // directly and must carry the `output` selection
-                            // itself for multi-output color3 taps.
-                            if (srcIsPreviewNode) connectToPreview(emiss, 'preview_node');
-                            else emiss.setNodeName(srcName);
                         } else {
                             const shown = (types || []).join(', ') || 'unknown';
-                            const eN = new Error(`No preview for "${nodeName}" — it outputs ${shown}, which isn't a viewable color surface.`);
+                            const eN = new Error(`No preview for "${nodeName}" — it outputs ${shown}, which isn't a viewable color surface. Try it in the node graph editor.`);
                             eN.isNotice = true; // informational, not a failure
                             throw eN;
                         }
@@ -800,7 +679,7 @@
                             instance: previewInstance,
                             created: createdNodes,
                             // Closure keeps doc/nodedef context alive for export.
-                            ensureInput: (n2, t2) => ensureTypedInput(previewInstance, n2, t2),
+                            ensureInput: (n2, t2) => ensureTypedInput(doc, previewInstance, n2, t2),
                         };
 
                         // Before generating: dump the constructed graph and run
@@ -866,7 +745,7 @@
                         // string/enum input has no uniform, so editing it
                         // regenerates the shader (see `overrides`).
                         const targetNode = (kind === 'color' || kind === 'translation') ? 'preview_node'
-                            : (kind === 'bsdf' ? 'preview_bsdf' : 'preview_surface');
+                            : (kind === 'bsdf' ? 'preview_bsdf' : (kind === 'edf' ? 'preview_edf' : 'preview_surface'));
 
                         // Map introspected public uniforms back to input names,
                         // for live editing. Match by the element path's LAST
@@ -1009,7 +888,7 @@
                         // output type matches the previewed one (overloaded nodes
                         // like `mix` differ per signature); dedup by input name.
                         const preferType = kind === 'color' ? (multiOutput ? null : outType)
-                            : (kind === 'bsdf' ? 'BSDF' : 'surfaceshader');
+                            : (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'));
                         const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
                         defsAll.sort((a, b) => {
                             // An explicit preferredDef (the docs page's exact
@@ -1094,6 +973,17 @@
                             return;
                         }
                         const msg = mxErr(mxRef, err);
+                        // The shader generator has no essl (WebGL) implementation
+                        // for every nodedef in the libraries — that's expected
+                        // for some nodes, not a bug, so treat it as a notice
+                        // rather than an error.
+                        if (/Could not find a matching implementation/i.test(msg)) {
+                            if (mounted) {
+                                setNotice(`No preview for "${nodeName}" — this node has no WebGL (essl) implementation in the MaterialX libraries.`);
+                                setLoading(false);
+                            }
+                            return;
+                        }
                         console.error('MaterialX Preview Error:', msg, err);
                         if (mounted) {
                             setError(msg);

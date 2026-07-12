@@ -323,6 +323,124 @@ const vecToArray = (v) => {
     return [];
 };
 
+const mxSafe = (fn, fb) => { try { const v = fn(); return v == null ? fb : v; } catch (e) { return fb; } };
+const mxElCat = (el) => mxSafe(() => el.getCategory(), '');
+const mxElType = (el) => mxSafe(() => String(el.getType()), '');
+
+// Shortest chain of `convert` hops fromType->toType using ONLY the
+// conversions the loaded library actually defines. This matters because
+// a generator-resolved convert with no matching nodedef (e.g. going
+// color3->color3 for multi-output color taps, or vector2->color3 in one
+// hop) doesn't fail at graph construction — the generator quietly
+// resolves the instance against the first convert nodedef with the
+// right OUTPUT type and emits a call whose argument type doesn't match
+// the emitted function (GLSL: "'NG_convert_float_color3' : no matching
+// overloaded function found"). [] = no convert needed, null = unreachable.
+const findConvertChain = (doc, fromType, toType) => {
+    if (fromType === toType) return [];
+    const typeStr = (t) => (t && t.getName) ? t.getName() : String(t || '');
+    // convert nodedefs -> directed edges inType -> outType
+    const convEdges = {};
+    for (const def of vecToArray(mxSafe(() => doc.getMatchingNodeDefs('convert'), []))) {
+        const ins = vecToArray(mxSafe(() => def.getInputs(), []));
+        if (ins.length !== 1) continue;
+        const inT = typeStr(mxSafe(() => ins[0].getType(), ''));
+        const outT = typeStr(mxSafe(() => def.getType(), ''));
+        if (!inT || !outT || outT === 'multioutput') continue;
+        (convEdges[inT] = convEdges[inT] || new Set()).add(outT);
+    }
+    // BFS, shortest chain wins (converts are cheap but each hop is
+    // another generated function).
+    const prev = { [fromType]: null };
+    let frontier = [fromType];
+    while (frontier.length) {
+        const next = [];
+        for (const t of frontier) {
+            for (const n of convEdges[t] || []) {
+                if (n in prev) continue;
+                prev[n] = t;
+                if (n === toType) {
+                    const chain = [];
+                    for (let c = toType; c !== fromType; c = prev[c]) chain.unshift(c);
+                    return chain;
+                }
+                next.push(n);
+            }
+        }
+        frontier = next;
+    }
+    return null;
+};
+
+// Create-or-fetch an input on `node`, guaranteeing its TYPE — the single
+// safe way to author inputs in this wasm build. Two verified binding
+// quirks make the obvious calls corrupting:
+//   - addInput(name, type) can DROP the type argument (input lands
+//     'color3'),
+//   - setValueString retypes the input to 'string'.
+// Either mistyping breaks nodedef resolution ("Could not find a nodedef
+// for node …") and with it every shader recompile. So: the input is
+// created BARE, the matching nodedef input's content is copied verbatim
+// inside C++ (type + default cross no JS boundary), the type is
+// verified and force-corrected as a fallback, and nodedef UI metadata
+// the copy drags along is stripped. Values are written afterwards with
+// mxWriteValue (raw attribute — never touches type).
+//
+// Categories like `convert` have MANY nodedefs sharing an input name
+// (e.g. 'in') with different types — copying from the first def found
+// (the float variant) would stamp `float` onto vector inputs, making
+// the generator resolve the WRONG convert nodedef. So the def whose
+// input TYPE matches `wantedType` is preferred when one is found.
+const ensureTypedInput = (doc, node, inputName, wantedType) => {
+    let inp = mxSafe(() => node.getInput(inputName), null);
+    let how = 'existing';
+    if (!inp) {
+        let defInput = null;
+        const cat = mxElCat(node);
+        for (const d of vecToArray(mxSafe(() => doc.getMatchingNodeDefs(cat), []))) {
+            const cand = mxSafe(() => d.getInput(inputName), null)
+                || mxSafe(() => d.getActiveInput(inputName), null);
+            if (!cand) continue;
+            if (!defInput) defInput = cand; // fallback: first found
+            if (wantedType && mxElType(cand) === wantedType) { defInput = cand; break; }
+        }
+        inp = mxSafe(() => node.addInput(inputName), null);
+        how = 'added-bare';
+        if (inp && defInput) {
+            const copied = mxSafe(() => { inp.copyContentFrom(defInput); return true; }, false);
+            if (copied) {
+                how = 'copied-from-nodedef';
+                // The copy brings the nodedef's UI/doc metadata along —
+                // meaningless on an instance and noisy in exports.
+                for (const attr of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
+                    'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues']) {
+                    mxSafe(() => { inp.removeAttribute(attr); return true; }, false);
+                }
+            }
+        }
+    }
+    // Enforce the caller's type UNCONDITIONALLY — a wrong-typed copy (see
+    // above) must not survive; the caller knows the graph typing, the
+    // copy only supplies defaults/metadata.
+    if (inp && wantedType && mxElType(inp) !== wantedType) {
+        mxSafe(() => {
+            if (typeof inp.setType === 'function') inp.setType(wantedType);
+            else inp.setAttribute('type', wantedType);
+            return true;
+        }, false);
+        if (mxElType(inp) !== wantedType) {
+            mxSafe(() => { inp.setAttribute('type', wantedType); return true; }, false);
+        }
+        // A copied default VALUE is malformed for the corrected type —
+        // drop it; callers connect or re-value anyway.
+        mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
+    }
+    if (inp && wantedType && mxElType(inp) !== wantedType) {
+        console.warn('ensureTypedInput: "' + inputName + '" is "' + mxElType(inp) + '" (wanted "' + wantedType + '"), path=' + how);
+    }
+    return inp;
+};
+
 // Enumerate a ShaderStage's uniform variables via MaterialX shader
 // introspection — the official viewer's approach (§7.1). Returns
 // [{ name, type, data }] where data is the raw getData() payload of
@@ -598,7 +716,7 @@ const buildPreviewGeometry = async (which) => {
 //  - MULTI-OUTPUT defs (many noise nodes expose out/outr/outg/...):
 //    we pick the FIRST viewable output.
 // Returns { kind, outType, outputName, multiOutput } where kind is
-// 'surface' | 'bsdf' | 'color' | null. outputName is the specific
+// 'surface' | 'bsdf' | 'edf' | 'color' | null. outputName is the specific
 // output to tap (null = the def's single/default output). multiOutput
 // is true when the node instance must be created as type 'multioutput'.
 const COLOR_VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vector4'];
@@ -665,6 +783,7 @@ const resolveNodeKind = (doc, nodeName, defFilter, preferType, preferDefName) =>
         if (want) {
             if (want.type === 'surfaceshader') return { kind: 'surface', ...want };
             if (want.type === 'BSDF') return { kind: 'bsdf', ...want };
+            if (want.type === 'EDF') return { kind: 'edf', ...want };
             if (COLOR_VIEWABLE.indexOf(want.type) !== -1) {
                 return { kind: 'color', outType: want.type, outputName: want.outputName, multiOutput: want.multiOutput };
             }
@@ -674,11 +793,13 @@ const resolveNodeKind = (doc, nodeName, defFilter, preferType, preferDefName) =>
         // nodedef): fall through to the automatic priority below.
     }
 
-    // Priority: surface shader > BSDF > first viewable color/vector.
+    // Priority: surface shader > BSDF > EDF > first viewable color/vector.
     const surf = candidates.find((c) => c.type === 'surfaceshader');
     if (surf) return { kind: 'surface', ...surf };
     const bsdf = candidates.find((c) => c.type === 'BSDF');
     if (bsdf) return { kind: 'bsdf', ...bsdf };
+    const edf = candidates.find((c) => c.type === 'EDF');
+    if (edf) return { kind: 'edf', ...edf };
     for (const t of COLOR_VIEWABLE) {
         const hit = candidates.find((c) => c.type === t);
         if (hit) return { kind: 'color', outType: t, outputName: hit.outputName, multiOutput: hit.multiOutput };
@@ -1386,6 +1507,7 @@ Object.assign(window, {
     getMxEnv, DEBUG_SHADERS,
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
+    findConvertChain, ensureTypedInput,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
     getDefaultTexture, configureLoadedTexture,

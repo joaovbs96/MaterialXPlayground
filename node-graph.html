@@ -300,6 +300,34 @@
             return pool.find((d) => safe(() => d.getVersionString(), '') === ver) || fallback();
         };
 
+        // Every input type the node's signature exposes: authored inputs, the
+        // resolved nodedef's active inputs, and — when the resolved def is
+        // missing or doesn't match the node's output type (getNodeDef() can
+        // mis-resolve unpinned closure overloads) — every category nodedef
+        // with a matching output type.
+        const signatureInputTypes = (doc, el, outType) => {
+            const authoredInTypes = vecToArray(safe(() => el.getInputs(), [])).map(elType);
+            const def = resolveVersionedNodeDef(el);
+            let defInTypes = def ? vecToArray(safe(() => def.getActiveInputs(), [])).map(elType) : [];
+            const defMatchesOut = def && (elType(def) === outType
+                || vecToArray(safe(() => def.getActiveOutputs(), [])).some((o) => elType(o) === outType));
+            if (!defMatchesOut) {
+                // getNodeDef() can miss (or mis-resolve) unpinned closure overloads;
+                // scan every nodedef of this category with a matching output type.
+                const candDefs = vecToArray(safe(() => doc.getMatchingNodeDefs(elCat(el)), []))
+                    .filter((d) => elType(d) === outType
+                        || vecToArray(safe(() => d.getActiveOutputs(), [])).some((o) => elType(o) === outType));
+                for (const d of candDefs) {
+                    defInTypes = defInTypes.concat(vecToArray(safe(() => d.getActiveInputs(), [])).map(elType));
+                }
+            }
+            return authoredInTypes.concat(defInTypes);
+        };
+        const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
+        const isClosureModifier = (outType, inTypes) =>
+            CLOSURE_TYPES.indexOf(outType) !== -1
+            && inTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1);
+
         // Inputs/outputs of an element, with the raw connection attributes
         // kept verbatim (nodename / nodegraph / interfacename / output).
         // Port types the document leaves implicit are resolved from the
@@ -853,101 +881,10 @@
 
         // ---- Per-node preview --------------------------------------------
 
-        // Shortest chain of `convert` hops fromType→toType using ONLY the
-        // conversions the loaded library actually defines (same discovery
-        // the docs page previewer does — instantiating a convert with no
-        // nodedef fails only at GLSL compile time with a cryptic overload
-        // error). [] = no convert needed, null = unreachable.
-        const findConvertChain = (doc, fromType, toType) => {
-            if (fromType === toType) return [];
-            const typeStr = (t) => (t && t.getName) ? t.getName() : String(t || '');
-            const convEdges = {};
-            for (const def of vecToArray(safe(() => doc.getMatchingNodeDefs('convert'), []))) {
-                const ins = vecToArray(safe(() => def.getInputs(), []));
-                if (ins.length !== 1) continue;
-                const inT = typeStr(safe(() => ins[0].getType(), ''));
-                const outT = typeStr(safe(() => def.getType(), ''));
-                if (!inT || !outT || outT === 'multioutput') continue;
-                (convEdges[inT] = convEdges[inT] || new Set()).add(outT);
-            }
-            const prev = { [fromType]: null };
-            let frontier = [fromType];
-            while (frontier.length) {
-                const next = [];
-                for (const t of frontier) {
-                    for (const n of convEdges[t] || []) {
-                        if (n in prev) continue;
-                        prev[n] = t;
-                        if (n === toType) {
-                            const chain = [];
-                            for (let c = toType; c !== fromType; c = prev[c]) chain.unshift(c);
-                            return chain;
-                        }
-                        next.push(n);
-                    }
-                }
-                frontier = next;
-            }
-            return null;
-        };
-
-        // Create-or-fetch an input on `node`, guaranteeing its TYPE. Type
-        // strings crossing the JS/wasm boundary have been unreliable in
-        // this build (see the docs page previewer), so the primary path
-        // copies the matching nodedef input inside C++, then enforces the
-        // wanted type with setType/setAttribute as a fallback.
-        // Create-or-fetch an input on a node, GUARANTEEING its type — the
-        // single safe way to author inputs in this wasm build. Two verified
-        // binding quirks make the obvious calls corrupting (see the docs
-        // previewer, which pioneered this):
-        //   - addInput(name, type) can DROP the type argument (input lands
-        //     'color3'),
-        //   - setValueString retypes the input to 'string'.
-        // Either mistyping breaks nodedef resolution ("Could not find a
-        // nodedef for node …") and with it every shader recompile. So: the
-        // input is created BARE, the matching nodedef input's content is
-        // copied verbatim inside C++ (type + default cross no JS boundary),
-        // the type is verified and force-corrected as a fallback, and nodedef
-        // UI metadata the copy drags along is stripped. Values are written
-        // afterwards with mxWriteValue (raw attribute — never touches type).
-        const ensureTypedInput = (doc, node, inputName, wantedType) => {
-            let inp = safe(() => node.getInput(inputName), null);
-            if (!inp) {
-                let defInput = null;
-                const cat = elCat(node);
-                for (const d of vecToArray(safe(() => doc.getMatchingNodeDefs(cat), []))) {
-                    const cand = safe(() => d.getInput(inputName), null)
-                        || safe(() => d.getActiveInput(inputName), null);
-                    if (!cand) continue;
-                    if (!defInput) defInput = cand;
-                    if (wantedType && elType(cand) === wantedType) { defInput = cand; break; }
-                }
-                inp = safe(() => node.addInput(inputName), null);
-                if (inp && defInput) {
-                    safe(() => { inp.copyContentFrom(defInput); return true; }, false);
-                    // The copy brings the nodedef's UI/doc metadata along —
-                    // meaningless on an instance and noisy in exports.
-                    for (const attr of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
-                        'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues']) {
-                        safe(() => { inp.removeAttribute(attr); return true; }, false);
-                    }
-                }
-            }
-            if (inp && wantedType && elType(inp) !== wantedType) {
-                safe(() => {
-                    if (typeof inp.setType === 'function') inp.setType(wantedType);
-                    else inp.setAttribute('type', wantedType);
-                    return true;
-                }, false);
-                if (elType(inp) !== wantedType) {
-                    safe(() => { inp.setAttribute('type', wantedType); return true; }, false);
-                }
-                // A copied default VALUE is malformed for the corrected
-                // type — drop it; callers connect or re-value anyway.
-                safe(() => { inp.removeAttribute('value'); return true; }, false);
-            }
-            return inp;
-        };
+        // findConvertChain(doc, fromType, toType) and
+        // ensureTypedInput(doc, node, inputName, wantedType) now live in
+        // js/mtlx-engine.js (loaded before this script) and are used here
+        // as window globals like the rest of the shared engine API.
 
         // First (preferably color-viewable) output of a node instance:
         // authored outputs first, the instance's own type next, and the
@@ -1025,6 +962,19 @@
                     connectSrc(ensureTypedInput(doc, surf, outType === 'BSDF' ? 'bsdf' : 'edf', outType));
                     return ok(surf, label);
                 }
+                const direct = findConvertChain(doc, outType, 'surfaceshader');
+                if (direct !== null) {
+                    let dSrcName = null, dPrevType = outType, lastConv = null;
+                    for (let i = 0; i < direct.length; i++) {
+                        const conv = addTempNode('convert', '__pv_convert' + i, direct[i]);
+                        if (!conv) return fail('Could not build the preview graph (convert).');
+                        connectSrc(ensureTypedInput(doc, conv, 'in', dPrevType), dSrcName);
+                        dSrcName = elName(conv);
+                        dPrevType = direct[i];
+                        lastConv = conv;
+                    }
+                    return ok(lastConv, label);
+                }
                 const chain = findConvertChain(doc, outType, 'color3');
                 if (chain === null) {
                     return fail('No preview for "' + label + '" \u2014 it outputs '
@@ -1080,33 +1030,10 @@
                     srcRef = { nodegraph: containerName, output: oName };
                 }
                 // Closure-modifier nodes (BSDF/EDF/VDF output that ALSO takes a
-                // BSDF/EDF/VDF input — e.g. pbrlib multiply/add/mix) fail
-                // WebGL shader compilation in the WASM shadergen/stdlib build; we
-                // can't fix that mismatch here, so show the notice instead of
-                // attempting to compile. Elemental BSDFs (closure output, no
-                // closure inputs) and `surface` (closure inputs, surfaceshader
-                // output) have no closure-typed input/output pair and pass through.
-                if (out.type === 'BSDF' || out.type === 'EDF' || out.type === 'VDF') {
-                    const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
-                    const authoredInTypes = vecToArray(safe(() => el.getInputs(), [])).map(elType);
-                    const def = resolveVersionedNodeDef(el);
-                    let defInTypes = def ? vecToArray(safe(() => def.getActiveInputs(), [])).map(elType) : [];
-                    const defMatchesOut = def && (elType(def) === out.type
-                        || vecToArray(safe(() => def.getActiveOutputs(), [])).some((o) => elType(o) === out.type));
-                    if (!defMatchesOut) {
-                        // getNodeDef() can miss (or mis-resolve) unpinned closure overloads;
-                        // scan every nodedef of this category with a matching output type.
-                        const candDefs = vecToArray(safe(() => doc.getMatchingNodeDefs(elCat(el)), []))
-                            .filter((d) => elType(d) === out.type
-                                || vecToArray(safe(() => d.getActiveOutputs(), [])).some((o) => elType(o) === out.type));
-                        for (const d of candDefs) {
-                            defInTypes = defInTypes.concat(vecToArray(safe(() => d.getActiveInputs(), [])).map(elType));
-                        }
-                    }
-                    const allInTypes = authoredInTypes.concat(defInTypes);
-                    if (allInTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1)) {
-                        return fail('No preview for "' + name + '" \u2014 closure-modifier nodes (BSDF/EDF/VDF in and out) can\u2019t be compiled for preview.');
-                    }
+                // BSDF/EDF/VDF input — e.g. pbrlib multiply/add/mix) fail WebGL
+                // shader compilation in the WASM shadergen/stdlib build.
+                if (isClosureModifier(out.type, signatureInputTypes(doc, el, out.type))) {
+                    return fail('No preview for "' + name + '" \u2014 closure-modifier nodes (BSDF/EDF/VDF in and out) can\u2019t be compiled for preview.');
                 }
                 return wrapAsSurface(srcRef, out.type, name);
             };
@@ -1301,7 +1228,12 @@
                         if (!mounted) return;
                         setLoading(false);
                         setLastFrame(null);
-                        setError(String((e && e.message) || e));
+                        const msg = String((e && e.message) || e);
+                        if (/Could not find a matching implementation/i.test(msg)) {
+                            setNotice('No preview \u2014 this node has no WebGL (essl) implementation in the MaterialX libraries.');
+                        } else {
+                            setError(msg);
+                        }
                     }
                 })();
                 return () => {
@@ -4843,7 +4775,10 @@
                         <button
                             onClick={() => toggleFullscreen(panelRef.current)}
                             title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-                            className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors '
+                                + (isFullscreen
+                                    ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
+                                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                         >
                             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                             <span>Maximize</span>

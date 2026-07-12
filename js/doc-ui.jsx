@@ -444,16 +444,16 @@
         // ------------------------------------------------------------------
         const CANONICAL_ORDER = ['port', 'description', 'type', 'default', 'accepted_values'];
         const COL_WIDTHS = {
-            port: 'w-40',
+            port: 'w-52',
             type: 'w-48',
-            default: 'w-36',
+            default: 'w-40',
             accepted_values: 'w-44',
             // description gets whatever space is left
         };
         // Same widths in rem, used to compute each table's minimum width on
         // small screens (fixed columns + a readable minimum for description).
-        const COL_REM = { port: 10, type: 12, default: 9, accepted_values: 11 };
-        const DESCRIPTION_MIN_REM = 14;
+        const COL_REM = { port: 13, type: 12, default: 10, accepted_values: 11 };
+        const DESCRIPTION_MIN_REM = 8;
         const EXTRA_COL_REM = 8;
         const CELL_STYLES = {
             port: 'font-medium text-blue-400 font-mono break-words',
@@ -563,8 +563,9 @@
         // author family tokens ('float, colorN or vectorN', 'matrixNN')
         // rather than splitting per concrete type. Expand those tokens the
         // same way signaturePreviewType does and pick the first table whose
-        // port types (resolving "Same as X" chains via resolveType) cover
-        // the wanted concrete type.
+        // OUTPUT port types (resolving "Same as X" chains via resolveType,
+        // and falling back to ALL ports when a table has no output row)
+        // cover the wanted concrete type.
         const SIG_FAMILY_EXPANSIONS = {
             colorn: ['color2', 'color3', 'color4'],
             vectorn: ['vector2', 'vector3', 'vector4'],
@@ -580,7 +581,9 @@
             for (const table of tables) {
                 const ports = table.ports || {};
                 const names = Object.keys(ports);
-                const tokens = uniqTypeTokens(names.map(n => resolveType(ports, n)));
+                let outNames = names.filter(n => isOutputPort(n, ports[n]));
+                if (!outNames.length) outNames = names;
+                const tokens = uniqTypeTokens(outNames.map(n => resolveType(ports, n)));
                 const expanded = tokens.reduce((acc, t) => acc.concat(expandSigToken(t)), []);
                 if (expanded.some(t => t === want)) return table;
             }
