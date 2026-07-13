@@ -374,7 +374,16 @@
                     try {
                         const { mx, gen, genContext, lightData } = await getMxEnv();
                         if (!mounted) return;
+                        // [mtlx-perf] timing (item 3) — off unless
+                        // MTLX_PERF_LOG (bare window global, model.jsx
+                        // loads before this file).
+                        const __pvStart = MTLX_PERF_LOG ? performance.now() : 0;
                         const built = buildPreviewRenderable(parsed, target);
+                        if (MTLX_PERF_LOG) {
+                            console.log('[mtlx-perf] buildPreviewRenderable: '
+                                + (performance.now() - __pvStart).toFixed(1) + 'ms (target: '
+                                + ((target && target.id) || '(doc default)') + ')');
+                        }
                         if (!built.renderable) {
                             setLabel('');
                             setNotice(built.notice || 'This document has nothing to preview.');

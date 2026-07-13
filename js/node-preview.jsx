@@ -268,7 +268,9 @@
                         typeReport.push(p.input + ':' + got + (got === p.type ? '' : ' (WANTED ' + p.type + ')'));
                     } catch (e) { /* keep exporting the rest */ }
                 }
-                console.log('export input types (non-default only) →', typeReport.join(', ') || '(all at defaults)');
+                if (DEBUG_SHADERS) {
+                    console.log('export input types (non-default only) →', typeReport.join(', ') || '(all at defaults)');
+                }
                 // 2) Serialize the DOCUMENT itself — no options, no
                 //    predicate, no fallback. The standard library is attached
                 //    via setDataLibrary (referenced, not contained), so the

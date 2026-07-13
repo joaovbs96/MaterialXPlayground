@@ -50,6 +50,15 @@
             // `busy` (document load/import) — the two overlays are never
             // meant to be shown for the same reason.
             const [scopeBusy, setScopeBusy] = React.useState(false);
+            // Generic busy overlay for heavy, doc-mutating keyboard actions
+            // that otherwise give zero feedback (Ctrl+G encapsulate,
+            // deleting a nodegraph) — a label string while deferred behind
+            // the same double-rAF idiom changeScope uses (below), null when
+            // idle. Kept separate from scopeBusy — the two never fire for
+            // the same reason (this one for edit actions, that one for
+            // scope navigation) — rendered as its own LoadingOverlay
+            // alongside scopeBusy's.
+            const [actionBusy, setActionBusy] = React.useState(null);
             // The type-color legend (bottom left) can be collapsed to a chip.
             const [legendOpen, setLegendOpen] = React.useState(true);
             // Legend "+" toggle: show every known TYPE_COLORS entry, not just
@@ -61,19 +70,6 @@
             const [globalPorts, setGlobalPorts] = React.useState('authored');
             const globalPortsRef = React.useRef('authored');
             globalPortsRef.current = globalPorts;
-            // auto-layout: OFF by default — loading a document and entering
-            // or leaving nodegraphs keep the stored (or once-computed)
-            // layout, and only the Arrange button re-lays out. ON: every
-            // rebuild (new document, scope change) and every port-mode
-            // change re-runs the automatic layout. Remembered per browser.
-            const [autoLayout, setautoLayout] = React.useState(() => {
-                try { return localStorage.getItem('mtlx-graph-auto-layout') === '1'; } catch (e) { return false; }
-            });
-            const autoLayoutRef = React.useRef(false);
-            autoLayoutRef.current = autoLayout;
-            React.useEffect(() => {
-                try { localStorage.setItem('mtlx-graph-auto-layout', autoLayout ? '1' : '0'); } catch (e) { /* storage unavailable */ }
-            }, [autoLayout]);
             // Parameter panel (right): the clicked node's id, and whether the
             // panel is expanded or collapsed to a chip.
             const [selectedId, setSelectedId] = React.useState(null);
@@ -342,6 +338,29 @@
 
             // A new document invalidates the remembered preview target.
             React.useEffect(() => { setPreviewSel(null); setPinnedTarget(null); }, [parsed]);
+
+            // Connect-time literal stash (item 4a): the moment a wire is
+            // attached, the pre-existing literal on that input is destroyed
+            // (removeAttribute('value') at every connect site below) so the
+            // document doesn't carry both a wire AND a stale value.
+            // Stashing it here lets severConnection (below) bring it
+            // straight back when the wire is later removed, instead of
+            // falling back to the nodedef default. Keyed by the input
+            // element's full document path (getNamePath) so the roundtrip
+            // survives whatever else changes meanwhile; cleared whenever
+            // the document itself is replaced — a stash from the previous
+            // document could never resolve to anything in the new one.
+            const stashedValuesRef = React.useRef({});
+            React.useEffect(() => { stashedValuesRef.current = {}; }, [parsed]);
+
+            // Document-level colorspace (item 6 toolbar dropdown): the
+            // fallback colorspace for every input that doesn't author its
+            // own. Re-read from the doc whenever a new document loads or
+            // replaces the current one.
+            const [docColorspace, setDocColorspace] = React.useState('');
+            React.useEffect(() => {
+                setDocColorspace(parsed ? (mxSafe(() => parsed.doc.getColorSpace(), '') || '') : '');
+            }, [parsed]);
 
             // Open the quick-add palette (also kicks off the catalog load
             // the first time).
@@ -745,8 +764,7 @@
                     setError(null);
                     // Queued after the setFlow above, so it acts on the flow
                     // we just built.
-                    if (autoLayoutRef.current) reorganize();
-                    else if (switchedScope) fitViewSoon({ padding: 0.15, duration: 350 });
+                    if (switchedScope) fitViewSoon({ padding: 0.15, duration: 350 });
                 } catch (e) {
                     setFlow({ nodes: [], edges: [] });
                     setError(String(e && e.message || e));
@@ -782,8 +800,6 @@
                         });
                     }),
                 }));
-                // The node's height changed — with auto-layout on, re-flow.
-                if (autoLayoutRef.current) reorganize();
             };
 
             // Global set/all — applies to every node in place.
@@ -798,8 +814,6 @@
                         }),
                     })),
                 }));
-                // Every node's height changed — with auto-layout on, re-flow.
-                if (autoLayoutRef.current) reorganize();
             };
 
             // Re-run the automatic layout on the CURRENT node sizes (visible
@@ -1373,20 +1387,80 @@
                 }
             };
 
+            // Stash a connection point's about-to-be-destroyed literal
+            // (item 4a) — called immediately before every removeAttribute
+            // ('value') below that runs as part of writing a NEW connection
+            // onto an input, so severConnection can bring it back later
+            // instead of falling back to the nodedef default. A no-op when
+            // the input carries no value, or its path can't be resolved.
+            const stashValueBeforeRemoval = (point) => {
+                const val = mxSafe(() => point.getAttribute('value'), '');
+                if (!val) return;
+                const key = mxSafe(() => point.getNamePath(), '');
+                if (!key) return;
+                stashedValuesRef.current[key] = val;
+            };
+
             // Fully sever a connection point: the connection attributes go,
-            // and a real node's <input> element left carrying NOTHING (no
-            // value either) is removed outright — the input reads as
-            // "default" again for set/all-input purposes. Nodegraph
-            // interface inputs and <output> elements are declarations, not
-            // just connection carriers: they always keep their element.
+            // then — a stashed literal (item 4a) takes priority and is
+            // written straight back (the element is always kept in that
+            // case, since it now carries the restored value); otherwise a
+            // real node's OR a nodegraph-instance's <input> element left
+            // carrying NOTHING (no value either) is removed outright — the
+            // input reads as "default" again for set/all-input purposes.
+            // EXCEPT: a nodegraph's <input> child doubles as an interface
+            // DECLARATION — internal nodes (and the graph's own outputs)
+            // may bind to it via interfacename="<name>", so a pin that is
+            // referenced from inside the graph must survive severing (attrs
+            // cleared, element kept); only a pin nothing references is
+            // removed. Nodegraph interface inputs (i:) and <output>
+            // elements (o:) are declarations too: they always keep their
+            // element. Returns the point's final literal value string
+            // (restored stash, or a value it already carried) so flow-side
+            // callers can show it instead of guessing the nodedef default;
+            // '' when the element survives holding no value (a kept,
+            // still-referenced interface pin — the flow keeps its row
+            // visible); null when the element is gone (or was never
+            // removable).
             const severConnection = (point, targetId) => {
                 clearConnAttrs(point);
-                if (String(targetId || '').indexOf('n:') !== 0) return;
-                if (mxSafe(() => point.getAttribute('value'), '')) return;
-                if (mxSafe(() => point.getAttribute('colorspace'), '')) return;
+                const key = mxSafe(() => point.getNamePath(), '');
+                const stashed = key && stashedValuesRef.current[key];
+                if (stashed) {
+                    mxSafe(() => { point.setAttribute('value', stashed); return true; }, false);
+                    delete stashedValuesRef.current[key];
+                    return stashed;
+                }
+                const kind = String(targetId || '').slice(0, 2);
+                if (kind !== 'n:' && kind !== 'g:') return null;
+                const curVal = mxSafe(() => point.getAttribute('value'), '');
+                if (curVal) return curVal;
+                if (mxSafe(() => point.getAttribute('colorspace'), '')) return null;
                 const par = mxSafe(() => point.getParent(), null);
                 const nm = mxElName(point);
-                if (par && nm) mxSafe(() => { par.removeChild(nm); return true; }, false);
+                if (par && nm) {
+                    if (kind === 'g:') {
+                        // The parent IS the <nodegraph>: scan its nodes'
+                        // inputs and its own outputs (same traversal as
+                        // renameElement's connectables) for interfacename
+                        // bindings to this pin — interface pins referenced
+                        // by interfacename must survive severing, so a
+                        // referenced pin keeps its (attr-cleared) element.
+                        // '' (not null) tells patchInputConn the element is
+                        // still there, just valueless — the row stays
+                        // visible, matching the kept declaration.
+                        for (const n of vecToArray(mxSafe(() => par.getNodes(), []))) {
+                            for (const inp of vecToArray(mxSafe(() => n.getInputs(), []))) {
+                                if (mxElAttr(inp, 'interfacename') === nm) return '';
+                            }
+                        }
+                        for (const o of vecToArray(mxSafe(() => par.getOutputs(), []))) {
+                            if (mxElAttr(o, 'interfacename') === nm) return '';
+                        }
+                    }
+                    mxSafe(() => { par.removeChild(nm); return true; }, false);
+                }
+                return null;
             };
 
             // A port's type, read from the on-screen flow.
@@ -1414,19 +1488,28 @@
 
             // Patch ONE input's connected flag on a flow node, re-deriving
             // the visible rows. Connecting SETS the input (it surfaces even
-            // in "set inputs" mode); disconnecting a real node's input
-            // reverts it to the nodedef default (severConnection removed the
-            // document element), so it stops counting as set. Nodegraph
-            // interface inputs and output pseudo nodes only flip the flag.
-            const patchInputConn = (n, inputName, connected) => {
-                const reverts = !connected && n.id.indexOf('n:') === 0;
+            // in "set inputs" mode); disconnecting a real node's (or a
+            // nodegraph instance's) input reverts it to the nodedef default
+            // (severConnection removed the document element), so it stops
+            // counting as set — UNLESS severConnection restored a stashed
+            // literal (item 4c), in which case `restoredValue` is that
+            // string and the row shows it (still authored=true, since the
+            // document element still carries it) instead of the default.
+            // severConnection also returns '' (not null) for a KEPT but
+            // valueless element (a still-referenced interface pin) — same
+            // branch: the row stays visible, showing no value.
+            // Interface inputs and output pseudo nodes only flip the flag.
+            const patchInputConn = (n, inputName, connected, restoredValue) => {
+                const reverts = !connected && (n.id.indexOf('n:') === 0 || n.id.indexOf('g:') === 0);
                 const upd = (i) => i.name !== inputName ? i
                     : Object.assign({}, i, connected
                         ? { connected: true, authored: true, value: '' }
-                        : (reverts
-                            ? { connected: false, authored: false,
-                                value: i.defValue !== undefined ? i.defValue : i.value }
-                            : { connected: false }));
+                        : (restoredValue != null
+                            ? { connected: false, authored: true, value: restoredValue }
+                            : (reverts
+                                ? { connected: false, authored: false,
+                                    value: i.defValue !== undefined ? i.defValue : i.value }
+                                : { connected: false })));
                 const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
                 return Object.assign({}, n, {
                     data: Object.assign({}, n.data, {
@@ -1501,8 +1584,12 @@
                     for (const e of flow.edges) {
                         if (e.source !== flowId) continue;
                         const point = connectionPoint(e.target, e.targetHandle, false);
-                        if (point) severConnection(point, e.target);
-                        severedDownstream.push(e);
+                        // Tag the pushed copy with whatever severConnection
+                        // restored (item 4c) — the nodes.map pass below
+                        // reads it back out to show it instead of guessing
+                        // the default.
+                        const restored = point ? severConnection(point, e.target) : null;
+                        severedDownstream.push(Object.assign({}, e, { __restoredValue: restored }));
                     }
                 }
                 setDocRev((r) => r + 1);
@@ -1544,7 +1631,7 @@
                             let out = n;
                             for (const e of severedDownstream) {
                                 if (e.target !== n.id) continue;
-                                out = patchInputConn(out, String(e.targetHandle || '').replace(/^in:/, ''), false);
+                                out = patchInputConn(out, String(e.targetHandle || '').replace(/^in:/, ''), false, e.__restoredValue);
                             }
                             return out;
                         }),
@@ -1626,6 +1713,9 @@
                         }
                         // A connected input takes its value from the wire — a
                         // literal alongside it would make the document invalid.
+                        // Stash it first (item 4a) so disconnecting later
+                        // can bring it straight back.
+                        stashValueBeforeRemoval(point);
                         mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                         setDocRev((r) => r + 1);
                         markDirty();
@@ -1649,14 +1739,15 @@
             // input in the document, and the edge in the flow.
             const disconnectEdge = (edge) => {
                 if (!edge) return;
+                let restored = null; // a stashed literal severConnection brought back (item 4c)
                 if (parsed) {
                     const point = connectionPoint(edge.target, edge.targetHandle, false);
-                    if (point) { severConnection(point, edge.target); setDocRev((r) => r + 1); markDirty(); }
+                    if (point) { restored = severConnection(point, edge.target); setDocRev((r) => r + 1); markDirty(); }
                 }
                 const inputName = String(edge.targetHandle || '').replace(/^in:/, '');
                 setFlow((prev) => ({
                     edges: prev.edges.filter((e) => e.id !== edge.id),
-                    nodes: prev.nodes.map((n) => n.id === edge.target ? patchInputConn(n, inputName, false) : n),
+                    nodes: prev.nodes.map((n) => n.id === edge.target ? patchInputConn(n, inputName, false, restored) : n),
                 }));
                 setSelectedEdgeId((cur) => (cur === edge.id ? null : cur));
             };
@@ -1677,6 +1768,45 @@
             const onEdgeUpdateEnd = (evt, edge) => {
                 if (!edgeUpdateDone.current) disconnectEdge(edge);
                 edgeUpdateDone.current = true;
+            };
+
+            // Drag a connection into EMPTY canvas (item 5): reuse the
+            // port-dot double-click add-node flow (openPortAdd) instead of
+            // just dropping the half-made connection on the floor.
+            // onConnectStart stashes the drag's origin port; onConnectEnd
+            // resolves what the drag was actually dropped ON. Mouse: the
+            // native event's own target. Touch: touch events keep `target`
+            // pinned to wherever the touch STARTED (not where it ended), so
+            // the drop point has to be resolved via elementFromPoint
+            // instead. Dropped on a handle/node → onConnect already ran,
+            // nothing to do here; dropped on the pane (class
+            // "react-flow__pane") → open the add-search pre-filtered to
+            // what plugs into the origin port, exactly like a port-dot
+            // double-click.
+            const connectOriginRef = React.useRef(null);
+            const onConnectStart = (event, params) => { connectOriginRef.current = params; };
+            const onConnectEnd = (event) => {
+                const origin = connectOriginRef.current;
+                connectOriginRef.current = null;
+                if (!origin || !origin.nodeId) return;
+                const dropEl = (event && event.changedTouches && event.changedTouches.length)
+                    ? document.elementFromPoint(event.changedTouches[0].clientX, event.changedTouches[0].clientY)
+                    : (event && event.target);
+                if (!dropEl || !dropEl.classList || !dropEl.classList.contains('react-flow__pane')) return;
+                const node = flow.nodes.find((n) => n.id === origin.nodeId);
+                if (!node) return;
+                const isTarget = origin.handleType === 'target';
+                // Handle ids are 'in:'/'out:'-prefixed port names (see
+                // node-component.jsx's <Handle id={'in:' + inp.name}> /
+                // <Handle id={'out:' + out.name}>).
+                const portName = String(origin.handleId || '').replace(isTarget ? /^in:/ : /^out:/, '');
+                const list = isTarget ? (node.data.inputs || []) : (node.data.outputs || []);
+                const port = list.find((p) => p.name === portName);
+                if (!port) return;
+                onPortAddRef.current({
+                    nodeId: origin.nodeId, port: portName, portType: port.type,
+                    dir: isTarget ? 'in' : 'out',
+                });
             };
 
             // Syntax validity of a candidate MaterialX element name: prefer
@@ -1804,14 +1934,27 @@
             // keeps no dangling references.
             const deleteNode = (id) => {
                 if (!id) return;
+                // [mtlx-perf] timing (item 3) — off unless MTLX_PERF_LOG.
+                const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
                 const name = id.slice(2);
+                // Values severConnection restored from the stash (item 4c),
+                // keyed by [targetFlowId][inputName] — read back below by
+                // the setFlow pass so a restored literal shows up instead
+                // of the guessed default.
+                const restoredMap = {};
                 if (parsed) {
                     // Sever downstream references FIRST (the elements are
                     // still resolvable while the node exists).
                     for (const e of flow.edges) {
                         if (e.source !== id) continue;
                         const point = connectionPoint(e.target, e.targetHandle, false);
-                        if (point) severConnection(point, e.target);
+                        if (point) {
+                            const restored = severConnection(point, e.target);
+                            if (restored != null) {
+                                const nm = String(e.targetHandle || '').replace(/^in:/, '');
+                                (restoredMap[e.target] = restoredMap[e.target] || {})[nm] = restored;
+                            }
+                        }
                     }
                     const c = scopeContainer();
                     let removed = false;
@@ -1856,15 +1999,29 @@
                             const names = fed[n.id];
                             if (!names) return n;
                             let out = n;
-                            names.forEach((nm) => { out = patchInputConn(out, nm, false); });
+                            const rmap = restoredMap[n.id] || {};
+                            names.forEach((nm) => { out = patchInputConn(out, nm, false, rmap[nm]); });
                             return out;
                         }),
                     };
                 });
+                if (MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] deleteNode(' + id + '): '
+                        + (performance.now() - __perfStart).toFixed(1) + 'ms');
+                }
             };
 
             // What Delete acts on (kept fresh via the ref the window key
-            // handler reads).
+            // handler reads). Deleting a NODEGRAPH is the slow path (the
+            // docRev-driven preview effect regenerates the shader, often
+            // falling back to a new default target) — flash the shared
+            // actionBusy overlay and defer behind the same double-rAF
+            // idiom changeScope uses so it actually paints first. Plain
+            // node deletes (no nodegraph in the selection) stay fully
+            // synchronous — they're fast and don't need the flash.
+            // ids/targets are captured up front, before any deferral, so a
+            // theoretical selection change in the meantime can't retarget
+            // what gets deleted.
             deleteSelectionRef.current = () => {
                 if (selectedEdgeId) {
                     const e = flow.edges.find((e2) => e2.id === selectedEdgeId);
@@ -1872,9 +2029,27 @@
                     return false;
                 }
                 const ids = flow.nodes.filter((n) => n.selected).map((n) => n.id);
-                if (ids.length > 1) { ids.forEach((id) => deleteNode(id)); return true; }
-                if (selectedId) { deleteNode(selectedId); return true; }
-                return false;
+                const targets = ids.length > 1 ? ids : (selectedId ? [selectedId] : null);
+                if (!targets) return false;
+                const hasNodegraph = targets.some((id) => id.indexOf('g:') === 0);
+                if (hasNodegraph) {
+                    setActionBusy('Deleting' + '\u2026');
+                    (async () => {
+                        // Same double-rAF idiom as changeScope — lets the
+                        // overlay actually paint before the deletion (and
+                        // the preview regen it triggers) runs.
+                        await new Promise((r) => requestAnimationFrame(r));
+                        await new Promise((r) => requestAnimationFrame(r));
+                        try {
+                            targets.forEach((id) => deleteNode(id));
+                        } finally {
+                            setActionBusy(null);
+                        }
+                    })();
+                    return true;
+                }
+                targets.forEach((id) => deleteNode(id));
+                return true;
             };
 
             // Add a stdlib node (picked in the Tab palette) to the CURRENT
@@ -2000,6 +2175,7 @@
                     if (outMatch && outMatch.name && outs.length > 1) {
                         mxSafe(() => { point.setAttribute('output', outMatch.name); return true; }, false);
                     }
+                    stashValueBeforeRemoval(point); // item 4a
                     mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                     targetFlowId = pending.nodeId;
                     targetInputName = pending.port;
@@ -2033,6 +2209,7 @@
                             mxSafe(() => { point.setAttribute('output', pending.port); return true; }, false);
                         }
                     }
+                    stashValueBeforeRemoval(point); // item 4a
                     mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                     targetFlowId = created.id;
                     targetInputName = inMatch.name;
@@ -2311,6 +2488,14 @@
             // interface inputs; outbound edges to outside the selection
             // become graph outputs. Root-only — MaterialX nodegraphs don't
             // nest, so this is unavailable once a scope is already open.
+            // Synchronously snapshotting/recreating/rewiring every selected
+            // node can take a beat on a big selection, then the docRev bump
+            // below triggers a full shader regen — so the actual body is
+            // deferred behind the same double-rAF idiom changeScope uses,
+            // flashing the shared actionBusy overlay first. Everything the
+            // body reads off the current selection (ids/idSet/names/
+            // nameSet) is captured up front, before the defer, same as
+            // deleteSelectionRef above.
             const encapsulateSelection = () => {
                 if (!parsed) return;
                 if (scope !== '') {
@@ -2322,11 +2507,18 @@
                 const idSet = new Set(ids);
                 const names = ids.map((id) => id.slice(2));
                 const nameSet = new Set(names);
-                try {
+                setActionBusy('Grouping' + '\u2026');
+                (async () => {
+                    await new Promise((r) => requestAnimationFrame(r));
+                    await new Promise((r) => requestAnimationFrame(r));
+                    // [mtlx-perf] timing (item 2) — off unless MTLX_PERF_LOG.
+                    const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
+                    try {
                     const doc = parsed.doc;
                     const gName = mxSafe(() => doc.createValidChildName('nodegraph1'), 'nodegraph1');
                     const g = mxSafe(() => doc.addNodeGraph(gName), null);
                     if (!g) { setError('Could not create a nodegraph.'); return; }
+                    if (parsed.nodegraphs) parsed.nodegraphs.push(gName); // scope dropdown
 
                     // Snapshot every selected node's full description BEFORE
                     // any mutation — collectPorts/storedPos read live
@@ -2459,6 +2651,7 @@
                         clearConnAttrs(point);
                         mxSafe(() => { point.setAttribute('nodegraph', gName); return true; }, false);
                         mxSafe(() => { point.setAttribute('output', outPin); return true; }, false);
+                        stashValueBeforeRemoval(point); // item 4a
                         mxSafe(() => { point.removeAttribute('value'); return true; }, false);
                     }
 
@@ -2499,9 +2692,16 @@
                     setSelectedId(newId);
                     setSelectedEdgeId(null);
                     setParamsOpen(true);
-                } catch (e) {
-                    setError('Encapsulation failed: ' + String((e && e.message) || e));
-                }
+                    } catch (e) {
+                        setError('Encapsulation failed: ' + String((e && e.message) || e));
+                    } finally {
+                        setActionBusy(null);
+                        if (MTLX_PERF_LOG) {
+                            console.log('[mtlx-perf] encapsulate: '
+                                + (performance.now() - __perfStart).toFixed(1) + 'ms (' + names.length + ' nodes)');
+                        }
+                    }
+                })();
             };
 
             // Kept current every render so the [] -dep Ctrl/Cmd+C / +V / +G
@@ -2835,6 +3035,8 @@
                             onEdgeClick={onEdgeClick}
                             onPaneClick={clearSelection}
                             onConnect={onConnect}
+                            onConnectStart={onConnectStart}
+                            onConnectEnd={onConnectEnd}
                             isValidConnection={isValidConnection}
                             connectionRadius={24}
                             connectionLineStyle={{ stroke: '#60a5fa', strokeWidth: 1.5 }}
@@ -2954,6 +3156,19 @@
                         labelClassName="text-sm text-gray-300 animate-pulse"
                         barWidthClass="w-56" />
 
+                    {/* Action-busy overlay (items 2 & 3): a heavy,
+                        doc-mutating keyboard action (Ctrl+G encapsulate,
+                        deleting a nodegraph) is in flight \u2014 same wrapper/
+                        z-index approach as scopeBusy just above (kept
+                        separate \u2014 the two never fire for the same
+                        reason). actionBusy already carries its own
+                        trailing \u2026, so it's passed straight through as
+                        the label. */}
+                    <LoadingOverlay show={!!actionBusy} label={actionBusy || ''}
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
+                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        barWidthClass="w-56" />
+
                     {/* Empty state: nothing loaded, nothing loading */}
                     {emptyHint && (
                         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
@@ -3045,10 +3260,31 @@
                                     className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
                                     title="Scope: the document root, or step inside a nodegraph"
                                     value={scope}
-                                    onChange={(e) => changeScope(e.target.value)}
+                                    onChange={(e) => { changeScope(e.target.value); e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */ }}
                                 >
                                     <option value="">(document root)</option>
                                     {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
+                                </select>
+                                {/* Document-level colorspace (item 6): the
+                                    fallback for every input that doesn't
+                                    author its own — same styling/blur
+                                    convention as the scope select above. */}
+                                <select
+                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
+                                    title="Document colorspace — the fallback for inputs without an explicit colorspace"
+                                    value={docColorspace}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        setDocColorspace(v);
+                                        if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
+                                        else mxSafe(() => { parsed.doc.removeAttribute('colorspace'); return true; }, false);
+                                        setDocRev((r) => r + 1);
+                                        markDirty();
+                                        e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */
+                                    }}
+                                >
+                                    <option value="">(doc colorspace)</option>
+                                    {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
                                 </select>
                             </>
                         )}
@@ -3101,18 +3337,13 @@
                         )}
                         {parsed && (
                             <button
-                                onClick={() => setautoLayout((v) => !v)}
-                                title={(autoLayout
-                                    ? 'auto-layout is ON: loading, entering/leaving nodegraphs and input-mode switches re-run the layout — click to keep layouts as they are'
-                                    : 'auto-layout is OFF: layouts stay as loaded (or as you dragged them) — click to re-arrange automatically on every load and scope change')
-                                    + ' (press A to re-arrange once, any time)'}
-                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
-                                    + (autoLayout
-                                        ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
-                                        : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                onClick={() => reorganize()}
+                                title="Re-run the automatic layout once (A)"
+                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                             >
                                 <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
                                 <span>Auto Layout</span>
+                                <span className="text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
                             </button>
                         )}
                         {parsed && (

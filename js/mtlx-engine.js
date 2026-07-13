@@ -124,9 +124,13 @@ const getMxEnv = () => {
     return mxEnvPromise;
 };
 
-// Flip to true to log the generated GLSL + discovered uniforms to the
-// console — the fastest way to diagnose a black/!runnable shader.
-const DEBUG_SHADERS = true;
+// Logs the generated GLSL + discovered uniforms to the console — the
+// fastest way to diagnose a black/!runnable shader. Off by default, opt in
+// via `localStorage.setItem('mtlxDebugShaders', '1')`. Read ONCE at module
+// load, mirroring MTLX_PERF_LOG (js/graph/model.jsx).
+const DEBUG_SHADERS = (() => {
+    try { return !!localStorage.getItem('mtlxDebugShaders'); } catch (e) { return false; }
+})();
 
 // Compile the scene while filtering BENIGN shader-compiler noise.
 // On Windows every browser runs WebGL through ANGLE, which translates

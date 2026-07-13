@@ -152,7 +152,7 @@
                 try {
                     downloadSnapshot(view, matName + '_' + geom);
                 } catch (e) {
-                    setError('Screenshot failed: ' + String(e && e.message || e));
+                    setError('Save PNG preview failed: ' + String(e && e.message || e));
                 }
             };
             // Hand the currently loaded document off to the node graph editor:

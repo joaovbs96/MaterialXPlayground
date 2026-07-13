@@ -12,18 +12,21 @@ const HOME_CARDS = [
         icon: 'file-code',
         title: 'Node Library & Documentation',
         desc: 'Browse every standard MaterialX node with per-signature docs, port tables, live 3D previews, an implementation-target matrix, and shareable permalinks.',
+        img: 'images/preview-docs.jpg',
     },
     {
         href: '#!viewer',
         icon: 'camera',
         title: 'Material Viewer',
         desc: 'Load and preview materials with real-time rendering.',
+        img: 'images/preview-material.jpg',
     },
     {
         href: '#!graph',
         icon: 'share',
         title: 'Node Graph Editor',
         desc: 'Visually build MaterialX graphs with nested nodegraphs, a live 3D preview, validation, and XML view/export.',
+        img: 'images/preview-nodegraph.jpg',
     },
 ];
 
@@ -55,13 +58,21 @@ function HomeApp({ active } = {}) {
                     <a
                         key={card.href}
                         href={card.href}
-                        className="group flex flex-col bg-gray-800 border border-gray-800 rounded-xl p-5 transition-colors hover:border-blue-500/50 hover:bg-gray-800/80"
+                        className="group flex flex-col bg-gray-800 border border-gray-800 rounded-xl overflow-hidden transition-colors hover:border-blue-500/50 hover:bg-gray-800/80"
                     >
-                        <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />
-                        <div className="mt-3 text-lg font-semibold text-gray-100">{card.title}</div>
-                        <p className="mt-1.5 text-sm text-gray-400 flex-1">{card.desc}</p>
-                        <div className="mt-4 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
-                            {'Open →'}
+                        <img
+                            src={card.img}
+                            alt={card.title}
+                            loading="lazy"
+                            className="w-full aspect-video object-cover border-b border-gray-700"
+                        />
+                        <div className="flex flex-col flex-1 p-5">
+                            <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />
+                            <div className="mt-3 text-lg font-semibold text-gray-100">{card.title}</div>
+                            <p className="mt-1.5 text-sm text-gray-400 flex-1">{card.desc}</p>
+                            <div className="mt-4 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
+                                {'Open →'}
+                            </div>
                         </div>
                     </a>
                 ))}

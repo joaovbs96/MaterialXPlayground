@@ -230,7 +230,7 @@ const ViewportControls = ({
         )}
         <button
             onClick={onScreenshot}
-            title="Save a PNG screenshot of the current view"
+            title="Save a PNG preview of the current view"
             className={buttonClassName(false)}
         >
             <MtlxIcon name="camera" className="w-3.5 h-3.5" />

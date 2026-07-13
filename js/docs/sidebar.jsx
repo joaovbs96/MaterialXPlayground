@@ -212,7 +212,7 @@
                                 <span className="font-semibold text-gray-100">3D preview.</span>{' '}
                                 Most nodes render live in WebGL: drag to orbit, scroll to zoom. The controls
                                 on the viewport switch the preview geometry, start/stop the turntable
-                                rotation, show the environment as background, save a PNG screenshot, and go
+                                rotation, show the environment as background, save a PNG preview, and go
                                 full screen. Editing values in the parameter panel regenerates the shader,
                                 and the node can be downloaded as a .mtlx document with the current values.
                                 The global "3D previews" toggle above disables all WebGL rendering to save

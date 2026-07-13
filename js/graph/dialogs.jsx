@@ -16,7 +16,7 @@
             { keys: 'Shift/Ctrl/Cmd + Click', desc: 'Toggle a node into/out of the current multi-selection' },
             { keys: 'Drag (empty canvas)', desc: 'Box-select every node inside the marquee' },
             { keys: 'Middle-drag', desc: 'Pan the canvas' },
-            { keys: 'Drag a node', desc: 'Move it (Auto Layout re-lays out afterward if it’s on)' },
+            { keys: 'Drag a node', desc: 'Move it' },
             { keys: 'Drag between ports', desc: 'Connect an output to an input' },
             { keys: 'Drag an edge end off', desc: 'Disconnect it' },
             { keys: 'Double-click a nodegraph', desc: 'Open (enter) its scope' },
