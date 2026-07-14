@@ -89,8 +89,18 @@ function getSharedOutputChannel() {
 //     virtual-FS slice offsets shift; the stdlib XML then parse-fails at
 //     a packed file's EOF), so bootstrap.js intercepts the glue code's
 //     fetch() and we serve the on-disk bytes from the extension host
-//     instead. Reply: { type: 'mtlx-fetch-result', id, ok, bytes|error }
-//     — a Uint8Array is structured-clone-safe across the boundary.
+//     instead. Reply: { type: 'mtlx-fetch-result', id, ok, bytesB64|error }
+//     — NOT a raw Uint8Array/Buffer: VS Code's extension<->webview
+//     postMessage channel does NOT reliably deliver typed arrays as typed
+//     arrays (despite docs suggesting structured-clone semantics); in
+//     practice a Node Buffer posted here JSON-serializes into a plain
+//     `{ '0': 0, '1': 97, ... }` object on the webview side. That surfaced
+//     as `WebAssembly.instantiate(): expected magic word 00 61 73 6d,
+//     found 5b 6f 62 6a` — "5b 6f 62 6a" is ASCII "[obj", i.e.
+//     `new Response(thatObject)` stringifying to "[object Object]". Base64
+//     text has no such ambiguity crossing the boundary; the ~33% size
+//     overhead on a payload that's at most a few MB is negligible next to
+//     correctness.
 //   - 'mtlx-error'  { text }: an uncaught error / unhandled rejection
 //     inside the webview, forwarded to the shared OutputChannel for
 //     diagnostics.
@@ -110,7 +120,7 @@ function wireCommonWebviewMessages(webview, repoRootUri, outputChannel) {
                 }
                 const fileUri = vscode.Uri.joinPath(repoRootUri, ...relPath.split('/'));
                 const bytes = await vscode.workspace.fs.readFile(fileUri);
-                webview.postMessage({ type: 'mtlx-fetch-result', id, ok: true, bytes });
+                webview.postMessage({ type: 'mtlx-fetch-result', id, ok: true, bytesB64: Buffer.from(bytes).toString('base64') });
             } catch (err) {
                 // bootstrap.js falls back to its native fetch on
                 // { ok: false }, so a read failure here is never worse
@@ -125,13 +135,22 @@ function wireCommonWebviewMessages(webview, repoRootUri, outputChannel) {
 }
 
 // Turn a Node Buffer/Uint8Array-keyed files map (docScanner's return
-// shape) into a plain object VS Code's postMessage can structured-clone.
-// VS Code (>=1.57) sends Uint8Array across the webview boundary natively,
-// so no base64 round-trip is needed here — see media/bootstrap.js, which
-// wraps each entry in `new Blob([u8])` on arrival.
-function toMessageFiles(files) {
+// shape) into a plain object of base64 strings for the 'mtlx-open'
+// message's `filesB64` field. Same reasoning as the 'mtlx-fetch-result'
+// bytesB64 field above: VS Code's extension<->webview postMessage channel
+// does NOT reliably deliver typed arrays as typed arrays — despite an
+// earlier assumption here that VS Code >=1.57 sends Uint8Array natively,
+// observed behavior is that a Node Buffer posted as-is JSON-serializes
+// into a plain object on the webview side. That defect was masked for
+// this path (unlike the 'mtlx-fetch' stdlib payload, which fails loudly
+// with a WebAssembly magic-word error) only because nothing here parses
+// the bytes as anything more demanding than an opaque Blob — but it was
+// silently producing corrupt texture/include payloads all the same.
+// media/bootstrap.js decodes each entry back to a Uint8Array before
+// wrapping it in a Blob.
+function toMessageFilesB64(files) {
     const out = {};
-    for (const key of Object.keys(files)) out[key] = files[key];
+    for (const key of Object.keys(files)) out[key] = Buffer.from(files[key]).toString('base64');
     return out;
 }
 
@@ -185,7 +204,7 @@ class MaterialXEditorProvider {
                         mode,
                         name,
                         xml,
-                        files: toMessageFiles(files),
+                        filesB64: toMessageFilesB64(files),
                     });
                 } catch (err) {
                     vscode.window.showErrorMessage(

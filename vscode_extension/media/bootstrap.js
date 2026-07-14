@@ -24,6 +24,25 @@
     // branch on it — e.g. to hide a browser-only affordance.
     window.__MTLX_VSCODE__ = true;
 
+    // Decode a base64 string into a Uint8Array. Used for every binary
+    // payload that crosses the extension<->webview postMessage boundary
+    // (see the 'mtlx-fetch-result' and 'mtlx-open' handlers below) —
+    // VS Code does NOT reliably deliver Node Buffers/typed arrays posted
+    // from the extension host as typed arrays on this side; in practice
+    // they arrive JSON-serialized into a plain object instead, which is
+    // silently wrong for a Blob and loudly wrong for
+    // WebAssembly.instantiate() (surfaced as "expected magic word
+    // 00 61 73 6d, found 5b 6f 62 6a" — "[obj", i.e. "[object Object]"
+    // stringified). Base64 text has no such ambiguity. These payloads are
+    // at most a few MB, and atob() + a byte loop over that runs in the
+    // tens of milliseconds — negligible next to correctness.
+    function base64ToUint8(b64) {
+        var binary = atob(b64);
+        var out = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+        return out;
+    }
+
     // ------------------------------------------------------------------
     // fetch() bridge for the MaterialX Emscripten payloads.
     //
@@ -39,7 +58,8 @@
     // null, and every downstream consumer breaks ("getNodeDefs is not
     // bound", no shader generation). Serving the bytes from the EXTENSION
     // HOST over postMessage (vscode.workspace.fs.readFile on the real
-    // file, structured-cloned across the boundary as a Uint8Array)
+    // file, base64-encoded across the boundary — see base64ToUint8 above
+    // for why a raw Uint8Array/Buffer doesn't survive the trip intact)
     // bypasses that pipeline entirely. The explicit Content-Type on the
     // synthesized Response keeps WebAssembly.instantiateStreaming() on
     // its fast path for the .wasm case (it requires 'application/wasm').
@@ -169,7 +189,7 @@
 
     // ------------------------------------------------------------------
     // Extension -> webview payload delivery. editorProvider.js posts
-    // { type: 'mtlx-open', mode, name, xml, files } (resolveCustomTextEditor's
+    // { type: 'mtlx-open', mode, name, xml, filesB64 } (resolveCustomTextEditor's
     // sendUpdate()) once on initial load and again on every debounced
     // text-document change (live reload).
     //
@@ -193,8 +213,8 @@
             var pending = pendingFetches[msg.id];
             if (!pending) return;
             delete pendingFetches[msg.id];
-            if (msg.ok && msg.bytes) {
-                pending.resolve(new Response(msg.bytes, {
+            if (msg.ok && msg.bytesB64) {
+                pending.resolve(new Response(base64ToUint8(msg.bytesB64), {
                     status: 200,
                     headers: {
                         'Content-Type': /\.wasm$/.test(pending.path)
@@ -213,20 +233,20 @@
         var mode = msg.mode;
         var name = msg.name;
         var xml = msg.xml;
-        var rawFiles = msg.files || null;
+        var rawFiles = msg.filesB64 || null;
 
-        // files: { relPath: Uint8Array } as sent by docScanner.js via
-        // editorProvider.js's toMessageFiles(). VS Code (>=1.57)
-        // structured-clones typed arrays across the extension<->webview
-        // boundary natively, so `rawFiles[key]` arrives here as a real
-        // Uint8Array, not base64 text. Convert to the { relPath: Blob }
-        // shape js/graph-app.jsx / js/viewer-app.jsx's ingest() expects
-        // — the same shape their own drag-and-drop path produces.
+        // filesB64: { relPath: base64string } as sent by docScanner.js via
+        // editorProvider.js's toMessageFilesB64(). See base64ToUint8 above
+        // for why these cross the boundary as base64 text rather than raw
+        // Uint8Array/Buffer values. Decode each entry and wrap it in the
+        // { relPath: Blob } shape js/graph-app.jsx / js/viewer-app.jsx's
+        // ingest() expects — the same shape their own drag-and-drop path
+        // produces.
         var blobMap = null;
         if (rawFiles) {
             blobMap = {};
             Object.keys(rawFiles).forEach(function (key) {
-                blobMap[key] = new Blob([rawFiles[key]]);
+                blobMap[key] = new Blob([base64ToUint8(rawFiles[key])]);
             });
         }
 
