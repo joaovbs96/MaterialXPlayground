@@ -579,12 +579,87 @@ const textureCacheKey = (blob, fallback) => {
     return fallback; // e.g. the fileMap key, when identity fields are missing
 };
 
+// Parse a dropped .exr Blob into a three.js texture via THREE.EXRLoader
+// (script tag pinned to three@0.147.0 — newer than the r128 core, see
+// index.html for why — alongside RGBELoader/GLTFLoader, same
+// DataTextureLoader family). EXRLoader.parse always returns RGBAFormat
+// data — the implementation hardcodes numChannels = 4 — so unlike
+// RGBELoader's env path (see prepareEnv/padToRGBA above) there's no
+// RGB->RGBA repack needed here. setDataType(FloatType) is explicit
+// (mirrors loadHdrTexture below): 0.147.0's EXRLoader constructor
+// defaults this.type to HalfFloatType, not FloatType like older
+// versions, and leaving it on the default would silently swap d.data
+// from a Float32Array to a half-float Uint16Array.
+// A THREE.DataTexture already defaults to generateMipmaps=false and
+// NearestFilter (see three's DataTexture ctor); left at no-mipmaps
+// (forcing mips on Float/HalfFloat data hits the same "not
+// color-renderable" WebGL restriction padToRGBA works around for the
+// env textures, and a material preview swatch doesn't need mip levels)
+// but bumped to LinearFilter for both min/mag so it isn't blocky —
+// LinearFilter is mipmap-free and texture-completeness-safe without a
+// mip chain, unlike a LinearMipmapLinear* filter would be.
+const loadExrTexture = async (blob) => {
+    if (typeof THREE.EXRLoader === 'undefined') {
+        console.warn('mtlx-engine: THREE.EXRLoader unavailable (script blocked/offline) — .exr textures fall back to the checker.');
+        return null;
+    }
+    try {
+        const buf = await blob.arrayBuffer();
+        const d = new THREE.EXRLoader().setDataType(THREE.FloatType).parse(buf);
+        if (!d || !d.data) return null;
+        const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+        tex.minFilter = tex.magFilter = THREE.LinearFilter;
+        return tex;
+    } catch (e) {
+        console.warn('mtlx-engine: failed to parse dropped .exr texture, falling back to the checker:', e);
+        return null;
+    }
+};
+
+// Parse a dropped .hdr Blob via the already-loaded THREE.RGBELoader.
+// r128's DataTextureLoader family exposes a synchronous .parse(buffer)
+// alongside the async .load(url, ...) used for the built-in environment
+// (loadHDR below) — same class, just called directly instead of via the
+// FileLoader roundtrip. Explicitly set to FloatType (not the default
+// UnsignedByteType/RGBE byte packing) so the plain MaterialX sampler
+// shader — which has no RGBE decode step — reads linear values
+// directly; that yields RGBFormat (3-channel) data per RGBELoader's
+// source, which THREE.DataTexture accepts as-is. Same no-mipmap
+// reasoning as loadExrTexture above: RGB16F/RGB32F can't safely
+// generateMipmap on WebGL2, but nothing here asks it to, so
+// padToRGBA's repack (needed only when mips ARE forced, as prepareEnv
+// does for the IBL environment) is unnecessary for this sampler-only
+// use.
+const loadHdrTexture = async (blob) => {
+    if (typeof THREE.RGBELoader === 'undefined') {
+        console.warn('mtlx-engine: THREE.RGBELoader unavailable — .hdr textures fall back to the checker.');
+        return null;
+    }
+    try {
+        const buf = await blob.arrayBuffer();
+        const d = new THREE.RGBELoader().setDataType(THREE.FloatType).parse(buf);
+        if (!d || !d.data) return null;
+        const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+        tex.minFilter = tex.magFilter = THREE.LinearFilter;
+        return tex;
+    } catch (e) {
+        console.warn('mtlx-engine: failed to parse dropped .hdr texture, falling back to the checker:', e);
+        return null;
+    }
+};
+
 // After the view is up: bind dropped textures onto the shader's
 // filename sampler uniforms by their document-referenced paths.
-// Cache hits assign synchronously; cache misses fall back to the
-// async TextureLoader path. `onBound` (optional) is invoked once per
-// texture that finishes binding (sync for cache hits, async
-// otherwise) so callers can re-render as textures land.
+// Cache hits assign synchronously; cache misses fall back to an async
+// load — THREE.TextureLoader for anything a plain <img> can decode,
+// or the arrayBuffer+parse loaders above for .exr/.hdr, which three's
+// TextureLoader can't handle (bindDroppedTextures previously fell
+// silently through to the UV checker for both). `onBound` (optional)
+// is invoked once per texture that finishes binding (sync for cache
+// hits, async otherwise) so callers can re-render as textures land —
+// on a failed/unsupported parse it's simply never called for that
+// uniform, same as a TextureLoader error, leaving the checker default
+// the sampler uniforms are created with (see getDefaultTexture) as-is.
 // Returns { bound: [...], missing: [...] } for the UI report.
 const bindDroppedTextures = (view, fileMap, onBound) => {
     const bound = [], missing = [];
@@ -605,14 +680,26 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             if (view.uniforms[u.name]) view.uniforms[u.name].value = cached;
             if (onBound) onBound();
         } else {
-            const url = URL.createObjectURL(blob);
-            new THREE.TextureLoader().load(url, (tex) => {
-                configureLoadedTexture(tex);
-                TEXTURE_CACHE.set(cacheKey, tex);
-                if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
-                URL.revokeObjectURL(url);
-                if (onBound) onBound();
-            }, undefined, () => URL.revokeObjectURL(url));
+            const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
+            if (ext === 'exr' || ext === 'hdr') {
+                const parsePromise = ext === 'exr' ? loadExrTexture(blob) : loadHdrTexture(blob);
+                parsePromise.then((tex) => {
+                    if (!tex) return; // unsupported/corrupt — checker default stands
+                    configureLoadedTexture(tex);
+                    TEXTURE_CACHE.set(cacheKey, tex);
+                    if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                    if (onBound) onBound();
+                });
+            } else {
+                const url = URL.createObjectURL(blob);
+                new THREE.TextureLoader().load(url, (tex) => {
+                    configureLoadedTexture(tex);
+                    TEXTURE_CACHE.set(cacheKey, tex);
+                    if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                    URL.revokeObjectURL(url);
+                    if (onBound) onBound();
+                }, undefined, () => URL.revokeObjectURL(url));
+            }
         }
         bound.push(ref + '  →  ' + hit.key);
     }
@@ -1219,6 +1306,379 @@ const getEnvironment = () => {
 const COLORSPACES = ['srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709',
     'acescg', 'lin_ap1', 'srgb_displayp3', 'lin_displayp3', 'adobergb', 'lin_adobergb', 'none'];
 
+// One persistent hidden WebGL2 context used ONLY to pre-warm driver shader
+// compiles (KHR_parallel_shader_compile). Created lazily once, on a 1x1
+// canvas that never enters the DOM, and NEVER disposed — its GL objects are
+// completely decoupled from every preview canvas/renderer lifecycle, so
+// rebuild churn can't invalidate handles mid-poll (the source of the old
+// glGetProgramiv console warnings). ANGLE/Chrome cache compiled programs
+// per GPU process keyed by source, so a compile finished here makes the
+// display context's compile of the SAME source a fast cache hit.
+// null = not tried yet; false = unavailable (no WebGL2 or no extension).
+let MTLX_WARM_CTX = null;
+const getWarmContext = () => {
+    if (MTLX_WARM_CTX !== null) return MTLX_WARM_CTX;
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        const gl = canvas.getContext('webgl2');
+        const ext = gl && gl.getExtension('KHR_parallel_shader_compile');
+        MTLX_WARM_CTX = (gl && ext) ? { gl, ext } : false;
+    } catch (e) {
+        MTLX_WARM_CTX = false;
+    }
+    return MTLX_WARM_CTX;
+};
+
+// Shader sources already pre-warmed (or fully display-compiled) this
+// session — the driver cache is primed for these, so a repeat pre-warm
+// would only ADD ~300ms of pointless background wait before the display
+// compile's cache hit. Keyed by a fast djb2 hash of the concatenated
+// sources (collisions are harmless: a false "already warmed" just means
+// one un-warmed sync compile, same as pre-warm-less behavior).
+const MTLX_WARMED_SOURCES = new Set();
+// Small shaders compile synchronously in single-digit milliseconds —
+// pre-warming them only ADDs a poll-tick of latency (measured
+// 50-100ms). Only pre-warm sources big enough for the background
+// compile to plausibly matter. 128 KB is comfortably above every
+// simple-node preview shader and comfortably below the
+// standard_surface/OpenPBR material shaders the pre-warm exists for.
+const PREWARM_MIN_SOURCE_BYTES = 128 * 1024;
+const warmKey = (vs, fs) => {
+    let h = 5381;
+    const s = vs + ' ' + fs;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return s.length + ':' + h;
+};
+
+// Pre-compile vs/fs on the hidden warm context and resolve when the driver
+// reports completion (or on bail/timeout). Returns 'done' | 'bailed' |
+// 'skipped'. Never throws; a warm failure must never break the preview.
+//
+// The throwaway source below must match byte-for-byte what three.js's
+// WebGLProgram will itself submit for the DISPLAY compile, or the driver's
+// source-keyed cache simply misses (never a correctness issue — just no
+// speed win, i.e. identical to not pre-warming at all). Verified from the
+// r128 source for our exact configuration (RawShaderMaterial +
+// glslVersion:GLSL3, WebGL2, no material.defines): prefixes reduce to
+// nothing (customDefines/customExtensions are empty; the WebGL2
+// built-in-material prefix block is skipped for RawShaderMaterial), and
+// resolveIncludes / replaceLightNums / replaceClippingPlaneNums /
+// unrollLoops are no-ops on MaterialX-generated GLSL (it uses none of
+// three's #include<>, NUM_*_LIGHTS, or #pragma unroll_loop_start
+// conventions). So three submits exactly '#version 300 es\n' + vs / + fs —
+// reproduced here.
+const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
+    const ctx = getWarmContext();
+    if (!ctx) return 'skipped';
+    const key = warmKey(vs, fs);
+    if (MTLX_WARMED_SOURCES.has(key)) {
+        if (window.MTLX_PERF_LOG) {
+            console.log('[mtlx-perf] GL prewarm skipped — source already warmed this session (target: ' + label + ')');
+        }
+        return 'skipped';
+    }
+    if (vs.length + fs.length < PREWARM_MIN_SOURCE_BYTES) {
+        if (window.MTLX_PERF_LOG) {
+            console.log('[mtlx-perf] GL prewarm skipped — small shader ('
+                + (vs.length + fs.length) + ' bytes, target: ' + label + ')');
+        }
+        return 'skipped';
+    }
+    const { gl, ext } = ctx;
+
+    const __warmPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
+    let warmProgram = null, warmVShader = null, warmFShader = null;
+    try {
+        warmVShader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(warmVShader, '#version 300 es\n' + vs);
+        gl.compileShader(warmVShader);
+        warmFShader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(warmFShader, '#version 300 es\n' + fs);
+        gl.compileShader(warmFShader);
+        warmProgram = gl.createProgram();
+        gl.attachShader(warmProgram, warmVShader);
+        gl.attachShader(warmProgram, warmFShader);
+        gl.linkProgram(warmProgram);
+    } catch (e) {
+        // Defensive only: any failure here just skips the warm-up — falls
+        // through to today's (unwarmed) compile behavior.
+        try { if (warmProgram) gl.deleteProgram(warmProgram); } catch (e2) { /* context lost etc. */ }
+        try { if (warmVShader) gl.deleteShader(warmVShader); } catch (e2) { /* ditto */ }
+        try { if (warmFShader) gl.deleteShader(warmFShader); } catch (e2) { /* ditto */ }
+        return 'skipped';
+    }
+    if (window.MTLX_PERF_LOG) {
+        console.log('[mtlx-perf] GL compile submit: '
+            + (performance.now() - __warmPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
+    }
+    const cleanup = () => {
+        try { if (warmProgram) gl.deleteProgram(warmProgram); } catch (e) { /* context lost etc. */ }
+        try { if (warmVShader) gl.deleteShader(warmVShader); } catch (e) { /* ditto */ }
+        try { if (warmFShader) gl.deleteShader(warmFShader); } catch (e) { /* ditto */ }
+    };
+
+    const WAIT_POLL_MS = 50, WAIT_POLL_FAST_MS = 16, WAIT_POLL_FAST_TICKS = 6, WAIT_TIMEOUT_MS = 15000;
+    const __waitStart = performance.now();
+    let timedOut = false;
+
+    // isProgram() is the silent validity check: it returns false for a
+    // deleted/invalid handle WITHOUT generating a GL error (unlike
+    // getProgramParameter on an invalid handle, which logs
+    // "GL_INVALID_VALUE: glGetProgramiv: Program object expected" once
+    // per pre-warm on Chrome). isContextLost / the null-guard / the
+    // try/catch below stay as belt-and-suspenders inner fallbacks.
+    const isWarmDone = () => {
+        try {
+            if (gl.isContextLost()) return true;
+            if (!gl.isProgram(warmProgram)) return true;
+            const v = gl.getProgramParameter(warmProgram, ext.COMPLETION_STATUS_KHR);
+            // A GL error (invalid/deleted program) returns null WITHOUT
+            // throwing — treat it as "nothing left to wait for" instead of
+            // polling (and console-spamming GL_INVALID_VALUE) until the
+            // timeout cap.
+            return (v === null) ? true : !!v;
+        } catch (e) {
+            // Disposed/invalid handle — nothing left to wait for.
+            return true;
+        }
+    };
+
+    // Check once immediately, before the first sleep — a fast background
+    // compile may already be done before we'd otherwise pay a single poll
+    // tick of latency.
+    let tick = 0;
+    for (;;) {
+        if (isWarmDone()) break;
+        // Safety cap: on timeout just stop polling and proceed. The real
+        // compile below will then block for whatever compile time remains —
+        // same as not pre-warming, so this can never be WORSE, only equal
+        // or better.
+        if ((performance.now() - __waitStart) > WAIT_TIMEOUT_MS) {
+            timedOut = true;
+            break;
+        }
+        // Escalating poll interval: fast compiles typically resolve within
+        // about a frame, so the first ~6 ticks poll at 16ms; the longer
+        // 50ms tick only matters for multi-second compiles, where that
+        // granularity is irrelevant.
+        const pollMs = tick < WAIT_POLL_FAST_TICKS ? WAIT_POLL_FAST_MS : WAIT_POLL_MS;
+        tick++;
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+        // Lifecycle bail: a superseded build must stop and clean up rather
+        // than keep polling GL objects for a view nobody wants.
+        if (!isMounted()) {
+            cleanup();
+            return 'bailed';
+        }
+    }
+    if (window.MTLX_PERF_LOG) {
+        console.log('[mtlx-perf] GL compile wait: '
+            + (performance.now() - __waitStart).toFixed(1) + 'ms (target: ' + label + ')');
+    }
+    if (!timedOut) MTLX_WARMED_SOURCES.add(key);
+    cleanup();
+    return 'done';
+};
+
+
+// ------------------------------------------------------------------
+// generatePreviewSources — shader-generation slice of
+// createMtlxRenderView, extracted so tryRefreshRenderView can
+// regenerate + diff a target's sources against a live view's
+// compiled sources without paying for a full view rebuild (measured
+// gen.generate: 20-40ms, vs. WebGLRenderer init + GL compile for a
+// full rebuild). Args: { mx, gen, genContext, renderable, label,
+// isMounted }. Returns { mxShader, vs, fs, VERTEX_STAGE, PIXEL_STAGE }
+// (stage names included so callers — createMtlxRenderView's
+// introspection loop, tryRefreshRenderView's — don't re-derive them),
+// or null when isMounted() went false before generation started
+// (nothing GL-side exists yet at that point, so there's nothing to
+// clean up here; the caller decides whether it needs disposePartial).
+// Throws Error with a decoded MaterialX message on generation failure.
+// ------------------------------------------------------------------
+const generatePreviewSources = ({ mx, gen, genContext, renderable, label, isMounted = () => true }) => {
+    // OFFICIAL PARITY: per-material generation options. Transparency
+    // detection switches the generated blending path (glass etc.);
+    // COMPLETE interface exposes every input as a uniform for the
+    // editor.
+    try {
+        if (typeof mx.isTransparentSurface === 'function') {
+            genContext.getOptions().hwTransparency =
+                mx.isTransparentSurface(renderable, gen.getTarget());
+        }
+    } catch (e) { /* keep previous value */ }
+    try {
+        if (mx.ShaderInterfaceType) {
+            genContext.getOptions().shaderInterfaceType =
+                mx.ShaderInterfaceType.SHADER_INTERFACE_COMPLETE;
+        }
+    } catch (e) { /* default interface */ }
+    // Generated shaders use the generator's default FIS
+    // specular-environment method. hwSpecularEnvironmentMethod
+    // is NOT settable through this JsMaterialXGenShader build —
+    // the embind setter rejects both the unexposed enum object
+    // and raw ints (verified at runtime, 2026-07). Don't retry.
+
+    // Bail before the ~expensive shader-generation call if this
+    // build has already been superseded (caller's effect
+    // cleanup flipped `mounted` while we were awaiting above) —
+    // nothing GL-side exists yet, so there's nothing for the
+    // caller to dispose either.
+    if (!isMounted()) return null;
+    let mxShader;
+    const __genPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
+    try {
+        mxShader = gen.generate('PreviewShader', renderable, genContext);
+    } catch (genErr) {
+        // Decode the REAL MaterialX error (Emscripten throws
+        // numeric pointers) instead of a generic string.
+        throw new Error(`Shader generation failed for "${label}": ${mxErr(mx, genErr)}`);
+    }
+    if (window.MTLX_PERF_LOG) {
+        console.log('[mtlx-perf] gen.generate: '
+            + (performance.now() - __genPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
+    }
+
+    // Stage identifiers: some JS builds don't expose the
+    // mx.Stage enum object (hence "Cannot read ... 'VERTEX'").
+    // The underlying constant values are just the strings
+    // "vertex" and "pixel", which getSourceCode accepts.
+    const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
+    const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
+    const vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
+    // hwSrgbEncodeOutput makes MaterialX emit its own sRGB
+    // encode (visible as srgb-named code in the source). Only
+    // inject our fallback when the option didn't take in this
+    // wasm build — double-encoding would wash everything out.
+    let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
+    fs = patchUnlitLightingRefs(fs);
+    if (!/srgb/i.test(fs)) fs = encodeDisplay(fs);
+    else if (DEBUG_SHADERS) console.log('generator emitted sRGB encode (hwSrgbEncodeOutput) — no injection');
+
+    return { mxShader, vs, fs, VERTEX_STAGE, PIXEL_STAGE };
+};
+
+// ------------------------------------------------------------------
+// applyIntrospectedUniformDefaults — upload MaterialX's introspected
+// uniform DEFAULTS onto a three.js uniforms map. Two modes:
+//   overwrite=false (view creation): explicit bindings already
+//     present on `uniforms` win — skip those names; skip entries with
+//     no default (u.data == null, left for WebGL's implicit 0); then
+//     bind the default checker texture to every unset `filename`
+//     sampler so image/tiledimage nodes render out of the box.
+//   overwrite=true (fast-refresh, tryRefreshRenderView): the
+//     generated source is byte-identical to the live view's, so every
+//     name is already bound on `uniforms` — OVERWRITE each entry's
+//     .value in place (three.js RawShaderMaterial reads .value
+//     per-frame, so mutating it is enough; no material rebuild
+//     needed). Restricted to the 'PublicUniforms' block — that's
+//     where every document-driven input value lives; the
+//     'PrivateUniforms' block (transforms, env, lights) is explicitly
+//     bound by createMtlxRenderView at creation and several of its
+//     entries carry non-null generator defaults that would clobber
+//     those live bindings (u_numActiveLightSources → 0 kills the
+//     direct light; env mips/samples likewise). `filename` entries
+//     are never touched either — the caller rebinds textures via
+//     bindDroppedTextures afterward.
+// ------------------------------------------------------------------
+const PREVIEW_TRANSFORM_UNIFORM_NAMES = new Set([
+    'u_worldMatrix', 'u_viewProjectionMatrix', 'u_worldInverseTransposeMatrix', 'u_viewPosition',
+]);
+const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = false } = {}) => {
+    if (!overwrite) {
+        for (const u of introspected) {
+            if (uniforms[u.name] || u.data == null) continue; // explicit bindings win; no default → leave for WebGL 0
+            const tu = mxValueToThreeUniform(u.type, u.data);
+            if (tu) uniforms[u.name] = tu;
+        }
+        // Bind the default checker to every `filename` sampler
+        // so image/tiledimage nodes render out of the box —
+        // an unbound sampler reads black. (Env samplers are
+        // bound later by name and are not `filename` ports.)
+        for (const u of introspected) {
+            if (u.type === 'filename' && !uniforms[u.name]) {
+                uniforms[u.name] = { value: getDefaultTexture() };
+            }
+        }
+        return;
+    }
+    // Fast-refresh: same values just recomputed from a re-generated
+    // (but byte-identical-source) shader — overwrite in place.
+    for (const u of introspected) {
+        // ONLY the public uniform block: document-driven input values
+        // live exclusively in PublicUniforms. Everything in
+        // PrivateUniforms (transforms, env matrix/mips/samples,
+        // u_numActiveLightSources/u_lightData, refraction flags, ...)
+        // was explicitly bound by createMtlxRenderView at creation and
+        // must never be clobbered by a refresh — several private
+        // entries DO carry non-null generator defaults (e.g.
+        // u_numActiveLightSources defaults to 0, which would silently
+        // kill the direct light rig).
+        if (u.block !== 'PublicUniforms') continue;
+        if (u.data == null) continue;
+        if (u.type === 'filename') continue;
+        // Belt-and-suspenders: the transforms are private-block (so the
+        // block guard above already skips them), but they're the one
+        // thing that would visibly break every frame if ever touched.
+        if (PREVIEW_TRANSFORM_UNIFORM_NAMES.has(u.name)) continue;
+        const tu = mxValueToThreeUniform(u.type, u.data);
+        if (!tu) continue;
+        if (uniforms[u.name]) uniforms[u.name].value = tu.value;
+        else uniforms[u.name] = tu;
+    }
+};
+
+// ------------------------------------------------------------------
+// tryRefreshRenderView — attempt a cheap in-place refresh of an
+// EXISTING render view instead of a full teardown+rebuild. Re-runs
+// shader generation for `renderable` (gen.generate measures 20-40ms —
+// cheap relative to a full WebGLRenderer init + GL compile) and
+// compares the regenerated sources against the live view's compiled
+// vs/fs. When byte-identical (unconnected add/delete, edits on
+// branches that don't feed this preview target, group/ungroup
+// elsewhere in the graph — all cases where the target's shader didn't
+// actually change), only the uniform DEFAULTS are re-uploaded onto
+// the EXISTING compiled material/uniforms object in place — no GL
+// recompile. The caller still owns rebinding dropped textures
+// (bindDroppedTextures) since `filename` entries are intentionally
+// left untouched here.
+// Args: { view, mx, gen, genContext, renderable, label, isMounted }
+// where `view` is a previous createMtlxRenderView() return value.
+// Returns { refreshed: false } when the source changed (or generation
+// threw/bailed) — caller falls back to the full rebuild path, which
+// eats its own +20-40ms regen; that duplicate cost is judged
+// acceptable over plumbing the already-generated sources through,
+// since a real rebuild (renderer + GL compile) dwarfs it anyway.
+// Returns { refreshed: true } when `view.uniforms`/`view.introspected`
+// were updated in place.
+// ------------------------------------------------------------------
+const tryRefreshRenderView = ({ view, mx, gen, genContext, renderable, label, isMounted = () => true }) => {
+    const __t = window.MTLX_PERF_LOG ? performance.now() : 0;
+    let srcs;
+    try {
+        srcs = generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+    } catch (e) {
+        return { refreshed: false };
+    }
+    if (!srcs) return { refreshed: false };
+    if (srcs.vs !== view.vs || srcs.fs !== view.fs) return { refreshed: false };
+
+    let introspected = [];
+    for (const stageName of [srcs.VERTEX_STAGE, srcs.PIXEL_STAGE]) {
+        let st = null;
+        try { st = srcs.mxShader.getStage(stageName); } catch (e) { /* stage absent */ }
+        if (st) introspected = introspected.concat(collectMxUniforms(st));
+    }
+    view.introspected = introspected;
+    applyIntrospectedUniformDefaults(view.uniforms, introspected, { overwrite: true });
+    if (window.MTLX_PERF_LOG) {
+        console.log('[mtlx-perf] preview fast-refresh (source unchanged): '
+            + (performance.now() - __t).toFixed(1) + 'ms (target: ' + label + ')');
+    }
+    return { refreshed: true };
+};
 
 // ------------------------------------------------------------------
 // createMtlxRenderView — the ENTIRE render pipeline for one
@@ -1266,56 +1726,54 @@ const createMtlxRenderView = async ({
         if (controls) controls.dispose();
         if (renderer) renderer.dispose();
     };
+    // [mtlx-perf] whole-function total — everything below, from shader
+    // generation through the GL compile that makes the view handle ready
+    // to return. See the finer-grained gen.generate / WebGLRenderer init /
+    // GL compile timers further down for a breakdown.
+    const __totalPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
     try {
-                // Generate the shader from the renderable surface node.
-                // OFFICIAL PARITY: per-material generation options.
-                // Transparency detection switches the generated blending
-                // path (glass etc.); COMPLETE interface exposes every
-                // input as a uniform for the editor.
-                try {
-                    if (typeof mx.isTransparentSurface === 'function') {
-                        genContext.getOptions().hwTransparency =
-                            mx.isTransparentSurface(renderable, gen.getTarget());
-                    }
-                } catch (e) { /* keep previous value */ }
-                try {
-                    if (mx.ShaderInterfaceType) {
-                        genContext.getOptions().shaderInterfaceType =
-                            mx.ShaderInterfaceType.SHADER_INTERFACE_COMPLETE;
-                    }
-                } catch (e) { /* default interface */ }
+                // Generate the shader from the renderable surface node
+                // (transparency + COMPLETE interface options, gen.generate,
+                // stage-source extraction/patching) — see
+                // generatePreviewSources for the full breakdown; extracted
+                // so tryRefreshRenderView can reuse it for a source diff
+                // without pulling in the rest of this function.
+                const __srcs = generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+                // Bail before the ~expensive shader-generation call if this
+                // build has already been superseded (caller's effect
+                // cleanup flipped `mounted` while we were awaiting above) —
+                // nothing GL-side exists yet (renderer isn't created until
+                // below), so disposePartial() is a safe, idempotent no-op
+                // here beyond flagging `stopped`.
+                if (!__srcs) { disposePartial(); return null; }
+                const { mxShader, vs, fs, VERTEX_STAGE, PIXEL_STAGE } = __srcs;
 
-                let mxShader;
-                try {
-                    mxShader = gen.generate('PreviewShader', renderable, genContext);
-                } catch (genErr) {
-                    // Decode the REAL MaterialX error (Emscripten throws
-                    // numeric pointers) instead of a generic string.
-                    throw new Error(`Shader generation failed for "${label}": ${mxErr(mx, genErr)}`);
-                }
-
-                // Stage identifiers: some JS builds don't expose the
-                // mx.Stage enum object (hence "Cannot read ... 'VERTEX'").
-                // The underlying constant values are just the strings
-                // "vertex" and "pixel", which getSourceCode accepts.
-                const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
-                const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
-                const vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
-                // hwSrgbEncodeOutput makes MaterialX emit its own sRGB
-                // encode (visible as srgb-named code in the source). Only
-                // inject our fallback when the option didn't take in this
-                // wasm build — double-encoding would wash everything out.
-                let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
-                fs = patchUnlitLightingRefs(fs);
-                if (!/srgb/i.test(fs)) fs = encodeDisplay(fs);
-                else if (DEBUG_SHADERS) console.log('generator emitted sRGB encode (hwSrgbEncodeOutput) — no injection');
-
+                // Pre-warm the driver's shader compile on the persistent
+                // hidden GL context BEFORE the display renderer is created
+                // below. Running the warm first means the display context
+                // is created only AFTER the driver has finished (or is
+                // well underway with) compiling — instead of a fresh
+                // WebGLRenderer init contending with an in-flight
+                // background compile queue on the SAME context (measured
+                // 0.8-2.5s WebGLRenderer init stalls with the old
+                // after-renderer placement). The display path below is
+                // therefore byte-for-byte the original, un-warmed code —
+                // the pre-warm here is a pure side effect that primes the
+                // driver's source-keyed compile cache.
+                const warmResult = await prewarmShaderCompile({ vs, fs, isMounted, label });
+                if (warmResult === 'bailed' || !isMounted()) { disposePartial(); return null; }
 
                 // --- three.js scene (WebGL2) ---
                 // clientWidth can be 0 before layout; fall back so the
                 // viewport isn't 0×0 (which renders nothing → black).
                 const cw = canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || 400;
                 const ch = canvas.clientHeight || 256;
+                // Bail before allocating the WebGL context if this build
+                // was superseded while shader generation was running above
+                // — still nothing GL-side exists yet, so disposePartial()
+                // stays a safe no-op.
+                if (!isMounted()) { disposePartial(); return null; }
+                const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
                 renderer.setSize(cw, ch, false);
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -1327,6 +1785,10 @@ const createMtlxRenderView = async ({
                 if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
                 renderer.toneMapping = THREE.ACESFilmicToneMapping;
                 renderer.toneMappingExposure = 1.0;
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] WebGLRenderer init: '
+                        + (performance.now() - __rendererPerfStart).toFixed(1) + 'ms');
+                }
 
                 const scene = new THREE.Scene();
                 const camera = new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
@@ -1399,20 +1861,7 @@ const createMtlxRenderView = async ({
                     try { st = mxShader.getStage(stageName); } catch (e) { /* stage absent */ }
                     if (st) introspected = introspected.concat(collectMxUniforms(st));
                 }
-                for (const u of introspected) {
-                    if (uniforms[u.name] || u.data == null) continue; // explicit bindings win; no default → leave for WebGL 0
-                    const tu = mxValueToThreeUniform(u.type, u.data);
-                    if (tu) uniforms[u.name] = tu;
-                }
-                // Bind the default checker to every `filename` sampler
-                // so image/tiledimage nodes render out of the box —
-                // an unbound sampler reads black. (Env samplers are
-                // bound later by name and are not `filename` ports.)
-                for (const u of introspected) {
-                    if (u.type === 'filename' && !uniforms[u.name]) {
-                        uniforms[u.name] = { value: getDefaultTexture() };
-                    }
-                }
+                applyIntrospectedUniformDefaults(uniforms, introspected);
                 if (DEBUG_SHADERS) {
                     console.log('introspected uniforms:',
                         introspected.map((u) => `${u.type} ${u.name}${u.data != null ? ' (default uploaded)' : ''}`));
@@ -1532,7 +1981,33 @@ const createMtlxRenderView = async ({
                 // ANGLE/fxc X4008-style warnings — see
                 // compileFilteringDriverNoise.)
                 setUniforms();
+
+                // [mtlx-perf] timing for the actual GL compile — separate
+                // from and nested inside js/graph/preview.jsx's
+                // buildPreviewRenderable timing, which wraps prep+compile
+                // together; this isolates just the renderer.compile() call
+                // below. It's one of several finer-grained timers in this
+                // function (see gen.generate / WebGLRenderer init above and
+                // the whole-function total near the return below) — this
+                // one used to be labeled 'createMtlxRenderView:', which read
+                // as if it covered the whole function; renamed to 'GL
+                // compile:' now that the total timer owns that label. Read
+                // window.MTLX_PERF_LOG defensively rather than the bare
+                // identifier: mtlx-engine.js is eager-loaded before
+                // js/graph/model.jsx (which sets the global), so a top-level
+                // reference could run before it exists — by the time a
+                // preview actually renders here, model.jsx has already
+                // loaded and set it, but this stays defensive on principle.
+                // With the pre-warm above, this is now typically an ANGLE
+                // cache hit (~270ms) instead of a fresh compile (~2.9s) —
+                // see the [mtlx-perf] GL compile wait log for how long the
+                // pre-warm actually took.
+                const __compilePerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 compileFilteringDriverNoise(renderer, scene, camera);
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] GL compile: '
+                        + (performance.now() - __compilePerfStart).toFixed(1) + 'ms (target: ' + label + ')');
+                }
                 const badProg = (renderer.info.programs || []).find(
                     (p) => p.diagnostics && p.diagnostics.runnable === false
                 );
@@ -1560,6 +2035,10 @@ const createMtlxRenderView = async ({
                 };
                 animate();
 
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] createMtlxRenderView total: '
+                        + (performance.now() - __totalPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
+                }
         return {
             uniforms, introspected, vs, fs, controls, renderer,
             // Live auto-orbit toggle (no regen needed).
@@ -1730,7 +2209,7 @@ Object.assign(window, {
     prepGeometry, normalizeGeometry, buildPreviewGeometry,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
-    createMtlxRenderView,
+    createMtlxRenderView, tryRefreshRenderView,
     fullscreenElement, toggleFullscreen, watchFullscreen,
     MtlxIcon, MTLX_ICON_PATHS,
 });

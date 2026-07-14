@@ -346,8 +346,12 @@
         // default — rendered with the SAME createMtlxRenderView pipeline
         // as the docs page. Re-inits whenever the target, the document,
         // or a committed parameter edit (docRev) changes.
-        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay }) {
+        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay, trailingChildren }) {
             const canvasRef = React.useRef(null);
+            // The viewport CONTAINER (not the canvas) goes fullscreen, so
+            // the overlaid ViewportControls stay visible — same contract as
+            // node-preview.jsx / viewer-app.jsx.
+            const viewportRef = React.useRef(null);
             // Mirrors NodeGraphApp's activeRef — pauses the render loop while
             // a future multi-view shell hides this view without unmounting it.
             const activeRef = React.useRef(active);
@@ -365,14 +369,103 @@
             const lastFrameRef = React.useRef(null);
             const [lastFrame, setLastFrame] = React.useState(null);
 
+            // ---- Viewport controls (item F2.1) — mirrors node-preview.jsx's
+            // copy exactly. Preview geometry (persisted): shares the SAME
+            // localStorage key as the docs previewer ('mtlx_preview_geom')
+            // since it's the identical setting in spirit — a value picked in
+            // one view carries over to the other. Falls back to 'shaderball'
+            // (this preview's long-standing hardcoded default) rather than
+            // node-preview.jsx's 'sphere' when nothing is stored yet.
+            const [geom, setGeom] = React.useState(() => {
+                const valid = ['shaderball', 'sphere', 'cube'];
+                try {
+                    const g = localStorage.getItem('mtlx_preview_geom');
+                    return valid.indexOf(g) !== -1 ? g : 'shaderball';
+                } catch (e) { return 'shaderball'; }
+            });
+            const pickGeom = (g) => {
+                try { localStorage.setItem('mtlx_preview_geom', g); } catch (e) { /* best-effort */ }
+                setGeom(g);
+            };
+            // Auto-orbit + env-background toggles, applied live via the view
+            // handle (the SAME ref the parent passes in and reads elsewhere
+            // — see previewViewRef in graph-app.jsx) and re-read fresh at
+            // creation time so they survive a geometry-triggered rebuild.
+            const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
+            const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
+            const [envAvail, setEnvAvail] = React.useState(false);
+            const [isFullscreen, toggleFullscreenView] = useFullscreen(viewportRef);
+            const takeScreenshot = () => {
+                const view = viewRef && viewRef.current;
+                if (!view || !view.snapshot) return;
+                try {
+                    downloadSnapshot(view, label + '_' + geom);
+                } catch (e) { /* best-effort */ }
+            };
+
+            // Component-lifetime handle to the CURRENTLY LIVE, GL-compiled
+            // render view (if any) — persists ACROSS the main effect's
+            // docRev-triggered re-runs so a fast-refresh (item F3c below)
+            // can reuse it instead of tearing it down. Only the rebuild
+            // path (a real shader-source change) or unmount ever dispose
+            // it; a superseded/stale run must never touch it (see the
+            // mounted-staleness comments below).
+            const liveViewRef = React.useRef(null);
+
+            // Mount-once: disposes whatever view is still live when this
+            // component actually UNMOUNTS. Not the per-docRev cleanup —
+            // that's handled inline by the rebuild path inside the main
+            // effect below (only a run that itself proceeds to rebuild
+            // ever disposes the previous view). No last-frame snapshot is
+            // taken here since nothing will render this preview again.
+            React.useEffect(() => {
+                return () => {
+                    if (liveViewRef.current) {
+                        try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                    }
+                    liveViewRef.current = null;
+                    if (viewRef) viewRef.current = null;
+                };
+            }, []);
+
             React.useEffect(() => {
                 let mounted = true;
-                let viewHandle = null;
-                setLastFrame(lastFrameRef.current);
                 (async () => {
-                    setLoading(true); setError(null); setNotice(null);
+                    setError(null); setNotice(null);
                     try {
                         const { mx, gen, genContext, lightData } = await getMxEnv();
+                        if (!mounted) return;
+                        // Let the graph paint before the heavy synchronous
+                        // regen below runs. getMxEnv() above resolves from a
+                        // cached promise, so without this yield the
+                        // buildPreviewRenderable + createMtlxRenderView work
+                        // runs in the same microtask/frame as a just-added/
+                        // deleted/grouped node's setFlow commit, blocking the
+                        // very frame that node should first appear in. Same
+                        // double-rAF-defer idiom as changeScope (graph-app.jsx)
+                        // — the graph's commit paints first, the regen follows.
+                        await new Promise((r) => requestAnimationFrame(r));
+                        await new Promise((r) => requestAnimationFrame(r));
+                        // Re-check staleness: another run may have started
+                        // (and this effect's cleanup set mounted = false)
+                        // while we were yielding across those two frames.
+                        if (!mounted) return;
+                        // Coalesce rapid successive triggers: a doc mutation
+                        // (e.g. adding a node) bumps docRev and fires this
+                        // effect while `target` is still the OLD selection,
+                        // then ~a frame later the selection moves to the
+                        // just-added node and fires it again for the real
+                        // target. The build below is synchronous, so without
+                        // this delay the FIRST run would block the main
+                        // thread and the superseding commit couldn't cancel
+                        // it (flip `mounted` to false) until that wasted
+                        // compile — measured at ~330ms-3s on heavy materials
+                        // — already ran. Waiting here lets the newest
+                        // trigger's cleanup cancel every stale run first, so
+                        // only the final target actually compiles; the cost
+                        // is a barely perceptible extra delay before a
+                        // legitimately final rebuild starts.
+                        await new Promise((r) => setTimeout(r, 120));
                         if (!mounted) return;
                         // [mtlx-perf] timing (item 3) — off unless
                         // MTLX_PERF_LOG (bare window global, model.jsx
@@ -390,6 +483,11 @@
                             setLoading(false);
                             setLastFrame(null);
                             lastFrameRef.current = null;
+                            if (liveViewRef.current) {
+                                try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                            }
+                            liveViewRef.current = null;
+                            if (viewRef) viewRef.current = null;
                             if (canvasRef.current) {
                                 const c = canvasRef.current;
                                 const w = c.width, h = c.height;
@@ -397,6 +495,74 @@
                                 c.width = w; c.height = h;
                             }
                             return;
+                        }
+
+                        // FAST PATH (item F3c) — before any teardown: try
+                        // to refresh the EXISTING compiled view in place
+                        // instead of a full rebuild. Only attempted when a
+                        // live view exists for the SAME geometry (a geom
+                        // switch is also a `geom` dep change that re-runs
+                        // this effect and lands here, but the mesh/material
+                        // pairing means it always needs a real rebuild).
+                        const live = liveViewRef.current;
+                        if (live && live.__geom === geom) {
+                            let res = { refreshed: false };
+                            try {
+                                res = tryRefreshRenderView({
+                                    view: live, mx, gen, genContext,
+                                    renderable: built.renderable,
+                                    label: built.label || parsed.label,
+                                    isMounted: () => mounted,
+                                });
+                            } finally {
+                                // The '__pv_*' wrappers only exist for shader
+                                // generation — remove them before anything
+                                // can rebuild the graph from the live
+                                // document. Only needed here when the
+                                // refresh actually took (view kept as-is);
+                                // when it didn't, `built` stays alive
+                                // uncleaned and the rebuild path's own
+                                // try/finally below cleans it up once.
+                                if (res.refreshed) built.cleanup();
+                            }
+                            if (res.refreshed) {
+                                // Bind any dropped texture files onto the
+                                // shader's filename uniforms (same pass as
+                                // the viewer/rebuild path). Missing
+                                // references keep the built-in checker
+                                // texture.
+                                const rep = bindDroppedTextures(live, fileMap || {});
+                                if (rep.missing.length) {
+                                    console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
+                                }
+                                setLabel(built.label || '');
+                                setLoading(false);
+                                setLastFrame(null);
+                                return;
+                            }
+                            // Not refreshed (source actually changed, or
+                            // generation errored/bailed) — fall through to
+                            // the full rebuild below.
+                        }
+
+                        // REBUILD PATH — full teardown + recreate. Only
+                        // NOW do we blink the loading overlay / hold the
+                        // last frame; a successful fast-refresh above never
+                        // reaches this point, so it never blinks.
+                        setLoading(true);
+                        setLastFrame(lastFrameRef.current);
+                        if (liveViewRef.current) {
+                            // Grab the last-drawn frame before tearing the
+                            // view down so the overlay above can paint it
+                            // over the checker-texture gap instead of
+                            // showing a blank/flashing canvas.
+                            try {
+                                const shot = liveViewRef.current.snapshot && liveViewRef.current.snapshot();
+                                if (shot) lastFrameRef.current = shot;
+                            } catch (e) { /* best-effort — keep the previous frame */ }
+                            liveViewRef.current.dispose();
+                            liveViewRef.current = null;
+                            if (viewRef) viewRef.current = null;
                         }
                         setLabel(built.label || '');
                         // The canvas may need a frame to mount after a
@@ -413,9 +579,9 @@
                                 canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                 label: built.label || parsed.label,
                                 needsLighting: true,
-                                geomName: 'shaderball',
-                                autoRotate: false,
-                                envBackground: false,
+                                geomName: geom,
+                                autoRotate: rotating,
+                                envBackground: envBg,
                                 // The preview is square now — pull the camera
                                 // in so the shaderball fills the frame.
                                 cameraDistance: 2.55,
@@ -431,8 +597,10 @@
                         }
                         if (!view) return;
                         if (!mounted) { view.dispose(); return; }
-                        viewHandle = view;
+                        view.__geom = geom;
+                        liveViewRef.current = view;
                         if (viewRef) viewRef.current = view;
+                        setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         // Bind any dropped texture files onto the shader's
                         // filename uniforms (same pass as the viewer). Missing
                         // references keep the built-in checker texture.
@@ -454,52 +622,80 @@
                         }
                     }
                 })();
+                // Per-run cleanup ONLY flips `mounted` — a superseded run
+                // must never dispose the live view (it might still be the
+                // one on screen). Disposal now happens inline: on the
+                // no-renderable path and the rebuild path above (both only
+                // reachable by a run that itself passed every `mounted`
+                // check up to that point), or on actual unmount (the
+                // mount-once effect above).
                 return () => {
-                    if (viewRef) viewRef.current = null;
                     mounted = false;
-                    if (viewHandle) {
-                        // Grab the last-drawn frame before tearing the view
-                        // down so the NEXT run (see setLastFrame above) can
-                        // paint it over the checker-texture gap instead of
-                        // showing a blank/flashing canvas.
-                        try {
-                            const shot = viewHandle.snapshot && viewHandle.snapshot();
-                            if (shot) lastFrameRef.current = shot;
-                        } catch (e) { /* best-effort — keep the previous frame */ }
-                        viewHandle.dispose();
-                    }
                 };
-            }, [parsed, target, docRev, fileMap]);
+            }, [parsed, target, docRev, fileMap, geom]);
 
             return (
-                <div className="relative flex-none w-full aspect-square border-b border-gray-700 bg-gray-900/60">
-                    <canvas ref={canvasRef} className="block w-full h-full" />
-                    {loading && lastFrame && !notice && !error && (
-                        // Hold the previous frame over the canvas while the
-                        // view rebuilds \u2014 otherwise the checker-texture
-                        // placeholder (and blank canvas) flash for a beat on
-                        // every committed parameter edit.
-                        <img src={lastFrame} className="absolute inset-0 w-full h-full object-cover pointer-events-none" alt="" />
-                    )}
-                    {loading && !notice && !error && (
-                        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 animate-pulse pointer-events-none bg-gray-900/40">
-                            Rendering material {'\u2026'}
-                        </div>
-                    )}
-                    {notice && (
-                        <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 px-3 text-center bg-gray-900/60">
-                            {notice}
-                        </div>
-                    )}
-                    {error && (
-                        <div className="absolute inset-0 overflow-y-auto custom-scrollbar text-[10px] text-red-300 bg-red-950/80 px-2 py-1 break-words">
-                            {error}
-                        </div>
-                    )}
-                    {/* Rendered last so it stacks above the loading/notice/
-                        error overlays regardless of z-index ties (item 10's
-                        pin toggle, passed in by the caller). */}
-                    {overlay}
+                <div
+                    ref={viewportRef}
+                    className="flex flex-col flex-none w-full border-b border-gray-700"
+                    style={isFullscreen ? { height: '100%' } : undefined}
+                >
+                    {/* Viewport controls (item F2.1): geometry picker,
+                        rotate/env toggles, screenshot, fullscreen \u2014 the same
+                        strip node-preview.jsx and viewer-app.jsx use. Moved
+                        above the canvas (item F2c) so it has its own row
+                        instead of floating over the square preview. The
+                        pin toggle below keeps its own top-left overlay slot
+                        (unchanged) since it doesn't share the strip's
+                        top-right corner or button styling; trailingChildren
+                        carries the new "send to Material Viewer" button. */}
+                    <ViewportControls
+                        geom={geom}
+                        onGeomChange={pickGeom}
+                        rotating={rotating}
+                        onToggleRotating={toggleRotating}
+                        envBg={envBg}
+                        onToggleEnvBg={toggleEnvBg}
+                        envAvail={envAvail}
+                        onScreenshot={takeScreenshot}
+                        isFullscreen={isFullscreen}
+                        onToggleFullscreen={toggleFullscreenView}
+                        trailingChildren={trailingChildren}
+                        containerClassName="flex items-center justify-end gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
+                    />
+                    <div
+                        className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
+                    >
+                        <canvas ref={canvasRef} className="block w-full h-full" />
+                        {loading && lastFrame && !notice && !error && (
+                            // Hold the previous frame over the canvas while the
+                            // view rebuilds \u2014 otherwise the checker-texture
+                            // placeholder (and blank canvas) flash for a beat on
+                            // every committed parameter edit.
+                            <img src={lastFrame} className="absolute inset-0 w-full h-full object-cover pointer-events-none" alt="" />
+                        )}
+                        <LoadingOverlay
+                            show={loading && !notice && !error}
+                            label={'Rendering material\u2026'}
+                            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-gray-900/70 pointer-events-none"
+                            labelClassName="text-[12px] text-gray-200 animate-pulse"
+                            barWidthClass="w-32"
+                        />
+                        {notice && (
+                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 px-3 text-center bg-gray-900/60">
+                                {notice}
+                            </div>
+                        )}
+                        {error && (
+                            <div className="absolute inset-0 overflow-y-auto custom-scrollbar text-[10px] text-red-300 bg-red-950/80 px-2 py-1 break-words">
+                                {error}
+                            </div>
+                        )}
+                        {/* Rendered last so it stacks above the loading/notice/
+                            error overlays regardless of z-index ties (item 10's
+                            pin toggle, passed in by the caller). */}
+                        {overlay}
+                    </div>
                 </div>
             );
         }

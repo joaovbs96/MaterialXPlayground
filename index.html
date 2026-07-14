@@ -34,6 +34,33 @@
          graph views, and cheap enough not to gate on lazy view selection). -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/RGBELoader.js"></script>
+    <!-- EXRLoader: self-hosted, patched copy at js/vendor/EXRLoader.js
+         (see the provenance header in that file for full detail). It starts
+         from three@0.147.0's examples/js UMD build — pinned newer than the
+         r128 core because that's the newest version unpkg still serves
+         under examples/js (0.148.0+ 404s; the legacy non-module bundle was
+         discontinued around r147/r148) — verified source-compatible with
+         the r128 THREE core: 0.147.0's EXRLoader.js only touches
+         THREE.DataTextureLoader, THREE.FloatType/HalfFloatType,
+         THREE.RGBAFormat/RedFormat, THREE.LinearEncoding, THREE.LinearFilter
+         and THREE.DataUtils.toHalfFloat — all present with matching
+         signatures in three@0.128.0/build/three.js.
+         On top of that base, the DWA decode path is back-ported from three's
+         current examples/jsm/loaders/EXRLoader.js (mrdoob/three.js PRs
+         #27982/#30709/#33216) to fix "Cannot read properties of undefined
+         (reading 'width') at lossyDctDecode" on real .exr files whose
+         channels are layer-prefixed (e.g. "RGBA.R" — the default naming many
+         DCC exporters use); r147's naive `cd.name==rule.name` channel-rule
+         check never matched such names and then called lossyDctDecode()
+         unconditionally.
+         fflate: EXRLoader needs the global `fflate` (its ZIP/DWA-compressed
+         decode paths call fflate.unzlibSync) — must load before
+         js/vendor/EXRLoader.js. 0.147.0's libs/fflate.min.js is
+         byte-identical to 0.128.0's (still fflate 0.6.9, same exports);
+         kept on the 0.147.0 CDN tag purely so the version tag matches what
+         js/vendor/EXRLoader.js was forked from. -->
+    <script src="https://unpkg.com/three@0.147.0/examples/js/libs/fflate.min.js"></script>
+    <script src="js/vendor/EXRLoader.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 

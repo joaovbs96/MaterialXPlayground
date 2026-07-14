@@ -426,17 +426,15 @@
                                         type="button"
                                         onClick={() => setCsOpen((v) => !v)}
                                         title="Colorspace…"
-                                        className="flex-none text-gray-400 hover:text-gray-200 text-[10px] leading-none px-0.5 self-stretch"
-                                    >{csOpen ? '▾' : '▸'}</button>
+                                        className="flex-none flex items-center text-gray-400 hover:text-gray-200 px-0.5 self-stretch"
+                                    ><MtlxIcon name={csOpen ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5" /></button>
                                 )}
                                 {isColor && (
-                                    <input
-                                        type="color"
+                                    <ColorSwatch
+                                        rgb={comps.slice(0, 3)}
                                         className="w-full self-stretch h-6 min-w-0 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
                                         title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
-                                        value={rgbToHex(comps.slice(0, 3))}
-                                        onChange={(e) => {
-                                            const nv = hexToRgb(e.target.value);
+                                        onChange={(nv) => {
                                             if (vecN === 4) nv.push(comps[3]);
                                             setCompText(nv.map(numStr));
                                             commitSoon(nv.map(numStr).join(', '));

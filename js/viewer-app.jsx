@@ -249,6 +249,43 @@
                 onDragState: setDragOver,
             });
 
+            // ---- Receive a material handed off from the node graph editor
+            // (item F2.2's counterpart to the "Send to Editor" button below:
+            // js/graph-app.jsx's "Send to Viewer" button stashes the payload
+            // on window.__mtlxPendingViewerImport, dispatches
+            // 'mtlx-view-document', and jumps the hash to #!viewer). On
+            // arrival here there may already be a pending payload (checked
+            // once on mount) and/or more may arrive later while this tab
+            // stays open (the event). Routed through ingestRef, exactly like
+            // the drag-drop handler above — a .mtlx in the map already
+            // replaces the current session per ingest()'s own semantics, so
+            // no extra confirm dialog is needed here (unlike the graph
+            // editor's guardedIngest, which guards against losing unsaved
+            // graph edits — the viewer has no such concept).
+            React.useEffect(() => {
+                const handleImport = (payload) => {
+                    if (!payload) return;
+                    const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                    const map = Object.assign({}, payload.files || {}, {
+                        [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
+                    });
+                    ingestRef.current(map);
+                };
+                if (window.__mtlxPendingViewerImport) {
+                    const payload = window.__mtlxPendingViewerImport;
+                    window.__mtlxPendingViewerImport = null;
+                    handleImport(payload);
+                }
+                const onViewDoc = (e) => {
+                    const payload = e.detail;
+                    if (!payload) return;
+                    window.__mtlxPendingViewerImport = null;
+                    handleImport(payload);
+                };
+                window.addEventListener('mtlx-view-document', onViewDoc);
+                return () => window.removeEventListener('mtlx-view-document', onViewDoc);
+            }, []);
+
             // Warm the MaterialX WASM + environment map on mount, instead of
             // paying for them on the first drop. Also resolves the version
             // badge in the shared header right away.

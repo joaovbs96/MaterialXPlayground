@@ -129,9 +129,12 @@
         // Input display, per node: 'authored' (only inputs written in the
         // document — "set") or 'all' (plus every nodedef input at its
         // default value). Connected inputs are ALWAYS visible so no edge
-        // ever dangles.
+        // ever dangles. keepRow (patchInputConn, js/graph-app.jsx) is a
+        // flow-state-only flag that pins a just-disconnected port visible
+        // for one more render in 'authored' mode, so it doesn't vanish out
+        // from under the user the instant they disconnect it.
         const visiblePortsFor = (all, mode) => all.filter((inp) =>
-            inp.connected || mode === 'all' || inp.authored !== false);
+            inp.connected || inp.keepRow || mode === 'all' || inp.authored !== false);
 
         const toFlow = (descs, edges, opts) => {
             const o = opts || {};

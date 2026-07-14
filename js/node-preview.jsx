@@ -816,6 +816,10 @@
                             const inputName = inp.getName();
                             const type = inp.getType();
                             const label = attrOf(inp, 'uiname') || inputName;
+                            // Collapsible parameter group this input belongs to
+                            // (item F2.3) — null/absent means "ungrouped",
+                            // rendered at the top of the panel same as before.
+                            const uifolder = attrOf(inp, 'uifolder');
                             let valueStr = null;
                             try { valueStr = inp.getValueString ? inp.getValueString() : null; } catch (e) { /* none */ }
                             const enumAttr = attrOf(inp, 'enum');
@@ -828,14 +832,14 @@
                                 const options = enumAttr ? enumAttr.split(',').map((e2) => e2.trim()).filter(Boolean) : null;
                                 const def = (valueStr != null ? valueStr : (options && options[0])) || '';
                                 return { uniform: 'in::' + inputName, input: inputName, label, type: 'string',
-                                    def, options, regen: true, live: false };
+                                    def, options, regen: true, live: false, uifolder };
                             }
 
                             // FILENAME — needs a live sampler uniform to preview.
                             if (type === 'filename') {
                                 if (!u || !uniforms[u.name]) return null;
                                 return { uniform: u.name, input: inputName, label, type: 'filename', def: null,
-                                    colorspace: attrOf(inp, 'colorspace'), live: true };
+                                    colorspace: attrOf(inp, 'colorspace'), live: true, uifolder };
                             }
 
                             // NUMERIC / VECTOR / COLOR / BOOLEAN.
@@ -846,7 +850,7 @@
                                 // ONLY of them (pbrlib add/mix/multiply):
                                 // show them as read-only connections.
                                 return { uniform: 'in::' + inputName, input: inputName, label, type,
-                                    def: '(connection)', readonly: true, live: false };
+                                    def: '(connection)', readonly: true, live: false, uifolder };
                             }
                             // Numeric enum (name→value) → existing select control.
                             let enumNames = null, enumValues = null;
@@ -867,7 +871,7 @@
                                     if (max <= min) max = min + 1;
                                 }
                                 return { uniform: u.name, input: inputName, label, type, def, min, max,
-                                    enumNames, enumValues, live: true };
+                                    enumNames, enumValues, live: true, uifolder };
                             }
 
                             // No uniform (e.g. an input with a geometric default
@@ -879,7 +883,7 @@
                             const parsed = parseDefault(type, valueStr);
                             return { uniform: 'in::' + inputName, input: inputName, label, type,
                                 def: parsed === undefined ? (valueStr || '(geometry)') : parsed,
-                                readonly: true, live: false };
+                                readonly: true, live: false, uifolder };
                         };
 
                         // Enumerate the node's inputs. Prefer the nodedef whose
@@ -1162,13 +1166,11 @@
                     const chan = p.type === 'color4' ? 'RGBA' : 'RGB';
                     return (
                         <div className="flex items-center gap-1">
-                            <input
-                                type="color"
+                            <ColorSwatch
+                                rgb={rgb}
                                 className="h-7 w-10 bg-transparent border border-gray-600 rounded cursor-pointer flex-none"
                                 title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
-                                value={rgbToHex(rgb)}
-                                onChange={(e) => {
-                                    const nv = hexToRgb(e.target.value);
+                                onChange={(nv) => {
                                     onParamChange(p, p.type === 'color4' ? nv.concat([cur[3]]) : nv);
                                 }}
                             />
@@ -1205,6 +1207,32 @@
                     </div>
                 );
             };
+
+            // Group params by uifolder (item F2.3): un-foldered params
+            // render first, ungrouped, exactly as before; foldered ones are
+            // bucketed under a collapsible header, preserving the FIRST
+            // appearance order of each folder name. A node with no
+            // uifolder attrs anywhere yields an empty `folders` array, so
+            // the render below falls back to the old flat list untouched.
+            const paramGroups = React.useMemo(() => {
+                const ungrouped = [];
+                const folderOrder = [];
+                const byFolder = new Map();
+                for (const p of params) {
+                    const folder = p.uifolder;
+                    if (!folder) { ungrouped.push(p); continue; }
+                    if (!byFolder.has(folder)) { byFolder.set(folder, []); folderOrder.push(folder); }
+                    byFolder.get(folder).push(p);
+                }
+                return { ungrouped, folders: folderOrder.map((name) => ({ name, params: byFolder.get(name) })) };
+            }, [params]);
+            // Open/closed state per folder name, default expanded (a name
+            // absent from this map reads as open — see `!== false` below).
+            // Reset whenever the selected node/signature changes, same as
+            // resetNonce, so a folder collapsed on one node doesn't leak
+            // its state onto an unrelated one that happens to reuse a name.
+            const [paramFoldersOpen, setParamFoldersOpen] = React.useState({});
+            React.useEffect(() => { setParamFoldersOpen({}); }, [identKey]);
 
             // Desktop (lg+): panel sits to the RIGHT of the preview.
             // Mobile: flex-col stacks it BELOW.
@@ -1275,7 +1303,7 @@
                                 </div>
                             </div>
                             <div className="overflow-y-auto p-3 space-y-3 flex-1 custom-scrollbar">
-                                {params.map((p) => (
+                                {paramGroups.ungrouped.map((p) => (
                                     // Key includes nodeName: different nodes often
                                     // expose SAME-named inputs (image/hextiledimage
                                     // both have `file`), and a reused DOM file
@@ -1288,6 +1316,33 @@
                                         {renderControl(p)}
                                     </div>
                                 ))}
+                                {paramGroups.folders.map((f) => {
+                                    const open = paramFoldersOpen[f.name] !== false;
+                                    return (
+                                        <div key={'folder:' + f.name} className="border-t border-gray-700/70 mt-2 pt-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setParamFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
+                                                className="w-full flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200"
+                                            >
+                                                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5" />
+                                                <span className="truncate">{f.name}</span>
+                                            </button>
+                                            {open && (
+                                                <div className="mt-2 space-y-3">
+                                                    {f.params.map((p) => (
+                                                        <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
+                                                            <label className="block text-xs text-gray-400 mb-1">
+                                                                {p.label} <span className="text-gray-600">({p.type})</span>
+                                                            </label>
+                                                            {renderControl(p)}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                     )}

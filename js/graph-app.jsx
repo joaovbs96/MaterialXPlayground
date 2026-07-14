@@ -27,6 +27,102 @@
         const ReactFlowComp = RF.ReactFlow || RF.default;
         const { Background, MiniMap, Handle, Position, MarkerType } = RF;
 
+        // Port-picker popover (item 2): offered when a connection drag ends
+        // on a NODE BODY instead of a precise handle (see onConnectEnd in
+        // NodeGraphApp below) — lets the user pick which compatible port on
+        // that node to wire up. Styled to match AddNodeSearch (js/graph/
+        // panels.jsx) — same container chrome, same row layout (name left,
+        // muted type tag right), same footer hint bar — plus a filter input
+        // since AddNodeSearch's type-filter dropdown doesn't apply here
+        // (every candidate is already type-compatible). A real component
+        // (not a plain render helper) because it owns its own filter-text
+        // and selection-index state across re-renders while it's open.
+        // portPicker: { x, y, candidates, targetName }; rootRef is forwarded
+        // so the parent's outside-pointerdown-closes effect keeps working;
+        // Escape is handled by the parent's useEscapeToClose (window-level),
+        // so this component doesn't need its own Escape handling.
+        const PORT_PICKER_ROW_H = 26;
+        function PortPickerPopover({ portPicker, rootRef, onPick }) {
+            const [q, setQ] = React.useState('');
+            const [hi, setHi] = React.useState(0);
+            const inputRef = React.useRef(null);
+            const listRef = React.useRef(null);
+            React.useEffect(() => {
+                const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0);
+                return () => clearTimeout(t);
+            }, []);
+            const items = React.useMemo(() => {
+                const s = q.trim().toLowerCase();
+                const pool = portPicker.candidates;
+                return s ? pool.filter((c) => c.label.toLowerCase().indexOf(s) !== -1) : pool;
+            }, [portPicker.candidates, q]);
+            React.useEffect(() => { setHi(0); }, [q]);
+            React.useEffect(() => { // keep the highlighted row in view
+                const el = listRef.current && listRef.current.children[hi];
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+            }, [hi, items]);
+            const onKeyDown = (e) => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(items.length - 1, 0))); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+                else if (e.key === 'Enter') { e.preventDefault(); if (items[hi]) onPick(items[hi]); }
+                // Escape: let it bubble to the parent's window-level
+                // useEscapeToClose listener — nothing to do here.
+            };
+            const width = 260;
+            const inputH = 38, footerH = 26;
+            const height = inputH + Math.min(items.length, 8) * PORT_PICKER_ROW_H + footerH;
+            const flip = portPicker.y + height > window.innerHeight;
+            const style = {
+                position: 'fixed', zIndex: 9999, width,
+                left: Math.max(4, Math.min(portPicker.x, window.innerWidth - width - 4)),
+            };
+            if (flip) style.bottom = Math.max(4, window.innerHeight - portPicker.y + 4);
+            else style.top = portPicker.y + 4;
+            return (
+                <div
+                    ref={rootRef}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={style}
+                    className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+                >
+                    <div className="flex items-stretch border-b border-gray-700">
+                        <input
+                            ref={inputRef}
+                            className="flex-1 min-w-0 bg-gray-900 px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
+                            placeholder={'Filter ports on ' + portPicker.targetName + '…'}
+                            value={q}
+                            spellCheck={false}
+                            onChange={(e) => setQ(e.target.value)}
+                            onKeyDown={onKeyDown}
+                        />
+                    </div>
+                    <div ref={listRef} className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                        {!items.length && (
+                            <div className="px-3 py-3 text-[11px] text-gray-500">No port matches {'“'}{q}{'”'}.</div>
+                        )}
+                        {items.map((c, i) => (
+                            <button
+                                key={c.label}
+                                type="button"
+                                onMouseEnter={() => setHi(i)}
+                                onClick={() => onPick(c)}
+                                className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
+                                    + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                            >
+                                <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(c.type) }} />
+                                <span className="flex-1 truncate">{c.label}</span>
+                                {c.connected && <span className="flex-none text-gray-500">(connected)</span>}
+                                <span className="ml-auto flex-none text-[9px] uppercase tracking-wider" style={{ color: typeColor(c.type) }}>{c.type}</span>
+                            </button>
+                        ))}
+                    </div>
+                    <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                        {'↑↓'} select {'·'} Enter connect {'·'} Esc close
+                    </div>
+                </div>
+            );
+        }
+
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
@@ -94,6 +190,14 @@
             // (and locks) AddNodeSearch's type dropdown so only compatible
             // nodes show, and drives the auto-wire once one is picked.
             const [portAddFilter, setPortAddFilter] = React.useState(null);
+            // Port-picker popover (item 2): set when a connection drag ends
+            // on a NODE BODY (not a handle, not the empty pane) — offers
+            // every compatible port on that node instead of demanding
+            // pixel-precise aim. { x, y, candidates, targetName } or null;
+            // see onConnectEnd (candidate list) and the popover render
+            // below (portPickerRef, useEscapeToClose, outside-pointerdown).
+            const [portPicker, setPortPicker] = React.useState(null);
+            const portPickerRef = React.useRef(null);
             // Keybinds reference popup ("?" button, top-right).
             const [helpOpen, setHelpOpen] = React.useState(false);
             // In-tab docs viewer (parameter panel "?" button): { url, fullUrl, label }
@@ -109,6 +213,20 @@
             // dialog opens (see the useEffect gated on validateOpen below).
             const [validateOpen, setValidateOpen] = React.useState(false);
             const [validateResult, setValidateResult] = React.useState(null);
+            // Export dialog (toolbar "Export" button, item B1): holds
+            // { defaultName, textures } computed once when the dialog is
+            // opened (openExportDialog below), or null while closed — same
+            // "computed once by the caller, not on every render" contract
+            // as xmlDialogXml/validateResult above.
+            const [exportDialog, setExportDialog] = React.useState(null);
+            // Presets dialog (toolbar "Presets" button, item F3.2): a
+            // curated list of official MaterialX example documents (see
+            // MTLX_PRESETS in js/graph/dialogs.jsx). `presetsBusyPath`
+            // tracks WHICH preset is fetching so the dialog can spin just
+            // that row while every row is disabled.
+            const [presetsOpen, setPresetsOpen] = React.useState(false);
+            const [presetsBusy, setPresetsBusy] = React.useState(false);
+            const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
             // Freezes the preview panel to a specific node regardless of
             // what gets selected afterward (item 10's pin toggle) — same
             // { scope, id } shape as previewSel, reset alongside it.
@@ -181,6 +299,23 @@
             // overlay existed.
             const changeScope = (next) => {
                 if (next === scopeRef.current) return;
+                // Entering/jumping into a nodegraph (non-empty target
+                // scope): aim the initial selection+preview at the graph's
+                // RESULT (its first output) instead of falling back to the
+                // last/global selection — mirrors the scope-EXIT convention
+                // above (Backspace/breadcrumb seed 'g:'+name into
+                // pendingScopeSelectRef before calling changeScope; here we
+                // seed 'o:'+name on the way IN). Skipped when a pin owns
+                // the preview, or when an exit call site already seeded the
+                // ref (that selection must win).
+                if (next && !pendingScopeSelectRef.current && !pinnedTarget) {
+                    const firstOutputName = mxSafe(() => {
+                        const g = parsedRef.current && parsedRef.current.doc.getNodeGraph(next);
+                        const outs = g ? vecToArray(g.getOutputs()) : [];
+                        return outs.length ? mxElName(outs[0]) : null;
+                    }, null);
+                    if (firstOutputName) pendingScopeSelectRef.current = 'o:' + firstOutputName;
+                }
                 setScopeBusy(true);
                 (async () => {
                     // A single requestAnimationFrame callback fires just
@@ -559,7 +694,15 @@
                 }
             };
 
-            const ingest = async (map) => {
+            // `rootKey` (optional): when the caller already knows which
+            // .mtlx key is the document to load — e.g. loadPreset below,
+            // whose map may also contain xi:include dependency docs that
+            // are ALSO .mtlx-suffixed — skip the "ambiguous drop, ask the
+            // user to pick" heuristic below and load it directly. Omitted
+            // by every other caller (drag-drop, the default-document
+            // fetch), which keeps relying on that heuristic exactly as
+            // before.
+            const ingest = async (map, rootKey) => {
                 setError(null);
                 try {
                     await expandZips(map);
@@ -592,7 +735,8 @@
                     return;
                 }
                 if (droppedMtlx.length) {
-                    const pick = mtlx.length === 1 ? mtlx[0] : null;
+                    const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
+                        ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
                     if (pick) loadDocument(pick, merged);
                     else setStatus('This drop contains several .mtlx files — pick one below.');
@@ -1222,6 +1366,36 @@
                 }
             };
 
+            // Derives the default export base name (no extension) from the
+            // parsed document's label — shared by the direct one-click
+            // Export & Continue path (exportMtlx below) and the Export
+            // dialog's (item B1) prefilled filename field.
+            const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+
+            // Hand the current document off to the material viewer — item
+            // F2.2's "Send to Viewer", the reverse of the receive-side
+            // machinery below (the 'mtlx-load-document' effect handles the
+            // viewer's own "Send to Editor" button the same way, in
+            // reverse). Serializes through the SAME resolveDocXml() the
+            // Export path uses just above, so it copes with the transient
+            // '__pv_*' preview-tap race identically rather than re-deriving
+            // that retry logic. `files` mirrors viewer-app.jsx's sendToEditor
+            // filter: every dropped session file that ISN'T a .mtlx (loose
+            // textures the graph carries alongside the document).
+            const sendToViewer = async () => {
+                if (!parsed) return;
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) {
+                    setError('Send to Viewer failed: ' + error);
+                    return;
+                }
+                const files = {};
+                Object.keys(fileMapRef.current || {}).forEach((k) => {
+                    if (!/\.mtlx$/i.test(k)) files[k] = fileMapRef.current[k];
+                });
+                openInViewer({ xml, name: defaultExportBase(), files });
+            };
+
             // Serialize the CURRENT document — edits, connections, layout
             // positions, everything — and write it out as .mtlx. The stdlib
             // is attached via setDataLibrary (referenced, not contained), so
@@ -1229,15 +1403,18 @@
             // save-file picker (lets the user choose where the file goes /
             // overwrite in place) and falls back to the anchor-download
             // mechanism when the picker API is unavailable or fails for a
-            // reason other than the user canceling.
-            const doExportMtlx = async () => {
+            // reason other than the user canceling. `nameOverride` (item
+            // B1's Export dialog) supersedes the label-derived base name;
+            // every existing caller passes nothing, so behavior there is
+            // byte-identical.
+            const doExportMtlx = async (nameOverride) => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
                 if (xml == null) {
                     setError('Export failed: ' + error);
                     return false;
                 }
-                const base = String(parsed.label || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+                const base = nameOverride || defaultExportBase();
                 const blob = new Blob([xml], { type: 'application/xml' });
                 if (typeof window.showSaveFilePicker === 'function') {
                     let handle = null;
@@ -1271,19 +1448,334 @@
                 markSaved(); // the just-downloaded file matches the current document
                 return true;
             };
+            // Same document, packaged as a .zip alongside every texture the
+            // Export dialog (item B1) found a session-file match for.
+            // `resolvedTextures` is the { ref, key }[] list ExportDialog was
+            // opened with (scanExportTextures below) — reused as-is rather
+            // than rescanning, since the modal backdrop closes on any
+            // outside click, so the live doc can't drift out from under an
+            // open dialog. Each texture is stored under its AUTHORED
+            // reference path (forward slashes, no leading './') so
+            // re-dropping the zip later resolves textures through the
+            // normal import path (readDroppedItems -> expandZips ->
+            // findFileForRef, which suffix/basename-matches — see
+            // js/mtlx-engine.js) — not lowercased/renamed the way
+            // findFileForRef's own normPath would for MATCHING purposes.
+            const doExportZip = async (name, resolvedTextures) => {
+                if (!parsed) return false;
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) {
+                    setError('Export failed: ' + error);
+                    return false;
+                }
+                if (!window.JSZip) {
+                    setError('Export failed: JSZip failed to load from the CDN.');
+                    return false;
+                }
+                const zip = new JSZip();
+                zip.file(name + '.mtlx', xml);
+                const seenPaths = new Set();
+                for (const t of (resolvedTextures || [])) {
+                    const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
+                    if (!zipPath || seenPaths.has(zipPath)) continue;
+                    seenPaths.add(zipPath);
+                    const blob = fileMapRef.current[t.key];
+                    if (blob) zip.file(zipPath, blob);
+                }
+                let blob;
+                try {
+                    blob = await zip.generateAsync({ type: 'blob' });
+                } catch (e) {
+                    setError('Export failed: ' + String(e && e.message || e));
+                    return false;
+                }
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = name + '.zip';
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                markSaved(); // the just-downloaded zip's document matches the current one
+                return true;
+            };
             // A second picker opening mid-export (e.g. a fast double-click)
-            // would race the first — guard exportMtlx itself so only one
-            // export runs at a time; the retry recursion above stays
+            // would race the first — guard exportMtlx/exportZip themselves
+            // so only one export runs at a time (shared across both
+            // formats, since only one export can meaningfully be in flight
+            // at once); the retry recursion in resolveDocXml above stays
             // unguarded so it can keep looping inside that single run.
             const exportBusyRef = React.useRef(false);
-            const exportMtlx = async () => {
+            const exportMtlx = async (nameOverride) => {
                 if (exportBusyRef.current) return false;
                 exportBusyRef.current = true;
                 try {
-                    return await doExportMtlx();
+                    return await doExportMtlx(nameOverride);
                 } finally {
                     exportBusyRef.current = false;
                 }
+            };
+            const exportZip = async (name, resolvedTextures) => {
+                if (exportBusyRef.current) return false;
+                exportBusyRef.current = true;
+                try {
+                    return await doExportZip(name, resolvedTextures);
+                } finally {
+                    exportBusyRef.current = false;
+                }
+            };
+
+            // Scan the WHOLE document (root nodes + every nodegraph's
+            // nodes — same one-level-deep container walk ungroupNodegraph's
+            // `connectables` helper uses below) for authored `filename`
+            // inputs, and resolve each ref against this session's dropped
+            // files (fileMapRef.current). Only run when opening the Export
+            // dialog (item B1), to preview what a "ZIP with textures"
+            // export would bundle. Reuses collectPorts (js/graph/model.jsx)
+            // for its existing filename-input + value resolution — the
+            // same helper copySelection relies on to capture a node's
+            // texture refs (see its comment above) — rather than
+            // re-deriving port types by hand.
+            const scanExportTextures = () => {
+                const resolved = [];
+                const unresolved = [];
+                if (!parsed) return { resolved, unresolved };
+                const seenRefs = new Set();
+                const allNodes = vecToArray(mxSafe(() => parsed.doc.getNodes(), [])).slice();
+                for (const g of vecToArray(mxSafe(() => parsed.doc.getNodeGraphs(), []))) {
+                    allNodes.push.apply(allNodes, vecToArray(mxSafe(() => g.getNodes(), [])));
+                }
+                for (const n of allNodes) {
+                    const ports = collectPorts(n, { authoredOnly: true });
+                    for (const i of ports.inputs) {
+                        if (i.type !== 'filename' || !i.value) continue;
+                        if (seenRefs.has(i.value)) continue;
+                        seenRefs.add(i.value);
+                        const hit = findFileForRef(fileMapRef.current, i.value);
+                        if (hit) resolved.push({ ref: i.value, key: hit.key });
+                        else unresolved.push(i.value);
+                    }
+                }
+                return { resolved, unresolved };
+            };
+
+            // Toolbar "Presets" button (item F3.2): fetch a curated
+            // official example .mtlx (js/graph/dialogs.jsx's MTLX_PRESETS)
+            // and hand it to ingest() much like a drag-drop — the same
+            // fetch->Blob->ingestRef.current(map) pipeline the default
+            // startup document uses above, extended into a small
+            // breadth-first crawl (see loadPreset below) since a preset
+            // may pull in sibling documents and textures of its own.
+            // Gated behind the same confirmReplace unsaved-changes confirm
+            // as every other document-replacing action (guardedIngest, the
+            // document-picker <select>'s onChange) since a preset always
+            // introduces a new .mtlx. `presetsOpen` is deliberately left
+            // open through the fetch (busy=true disables/spins its rows)
+            // so a failed fetch's setError leaves the dialog up for
+            // another pick, rather than punting the user back to a bare
+            // canvas.
+            //
+            // Two things a plain single-doc fetch misses, both exercised
+            // by the official MaterialX example set:
+            //  (1) xi:include: "look" files (e.g. "Brass (tiled look)")
+            //      pull in a separate sibling .mtlx for the actual
+            //      material — resolveIncludes (js/mtlx-engine.js:535,
+            //      invoked from loadDocument above) inlines those from
+            //      the SAME dropped-file map this preset flow builds, but
+            //      only if that sibling doc was actually fetched into it.
+            //  (2) filename refs that escape the preset's own directory
+            //      via literal "../" segments in the authored value AND/OR
+            //      an inheritable `fileprefix="..."` attribute (MaterialX
+            //      spec: set on an ancestor element — the document root or
+            //      a <nodegraph> — and prepended, plain string
+            //      concatenation, to every descendant filename input's raw
+            //      `value`). E.g. "Wood (tiled)"'s <nodegraph
+            //      fileprefix="../../../Images/"> makes
+            //      value="wood_color.jpg" resolve to
+            //      "../../../Images/wood_color.jpg", which lands outside
+            //      the preset's own directory (resources/Images/, a
+            //      sibling of resources/Materials/) — a plain
+            //      dir-relative fetch 404s on it.
+            //
+            // Below: `visited` (resolved doc URLs) + `queue` seed with the
+            // preset doc; every fetched doc is (a) scanned for xi:include
+            // hrefs, resolved against THAT doc's own URL and enqueued for
+            // its own scan, and (b) scanned for fileprefix-resolved
+            // filename refs (extractFilenameRefs below), fetched relative
+            // to THAT doc's own URL. `visited.size` is capped at
+            // MAX_DOCS: these examples nest at most one include deep in
+            // practice, so this is purely a guard against a
+            // malformed/circular include chain spinning forever, not an
+            // expected limit. Texture fetches stay best-effort (warn +
+            // skip on failure — a skipped ref just shows the UV checker
+            // like any unresolved texture). A SAFETY GUARD only ever
+            // fetches URLs under this tag's resources/ root (derived from
+            // MTLX_PRESETS_BASE, not hardcoded a second time); refs that
+            // are absolute URLs (scheme://) or resolve outside that root
+            // are skipped.
+            //
+            // Blobs for included docs are keyed the same way
+            // mtlx-engine.js's resolveIncludes composes its own lookup
+            // when it later runs (fromDir-of-the-including-key + '/' +
+            // href — see resolveIncludes, js/mtlx-engine.js:547).
+            // Blobs for textures are keyed by the fileprefix-resolved ref
+            // string (e.g. "../../../Images/wood_color.jpg") — findFileForRef
+            // (js/mtlx-engine.js:517) matches an exact normalized path
+            // first, then a unique path-suffix, then a unique basename, so
+            // this key resolves correctly whether the WASM binding reports
+            // that resolved path or the bare authored filename as the
+            // input's value at bind time (bindDroppedTextures,
+            // js/mtlx-engine.js:659).
+            //
+            // Finally: ingestRef.current(map, baseName) passes the root
+            // doc's key explicitly, because ingest()'s default
+            // "auto-pick only when exactly one .mtlx is in the map"
+            // heuristic (js/graph-app.jsx, ingest() above) would otherwise
+            // see the included docs' .mtlx keys too and stop to ask the
+            // user which one to load — wrong for a preset, which always
+            // knows its own root doc.
+            const MTLX_RESOURCES_ROOT = MTLX_PRESETS_BASE.slice(
+                0, MTLX_PRESETS_BASE.indexOf('resources/') + 'resources/'.length);
+            const isSafePresetUrl = (url) => url.indexOf(MTLX_RESOURCES_ROOT) === 0;
+            const isSchemeOrRootedRef = (ref) =>
+                /^[a-z][a-z0-9+.\-]*:\/\//i.test(ref) || ref.startsWith('/');
+            // Filename refs authored in a preset doc, resolved against any
+            // <materialx fileprefix="..."> (document-wide) and/or
+            // <nodegraph fileprefix="..."> (scoped to that nodegraph's
+            // own body) ancestor per MaterialX's inheritable-attribute
+            // semantics — see the comment above. Splits the raw xml into
+            // "scopes" (each nodegraph's body, plus everything outside any
+            // nodegraph) so each <input type="filename"> tag picks up the
+            // right accumulated prefix; a two-pass tag scan within each
+            // scope, same shape as the original single-doc version of
+            // this function.
+            const extractFilenameRefs = (xml) => {
+                const rootAttrs = (/<materialx\b([^>]*)>/.exec(xml) || [])[1] || '';
+                const rootPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(rootAttrs) || [])[1] || '';
+                const scopes = [];
+                let cursor = 0;
+                const NG = /<nodegraph\b([^>]*)>([\s\S]*?)<\/nodegraph>/g;
+                let ngm;
+                while ((ngm = NG.exec(xml)) !== null) {
+                    scopes.push({ text: xml.slice(cursor, ngm.index), prefix: rootPrefix });
+                    const ngPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(ngm[1]) || [])[1] || '';
+                    scopes.push({ text: ngm[2], prefix: rootPrefix + ngPrefix });
+                    cursor = ngm.index + ngm[0].length;
+                }
+                scopes.push({ text: xml.slice(cursor), prefix: rootPrefix });
+                const refs = [];
+                for (const scope of scopes) {
+                    const tags = scope.text.match(/<input\b[^>]*>/g) || [];
+                    for (const tag of tags) {
+                        if (!/\btype\s*=\s*"filename"/.test(tag)) continue;
+                        const m = /\bvalue\s*=\s*"([^"]*)"/.exec(tag);
+                        const raw = m && m[1];
+                        if (!raw) continue;
+                        refs.push(scope.prefix + raw);
+                    }
+                }
+                return refs;
+            };
+            const loadPreset = (preset) => {
+                confirmReplace(true, () => {
+                    (async () => {
+                        setPresetsBusy(true);
+                        setPresetsBusyPath(preset.path);
+                        setError(null);
+                        try {
+                            const docUrl = MTLX_PRESETS_BASE + preset.path;
+                            const baseName = preset.path.split('/').pop();
+                            const map = {};
+                            const seenRefs = new Set();
+                            const textureFetches = [];
+                            const MAX_DOCS = 12; // guard only — see comment above
+                            const visited = new Set([docUrl]);
+                            const queue = [{ url: docUrl, key: baseName }];
+                            while (queue.length) {
+                                const { url, key } = queue.shift();
+                                let xml;
+                                try {
+                                    const res = await fetch(url);
+                                    if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
+                                    xml = await res.text();
+                                } catch (e) {
+                                    if (key === baseName) throw e; // the root doc must load
+                                    console.warn('preset include fetch failed (skipped):', url, e);
+                                    continue;
+                                }
+                                map[key] = new Blob([xml], { type: 'application/xml' });
+
+                                // (a) xi:include siblings — same
+                                // attribute-order/quote tolerant href
+                                // extraction as resolveIncludes
+                                // (js/mtlx-engine.js:540), resolved against
+                                // THIS doc's own URL.
+                                const INC = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/g;
+                                let incM;
+                                while ((incM = INC.exec(xml)) !== null) {
+                                    const href = incM[1] || incM[2];
+                                    if (!href || isSchemeOrRootedRef(href)) continue;
+                                    let incUrl;
+                                    try { incUrl = new URL(href, url).href; } catch (e) { continue; }
+                                    if (!isSafePresetUrl(incUrl)) continue;
+                                    if (visited.has(incUrl) || visited.size >= MAX_DOCS) continue;
+                                    visited.add(incUrl);
+                                    const dirKey = key.indexOf('/') >= 0 ? key.slice(0, key.lastIndexOf('/')) : '';
+                                    const incKey = dirKey ? dirKey + '/' + href : href;
+                                    queue.push({ url: incUrl, key: incKey });
+                                }
+
+                                // (b) filename refs, fileprefix-resolved,
+                                // fetched relative to THIS doc's own URL —
+                                // best-effort, doesn't block the queue.
+                                for (const ref of extractFilenameRefs(xml)) {
+                                    if (isSchemeOrRootedRef(ref) || seenRefs.has(ref)) continue;
+                                    seenRefs.add(ref);
+                                    let texUrl;
+                                    try { texUrl = new URL(ref, url).href; } catch (e) { continue; }
+                                    if (!isSafePresetUrl(texUrl)) continue;
+                                    textureFetches.push((async () => {
+                                        try {
+                                            const r = await fetch(texUrl);
+                                            if (!r.ok) throw new Error('HTTP ' + r.status);
+                                            map[ref] = await r.blob();
+                                        } catch (texErr) {
+                                            console.warn('preset texture fetch failed (falls back to the checker):', ref, texErr);
+                                        }
+                                    })());
+                                }
+                            }
+                            await Promise.all(textureFetches);
+
+                            ingestRef.current(map, baseName);
+                            setPresetsOpen(false);
+                        } catch (e) {
+                            setError('Could not load preset: ' + String(e && e.message || e));
+                        } finally {
+                            setPresetsBusy(false);
+                            setPresetsBusyPath(null);
+                        }
+                    })();
+                });
+            };
+
+            // Toolbar "Export" button (item B1): opens the Export dialog
+            // with a prefilled filename and a preview of which textures a
+            // ZIP export would bundle, instead of exporting immediately.
+            const openExportDialog = () => {
+                if (!parsed) return;
+                setExportDialog({ defaultName: defaultExportBase(), textures: scanExportTextures() });
+            };
+            // Export dialog's onExport — routes to the .mtlx or .zip
+            // writer per the user's format choice, through the same
+            // exportBusyRef-guarded wrappers the toolbar/Export & Continue
+            // flows use. A thrown error here is caught by ExportDialog
+            // itself (js/graph/dialogs.jsx), which leaves the dialog open
+            // (the setError banner above already surfaces the reason) so
+            // the user can retry without re-entering the filename.
+            const handleExportDialogSubmit = async ({ name, format }) => {
+                const ok = format === 'zip'
+                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [])
+                    : await exportMtlx(name);
+                if (!ok) throw new Error('export failed');
             };
 
             // View-only XML dialog (item 8's "Document" button): same
@@ -1507,7 +1999,15 @@
                         : (restoredValue != null
                             ? { connected: false, authored: true, value: restoredValue }
                             : (reverts
-                                ? { connected: false, authored: false,
+                                // keepRow (flow-state only, never written to the
+                                // document): keeps the just-disconnected port
+                                // visible in 'authored' mode so the user can
+                                // immediately reconnect it — visiblePortsFor
+                                // would otherwise drop it the instant authored
+                                // flips false. The next full rebuild (scope
+                                // change/reload) re-derives visibility from
+                                // document truth and drops this flag.
+                                ? { connected: false, authored: false, keepRow: true,
                                     value: i.defValue !== undefined ? i.defValue : i.value }
                                 : { connected: false })));
                 const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
@@ -1684,6 +2184,10 @@
             // onto the target input, replace any edge already feeding it
             // (an input has exactly one source), and add the new edge.
             const onConnect = (params) => {
+                // React Flow only calls onConnect when the drop actually
+                // resolved to a handle — mark the gesture as "connected" so
+                // onConnectEnd skips the port-picker/add-search popup.
+                connectDidRunRef.current = true;
                 if (!isValidConnection(params)) return;
                 const { source, sourceHandle, target, targetHandle } = params;
                 const inputName = String(targetHandle || '').replace(/^in:/, '');
@@ -1772,41 +2276,166 @@
 
             // Drag a connection into EMPTY canvas (item 5): reuse the
             // port-dot double-click add-node flow (openPortAdd) instead of
-            // just dropping the half-made connection on the floor.
+            // just dropping the half-made connection on the floor. Also
+            // handles dropping onto a NODE BODY (not a precise handle) by
+            // offering a port-picker popover.
             // onConnectStart stashes the drag's origin port; onConnectEnd
             // resolves what the drag was actually dropped ON. Mouse: the
             // native event's own target. Touch: touch events keep `target`
             // pinned to wherever the touch STARTED (not where it ended), so
             // the drop point has to be resolved via elementFromPoint
-            // instead. Dropped on a handle/node → onConnect already ran,
-            // nothing to do here; dropped on the pane (class
-            // "react-flow__pane") → open the add-search pre-filtered to
-            // what plugs into the origin port, exactly like a port-dot
-            // double-click.
+            // instead. Dropped on a handle → onConnect already ran (or it
+            // was a zero-distance click), nothing to do here; dropped on a
+            // node body → open a port-picker popover; dropped on the pane
+            // (class "react-flow__pane", covering empty canvas and other
+            // non-node/non-handle descendants like the edges SVG) → open
+            // the add-search pre-filtered to what plugs into the origin
+            // port, exactly like a port-dot double-click.
             const connectOriginRef = React.useRef(null);
-            const onConnectStart = (event, params) => { connectOriginRef.current = params; };
+            // Tracks whether onConnect actually fired for this drag gesture.
+            // React Flow's connectionRadius (~20px) completes a connection
+            // when the drop lands NEAR a handle even though the DOM element
+            // under the cursor is the node body or the pane — so a DOM-only
+            // check in onConnectEnd can't distinguish "connected" from
+            // "dropped loose" and would wrongly pop up the port-picker/
+            // add-search on top of an already-made connection.
+            const connectDidRunRef = React.useRef(false);
+            const onConnectStart = (event, params) => {
+                connectDidRunRef.current = false;
+                connectOriginRef.current = params;
+            };
             const onConnectEnd = (event) => {
                 const origin = connectOriginRef.current;
                 connectOriginRef.current = null;
+                // This drag is an edge UPDATE (disconnect/reconnect) — React Flow runs
+                // the same handle-drag machinery for edge ends, so onConnectStart/End
+                // fire here too. onEdgeUpdateStart already flipped edgeUpdateDone false
+                // (and onEdgeUpdateEnd, which fires after us, will handle the
+                // disconnect); a new-connection drag never touches the flag.
+                if (!edgeUpdateDone.current) return;
+                // The drag actually completed a connection (connectionRadius
+                // snapped it onto a nearby handle) — no popup either way.
+                if (connectDidRunRef.current) return;
                 if (!origin || !origin.nodeId) return;
-                const dropEl = (event && event.changedTouches && event.changedTouches.length)
-                    ? document.elementFromPoint(event.changedTouches[0].clientX, event.changedTouches[0].clientY)
+                // Same touch-vs-mouse split as the drop-target resolution
+                // below: touch events keep `target`/coordinates pinned to
+                // where the touch STARTED, so the actual drop point has to
+                // come from changedTouches instead of event.clientX/Y.
+                const touchPoint = (event && event.changedTouches && event.changedTouches.length)
+                    ? event.changedTouches[0] : null;
+                const dropEl = touchPoint
+                    ? document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
                     : (event && event.target);
-                if (!dropEl || !dropEl.classList || !dropEl.classList.contains('react-flow__pane')) return;
-                const node = flow.nodes.find((n) => n.id === origin.nodeId);
-                if (!node) return;
-                const isTarget = origin.handleType === 'target';
-                // Handle ids are 'in:'/'out:'-prefixed port names (see
-                // node-component.jsx's <Handle id={'in:' + inp.name}> /
-                // <Handle id={'out:' + out.name}>).
-                const portName = String(origin.handleId || '').replace(isTarget ? /^in:/ : /^out:/, '');
-                const list = isTarget ? (node.data.inputs || []) : (node.data.outputs || []);
-                const port = list.find((p) => p.name === portName);
-                if (!port) return;
-                onPortAddRef.current({
-                    nodeId: origin.nodeId, port: portName, portType: port.type,
-                    dir: isTarget ? 'in' : 'out',
-                });
+                // Drop point in page/client coordinates (item A3) — lets
+                // addNodeFromCatalog place the picked node so the newly
+                // wired handle lands under the cursor instead of the
+                // viewport center; also used to position the node-body
+                // port-picker popover below.
+                const dropClient = touchPoint
+                    ? { x: touchPoint.clientX, y: touchPoint.clientY }
+                    : (event ? { x: event.clientX, y: event.clientY } : null);
+                // FIRST: dropped on a handle → React Flow already handled
+                // it (onConnect ran if the connection was valid); a plain
+                // click on a port is also a zero-distance drag that starts
+                // and ends on its own handle. Either way, nothing to do
+                // here — this also keeps port single-clicks inert so port
+                // DOUBLE-clicks reach the node-component dblclick handlers
+                // (openPortAdd) instead of being swallowed as a drag.
+                if (dropEl && dropEl.closest && dropEl.closest('.react-flow__handle')) return;
+                // SECOND: dropped on a NODE BODY — checked before the pane
+                // below because in React Flow 11 nodes are DOM descendants
+                // of the pane, so closest('.react-flow__pane') would match
+                // every drop otherwise. Offers a port-picker popover
+                // instead of demanding pixel-precise aim at the exact
+                // handle dot. Same node-lookup pattern as the native
+                // dblclick-to-open-scope handler above.
+                const nodeEl = dropEl && dropEl.closest && dropEl.closest('.react-flow__node');
+                if (nodeEl) {
+                    const targetId = nodeEl.getAttribute('data-id');
+                    if (!targetId || targetId === origin.nodeId) return;
+                    const targetNode = flow.nodes.find((n) => n.id === targetId);
+                    if (!targetNode) return;
+                    const candidates = [];
+                    if (origin.handleType === 'source') {
+                        // Dragging FROM an output: candidates are the target
+                        // node's inputs.
+                        const inputs = targetNode.data.allInputs || targetNode.data.inputs || [];
+                        for (const inp of inputs) {
+                            const params = {
+                                source: origin.nodeId, sourceHandle: origin.handleId,
+                                target: targetId, targetHandle: 'in:' + inp.name,
+                            };
+                            if (isValidConnection(params)) {
+                                candidates.push({ label: inp.name, type: inp.type, connected: !!inp.connected, params });
+                            }
+                        }
+                    } else {
+                        // Dragging FROM an input: candidates are the target
+                        // node's outputs.
+                        const outputs = targetNode.data.outputs || [];
+                        for (const out of outputs) {
+                            const params = {
+                                source: targetId, sourceHandle: 'out:' + out.name,
+                                target: origin.nodeId, targetHandle: origin.handleId,
+                            };
+                            if (isValidConnection(params)) {
+                                candidates.push({ label: out.name, type: out.type, connected: false, params });
+                            }
+                        }
+                    }
+                    if (!candidates.length) return; // nothing compatible — silent no-op drop
+                    setPortPicker({
+                        x: dropClient ? dropClient.x : 0, y: dropClient ? dropClient.y : 0,
+                        candidates, targetName: targetNode.data.name,
+                    });
+                    return;
+                }
+                // LAST: dropped on the pane (class "react-flow__pane").
+                // Handles and nodes are already ruled out above, so
+                // closest() is now safe here too and correctly covers pane
+                // descendants that aren't nodes/handles (e.g. the edges SVG
+                // layer, background) as an empty-canvas drop.
+                const paneEl = dropEl && dropEl.closest && dropEl.closest('.react-flow__pane');
+                if (paneEl) {
+                    const node = flow.nodes.find((n) => n.id === origin.nodeId);
+                    if (!node) return;
+                    const isTarget = origin.handleType === 'target';
+                    // Handle ids are 'in:'/'out:'-prefixed port names (see
+                    // node-component.jsx's <Handle id={'in:' + inp.name}> /
+                    // <Handle id={'out:' + out.name}>).
+                    const portName = String(origin.handleId || '').replace(isTarget ? /^in:/ : /^out:/, '');
+                    const list = isTarget ? (node.data.inputs || []) : (node.data.outputs || []);
+                    const port = list.find((p) => p.name === portName);
+                    if (!port) return;
+                    onPortAddRef.current({
+                        nodeId: origin.nodeId, port: portName, portType: port.type,
+                        dir: isTarget ? 'in' : 'out',
+                        dropClient,
+                    });
+                    return;
+                }
+            };
+
+            // Port-picker popover: Escape and outside-pointerdown both
+            // close it, same pattern as ColorSwatch (js/shared/mtlx-ui.jsx)
+            // — the popover itself stops propagation on its own
+            // pointerdown, so this effect only ever sees genuinely-outside
+            // clicks.
+            useEscapeToClose(() => setPortPicker(null), !!portPicker);
+            React.useEffect(() => {
+                if (!portPicker) return undefined;
+                const onDown = (e) => {
+                    if (portPickerRef.current && portPickerRef.current.contains(e.target)) return;
+                    setPortPicker(null);
+                };
+                window.addEventListener('pointerdown', onDown);
+                return () => window.removeEventListener('pointerdown', onDown);
+            }, [portPicker]);
+            // Commit a candidate pick: wire it exactly like a completed
+            // drag-to-handle connection, then close the popover.
+            const pickPort = (candidate) => {
+                onConnect(candidate.params);
+                setPortPicker(null);
             };
 
             // Syntax validity of a candidate MaterialX element name: prefer
@@ -1919,7 +2548,7 @@
                 const { descs, edges } = buildScope(parsed, scope);
                 const rebuilt = toFlow(descs, edges, {
                     portMode: globalPortsRef.current,
-                    onOpenScope: setScope,
+                    onOpenScope: changeScope,
                     onTogglePorts: (id2) => togglePortsRef.current(id2),
                     onPortAdd: (info) => onPortAddRef.current(info),
                 });
@@ -2113,22 +2742,88 @@
                     onTogglePorts: () => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
                 };
-                // Drop it at the center of the current viewport.
+                // Drop position (item A3): when this pick resolves a
+                // drag-to-empty connection (onConnectEnd stashed a
+                // dropClient on the pending info), place the node so the
+                // handle that's about to be WIRED lands under the cursor,
+                // instead of the viewport center. Plain Tab-palette adds and
+                // port-dot double-clicks (no dropClient) keep the old
+                // center-of-viewport placement.
                 let pos = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
-                const host = panelRef.current;
-                if (inst && host) {
-                    const r = host.getBoundingClientRect();
-                    if (typeof inst.screenToFlowPosition === 'function') {
-                        pos = inst.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-                    } else if (typeof inst.project === 'function') {
-                        pos = inst.project({ x: r.width / 2, y: r.height / 2 });
+                const pending = pendingConnRef.current;
+                let placedAtDrop = false;
+                if (pending && pending.dropClient && inst) {
+                    // Mirror wirePendingConnection's own match (inMatch/
+                    // outMatch below) just far enough to predict which row
+                    // the wired port will render at — exact-pixel alignment
+                    // isn't required, landing the right row is.
+                    let wiredRowIndex;
+                    if (pending.dir === 'in') {
+                        // The new node's OUTPUT feeds the existing input —
+                        // its row comes after every visible input row.
+                        const outIdx = Math.max(0, data.outputs.findIndex((o) => o.type === pending.portType));
+                        wiredRowIndex = data.inputs.length + outIdx;
+                    } else {
+                        // dir === 'out': the new node's INPUT is fed by the
+                        // existing output — match against visible inputs.
+                        wiredRowIndex = Math.max(0, data.inputs.findIndex((i) => i.type === pending.portType));
+                    }
+                    const host = panelRef.current;
+                    const hostRect = host ? host.getBoundingClientRect() : null;
+                    const P = typeof inst.screenToFlowPosition === 'function'
+                        ? inst.screenToFlowPosition(pending.dropClient)
+                        : (typeof inst.project === 'function' && hostRect
+                            ? inst.project({ x: pending.dropClient.x - hostRect.left, y: pending.dropClient.y - hostRect.top })
+                            : null);
+                    if (P) {
+                        // Output handles sit on the right edge (dir 'in' —
+                        // new node feeds the drop target — needs its output
+                        // there); input handles sit on the left (dir 'out').
+                        const x = pending.dir === 'in' ? P.x - NODE_W : P.x;
+                        // 38 = header height, 2 = the port list's top
+                        // padding, 22 = row height, 11 = half a row (handle
+                        // vertical center) — see node-component.jsx.
+                        const y = P.y - (38 + 2 + wiredRowIndex * 22 + 11);
+                        pos = { x, y };
+                        placedAtDrop = true;
                     }
                 }
-                pos = {
-                    x: pos.x - NODE_W / 2,
-                    y: pos.y - nodeHeight({ inputs: data.inputs, outputs: data.outputs }) / 2,
-                };
+                if (!placedAtDrop && pending && pending.nodeId) {
+                    // Port-dblclick adds (no dropClient): put the new node beside the
+                    // node whose port was double-clicked — feeding nodes to the LEFT
+                    // (dir 'in': the new node's output feeds the clicked input), consumers
+                    // to the RIGHT (dir 'out'), with a fixed gap.
+                    const origin = flow.nodes.find((n) => n.id === pending.nodeId);
+                    if (origin && origin.position) {
+                        // Deliberately roomier than the auto-layout ranksep
+                        // (70, js/graph/style.jsx) so the new node reads as
+                        // a clearly separate column, as if it were placed by
+                        // a relative auto-layout pass around this node.
+                        const GAP = 120;
+                        pos = {
+                            x: pending.dir === 'in' ? origin.position.x - NODE_W - GAP : origin.position.x + NODE_W + GAP,
+                            y: origin.position.y,
+                        };
+                        placedAtDrop = true;
+                    }
+                }
+                if (!placedAtDrop) {
+                    // Drop it at the center of the current viewport.
+                    const host = panelRef.current;
+                    if (inst && host) {
+                        const r = host.getBoundingClientRect();
+                        if (typeof inst.screenToFlowPosition === 'function') {
+                            pos = inst.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+                        } else if (typeof inst.project === 'function') {
+                            pos = inst.project({ x: r.width / 2, y: r.height / 2 });
+                        }
+                    }
+                    pos = {
+                        x: pos.x - NODE_W / 2,
+                        y: pos.y - nodeHeight({ inputs: data.inputs, outputs: data.outputs }) / 2,
+                    };
+                }
                 // Persist the drop position right away (same convention as
                 // onNodeDragStop), so a scope round-trip keeps it.
                 mxSafe(() => { el.setAttribute('xpos', String(Math.round((pos.x / 240) * 10000) / 10000)); return true; }, false);
@@ -2322,15 +3017,20 @@
             // ---- Copy / paste (in-page clipboard, Ctrl/Cmd+C / Ctrl/Cmd+V) --
             // An in-memory snapshot of the selected REAL nodes' full
             // parameter set (collectPorts already reads texture filenames
-            // and their colorspace, plus every connection attribute) —
-            // nodegraphs/interface/output pseudo-nodes aren't copied as a
-            // unit, silently skipped. No system clipboard: in-page only, per
-            // the project's decision.
+            // and their colorspace, plus every connection attribute) plus
+            // any selected nodegraph INSTANCES (g: ids) — those are captured
+            // as just name+pos, their interior deep-copied via
+            // copyContentFrom on paste rather than replayed attribute by
+            // attribute. Interface/output pseudo-nodes still aren't copied
+            // as a unit, silently skipped. No system clipboard: in-page
+            // only, per the project's decision.
             const clipboardRef = React.useRef(null);
+
+            const isCopyableId = (id) => id.indexOf('n:') === 0 || id.indexOf('g:') === 0;
 
             const copySelection = () => {
                 if (!parsed) return;
-                const ids = flow.nodes.filter((n) => n.selected && n.id.indexOf('n:') === 0).map((n) => n.id);
+                const ids = flow.nodes.filter((n) => n.selected && isCopyableId(n.id)).map((n) => n.id);
                 if (!ids.length) return;
                 const idSet = new Set(ids);
                 const container = scopeContainer();
@@ -2343,11 +3043,22 @@
                 // they'd all collapse onto { x: 0, y: 0 } on paste.
                 const flowPosById = {};
                 flow.nodes.forEach((n) => {
-                    if (n.selected && n.id.indexOf('n:') === 0) flowPosById[n.id] = n.position;
+                    if (n.selected && isCopyableId(n.id)) flowPosById[n.id] = n.position;
                 });
                 const entries = [];
                 for (const id of ids) {
                     const name = id.slice(2);
+                    if (id.indexOf('g:') === 0) {
+                        // Nodegraph instance — g: ids only ever appear at
+                        // the document root (buildScope never emits them
+                        // for a nested scope), so the source is always
+                        // looked up on the doc, not scopeContainer().
+                        const gEl = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                        if (!gEl) continue;
+                        const pos = flowPosById[id] || storedPos(gEl) || { x: 0, y: 0 };
+                        entries.push({ kind: 'nodegraph', name, pos });
+                        continue;
+                    }
                     const el = mxSafe(() => container.getNode(name), null);
                     if (!el) continue;
                     const ports = collectPorts(el);
@@ -2372,6 +3083,7 @@
                         });
                     const pos = flowPosById[id] || storedPos(el) || { x: 0, y: 0 };
                     entries.push({
+                        kind: 'node',
                         name, category: mxElCat(el), type: mxElType(el),
                         nodedef: mxElAttr(el, 'nodedef') || '',
                         version: mxElAttr(el, 'version') || '',
@@ -2386,12 +3098,49 @@
                 if (!clip || !clip.nodes.length || !parsed) return;
                 const container = scopeContainer();
                 if (!container) return;
-                // First pass: create every node with a fresh unique name (the
-                // same mechanism addNodeFromCatalog uses) so the second pass
-                // can remap internal wires old-name → new-name.
+                const doc = parsed.doc;
+                // First pass: create every node/nodegraph with a fresh
+                // unique name (the same mechanism addNodeFromCatalog uses)
+                // so the second pass can remap internal wires old-name →
+                // new-name. Nodegraph entries are handled separately below —
+                // they're always doc-root children (MaterialX nodegraphs
+                // don't nest, same restriction encapsulate/ungroup apply),
+                // so a nodegraph entry is skipped (with a warning) when
+                // pasting into a non-root scope, while any plain-node
+                // entries in the same clipboard still paste normally.
                 const nameMap = {};
                 const created = [];
+                const createdGraphs = [];
+                let skippedNodegraphScope = false;
                 for (const entry of clip.nodes) {
+                    if (entry.kind === 'nodegraph') {
+                        if (scope !== '') { skippedNodegraphScope = true; continue; }
+                        // Look up the ORIGINAL by the name captured at copy
+                        // time — if it's gone/renamed since, skip gracefully
+                        // (same handling as a missing source in the node path).
+                        const originalGraph = mxSafe(() => doc.getNodeGraph(entry.name), null);
+                        if (!originalGraph) continue;
+                        let newName = entry.name;
+                        if (typeof doc.createValidChildName === 'function') {
+                            newName = mxSafe(() => doc.createValidChildName(entry.name), entry.name);
+                        } else {
+                            let i = 1;
+                            while (mxSafe(() => doc.getChild(newName), null)) newName = entry.name + '_copy' + (i++);
+                        }
+                        const newGraph = mxSafe(() => doc.addNodeGraph(newName), null);
+                        if (!newGraph) continue;
+                        // Deep-copy the interior in one call rather than
+                        // replaying attributes port by port.
+                        const copied = mxSafe(() => { newGraph.copyContentFrom(originalGraph); return true; }, false);
+                        if (!copied) {
+                            mxSafe(() => { doc.removeNodeGraph(newName); return true; }, false);
+                            continue;
+                        }
+                        if (parsed.nodegraphs) parsed.nodegraphs.push(newName); // scope dropdown
+                        nameMap[entry.name] = newName;
+                        createdGraphs.push({ el: newGraph, entry, newName });
+                        continue;
+                    }
                     let newName = entry.name;
                     if (typeof container.createValidChildName === 'function') {
                         newName = mxSafe(() => container.createValidChildName(entry.name), entry.name);
@@ -2406,7 +3155,8 @@
                     nameMap[entry.name] = newName;
                     created.push({ el, entry, newName });
                 }
-                if (!created.length) return;
+                if (skippedNodegraphScope) setError('Pasting a nodegraph is only available at the document root.');
+                if (!created.length && !createdGraphs.length) return;
                 // Second pass: write every input now that every new name is
                 // known — internal wires remap to the pasted copies (same
                 // attrs onConnect writes), everything else (literal values,
@@ -2457,6 +3207,12 @@
                     mxSafe(() => { el.setAttribute('xpos', String(Math.round((x / 240) * 10000) / 10000)); return true; }, false);
                     mxSafe(() => { el.setAttribute('ypos', String(Math.round((y / 240) * 10000) / 10000)); return true; }, false);
                 }
+                for (const { el, entry } of createdGraphs) {
+                    const x = center.x + (entry.pos.x - cx);
+                    const y = center.y + (entry.pos.y - cy);
+                    mxSafe(() => { el.setAttribute('xpos', String(Math.round((x / 240) * 10000) / 10000)); return true; }, false);
+                    mxSafe(() => { el.setAttribute('ypos', String(Math.round((y / 240) * 10000) / 10000)); return true; }, false);
+                }
                 setDocRev((r) => r + 1);
                 markDirty();
                 // Rebuild the whole scope from the document — the simplest
@@ -2465,17 +3221,21 @@
                 const { descs, edges } = buildScope(parsed, scope);
                 const rebuilt = toFlow(descs, edges, {
                     portMode: globalPortsRef.current,
-                    onOpenScope: setScope,
+                    onOpenScope: changeScope,
                     onTogglePorts: (id) => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
                 });
-                const pastedIds = new Set(created.map((c) => 'n:' + c.newName));
+                const pastedIds = new Set(created.map((c) => 'n:' + c.newName)
+                    .concat(createdGraphs.map((c) => 'g:' + c.newName)));
                 setFlow({
                     edges: rebuilt.edges,
                     nodes: rebuilt.nodes.map((n) => (n.selected === pastedIds.has(n.id) ? n
                         : Object.assign({}, n, { selected: pastedIds.has(n.id) }))),
                 });
-                setSelectedId(created.length === 1 ? 'n:' + created[0].newName : null);
+                const totalCreated = created.length + createdGraphs.length;
+                setSelectedId(totalCreated === 1
+                    ? (created.length ? 'n:' + created[0].newName : 'g:' + createdGraphs[0].newName)
+                    : null);
                 setSelectedEdgeId(null);
                 setParamsOpen(true);
             };
@@ -2527,7 +3287,11 @@
                     for (const name of names) {
                         const el = mxSafe(() => doc.getNode(name), null);
                         if (!el) continue;
-                        const ports = collectPorts(el);
+                        // authoredOnly (item A4.2): this snapshot filters
+                        // `i.authored !== false` right below anyway, so skip
+                        // collectPorts' unauthored-nodedef-input enumeration
+                        // altogether instead of building and discarding it.
+                        const ports = collectPorts(el, { authoredOnly: true });
                         entries.push({
                             name, category: mxElCat(el), type: mxElType(el),
                             nodedef: mxElAttr(el, 'nodedef') || '',
@@ -2605,46 +3369,54 @@
                         }
                     }
 
-                    // 5: outbound boundary — one graph output per distinct
-                    // (source node, output name) pair fed to something
-                    // OUTSIDE the selection.
+                    // 5+6 (merged, item A4.1): outbound boundary AND the
+                    // rewrite of every external consumer, in one pass over
+                    // flow.edges instead of two. One graph output is still
+                    // created per distinct (source node, output name) pair
+                    // fed to something OUTSIDE the selection — on the FIRST
+                    // edge that needs it, exactly like the original two-pass
+                    // version's loop 5 (same iteration order over
+                    // flow.edges, so createValidChildName calls happen in
+                    // the same sequence/names as before); every edge that
+                    // shares that pair (including the one that just created
+                    // the pin) then immediately gets its consumer rewritten
+                    // to read from it, exactly like the original loop 6.
+                    // outPins doubling as a per-key cache is what makes the
+                    // single pass safe: a pin, once created, is reused by
+                    // every later edge with the same key, same as before.
+                    const nodesById = new Map(flow.nodes.map((n) => [n.id, n]));
                     const outPins = {}; // "srcName␟outname" -> pin name
                     for (const e of flow.edges) {
                         if (!idSet.has(e.source) || idSet.has(e.target)) continue;
                         const srcName = e.source.slice(2);
                         const outName = String(e.sourceHandle || '').replace(/^out:/, '');
                         const key = srcName + '␟' + outName;
-                        if (outPins[key]) continue;
-                        const innerEl = inner[srcName];
-                        if (!innerEl) continue;
-                        const srcNode = flow.nodes.find((n) => n.id === e.source);
-                        const outs = (srcNode && srcNode.data.outputs) || [];
-                        const type = flowPortType(e.source, e.sourceHandle, true) || entries.find((en) => en.name === srcName).type;
-                        const pinBase = srcName + '_out';
-                        const outPin = mxSafe(() => g.createValidChildName(pinBase), pinBase);
-                        const gout = mxSafe(() => g.addOutput(outPin, type), null);
-                        if (!gout) continue;
-                        if (mxElType(gout) !== type) {
-                            mxSafe(() => {
-                                if (typeof gout.setType === 'function') gout.setType(type);
-                                else gout.setAttribute('type', type);
-                                return true;
-                            }, false);
-                            if (mxElType(gout) !== type) mxSafe(() => { gout.setAttribute('type', type); return true; }, false);
+                        let outPin = outPins[key];
+                        if (!outPin) {
+                            const innerEl = inner[srcName];
+                            if (innerEl) {
+                                const srcNode = nodesById.get(e.source);
+                                const outs = (srcNode && srcNode.data.outputs) || [];
+                                const type = flowPortType(e.source, e.sourceHandle, true) || entries.find((en) => en.name === srcName).type;
+                                const pinBase = srcName + '_out';
+                                const newPin = mxSafe(() => g.createValidChildName(pinBase), pinBase);
+                                const gout = mxSafe(() => g.addOutput(newPin, type), null);
+                                if (gout) {
+                                    if (mxElType(gout) !== type) {
+                                        mxSafe(() => {
+                                            if (typeof gout.setType === 'function') gout.setType(type);
+                                            else gout.setAttribute('type', type);
+                                            return true;
+                                        }, false);
+                                        if (mxElType(gout) !== type) mxSafe(() => { gout.setAttribute('type', type); return true; }, false);
+                                    }
+                                    mxSafe(() => { gout.setAttribute('nodename', srcName); return true; }, false);
+                                    if (outName && outs.length > 1) mxSafe(() => { gout.setAttribute('output', outName); return true; }, false);
+                                    outPin = newPin;
+                                    outPins[key] = outPin;
+                                }
+                            }
                         }
-                        mxSafe(() => { gout.setAttribute('nodename', srcName); return true; }, false);
-                        if (outName && outs.length > 1) mxSafe(() => { gout.setAttribute('output', outName); return true; }, false);
-                        outPins[key] = outPin;
-                    }
-
-                    // 6: rewrite every external target input to read from
-                    // the new graph instead of the (soon to be removed)
-                    // original node.
-                    for (const e of flow.edges) {
-                        if (!idSet.has(e.source) || idSet.has(e.target)) continue;
-                        const srcName = e.source.slice(2);
-                        const outName = String(e.sourceHandle || '').replace(/^out:/, '');
-                        const outPin = outPins[srcName + '␟' + outName];
                         if (!outPin) continue;
                         const point = connectionPoint(e.target, e.targetHandle, true);
                         if (!point) continue;
@@ -2679,7 +3451,7 @@
                     const { descs, edges } = buildScope(parsed, scope);
                     const rebuilt = toFlow(descs, edges, {
                         portMode: globalPortsRef.current,
-                        onOpenScope: setScope,
+                        onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
                     });
@@ -2704,6 +3476,363 @@
                 })();
             };
 
+            // ---- Ungroup (Ctrl/Cmd+Shift+G) — inverse of Encapsulate ---------
+            // Dissolve a collapsed nodegraph back into root-level nodes,
+            // preserving every wire — the mirror image of
+            // encapsulateSelection above: interface-pin connections/
+            // literals flow back onto the recreated nodes' inputs, sibling
+            // wires are recreated verbatim under the (reserved-up-front)
+            // new root names, and every root-level consumer that pointed at
+            // the graph is rewritten to read straight from the node that
+            // used to feed that pin. Root-only, same reason as encapsulate
+            // (MaterialX nodegraphs don't nest). Deferred behind the same
+            // double-rAF + actionBusy idiom for the same reason (the
+            // snapshot/recreate/rewire pass can take a beat on a big graph,
+            // then the docRev bump triggers a full shader regen).
+            const ungroupNodegraph = (gName) => {
+                if (!parsed || !gName) return;
+                if (scope !== '') {
+                    setError('Ungrouping is only available at the document root.');
+                    return;
+                }
+                const doc = parsed.doc;
+                const g = mxSafe(() => doc.getNodeGraph(gName), null);
+                if (!g) return; // stale target (renamed/removed since) — no-op
+                // Implementation graphs (nodedef= functional definitions,
+                // not a user-made group) are never ungroupable.
+                if (mxElAttr(g, 'nodedef')) return;
+                setActionBusy('Ungrouping' + '\u2026');
+                (async () => {
+                    await new Promise((r) => requestAnimationFrame(r));
+                    await new Promise((r) => requestAnimationFrame(r));
+                    // [mtlx-perf] timing — off unless MTLX_PERF_LOG.
+                    const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
+                    let __nodeCount = 0;
+                    try {
+                        // 1: snapshot EVERYTHING before any mutation —
+                        // collectPorts/storedPos read live document state,
+                        // and step 6 below removes g.
+                        const pinsSnapshot = vecToArray(mxSafe(() => g.getInputs(), [])).map((p) => ({
+                            name: mxElName(p), type: mxElType(p),
+                            value: mxSafe(() => p.getAttribute('value'), ''),
+                            colorspace: mxElAttr(p, 'colorspace'),
+                            nodename: mxElAttr(p, 'nodename'),
+                            nodegraph: mxElAttr(p, 'nodegraph'),
+                            output: mxElAttr(p, 'output'),
+                        }));
+                        const pinsByName = {};
+                        for (const p of pinsSnapshot) pinsByName[p.name] = p;
+
+                        const innerNodes = vecToArray(mxSafe(() => g.getNodes(), []));
+                        const innerNameSet = new Set(innerNodes.map((n) => mxElName(n)));
+                        const entries = innerNodes.map((n) => {
+                            // Full-mode collectPorts (no authoredOnly) —
+                            // this snapshot is filtered to authored inputs
+                            // right below anyway, but also needs `outputs`
+                            // for outputsCount (kept for diagnostics; step 5's
+                            // output= guard no longer conditions on it — see
+                            // 2c below).
+                            const ports = collectPorts(n);
+                            return {
+                                name: mxElName(n), category: mxElCat(n), type: mxElType(n),
+                                nodedef: mxElAttr(n, 'nodedef') || '',
+                                version: mxElAttr(n, 'version') || '',
+                                pos: storedPos(n),
+                                inputs: ports.inputs.filter((i) => i.authored !== false),
+                                outputsCount: ports.outputs.length,
+                            };
+                        });
+                        __nodeCount = entries.length;
+                        const outputsSnapshot = vecToArray(mxSafe(() => g.getOutputs(), [])).map((o) => ({
+                            name: mxElName(o),
+                            nodename: mxElAttr(o, 'nodename'),
+                            output: mxElAttr(o, 'output'),
+                            interfacename: mxElAttr(o, 'interfacename'),
+                        }));
+                        const graphPos = storedPos(g) || { x: 0, y: 0 };
+
+                        if (!entries.length) { setError('This nodegraph has no nodes to ungroup.'); return; }
+
+                        // 2: reserve every recreated node's new root-level
+                        // name BEFORE creating any of them, so collisions
+                        // with EXISTING root names resolve up front.
+                        // createValidChildName is called on the DOC — the
+                        // container the recreated nodes will actually live
+                        // in. It can't see names reserved-but-not-yet-
+                        // created in this very loop, so the `reserved` set
+                        // dedups those by hand (root has "foo", the graph
+                        // has both "foo" and "foo1" — both would otherwise
+                        // resolve to "foo1").
+                        const nameMap = {};
+                        const reserved = new Set();
+                        for (const entry of entries) {
+                            let nm = mxSafe(() => doc.createValidChildName(entry.name), entry.name);
+                            while (reserved.has(nm)) {
+                                nm = mxSafe(() => doc.createValidChildName(nm + '1'), nm + '1');
+                            }
+                            reserved.add(nm);
+                            nameMap[entry.name] = nm;
+                        }
+
+                        // Interior centroid of the inner nodes' stored
+                        // positions — nodes missing a stored pos don't
+                        // contribute (and don't get a position written
+                        // below either; layout picks them up instead).
+                        const posEntries = entries.filter((e) => e.pos);
+                        const centroid = posEntries.length
+                            ? {
+                                x: posEntries.reduce((a, e) => a + e.pos.x, 0) / posEntries.length,
+                                y: posEntries.reduce((a, e) => a + e.pos.y, 0) / posEntries.length,
+                            }
+                            : { x: 0, y: 0 };
+
+                        // 3: recreate every inner node AT ROOT under its
+                        // reserved name.
+                        const created = {}; // old inner name -> new root element
+                        for (const entry of entries) {
+                            const el = mxSafe(() => doc.addNode(entry.category, nameMap[entry.name], entry.type), null);
+                            if (!el) continue;
+                            if (entry.nodedef) mxSafe(() => { el.setAttribute('nodedef', entry.nodedef); return true; }, false);
+                            if (entry.version) mxSafe(() => { el.setAttribute('version', entry.version); return true; }, false);
+                            if (entry.pos) {
+                                const x = entry.pos.x + (graphPos.x - centroid.x);
+                                const y = entry.pos.y + (graphPos.y - centroid.y);
+                                mxSafe(() => { el.setAttribute('xpos', String(x)); return true; }, false);
+                                mxSafe(() => { el.setAttribute('ypos', String(y)); return true; }, false);
+                            }
+                            created[entry.name] = el;
+                        }
+                        if (!Object.keys(created).length) { setError('Could not recreate the grouped nodes.'); return; }
+
+                        // Apply a pin's resolved source — external
+                        // connection, else literal, else nothing — onto
+                        // `point`. Shared by step 4 (an interfacename=pin
+                        // input on a recreated node) and step 5's
+                        // pass-through <output> case (a graph output with
+                        // no nodename of its own, reading a pin straight
+                        // through).
+                        const applyPinSource = (point, pin) => {
+                            clearConnAttrs(point);
+                            if (pin.nodename || pin.nodegraph) {
+                                if (pin.nodename) mxSafe(() => { point.setAttribute('nodename', pin.nodename); return true; }, false);
+                                if (pin.nodegraph) mxSafe(() => { point.setAttribute('nodegraph', pin.nodegraph); return true; }, false);
+                                if (pin.output) mxSafe(() => { point.setAttribute('output', pin.output); return true; }, false);
+                            } else if (pin.value !== '' && pin.value != null) {
+                                mxSafe(() => { mxWriteValue(point, pin.value, pin.type); return true; }, false);
+                                if (pin.colorspace) {
+                                    mxSafe(() => {
+                                        if (typeof point.setColorSpace === 'function') point.setColorSpace(pin.colorspace);
+                                        else point.setAttribute('colorspace', pin.colorspace);
+                                        return true;
+                                    }, false);
+                                }
+                            }
+                            // else: the pin itself carried neither — leave
+                            // `point` as freshly created (unauthored).
+                        };
+
+                        // 4: rewire each recreated node's authored inputs —
+                        // the inverse of encapsulate's inbound-wiring trio.
+                        for (const entry of entries) {
+                            const el = created[entry.name];
+                            if (!el) continue;
+                            for (const inp of entry.inputs) {
+                                if (inp.interfacename) {
+                                    // Interface pin — resolve what THAT pin
+                                    // itself was fed by, one level up.
+                                    const pin = pinsByName[inp.interfacename];
+                                    if (!pin) continue;
+                                    const hasSource = !!(pin.nodename || pin.nodegraph)
+                                        || (pin.value !== '' && pin.value != null);
+                                    if (!hasSource) continue; // pin had neither -> leave input unauthored
+                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                    if (!target) continue;
+                                    applyPinSource(target, pin);
+                                    continue;
+                                }
+                                if (!inp.nodegraph && inp.nodename && innerNameSet.has(inp.nodename)) {
+                                    // Sibling wire, kept verbatim under the
+                                    // sibling's new root-level name.
+                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                    if (!target) continue;
+                                    clearConnAttrs(target);
+                                    mxSafe(() => { target.setAttribute('nodename', nameMap[inp.nodename]); return true; }, false);
+                                    if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                    continue;
+                                }
+                                if (inp.nodegraph) {
+                                    // Interior input wired DIRECTLY to another
+                                    // (sibling) nodegraph — outside the graph
+                                    // being dissolved, so its name doesn't
+                                    // change; copy the reference verbatim, no
+                                    // nameMap remapping (mirrors applyPinSource
+                                    // above, which also writes nodename +
+                                    // nodegraph together — MaterialX allows
+                                    // nodegraph= with nodename= to select a
+                                    // node WITHIN that graph).
+                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                    if (!target) continue;
+                                    clearConnAttrs(target);
+                                    mxSafe(() => { target.setAttribute('nodegraph', inp.nodegraph); return true; }, false);
+                                    if (inp.nodename) mxSafe(() => { target.setAttribute('nodename', inp.nodename); return true; }, false);
+                                    if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                    continue;
+                                }
+                                if (inp.value !== '' && inp.value != null) {
+                                    const target = ensureTypedInput(doc, el, inp.name, inp.type);
+                                    if (!target) continue;
+                                    mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
+                                    if (inp.colorspace) {
+                                        mxSafe(() => {
+                                            if (typeof target.setColorSpace === 'function') target.setColorSpace(inp.colorspace);
+                                            else target.setAttribute('colorspace', inp.colorspace);
+                                            return true;
+                                        }, false);
+                                    }
+                                }
+                            }
+                        }
+
+                        // 5: rewrite every ROOT-level consumer that pointed
+                        // at g (nodegraph=gName) to read straight from the
+                        // recreated node instead — same "connectables"
+                        // traversal renameElement uses to find every
+                        // element that can carry a reference attribute.
+                        const connectables = (container) => {
+                            const out = [];
+                            for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                                out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
+                            }
+                            out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
+                            // Also recurse into every OTHER nodegraph's
+                            // interior — a node inside a sibling <nodegraph>
+                            // can legally reference this graph too (nodegraph=
+                            // is not restricted to root-level consumers), and
+                            // once this graph is deleted (step 6) any such
+                            // reference left unrewritten would dangle.
+                            for (const sib of vecToArray(mxSafe(() => container.getNodeGraphs(), []))) {
+                                if (mxElName(sib) === gName) continue; // the graph being dissolved itself
+                                for (const n of vecToArray(mxSafe(() => sib.getNodes(), []))) {
+                                    out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
+                                }
+                                out.push.apply(out, vecToArray(mxSafe(() => sib.getOutputs(), [])));
+                            }
+                            return out;
+                        };
+                        // Consumers whose `output` attribute is empty AND the
+                        // dissolved graph has more than one output — which
+                        // output they meant can't be resolved, so the
+                        // reference is left as-is (would otherwise dangle
+                        // once the graph is deleted in step 6). Collected
+                        // here and surfaced as a single warning after the
+                        // operation completes, without blocking the rest of
+                        // the ungroup.
+                        const ambiguousConsumers = [];
+                        for (const point of connectables(doc)) {
+                            if (mxElAttr(point, 'nodegraph') !== gName) continue;
+                            const outAttr = mxElAttr(point, 'output');
+                            const outSnap = outAttr
+                                ? outputsSnapshot.find((o) => o.name === outAttr)
+                                : (outputsSnapshot.length === 1 ? outputsSnapshot[0] : null);
+                            if (!outSnap) {
+                                // Identify the consumer as parent.self (e.g.
+                                // a node's "in1" input, or a graph's own
+                                // <output>) — same getParent() pattern used
+                                // elsewhere in this file to name a point.
+                                const par = mxSafe(() => point.getParent(), null);
+                                const parName = par ? mxElName(par) : '';
+                                const ptName = mxElName(point) || '(unnamed)';
+                                ambiguousConsumers.push(parName ? (parName + '.' + ptName) : ptName);
+                                continue;
+                            }
+                            if (outSnap.nodename) {
+                                const newName = nameMap[outSnap.nodename];
+                                if (!newName) continue;
+                                clearConnAttrs(point);
+                                mxSafe(() => { point.setAttribute('nodename', newName); return true; }, false);
+                                // output= whenever the ORIGINAL graph output
+                                // snapshot explicitly named a port — even if
+                                // the recreated source's own outputsCount
+                                // came back 0 (unresolved nodedef), that
+                                // still doesn't mean the source isn't
+                                // multi-output; only omit output= when the
+                                // original never had one to disambiguate.
+                                if (outSnap.output) {
+                                    mxSafe(() => { point.setAttribute('output', outSnap.output); return true; }, false);
+                                }
+                            } else if (outSnap.interfacename) {
+                                // Pass-through output: the graph's <output>
+                                // has no nodename of its own — it reads an
+                                // interface pin straight through, so the
+                                // consumer inherits THAT pin's own external
+                                // connection or literal instead.
+                                const pin = pinsByName[outSnap.interfacename];
+                                if (pin) applyPinSource(point, pin);
+                            }
+                        }
+
+                        // 6: remove the emptied graph RAW — NOT deleteNode(),
+                        // which would sever the very references just
+                        // rewired above (same reasoning as encapsulate's
+                        // raw removeNode for the originals, step 7 there).
+                        mxSafe(() => { doc.removeNodeGraph(gName); return true; }, false)
+                            || mxSafe(() => { doc.removeChild(gName); return true; }, false);
+                        if (parsed.nodegraphs) { // scope dropdown
+                            parsed.nodegraphs = parsed.nodegraphs.filter((n) => n !== gName);
+                        }
+
+                        setDocRev((r) => r + 1);
+                        markDirty();
+
+                        // 7: full scope rebuild — same reason encapsulate/
+                        // pasteClipboard/renameElement all do this: the
+                        // simplest correct way to pick up every recreated
+                        // node and rewritten reference.
+                        const { descs, edges } = buildScope(parsed, scope);
+                        const rebuilt = toFlow(descs, edges, {
+                            portMode: globalPortsRef.current,
+                            onOpenScope: changeScope,
+                            onTogglePorts: (id) => togglePortsRef.current(id),
+                            onPortAdd: (info) => onPortAddRef.current(info),
+                        });
+                        const recreatedIds = Object.keys(created).map((old) => 'n:' + nameMap[old]);
+                        const recreatedIdSet = new Set(recreatedIds);
+                        setFlow({
+                            edges: rebuilt.edges,
+                            nodes: rebuilt.nodes.map((n) => (n.selected === recreatedIdSet.has(n.id) ? n
+                                : Object.assign({}, n, { selected: recreatedIdSet.has(n.id) }))),
+                        });
+                        setSelectedId(recreatedIds.length === 1 ? recreatedIds[0] : null);
+                        setSelectedEdgeId(null);
+                        setParamsOpen(true);
+                        // Surface any ambiguous consumers found in step 5 —
+                        // doesn't block the rest of the operation, which has
+                        // already completed successfully by this point.
+                        if (ambiguousConsumers.length) {
+                            setError('Ungrouped, but ' + ambiguousConsumers.length
+                                + ' reference(s) with no explicit output selector could not be resolved — check the XML view.');
+                        }
+                    } catch (e) {
+                        setError('Ungroup failed: ' + String((e && e.message) || e));
+                    } finally {
+                        setActionBusy(null);
+                        if (MTLX_PERF_LOG) {
+                            console.log('[mtlx-perf] ungroup: '
+                                + (performance.now() - __perfStart).toFixed(1) + 'ms (' + __nodeCount + ' nodes)');
+                        }
+                    }
+                })();
+            };
+
+            // No-arg entry point for the Ctrl/Cmd+Shift+G keybind: applies
+            // to the single selected g: node (selectedId — this trigger is
+            // inherently single-target, unlike encapsulate's multi-select),
+            // no-op otherwise.
+            const ungroupSelection = () => {
+                if (!selectedId || selectedId.indexOf('g:') !== 0) return;
+                ungroupNodegraph(selectedId.slice(2));
+            };
+
             // Kept current every render so the [] -dep Ctrl/Cmd+C / +V / +G
             // keydown handlers below never call a stale closure (same
             // trick as openAddRef/deleteSelectionRef).
@@ -2713,6 +3842,8 @@
             pasteClipboardRef.current = pasteClipboard;
             const encapsulateSelectionRef = React.useRef(encapsulateSelection);
             encapsulateSelectionRef.current = encapsulateSelection;
+            const ungroupRef = React.useRef(ungroupSelection);
+            ungroupRef.current = ungroupSelection;
 
             // Ctrl/Cmd+C / Ctrl/Cmd+V: copy / paste the selected nodes.
             // Same focus rules as the other global shortcuts — typing in an
@@ -2738,12 +3869,13 @@
             }, []);
 
             // Ctrl/Cmd+G: encapsulate the current multi-selection into a
-            // new nodegraph. preventDefault is required here — the browser
-            // binds Ctrl/Cmd+G to "find again" otherwise.
+            // new nodegraph. Ctrl/Cmd+Shift+G: the inverse — ungroup the
+            // selected nodegraph. preventDefault is required here — the
+            // browser binds Ctrl/Cmd+G to "find again" otherwise.
             React.useEffect(() => {
                 const onKey = (e) => {
                     if (!activeRef.current) return;
-                    if ((e.key !== 'g' && e.key !== 'G') || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+                    if ((e.key !== 'g' && e.key !== 'G') || !(e.ctrlKey || e.metaKey) || e.altKey) return;
                     const t = e.target;
                     const tag = ((t && t.tagName) || '').toLowerCase();
                     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -2752,7 +3884,8 @@
                         || (panelRef.current && t instanceof Node && panelRef.current.contains(t));
                     if (!inStage) return;
                     e.preventDefault();
-                    encapsulateSelectionRef.current();
+                    if (e.shiftKey) ungroupRef.current();
+                    else encapsulateSelectionRef.current();
                 };
                 window.addEventListener('keydown', onKey);
                 return () => window.removeEventListener('keydown', onKey);
@@ -2955,6 +4088,70 @@
                     ? [{ name: 'value', type: displayNode.data.type,
                          value: displayNode.data.value || '', connected: false }]
                     : (displayNode.data.allInputs || displayNode.data.inputs || []));
+            // Group panelInputs by uifolder (item F2.3): inputs without a
+            // uifolder render first, ungrouped, exactly as before; foldered
+            // ones are bucketed under a collapsible header, preserving the
+            // FIRST-appearance order of each folder name. A node with no
+            // uifolder attrs anywhere yields an empty `folders` array, so
+            // the render below falls back to the old flat list untouched.
+            const panelParamGroups = React.useMemo(() => {
+                // Sort by nodedef declaration order (item F3.0) before
+                // grouping, so a uifolder declared late in the nodedef
+                // (e.g. OpenPBR's "Geometry") doesn't render early just
+                // because its inputs happened to be authored/appended
+                // first in collectPorts' returned array (model.jsx) — that
+                // array's own order is left untouched since node cards,
+                // wiredRowIndex drop placement, and visiblePortsFor all
+                // consume it directly; this sorted COPY is only for the
+                // panel's grouping below. Array.prototype.sort is a stable
+                // sort in all modern engines, so inputs sharing a defIndex
+                // (or both lacking one) keep their relative order. Inputs
+                // absent from the nodedef (defIndex undefined — custom or
+                // legacy attrs) sink to the end via the Infinity fallback.
+                const sortedInputs = panelInputs.slice().sort((a, b) => {
+                    const ai = a.defIndex === undefined ? Infinity : a.defIndex;
+                    const bi = b.defIndex === undefined ? Infinity : b.defIndex;
+                    return ai - bi;
+                });
+                const ungrouped = [];
+                const folderOrder = [];
+                const byFolder = new Map();
+                for (const inp of sortedInputs) {
+                    const folder = inp.uifolder;
+                    if (!folder) { ungrouped.push(inp); continue; }
+                    if (!byFolder.has(folder)) { byFolder.set(folder, []); folderOrder.push(folder); }
+                    byFolder.get(folder).push(inp);
+                }
+                return { ungrouped, folders: folderOrder.map((name) => ({ name, inputs: byFolder.get(name) })) };
+            }, [panelInputs]);
+            // Open/closed state per folder name, default expanded (a name
+            // absent from this map reads as open — see `!== false` below).
+            // Reset whenever the displayed node changes, same key as the
+            // rename-edit reset above, so a folder collapsed on one node
+            // doesn't leak its state onto an unrelated node reusing a name.
+            const [panelFoldersOpen, setPanelFoldersOpen] = React.useState({});
+            React.useEffect(() => { setPanelFoldersOpen({}); }, [displayNode && displayNode.id]);
+            // One ParamRow, shared by the ungrouped list and every folder
+            // below so the markup doesn't drift between the two — only
+            // called once displayNode is known truthy (both call sites are
+            // inside the `displayNode ? [...] : (...)` branch).
+            const renderParamRow = (inp) => (
+                <ParamRow
+                    key={displayNode.id + '/' + inp.name}
+                    nodeId={displayNode.id}
+                    inp={inp}
+                    readOnly={panelReadOnly}
+                    sourceId={inp.connected ? sourceOfInput(displayNode.id, inp.name) : null}
+                    onJump={(id) => focusNode(id, true)}
+                    onCommit={(v) => applyParamEdit(displayNode.id, inp.name, v)}
+                    onLive={panelReadOnly || inp.connected ? undefined : (v) => { tryFastUniformUpdate(displayNode.id, inp.name, v, inp.type); }}
+                    onPickFile={(f) => {
+                        registerPickedFile(f);
+                        applyParamEdit(displayNode.id, inp.name, f.name);
+                    }}
+                    onSetColorspace={(cs) => applyColorspace(displayNode.id, inp.name, cs, inp.type)}
+                />
+            );
 
             // ---- Signature / version picker -------------------------------
             // Every nodedef sharing the displayed node's category is grouped
@@ -3016,6 +4213,19 @@
                 if (displayNode && !renameIssue(displayNode.id, nameDraft)) renameElement(displayNode.id, nameDraft);
                 setNameEditing(false);
             };
+
+            // Port-picker popover content (item 2) — portaled straight onto
+            // <body> below via ReactDOM.createPortal, same rationale as
+            // ColorSwatch's popover (js/shared/mtlx-ui.jsx): several
+            // ancestors here use `backdrop-blur`, which establishes a new
+            // containing block for `position: fixed` descendants, so a
+            // plain in-place fixed popover would land off-target. The
+            // popover itself (filter input, row list, footer hint) is the
+            // PortPickerPopover component defined above, styled to match
+            // AddNodeSearch (js/graph/panels.jsx).
+            const portPickerPopover = portPicker
+                ? <PortPickerPopover portPicker={portPicker} rootRef={portPickerRef} onPick={pickPort} />
+                : null;
 
             return (
                 <div ref={panelRef} className="absolute inset-0 bg-gray-900 overflow-hidden">
@@ -3080,6 +4290,20 @@
                             />
                         </ReactFlowComp>
                     </div>
+
+                    {/* Presets dialog ("Presets" button). Rendered BEFORE the
+                        unsaved-changes dialog below (same z-50 overlay class,
+                        but earlier in the DOM) so that dialog — which
+                        loadPreset's confirmReplace can pop up while this one
+                        is still open mid-fetch — paints on top instead of
+                        being hidden behind it. */}
+                    <PresetsDialog
+                        open={presetsOpen}
+                        onClose={() => setPresetsOpen(false)}
+                        onPick={loadPreset}
+                        busy={presetsBusy}
+                        busyPath={presetsBusyPath}
+                    />
 
                     {/* Unsaved-changes dialog: gates Import / drag-drop of a
                         new .mtlx / switching documents while dirty. See
@@ -3213,10 +4437,26 @@
                                 <span>Import</span>
                                 <input type="file" multiple className="hidden" onChange={onPickFiles} />
                             </label>
+                            <button
+                                onClick={() => setPresetsOpen(true)}
+                                title="Load a curated official MaterialX example document"
+                                className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            >
+                                {/* 'environment' renders as a framed photo/landscape
+                                    glyph (see MTLX_ICON_PATHS in mtlx-engine.js) — reads
+                                    as "browse a gallery of ready-made looks" and, unlike
+                                    file-code/file-plus/file-upload/file-download already
+                                    in this same New/Import/Export cluster, isn't reused
+                                    anywhere else in the graph editor's own toolbar (its
+                                    only other use is the unrelated env-map-background
+                                    toggle in the preview panel, js/shared/mtlx-ui.jsx). */}
+                                <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                                <span>Presets</span>
+                            </button>
                             {parsed && (
                                 <button
-                                    onClick={() => exportMtlx()}
-                                    title="Download the current document as .mtlx \u2014 edits, connections and layout positions included"
+                                    onClick={openExportDialog}
+                                    title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
                                     className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                 >
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
@@ -3387,6 +4627,12 @@
                     {/* Keybinds reference popup. */}
                     {helpOpen && <KeybindsHelp onClose={() => setHelpOpen(false)} active={active} />}
 
+                    {/* Port-picker popover (item 2): a connection dragged onto
+                        a node body (not a specific handle) opens this instead
+                        of silently dropping. Portaled onto <body> — see
+                        portPickerPopover above for why. */}
+                    {portPicker && ReactDOM.createPortal(portPickerPopover, document.body)}
+
                     {/* View-only XML dialog ("Document" button, item 8). */}
                     {xmlDialogOpen && (
                         <XmlDialog xml={xmlDialogXml} open={xmlDialogOpen} onClose={() => setXmlDialogOpen(false)} />
@@ -3395,6 +4641,17 @@
                     {/* Validation popup ("Validate" button, item 9). */}
                     {validateOpen && (
                         <ValidateDialog result={validateResult} open={validateOpen} onClose={() => setValidateOpen(false)} />
+                    )}
+
+                    {/* Export dialog ("Export" button, item B1). */}
+                    {exportDialog && (
+                        <ExportDialog
+                            open={!!exportDialog}
+                            defaultName={exportDialog.defaultName}
+                            textures={exportDialog.textures}
+                            onExport={handleExportDialogSubmit}
+                            onClose={() => setExportDialog(null)}
+                        />
                     )}
 
                     {/* In-tab docs viewer, opened from the parameter panel's
@@ -3438,6 +4695,15 @@
                                                 : 'bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                                     >
                                         <MtlxIcon name={pinnedTarget ? 'pin-filled' : 'pin'} className="w-3.5 h-3.5" />
+                                    </button>
+                                }
+                                trailingChildren={
+                                    <button
+                                        onClick={sendToViewer}
+                                        title="Open in Material Viewer"
+                                        className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                                    >
+                                        <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                     </button>
                                 }
                             />
@@ -3617,26 +4883,41 @@
                                         )}
                                     </div>
                                 ) : displayNode ? [
+                                    // Ungroup (inverse of Ctrl+G) — only for a
+                                    // single selected nodegraph at the document
+                                    // root, same gate as the keybind.
+                                    displayNode.data.kind === 'nodegraph' && scope === '' && selectedIds.length <= 1 && (
+                                        <div key="ungroup" className="py-1.5">
+                                            <button
+                                                onClick={() => ungroupNodegraph(displayNode.data.name)}
+                                                title="Dissolve this nodegraph back into its nodes, keeping every connection"
+                                                className="h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                            >
+                                                Ungroup (Ctrl+Shift+G)
+                                            </button>
+                                        </div>
+                                    ),
                                     !panelInputs.length && (
                                         <div key="none" className="text-[11px] text-gray-500 py-2">This node has no parameters.</div>
                                     ),
-                                    panelInputs.map((inp) => (
-                                        <ParamRow
-                                            key={displayNode.id + '/' + inp.name}
-                                            nodeId={displayNode.id}
-                                            inp={inp}
-                                            readOnly={panelReadOnly}
-                                            sourceId={inp.connected ? sourceOfInput(displayNode.id, inp.name) : null}
-                                            onJump={(id) => focusNode(id, true)}
-                                            onCommit={(v) => applyParamEdit(displayNode.id, inp.name, v)}
-                                            onLive={panelReadOnly || inp.connected ? undefined : (v) => { tryFastUniformUpdate(displayNode.id, inp.name, v, inp.type); }}
-                                            onPickFile={(f) => {
-                                                registerPickedFile(f);
-                                                applyParamEdit(displayNode.id, inp.name, f.name);
-                                            }}
-                                            onSetColorspace={(cs) => applyColorspace(displayNode.id, inp.name, cs, inp.type)}
-                                        />
-                                    )),
+                                    panelParamGroups.ungrouped.map(renderParamRow).concat(
+                                        panelParamGroups.folders.map((f) => {
+                                            const open = panelFoldersOpen[f.name] !== false;
+                                            return (
+                                                <div key={'folder:' + f.name} className="py-1 border-t border-gray-700/70 mt-1 pt-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setPanelFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
+                                                        className="w-full flex items-center gap-1.5 py-1 text-[11px] font-mono text-gray-300 hover:text-gray-100"
+                                                    >
+                                                        <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                        <span className="truncate">{f.name}</span>
+                                                    </button>
+                                                    {open && f.inputs.map(renderParamRow)}
+                                                </div>
+                                            );
+                                        })
+                                    ),
                                 ] : (
                                     <div className="text-[11px] text-gray-500 py-2">
                                         Click a node to inspect and edit its parameters.

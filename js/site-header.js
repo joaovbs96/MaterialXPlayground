@@ -255,13 +255,20 @@
     }
 
     // Version badge: the engine (mtlx-engine.js) sets window.__mtlxVersion and
-    // dispatches 'mtlx-version' once the WASM reports itself.
+    // dispatches 'mtlx-version' once the WASM reports itself. The home view
+    // never triggers getMxEnv(), though, so window.__mtlxVersion stays unset
+    // there and the badge would otherwise be blank until docs/viewer/graph
+    // loads the WASM. Fall back to the vendored build's known version —
+    // matches the vendored WASM build (see the pinned v1.39.5 spec URL
+    // above); update this when re-vendoring. The live 'mtlx-version' event
+    // still overrides it if they ever differ.
+    var MTLX_VERSION_FALLBACK = '1.39.5';
     var setVer = function (v) {
         if (!v) return;
         var els = document.querySelectorAll('#mtlx-header-version [data-role="ver"], #mtlx-header-version-mobile [data-role="ver"]');
         for (var i = 0; i < els.length; i++) { els[i].textContent = 'v' + v; }
     };
-    if (window.__mtlxVersion) setVer(window.__mtlxVersion);
+    setVer(window.__mtlxVersion || MTLX_VERSION_FALLBACK);
     window.addEventListener('mtlx-version', function (e) { setVer(e.detail || window.__mtlxVersion); });
 
     // ---- Shared footer --------------------------------------------------

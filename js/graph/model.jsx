@@ -183,7 +183,16 @@
         // value (defValue) and an `authored` flag; inputs the document does
         // not author are appended from the nodedef (authored: false) so the
         // "all inputs" display mode can show them.
-        const collectPorts = (el) => {
+        // opts.authoredOnly (item A4.2, default false/undefined — every
+        // existing caller passes no second arg, so behavior there is
+        // byte-identical): skip the unauthored-nodedef-input enumeration
+        // below when the caller only wants what's actually written in the
+        // document — e.g. encapsulateSelection's snapshot immediately
+        // filters `i.authored !== false` right after calling collectPorts,
+        // so building those nodedef-default entries just to discard them
+        // is wasted WASM round-tripping on a big selection.
+        const collectPorts = (el, opts) => {
+            const authoredOnly = !!(opts && opts.authoredOnly);
             let defMemo; // undefined = not looked up yet; null = no def found
             const nodeDef = () => {
                 if (defMemo === undefined) {
@@ -214,6 +223,7 @@
                 uisoftmin: mxElAttr(dIn, 'uisoftmin'), uisoftmax: mxElAttr(dIn, 'uisoftmax'),
                 enumNames: mxElAttr(dIn, 'enum'), enumValues: mxElAttr(dIn, 'enumvalues'),
                 defColorspace: mxElAttr(dIn, 'colorspace'),
+                uifolder: mxElAttr(dIn, 'uifolder'),
             };
             // Node output type(s), resolved BEFORE the inputs below so each
             // input can be flagged colorManaged — colorspace only means
@@ -235,6 +245,30 @@
             const isColorType = (t) => t === 'color3' || t === 'color4';
             const colorManagedFor = (type) => (type === 'filename' && isColorOutput) || isColorType(type);
 
+            // name -> declaration index in the nodedef's input list (active
+            // inputs first, then plain inputs; first-seen name wins — same
+            // list the unauthored branch below iterates). Built independently
+            // of authoredOnly/def0 above so uifolder grouping downstream
+            // (graph-app.jsx panelParamGroups) can sort by NODEDEF order
+            // regardless of instance/document authoring order. undefined
+            // (via Map#get on a missing key) for names not in the def, e.g.
+            // custom/legacy instance inputs with no nodedef entry.
+            const defIndexOf = (() => {
+                const def = nodeDef();
+                const map = new Map();
+                if (def) {
+                    const defIns = vecToArray(mxSafe(() => def.getActiveInputs(), []))
+                        .concat(vecToArray(mxSafe(() => def.getInputs(), [])));
+                    let idx = 0;
+                    for (const dIn of defIns) {
+                        const nm = mxElName(dIn);
+                        if (!nm || map.has(nm)) continue;
+                        map.set(nm, idx++);
+                    }
+                }
+                return (nm) => map.get(nm);
+            })();
+
             const inputs = vecToArray(mxSafe(() => el.getInputs(), [])).map((inp) => {
                 const dIn = defInputEl(mxElName(inp));
                 const type = mxElType(inp) || defPortType(mxElName(inp), false);
@@ -250,13 +284,16 @@
                     interfacename: mxElAttr(inp, 'interfacename'),
                     output: mxElAttr(inp, 'output'),
                     colorManaged: colorManagedFor(type),
+                    defIndex: defIndexOf(mxElName(inp)),
                 }, uiMeta(dIn));
             });
             // Unauthored nodedef inputs (shown only in "all" mode). Their
-            // value IS the default.
+            // value IS the default. Skipped entirely in authoredOnly mode —
+            // callers that filter these back out right after calling
+            // collectPorts don't pay for building them.
             const authoredNames = new Set(inputs.map((i) => i.name));
             const def = nodeDef();
-            if (def) {
+            if (def && !authoredOnly) {
                 const defIns = vecToArray(mxSafe(() => def.getActiveInputs(), []))
                     .concat(vecToArray(mxSafe(() => def.getInputs(), [])));
                 const seen = new Set();
@@ -271,10 +308,13 @@
                         authored: false, colorspace: '',
                         nodename: '', nodegraph: '', interfacename: '', output: '',
                         colorManaged: colorManagedFor(type),
+                        defIndex: defIndexOf(nm),
                     }, uiMeta(dIn)));
                 }
             }
-            const outputs = vecToArray(mxSafe(() => el.getOutputs(), [])).map((o) => ({
+            // Reuse the elOutputs local from the outTypes computation above
+            // instead of a second el.getOutputs() WASM round trip.
+            const outputs = elOutputs.map((o) => ({
                 name: mxElName(o), type: mxElType(o) || defPortType(mxElName(o), true),
             }));
 
