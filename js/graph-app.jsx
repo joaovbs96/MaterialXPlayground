@@ -801,7 +801,20 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    guardedIngestRef.current(map);
+                    // Under the VS Code extension, the open .mtlx FILE is the
+                    // source of truth: the host resends this exact payload on
+                    // every external edit (its live-reload), so gating THIS
+                    // path behind the unsaved-changes confirm would pop a
+                    // modal on every external save — unusable. Bypass ONLY
+                    // this external-document-import path; New/document-picker/
+                    // presets keep the confirm (window.__MTLX_VSCODE__ is set
+                    // only by the extension's bootstrap, so this branch is
+                    // dead — and thus inert — outside the webview).
+                    if (window.__MTLX_VSCODE__) {
+                        ingestRef.current(map);
+                    } else {
+                        guardedIngestRef.current(map);
+                    }
                 };
                 if (window.__mtlxPendingImport) {
                     const payload = window.__mtlxPendingImport;
@@ -816,6 +829,28 @@
                 };
                 window.addEventListener('mtlx-load-document', onLoadDoc);
                 return () => window.removeEventListener('mtlx-load-document', onLoadDoc);
+            }, []);
+
+            // ------------------------------------------------------------
+            // VS Code extension bridge (vscode_extension/media/bootstrap.js)
+            // — inert in the browser, just an unused global. Exposes the
+            // current graph's serialized XML (Ctrl+S in the extension's
+            // webview pulls this to write the open .mtlx file) and a "mark
+            // this session saved" hook, so the extension can sync the app's
+            // own unsaved-changes state once the host confirms the write
+            // landed, the same way doExportMtlx's markSaved() does after a
+            // successful in-browser export.
+            React.useEffect(() => {
+                window.__mtlxGetGraphXml = async () => {
+                    const { xml, error } = await resolveDocXml();
+                    if (xml == null) throw new Error(error || 'serialize failed');
+                    return xml;
+                };
+                window.__mtlxMarkGraphSaved = () => markSaved();
+                return () => {
+                    delete window.__mtlxGetGraphXml;
+                    delete window.__mtlxMarkGraphSaved;
+                };
             }, []);
 
             // Default document: fetched through the normal ingest() path so

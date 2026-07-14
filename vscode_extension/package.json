@@ -30,27 +30,30 @@
     ],
     "commands": [
       {
-        "command": "materialxPlayground.openInViewer",
-        "title": "MaterialX: Open in Material Viewer"
-      },
-      {
-        "command": "materialxPlayground.openInGraphEditor",
-        "title": "MaterialX: Open in Node Graph Editor"
+        "command": "materialxPlayground.open",
+        "title": "Send to MaterialX Playground"
       },
       {
         "command": "materialxPlayground.openDocs",
         "title": "MaterialX: Open Node Documentation"
+      },
+      {
+        "command": "materialxPlayground.saveGraph",
+        "title": "MaterialX: Save Node Graph to File"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "materialxPlayground.saveGraph",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "activeCustomEditorId == 'materialxPlayground.editor'"
       }
     ],
     "menus": {
       "explorer/context": [
         {
-          "command": "materialxPlayground.openInViewer",
-          "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
-        },
-        {
-          "command": "materialxPlayground.openInGraphEditor",
+          "command": "materialxPlayground.open",
           "when": "resourceExtname == .mtlx",
           "group": "materialxPlayground"
         }
@@ -66,7 +69,7 @@
             "graph"
           ],
           "default": "viewer",
-          "description": "Which MaterialX Playground view opens by default when a .mtlx file is opened with the MaterialX Playground custom editor: the Material Viewer (renders the shaded result) or the Node Graph Editor (shows/edits the node graph)."
+          "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible — use the header nav to switch to the other."
         }
       }
     }

@@ -123,6 +123,79 @@
         postError('Unhandled rejection: ' + String(event && event.reason));
     });
 
+    // ------------------------------------------------------------------
+    // Ctrl/Cmd+S: save the Node Graph view's current document back to the
+    // open .mtlx file. The PRIMARY path is now a package.json-contributed
+    // VS Code keybinding (materialxPlayground.saveGraph, when:
+    // activeCustomEditorId == 'materialxPlayground.editor') — a webview's
+    // in-iframe keydown listener is NOT reliably the first/only responder
+    // for a chord the workbench keybinding service also wants (it can
+    // route Ctrl+S to VS Code's own "save this webview" handling before,
+    // or instead of, this page ever seeing the keydown at all). The
+    // contributed command posts { type: 'mtlx-request-save' } to this
+    // webview (see the message listener further down), which calls
+    // requestGraphSave() below exactly as the in-page keydown does.
+    //
+    // The in-page keydown listener below is kept as belt-and-suspenders —
+    // some platforms/embeddings do deliver the chord in-iframe — still
+    // registered at the document level in the CAPTURE phase, before the
+    // key can reach a focused input, React Flow's own keydown handling,
+    // or bubble up to VS Code's webview host. Always
+    // preventDefault+stopPropagation on the chord itself, view or no
+    // view, so a stray "save this webview as a plain text editor" never
+    // happens.
+    //
+    // js/graph-app.jsx (its VS Code extension bridge mount effect) exposes
+    // window.__mtlxGetGraphXml when — and only while — the graph view is
+    // mounted; that's also how requestGraphSave() tells the graph view is
+    // the one currently showing, since js/shell.jsx unmounts views it
+    // isn't displaying. Anywhere else (viewer, docs, or the graph view not
+    // yet mounted), a save request — from either path — is a silent
+    // no-op: no reply is posted back to the host in that case (rather than
+    // an 'mtlx-error' text), since a user hitting Ctrl+S while looking at
+    // the Viewer/docs view isn't a mistake worth surfacing, and the
+    // contributed keybinding's `when` clause can legitimately still race
+    // the graph view finishing its mount right after the editor opens.
+    //
+    // pendingSave holds the resolve/reject pair for the single in-flight
+    // 'mtlx-save' round trip; settled by the 'mtlx-save-result' handler in
+    // the message listener further down. There is never more than one
+    // outstanding — requestGraphSave() doesn't post another 'mtlx-save'
+    // until the previous one settles (see the guard below).
+    var pendingSave = null;
+    function requestGraphSave() {
+        if (pendingSave) return; // a save is already in flight — drop the repeat
+        if (!vscodeApi) return;
+        if (location.hash.indexOf('#!graph') !== 0 || typeof window.__mtlxGetGraphXml !== 'function') {
+            // Graph view isn't the visible/mounted one — nothing to save,
+            // and nothing posted back (see the comment above this
+            // function for why silence is the right response here).
+            return;
+        }
+        Promise.resolve()
+            .then(function () { return window.__mtlxGetGraphXml(); })
+            .then(function (xml) {
+                return new Promise(function (resolve, reject) {
+                    pendingSave = { resolve: resolve, reject: reject };
+                    vscodeApi.postMessage({ type: 'mtlx-save', xml: xml });
+                });
+            })
+            .then(function () {
+                if (typeof window.__mtlxMarkGraphSaved === 'function') window.__mtlxMarkGraphSaved();
+            })
+            .catch(function (e) {
+                postError('Save failed: ' + String((e && e.message) || e));
+            });
+    }
+    document.addEventListener('keydown', function (event) {
+        var isSaveChord = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+            && (event.key === 's' || event.key === 'S');
+        if (!isSaveChord) return;
+        event.preventDefault();
+        event.stopPropagation();
+        requestGraphSave();
+    }, true);
+
     // Route the webview straight to the requested view (viewer/graph/docs)
     // BEFORE the site's own boot (js/shell.jsx reads location.hash for
     // its routing). document.currentScript is only valid synchronously
@@ -193,6 +266,15 @@
     // sendUpdate()) once on initial load and again on every debounced
     // text-document change (live reload).
     //
+    // lastDocName / lastBlobMap: remembered from the most recent
+    // 'mtlx-open' payload, so the hashchange listener further down
+    // (Graph -> Viewer sync on view switch) can hand the Viewer the same
+    // name/texture-blob context the Graph editor itself was loaded with,
+    // even though that sync fires long after this message handler
+    // returns and the original payload is out of scope.
+    var lastDocName = null;
+    var lastBlobMap = null;
+
     // NOTE: this is NOT the only postMessage traffic this page can see —
     // the site's own graph-editor docs dialog embeds
     // index.html?embed=1#/... in an <iframe>, and code under js/docs/
@@ -228,6 +310,33 @@
             return;
         }
 
+        // 'mtlx-save-result': the extension host answering an 'mtlx-save'
+        // posted by the Ctrl/Cmd+S handler below. Settle the one in-flight
+        // save (there is never more than one outstanding — the keydown
+        // handler doesn't post a new 'mtlx-save' until the previous one
+        // settles) and forget it; a stray/duplicate reply with nothing
+        // pending is ignored.
+        if (msg.type === 'mtlx-save-result') {
+            if (!pendingSave) return;
+            var settleSave = pendingSave;
+            pendingSave = null;
+            if (msg.ok) settleSave.resolve();
+            else settleSave.reject(new Error(msg.error || 'save failed'));
+            return;
+        }
+
+        // 'mtlx-request-save': the extension host asking this webview to
+        // save, posted by editorProvider.js's saveActiveGraph() in
+        // response to the materialxPlayground.saveGraph command (the
+        // contributed Ctrl+S keybinding — see the comment above
+        // requestGraphSave() for why that's the primary path now).
+        // Reuses the exact same function the in-page keydown fallback
+        // calls, guard and all.
+        if (msg.type === 'mtlx-request-save') {
+            requestGraphSave();
+            return;
+        }
+
         if (msg.type !== 'mtlx-open') return;
 
         var mode = msg.mode;
@@ -250,9 +359,37 @@
             });
         }
 
-        if (mode === 'graph') {
-            // Mirrors js/shared/mtlx-ui.jsx's openInGraphEditor() exactly
-            // — js/graph-app.jsx's 'mtlx-load-document' listener (and its
+        lastDocName = name;
+        lastBlobMap = blobMap;
+
+        if (mode === 'both') {
+            // Primary path: materialxPlayground.open sends one document
+            // to BOTH views at once. The site is a multi-view SPA where
+            // each view consumes its own pending global + event when it
+            // mounts — window.__mtlxPendingImport +
+            // 'mtlx-load-document' for js/graph-app.jsx,
+            // window.__mtlxPendingViewerImport + 'mtlx-view-document'
+            // for js/viewer-app.jsx (js/shared/mtlx-ui.jsx's own
+            // openInGraphEditor()/openInViewer() set exactly these).
+            // Setting both means whichever view the user is (or later
+            // switches to) already has the document; a view that's
+            // already mounted picks it up off the event, an unmounted
+            // one picks it up off the pending global at mount — the
+            // site's own contract, unchanged. Do NOT touch location.hash
+            // here: the initial view was already routed by
+            // data-initial-hash at boot (see initialHash above), and a
+            // live-reload resend must not yank the user away from
+            // whichever view they're currently looking at.
+            var payload = { xml: xml, name: name, files: blobMap };
+            window.__mtlxPendingImport = payload;
+            window.__mtlxPendingViewerImport = payload;
+            window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: payload }));
+            window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: payload }));
+        } else if (mode === 'graph') {
+            // Kept for robustness (e.g. a stale/future host sending a
+            // single-view payload) — mirrors js/shared/mtlx-ui.jsx's
+            // openInGraphEditor() exactly: js/graph-app.jsx's
+            // 'mtlx-load-document' listener (and its
             // window.__mtlxPendingImport fallback for a payload that
             // arrives before the listener is registered) expects this
             // shape verbatim.
@@ -260,8 +397,9 @@
             window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
             location.hash = '#!graph';
         } else if (mode === 'viewer') {
+            // Kept for robustness, same reasoning as 'graph' above.
             // Mirrors openInViewer() / js/viewer-app.jsx's
-            // 'mtlx-view-document' listener, same reasoning as above.
+            // 'mtlx-view-document' listener.
             window.__mtlxPendingViewerImport = { xml: xml, name: name, files: blobMap };
             window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: window.__mtlxPendingViewerImport }));
             location.hash = '#!viewer';
@@ -270,6 +408,51 @@
             // per-file state to import) — just make sure the hash agrees.
             location.hash = '#!docs';
         }
+    }, false);
+
+    // ------------------------------------------------------------------
+    // Graph -> Viewer sync when the user switches to the Viewer. Both
+    // views live in this ONE webview/document — only one is mounted at a
+    // time (js/shell.jsx unmounts whichever view it isn't displaying) —
+    // so "always in sync" means: at the moment the Viewer becomes
+    // visible, pull the Graph editor's CURRENT (possibly unsaved,
+    // possibly never-saved) state and hand it to the Viewer, the same
+    // window.__mtlxPendingViewerImport + 'mtlx-view-document' contract
+    // 'mtlx-open' above already uses (and the site's own "Send to
+    // Viewer" button uses — js/shared/mtlx-ui.jsx openInViewer()). The
+    // reverse direction (Viewer -> Graph) needs nothing: the Viewer is
+    // read-only, and an external file edit already reloads BOTH views
+    // via editorProvider.js's live-reload / this file's 'mtlx-open'
+    // handling above — there's no Viewer-only state that could ever need
+    // to flow back.
+    //
+    // window.__mtlxGetGraphXml only exists while the Graph editor is
+    // mounted (see the Ctrl+S section above), which doubles here as "the
+    // user actually had a live graph session to sync from" — if the
+    // Graph view was never opened this tab, lastBlobMap/lastDocName are
+    // still whatever the last 'mtlx-open' set (or null on a fresh panel;
+    // the Viewer's own mount-time __mtlxPendingViewerImport from that
+    // same 'mtlx-open' already covers that case, so this listener simply
+    // has nothing new to contribute and no-ops via the typeof check).
+    //
+    // NOTE: the Viewer rebuilds its material and recompiles its shader on
+    // EVERY switch — same WASM/shader-gen cost as any fresh load. That
+    // cost is real; what keeps it from stalling the UI is the site's own
+    // background WASM warm-up kicked off at boot (unrelated to this
+    // listener), not anything special done here.
+    window.addEventListener('hashchange', function () {
+        if (location.hash.indexOf('#!viewer') !== 0) return;
+        if (typeof window.__mtlxGetGraphXml !== 'function') return;
+        Promise.resolve()
+            .then(function () { return window.__mtlxGetGraphXml(); })
+            .then(function (xml) {
+                var payload = { xml: xml, name: lastDocName || 'document', files: lastBlobMap };
+                window.__mtlxPendingViewerImport = payload;
+                window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: payload }));
+            })
+            .catch(function (e) {
+                postError('Graph -> Viewer sync failed: ' + String((e && e.message) || e));
+            });
     }, false);
 
     // ------------------------------------------------------------------
