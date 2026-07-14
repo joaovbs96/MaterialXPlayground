@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- ================================================================
+         vscode_extension/media/webview.html — webview chrome for the
+         MaterialX Playground custom editor / node-docs panel.
+
+         KEEP THE LIBRARY TAGS AND BOOT SKELETON IN SYNC WITH
+         ../../index.html — the extension deliberately never modifies the
+         site. This file is a hand-maintained mirror of index.html's
+         <head>/<body>, with four ${...} placeholders substituted by
+         vscode_extension/src/editorProvider.js's buildHtml(), plus one
+         extra script (the bootstrap tag below) spliced in near the top
+         and a Content-Security-Policy meta tag webviews require. If
+         index.html's CDN/local script tags, inline config script, style
+         block, or body skeleton ever change, mirror the change here too.
+         ================================================================ -->
+
+    <!-- Content-Security-Policy: webviews block everything by default
+         unless explicitly allowed. Directives, one per concern:
+           default-src 'none'          — deny-by-default baseline.
+           script-src  ${cspSource} https: 'unsafe-inline' 'unsafe-eval'
+                       'wasm-unsafe-eval'
+                       — ${cspSource} for this extension's own local
+                         resources (bootstrap.js) and, via
+                         localResourceRoots, the repo's js/*.js(x);
+                         https: for the CDN libs (Tailwind, React, Babel
+                         standalone, three.js, RGBELoader/GLTFLoader/
+                         OrbitControls, fflate); 'unsafe-eval' because
+                         Babel standalone transpiles+evals the site's
+                         type="text/babel" scripts IN the browser (no
+                         build step, by design — js/shell.jsx,
+                         js/graph-app.jsx, etc. are all loaded that way);
+                         'wasm-unsafe-eval' for WebAssembly.instantiate
+                         (js/JsMaterialXCore.wasm / JsMaterialXGenShader.wasm).
+           style-src   ${cspSource} https: 'unsafe-inline'
+                       — Tailwind's CDN build injects a <style> tag at
+                         runtime, and the site itself uses inline style
+                         attributes/blocks throughout.
+           font-src    ${cspSource} https:  — KaTeX web fonts (lazy-loaded
+                       by the docs view), served from the same CDNs.
+           img-src     ${cspSource} https: blob: data:
+                       — blob: for object-URL textures/snapshots the app
+                         creates itself, data: for small inline assets.
+           connect-src ${cspSource} https:
+                       — fetch() for local resources (default preset,
+                         environment maps, WASM binaries, .data files)
+                         and https: for anything the app fetches from a
+                         CDN or the MaterialX GitHub raw content host.
+           frame-src   ${cspSource}
+                       — the graph editor's docs-dialog iframes
+                         index.html?embed=1#/... back into itself, which
+                         under <base href="${baseUri}"> resolves to a
+                         ${cspSource} (webview-resource) URL.
+         TRADEOFF: 'unsafe-inline' is in script-src (not just style-src)
+         because index.html's inline scripts (embed-mode detection, the
+         ReactDOM.createRoot(...) boot call) and this template's own
+         inline scripts are not nonce'd in v1 — a real nonce scheme is
+         future work, not required for a read/view-only, network-required
+         v1 that already runs third-party CDN code via 'unsafe-eval'. -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'none';
+        script-src ${cspSource} https: 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval';
+        style-src ${cspSource} https: 'unsafe-inline';
+        font-src ${cspSource} https:;
+        img-src ${cspSource} https: blob: data:;
+        connect-src ${cspSource} https:;
+        frame-src ${cspSource};
+    ">
+
+    <!-- Every relative URL below (favicon.ico, js/..., ...) resolves
+         against this — the webview-resource URI of the repo root — so
+         index.html's existing site-relative tags/paths work completely
+         unmodified. MUST precede every tag below that carries a relative
+         URL (per the HTML spec, <base> only affects URLs parsed AFTER
+         it). -->
+    <base href="${baseUri}">
+
+    <!-- Bootstrap: MUST be the first script to run, before the site's own
+         boot (js/shell.jsx reads location.hash for routing). Sets the
+         initial hash from data-initial-hash, flags window.__MTLX_VSCODE__,
+         installs the in-page link interceptor, and wires up the
+         extension <-> webview postMessage contract. See
+         vscode_extension/media/bootstrap.js. -->
+    <script src="${bootstrapUri}" data-initial-hash="${initialHash}"></script>
+
+    <title>MaterialX Playground</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+
+    <!-- Embed mode: iframed by the graph editor as
+         index.html?embed=1#/<lib>/<group>/<name> to show a focused view of
+         a single node's documentation (no header/footer/sidebar/chrome).
+         Applied synchronously (before first paint) so there's no flash of
+         the full chrome. -->
+    <script>
+        (function () {
+            if (new URLSearchParams(location.search).get('embed') === '1') {
+                document.documentElement.classList.add('embed-mode');
+                window.__MTLX_EMBED = true;
+            }
+        })();
+    </script>
+    <style>
+        /* Embed mode (the graph editor's docs dialog iframe): hide the
+           shared chrome — the iframe shows only the focused docs view. */
+        .embed-mode #site-header, .embed-mode #site-footer { display: none; }
+    </style>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- three.js r128 + add-ons: loaded eagerly (shared by the viewer and
+         graph views, and cheap enough not to gate on lazy view selection). -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/RGBELoader.js"></script>
+    <!-- EXRLoader: self-hosted, patched copy at js/vendor/EXRLoader.js
+         (see the provenance header in that file for full detail). It starts
+         from three@0.147.0's examples/js UMD build — pinned newer than the
+         r128 core because that's the newest version unpkg still serves
+         under examples/js (0.148.0+ 404s; the legacy non-module bundle was
+         discontinued around r147/r148) — verified source-compatible with
+         the r128 THREE core: 0.147.0's EXRLoader.js only touches
+         THREE.DataTextureLoader, THREE.FloatType/HalfFloatType,
+         THREE.RGBAFormat/RedFormat, THREE.LinearEncoding, THREE.LinearFilter
+         and THREE.DataUtils.toHalfFloat — all present with matching
+         signatures in three@0.128.0/build/three.js.
+         On top of that base, the DWA decode path is back-ported from three's
+         current examples/jsm/loaders/EXRLoader.js (mrdoob/three.js PRs
+         #27982/#30709/#33216) to fix "Cannot read properties of undefined
+         (reading 'width') at lossyDctDecode" on real .exr files whose
+         channels are layer-prefixed (e.g. "RGBA.R" — the default naming many
+         DCC exporters use); r147's naive `cd.name==rule.name` channel-rule
+         check never matched such names and then called lossyDctDecode()
+         unconditionally.
+         fflate: EXRLoader needs the global `fflate` (its ZIP/DWA-compressed
+         decode paths call fflate.unzlibSync) — must load before
+         js/vendor/EXRLoader.js. 0.147.0's libs/fflate.min.js is
+         byte-identical to 0.128.0's (still fflate 0.6.9, same exports);
+         kept on the 0.147.0 CDN tag purely so the version tag matches what
+         js/vendor/EXRLoader.js was forked from. -->
+    <script src="https://unpkg.com/three@0.147.0/examples/js/libs/fflate.min.js"></script>
+    <script src="js/vendor/EXRLoader.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col md:h-screen">
+    <!-- Shared site shell: injected synchronously (plain JS, no Babel/React)
+         so the header paints instantly and identically on every page. This
+         MUST run here (after the div below), not in <head> — site-header.js
+         mounts into #site-header via a null-checked getElementById and would
+         silently no-op if run before the body has parsed. -->
+    <div id="site-header"></div>
+    <script src="js/site-header.js"></script>
+
+    <!-- Full-bleed stage (node-graph.html's exact #root contract — the
+         strictest of the three original pages, since the graph view's
+         canvas is absolutely-positioned and needs an unpadded,
+         `position: relative` container with a definite height to fill.
+         The docs and viewer views reconstruct their OWN padded/max-width
+         wrappers inside this, in js/shell.jsx. -->
+    <div id="root" class="flex-1 relative min-h-0"></div>
+
+    <!-- Shared footer: filled by js/site-header.js at DOMContentLoaded. -->
+    <div id="site-footer" class="shrink-0"></div>
+
+    <!-- Shared engine + shell (must load after #root exists). The per-view
+         CDN/local dependencies (KaTeX, JSZip, React Flow, dagre, doc-ui.jsx,
+         node-preview.jsx, docs-app.jsx/viewer-app.jsx/graph-app.jsx) are
+         lazy-loaded by shell.jsx on first activation of each view. -->
+    <script type="text/babel" src="js/mtlx-engine.js"></script>
+    <script type="text/babel" src="js/shell.jsx"></script>
+    <script type="text/babel">
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<Shell />);
+    </script>
+
+    <style>
+        /* Port tables on small screens: enforce the per-table minimum
+           width computed from their columns (set as --tbl-min inline),
+           so the wrapper scrolls horizontally instead of crushing the
+           columns together. Desktop (md+) keeps the fluid layout. */
+        @media (max-width: 767px) {
+            .port-table { min-width: var(--tbl-min, 46rem); }
+        }
+
+        /* KaTeX on small screens: display equations get their own
+           horizontal scroll instead of overflowing the page, and the
+           whole thing scales down a notch. */
+        .katex-display {
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding: 0.25rem 0.1rem;
+            margin: 0.5rem 0;
+            -webkit-overflow-scrolling: touch;
+        }
+        .katex-display::-webkit-scrollbar {
+            height: 6px;
+        }
+        .katex-display::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 3px;
+        }
+        @media (max-width: 640px) {
+            .katex { font-size: 0.95em; }
+            .katex-display .katex { font-size: 1em; }
+        }
+
+        /* Custom scrollbar to match the dark theme */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1f2937;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #4b5563;
+        }
+
+        /* Dark-theme the React Flow chrome to match the site (graph view). */
+        input[type="number"], input[type="color"], input[type="range"] { color-scheme: dark; }
+        .react-flow__minimap { border: 1px solid #374151; border-radius: 6px; }
+        .react-flow__attribution {
+            background: rgba(17, 24, 39, 0.6); color: #6b7280;
+        }
+        .react-flow__attribution a { color: #9ca3af; }
+        .react-flow__edge.selected .react-flow__edge-path { stroke: #3b82f6 !important; }
+        .react-flow__handle { cursor: crosshair; }
+        .react-flow__handle::after { content: ''; position: absolute; inset: -5px; }
+    </style>
+</body>
+</html>

@@ -1,0 +1,74 @@
+{
+  "name": "materialx-playground",
+  "displayName": "MaterialX Playground",
+  "description": "View .mtlx files in the MaterialX Playground web app (Material Viewer / Node Graph Editor) from a checkout of this repo.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./src/extension.js",
+  "categories": [
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onCustomEditor:materialxPlayground.editor"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "materialxPlayground.editor",
+        "displayName": "MaterialX Playground",
+        "selector": [
+          {
+            "filenamePattern": "*.mtlx"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "materialxPlayground.openInViewer",
+        "title": "MaterialX: Open in Material Viewer"
+      },
+      {
+        "command": "materialxPlayground.openInGraphEditor",
+        "title": "MaterialX: Open in Node Graph Editor"
+      },
+      {
+        "command": "materialxPlayground.openDocs",
+        "title": "MaterialX: Open Node Documentation"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "materialxPlayground.openInViewer",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.openInGraphEditor",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "MaterialX Playground",
+      "properties": {
+        "materialx.defaultView": {
+          "type": "string",
+          "enum": [
+            "viewer",
+            "graph"
+          ],
+          "default": "viewer",
+          "description": "Which MaterialX Playground view opens by default when a .mtlx file is opened with the MaterialX Playground custom editor: the Material Viewer (renders the shaded result) or the Node Graph Editor (shows/edits the node graph)."
+        }
+      }
+    }
+  }
+}
