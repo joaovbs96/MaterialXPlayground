@@ -1688,13 +1688,15 @@ const getWarmContext = () => {
 // sources (collisions are harmless: a false "already warmed" just means
 // one un-warmed sync compile, same as pre-warm-less behavior).
 const MTLX_WARMED_SOURCES = new Set();
-// Small shaders compile synchronously in single-digit milliseconds —
-// pre-warming them only ADDs a poll-tick of latency (measured
-// 50-100ms). Only pre-warm sources big enough for the background
-// compile to plausibly matter. 128 KB is comfortably above every
-// simple-node preview shader and comfortably below the
-// standard_surface/OpenPBR material shaders the pre-warm exists for.
-const PREWARM_MIN_SOURCE_BYTES = 128 * 1024;
+// Deliberately no size gate here. An earlier version skipped pre-warm
+// for sources under 128 KB, assuming only "small" preview shaders would
+// fall under it — but measured 2026-07 on an RTX 4070 Ti / ANGLE D3D11,
+// real standard_surface/OpenPBR preview shaders are ~80-106 KB, UNDER
+// that gate, and their synchronous display compile froze the whole UI
+// for 2.5-2.9s. A genuinely tiny shader costs at most one or two poll
+// ticks (~16-32ms) to pre-warm — the poll checks completion once before
+// its first sleep — and MTLX_WARMED_SOURCES above already prevents
+// repeat pre-warms of the same source.
 const warmKey = (vs, fs) => {
     let h = 5381;
     const s = vs + ' ' + fs;
@@ -1726,13 +1728,6 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
     if (MTLX_WARMED_SOURCES.has(key)) {
         if (window.MTLX_PERF_LOG) {
             console.log('[mtlx-perf] GL prewarm skipped — source already warmed this session (target: ' + label + ')');
-        }
-        return 'skipped';
-    }
-    if (vs.length + fs.length < PREWARM_MIN_SOURCE_BYTES) {
-        if (window.MTLX_PERF_LOG) {
-            console.log('[mtlx-perf] GL prewarm skipped — small shader ('
-                + (vs.length + fs.length) + ' bytes, target: ' + label + ')');
         }
         return 'skipped';
     }
@@ -2435,9 +2430,11 @@ const createMtlxRenderView = async ({
                 // reference could run before it exists — by the time a
                 // preview actually renders here, model.jsx has already
                 // loaded and set it, but this stays defensive on principle.
-                // With the pre-warm above, this is now typically an ANGLE
-                // cache hit (~270ms) instead of a fresh compile (~2.9s) —
-                // see the [mtlx-perf] GL compile wait log for how long the
+                // With the pre-warm above completed, this is now typically
+                // an ANGLE program-cache hit (~15-25ms). If the pre-warm was
+                // skipped or failed, this is the full synchronous compile —
+                // measured 2.5-2.9s for real preview material shaders — see
+                // the [mtlx-perf] GL compile wait log for how long the
                 // pre-warm actually took.
                 const __compilePerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 compileFilteringDriverNoise(renderer, scene, camera);
