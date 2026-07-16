@@ -291,7 +291,7 @@ function activate(context) {
     // keystrokes out from under whatever the user is actively typing.
     const maybeAutoOpen = (editor) => {
         if (!editor || !editor.document || editor.document.uri.scheme !== 'file' || editor.document.languageId !== 'mtlx') return;
-        if (!vscode.workspace.getConfiguration('materialx').get('autoOpenPlayground', false)) return;
+        if (!vscode.workspace.getConfiguration('materialx').get('autoOpenPlayground', true)) return;
         const key = editor.document.uri.toString();
         if (autoOpenedUris.has(key)) return;
         autoOpenedUris.add(key);

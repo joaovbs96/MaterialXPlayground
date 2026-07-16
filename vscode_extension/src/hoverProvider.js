@@ -109,10 +109,10 @@ function buildHoverMarkdown(category, repoRootFsPath, ctx) {
     // matching signature/version instead of the node's first.
     const sigToken = nodeSignature.buildSigToken(ctx);
     const commandArgs = encodeURIComponent(JSON.stringify(sigToken ? [category, sigToken] : [category]));
-    md.appendMarkdown('[Open Interactive Documentation](command:materialxPlayground.openDocs?' + commandArgs + ')');
+    md.appendMarkdown('[Interactive Documentation](command:materialxPlayground.openDocs?' + commandArgs + ')');
 
     if (doc && doc.specUrl) {
-        md.appendMarkdown(' &nbsp;|&nbsp; [Spec](' + doc.specUrl + ')');
+        md.appendMarkdown(' &nbsp;|&nbsp; [Official Specification](' + doc.specUrl + ')');
     }
 
     return md;

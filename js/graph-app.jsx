@@ -2873,9 +2873,14 @@
             // the binding's own checker when one is exposed, else fall back
             // to a conservative identifier regex mirroring MaterialX's
             // naming rules (letters/digits/underscore, not leading with a
-            // digit) — empty names are always rejected either way.
+            // digit) — empty names are always rejected either way. The
+            // native mx.isValidName does NOT enforce the no-leading-digit
+            // rule (confirmed empirically — it returns true for e.g.
+            // "8foo"), so that check always runs first regardless of the
+            // native checker's verdict.
             const isValidMtlxName = (name) => {
                 if (!name) return false;
+                if (/^[0-9]/.test(name)) return false; // native mx.isValidName does NOT enforce this rule (confirmed empirically) — must always check it ourselves
                 const checker = parsed && parsed.mx && typeof parsed.mx.isValidName === 'function'
                     ? parsed.mx.isValidName : null;
                 if (checker) {
@@ -2885,12 +2890,23 @@
                 return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
             };
 
+            // Human-readable reason a name fails isValidMtlxName — messaging
+            // only, never the validity decision itself (that stays solely
+            // isValidMtlxName's call, including the native mx.isValidName
+            // path). Only meaningful to call once isValidMtlxName === false.
+            const describeInvalidMtlxName = (name) => {
+                if (!name) return 'Name cannot be empty';
+                if (/^[0-9]/.test(name)) return 'Names cannot start with a number';
+                if (/[^A-Za-z0-9_]/.test(name)) return 'Names can only contain letters, numbers, and underscores';
+                return 'Invalid MaterialX name';
+            };
+
             // Why a proposed rename of `id` to `newName` can't commit yet —
             // null when it's fine. Drives both the commit gate and the red-
             // border tooltip in the panel header.
             const renameIssue = (id, newName) => {
                 if (!parsed || !id) return 'Invalid MaterialX name';
-                if (!isValidMtlxName(newName)) return 'Invalid MaterialX name';
+                if (!isValidMtlxName(newName)) return describeInvalidMtlxName(newName);
                 const oldName = id.slice(2);
                 if (newName === oldName) return null; // unchanged — a no-op commit
                 const container = id.indexOf('g:') === 0 ? parsed.doc : scopeContainer();
@@ -3371,7 +3387,7 @@
                 const g = scopeContainer();
                 if (!g) { setError('Cannot add an interface pin: scope "' + scope + '" was not found.'); return; }
                 if (rawName && rawName.trim() && !isValidMtlxName(rawName.trim())) {
-                    setError('"' + rawName + '" is not a valid MaterialX name.');
+                    setError('"' + rawName + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(rawName.trim()) + '.');
                     return;
                 }
                 const base = (rawName && rawName.trim()) ? rawName.trim() : (kind === 'iface-input' ? 'input1' : 'output1');
@@ -4839,9 +4855,16 @@
                 if (!nameEditable) return;
                 setNameDraft(displayNode.data.name);
                 setNameEditing(true);
+                setError(null); // don't carry a stale rename error into a fresh edit
             };
             const commitNameEdit = () => {
-                if (displayNode && !renameIssue(displayNode.id, nameDraft)) renameElement(displayNode.id, nameDraft);
+                const issue = displayNode ? renameIssue(displayNode.id, nameDraft) : null;
+                if (displayNode && !issue) {
+                    renameElement(displayNode.id, nameDraft);
+                    setError(null); // clear any stale unrelated error now that rename succeeded
+                }
+                // invalid draft: revert silently — the inline icon/message next to
+                // the field already show why, no need for the global error banner
                 setNameEditing(false);
             };
 
@@ -5379,26 +5402,33 @@
                                         <span className="w-2 h-2 rounded-full flex-none bg-gray-600" />
                                     )}
                                     {selectedIds.length <= 1 && nameEditable && nameEditing ? (
-                                        <input
-                                            autoFocus
-                                            spellCheck={false}
-                                            onFocus={(e) => e.target.select()}
-                                            className={'flex-1 min-w-0 text-[13px] font-bold font-mono px-1 py-0.5 bg-gray-900 border rounded text-gray-100 focus:outline-none '
-                                                + (nameIssue ? 'border-red-500' : 'border-gray-600')}
-                                            title={nameIssue || ''}
-                                            value={nameDraft}
-                                            onChange={(e) => setNameDraft(e.target.value)}
-                                            onBlur={commitNameEdit}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    if (!renameIssue(displayNode.id, nameDraft)) commitNameEdit();
-                                                    // invalid: swallow the Enter, stay in edit mode
-                                                } else if (e.key === 'Escape') {
-                                                    setNameDraft(displayNode.data.name);
-                                                    setNameEditing(false);
-                                                }
-                                            }}
-                                        />
+                                        <div className="relative flex-1 min-w-0">
+                                            <input
+                                                autoFocus
+                                                spellCheck={false}
+                                                onFocus={(e) => e.target.select()}
+                                                className={'w-full text-[13px] font-bold font-mono py-0.5 bg-gray-900 border rounded text-gray-100 focus:outline-none '
+                                                    + (nameIssue ? 'pl-1 pr-6 border-red-500' : 'px-1 border-gray-600')}
+                                                title={nameIssue || ''}
+                                                value={nameDraft}
+                                                onChange={(e) => setNameDraft(e.target.value)}
+                                                onBlur={commitNameEdit}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        const issue = renameIssue(displayNode.id, nameDraft);
+                                                        if (!issue) commitNameEdit();
+                                                        // invalid: swallow the Enter and stay in edit mode —
+                                                        // the inline icon/message below already show why
+                                                    } else if (e.key === 'Escape') {
+                                                        setNameDraft(displayNode.data.name);
+                                                        setNameEditing(false);
+                                                    }
+                                                }}
+                                            />
+                                            {nameIssue && (
+                                                <MtlxIcon name="x" className="w-3.5 h-3.5 text-red-500 pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" />
+                                            )}
+                                        </div>
                                     ) : (
                                         <div
                                             className={'text-[13px] font-bold text-gray-100 truncate font-mono flex-1'
@@ -5437,6 +5467,10 @@
                                                 && displayNode.data.category ? '' : ' ml-auto')}
                                     >{'\u00BB'}</button>
                                 </div>
+
+                                {nameEditing && nameIssue && (
+                                    <div className="mx-3 mb-1.5 -mt-1 px-2 py-1 rounded border border-red-800/60 bg-red-950/60 text-red-300 text-[11px]">{nameIssue}</div>
+                                )}
 
                                 <div className="overflow-hidden pb-1.5">
                                     {selectedIds.length <= 1 && displayNode ? (

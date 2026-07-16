@@ -61,7 +61,7 @@ dependencies — it runs directly out of a checkout of this repo.
   open somewhere, the extension falls back sensibly — opening in the
   active group, or revealing the existing playground tab, respectively —
   regardless of this setting.
-- **Auto-open** (`materialx.autoOpenPlayground`, default `false`): when
+- **Auto-open** (`materialx.autoOpenPlayground`, default `true`): when
   enabled, opening (or switching to) a `.mtlx` file automatically opens
   the playground beside it, without stealing keyboard focus from the text
   editor. This fires once per file per "open": closing the playground tab
@@ -206,7 +206,7 @@ editor.
 
 ## Settings
 
-- `materialx.defaultView` (`"viewer"` | `"graph"`, default `"viewer"`) —
+- `materialx.defaultView` (`"viewer"` | `"graph"`, default `"graph"`) —
   which view (Material Viewer or Node Graph Editor) is shown first when a
   `.mtlx` file is opened. The document is loaded into both views either
   way; this only picks the initially visible one — use the header nav to
@@ -219,7 +219,7 @@ editor.
   editor group instead (the previous behavior). See "Opening the
   playground" under Usage above for the fallback behavior when there's
   nothing to split against.
-- `materialx.autoOpenPlayground` (boolean, default `false`) —
+- `materialx.autoOpenPlayground` (boolean, default `true`) —
   automatically open the playground beside the text editor whenever a
   `.mtlx` file is opened. See "Opening the playground" under Usage above
   for exactly when this re-triggers.

@@ -287,7 +287,7 @@ class MaterialXEditorProvider {
             // 'both' below), so this only decides what the user sees on
             // first paint. The header nav switches to the other view,
             // already loaded.
-            const defaultView = vscode.workspace.getConfiguration('materialx').get('defaultView', 'viewer');
+            const defaultView = vscode.workspace.getConfiguration('materialx').get('defaultView', 'graph');
             const initialHash = defaultView === 'graph' ? '#!graph' : '#!viewer';
 
             // false: this IS the file-backed custom editor, so it keeps
