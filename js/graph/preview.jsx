@@ -844,6 +844,11 @@
                         isFullscreen={isFullscreen}
                         onToggleFullscreen={toggleFullscreenView}
                         trailingChildren={trailingChildren}
+                        // This panel is docked at the screen's right edge, so open
+                        // the env dialog toward the graph canvas (left) instead of
+                        // the default below/right placement, which would cover the
+                        // 3D preview itself.
+                        envDialogPlacement="left"
                         containerClassName="flex items-center justify-end gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
                     />
                     <div

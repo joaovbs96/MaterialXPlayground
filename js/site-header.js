@@ -25,7 +25,12 @@
     // The old standalone pages (material-viewer.html, node-graph.html,
     // app.html) are now just redirect stubs that never load this script, so
     // the non-shell branch below is retained only as dead-code safety.
-    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname);
+    // Inside the VS Code webview the document URL is a vscode-webview://
+    // resource and never ends in index.html, but it genuinely IS the shell
+    // (hash-routed docs/viewer/graph views, same as index.html in a
+    // browser). bootstrap.js sets window.__MTLX_VSCODE__ BEFORE any site
+    // script loads, so it's a reliable second signal here.
+    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__;
 
     // The site name. Change it here and it changes everywhere
     // (header, and — via window.SITE_TITLE — anything React renders).
@@ -225,12 +230,18 @@
     var closeMobileMenu = function () {
         if (!mobileMenu || !navToggle) return;
         mobileMenu.classList.add('hidden');
+        mobileMenu.style.display = 'none';
         navToggle.setAttribute('aria-expanded', 'false');
     };
     if (navToggle && mobileMenu) {
         navToggle.addEventListener('click', function () {
             var willOpen = mobileMenu.classList.contains('hidden');
             mobileMenu.classList.toggle('hidden');
+            // The measured-collapse path below can force the hamburger
+            // visible at >=md widths (long nav labels overflowing), where
+            // the panel's own `md:hidden` class would keep it display:none
+            // even after `hidden` is removed — inline display must win.
+            mobileMenu.style.display = willOpen ? 'block' : 'none';
             navToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
         });
         // Any link inside the mobile panel (nav item or source/feedback/

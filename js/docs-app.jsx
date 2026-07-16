@@ -15,6 +15,52 @@
 // js/docs/sidebar.jsx — App owns all their state/derived data and passes
 // it down as props (see the {jsonData && (...)} block below).
 
+        // Given nodeVersionGroups (see groupDefVersions, js/docs/port-
+        // tables.jsx) and a parsed sig hint ({out, ins}, from a VS Code
+        // hover deep link's `?sig=` suffix — see js/docs/doc-links.jsx's
+        // parseSigHint), returns the INDEX of the group to pre-select in
+        // the Signature dropdown, or -1 when nothing matches (leave the
+        // dropdown's own default alone).
+        //
+        // Matching is deliberately permissive: hint.out is matched
+        // exactly against each group's resolved output type first, then
+        // retried lowercased (a hand-typed/legacy hash could differ only
+        // in case) — a SINGLE candidate (or a hint with no typed inputs
+        // to disambiguate with) wins outright. With MULTIPLE candidates
+        // sharing that output type (e.g. fractal3d's several float-
+        // output signatures), hint.ins — the hovered element's typed
+        // <input> children — disambiguates: the first candidate whose
+        // DEFAULT version's inputTypes satisfies EVERY hinted name->type
+        // pair wins; if none do, fall back to the first candidate rather
+        // than showing nothing.
+        const matchSigHintToGroups = (groups, hint) => {
+            if (!groups || !groups.length || !hint || !hint.out) return -1;
+
+            let candidates = [];
+            for (let i = 0; i < groups.length; i++) {
+                if (groups[i].type === hint.out) candidates.push(i);
+            }
+            if (!candidates.length) {
+                const wantLower = hint.out.toLowerCase();
+                for (let i = 0; i < groups.length; i++) {
+                    if ((groups[i].type || '').toLowerCase() === wantLower) candidates.push(i);
+                }
+            }
+            if (!candidates.length) return -1;
+            if (candidates.length === 1 || !hint.ins || !hint.ins.length) return candidates[0];
+
+            for (const idx of candidates) {
+                const group = groups[idx];
+                const defaultVersion = group.versions && group.versions[0];
+                if (!defaultVersion) continue;
+                const inputTypes = defaultVersion.inputTypes || {};
+                const satisfiesAll = hint.ins.every((inp) =>
+                    Object.prototype.hasOwnProperty.call(inputTypes, inp.name) && inputTypes[inp.name] === inp.type);
+                if (satisfiesAll) return idx;
+            }
+            return candidates[0];
+        };
+
         function App({ active = true, inline = false, initialHash } = {}) {
             // Embed mode: focused single-node view, iframed by the graph
             // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
@@ -42,12 +88,34 @@
             // load can race with the user switching shell views (which rewrites
             // location.hash to a '#!' route and would lose a docs deep link).
             const initialHashRef = React.useRef(window.location.hash);
+            // A signature hint (`{name, hint}`, hint from hashToSel's
+            // sel.sigHint) waiting to be applied to the Signature
+            // dropdown once nodeVersionGroups has loaded for the node it
+            // targets — set at the two hash-driven selection sites below
+            // (applyData's fromHash branch, onNav), consumed at most once
+            // by the effect right after the nodeVersionGroups effect
+            // further down. A ref, not state: it's read/written across
+            // renders but never itself drives one.
+            const pendingSigRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
             // Which signature (port table) of the selected node is shown —
             // and previewed. Reset on every selection change.
             const [sigIndex, setSigIndex] = React.useState(0);
-            React.useEffect(() => { setSigIndex(0); }, [selectedNode]);
+            React.useEffect(() => {
+                setSigIndex(0);
+                // A pending sig hint targets ONE specific node by name.
+                // If the selection driving this effect is for a
+                // DIFFERENT node than the pending hint's — e.g. the hint
+                // was set by a hash navigation, then something else (a
+                // sidebar click, browser back) changed the selection
+                // again before the consumer effect below ever got a
+                // chance to run — the hint is stale for this node and
+                // must not be applied to it.
+                if (pendingSigRef.current && selectedNode && pendingSigRef.current.name !== selectedNode.name) {
+                    pendingSigRef.current = null;
+                }
+            }, [selectedNode]);
             const [copied, setCopied] = React.useState(false);
             // Auto-generated port tables (from the nodedef) for undocumented
             // nodes: { name, status: 'loading'|'ready'|'unavailable', tables }.
@@ -148,6 +216,13 @@
                 if (fromHash) {
                     setExpandedLibs({ [fromHash.lib]: true });
                     setExpandedGroups({ [`${fromHash.lib}-${fromHash.group}`]: true });
+                    // A `?sig=` hint on this hash (VS Code hover deep
+                    // link only — see doc-links.jsx's parseSigHint) is
+                    // queued for the new-effect consumer below; set
+                    // right before setSelectedNode so the sigIndex-reset
+                    // effect above sees a pending hint whose name already
+                    // matches this selection.
+                    pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
                     setSelectedNode(fromHash);
                     return;
                 }
@@ -219,6 +294,9 @@
                     if (sel) {
                         setExpandedLibs((p) => Object.assign({}, p, { [sel.lib]: true }));
                         setExpandedGroups((p) => Object.assign({}, p, { [`${sel.lib}-${sel.group}`]: true }));
+                        // Same pending-hint queuing as applyData's
+                        // fromHash branch above — see its comment.
+                        pendingSigRef.current = sel.sigHint ? { name: sel.name, hint: sel.sigHint } : null;
                         setSelectedNode(sel);
                     }
                 };
@@ -328,6 +406,24 @@
                     .catch(() => { if (alive) setNodeVersionGroups(null); });
                 return () => { alive = false; };
             }, [selectedNode]);
+            // Consumes a pending sig hint (queued at the two hash-driven
+            // selection sites above) exactly once nodeVersionGroups has
+            // actually loaded for the CURRENTLY selected node — matching
+            // needs live group/version data (matchSigHintToGroups reads
+            // each candidate group's default version's inputTypes),
+            // which only exists once the nodeVersionGroups effect above
+            // resolves. The hint is consumed (pendingSigRef.current
+            // nulled) even on a no-match/idx<=0 result, not just a
+            // successful one, so it's applied at most once and never
+            // leaks into a later, unrelated selection.
+            React.useEffect(() => {
+                const pending = pendingSigRef.current;
+                if (!pending || !selectedNode || pending.name !== selectedNode.name) return;
+                if (!nodeVersionGroups) return; // groups not loaded yet — wait for the next run
+                pendingSigRef.current = null;
+                const idx = matchSigHintToGroups(nodeVersionGroups, pending.hint);
+                if (idx > 0) setSigIndex(idx);
+            }, [nodeVersionGroups, selectedNode]);
             // Which VERSION is selected within the currently resolved
             // signature group — reset whenever the selection or signature
             // changes (a different signature may resolve to a different

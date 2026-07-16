@@ -86,6 +86,82 @@
             return { mx, doc, nodegraphs, implGraphNames };
         };
 
+        // Validate a document's TEXT AS AUTHORED — deliberately NOT the
+        // live in-memory graph doc (parsed.doc). serializeDocXml (below)
+        // calls stripValuesFromConnectedInputs on the doc IN PLACE before
+        // every write (Export, undo/redo snapshots, AND the VS Code
+        // text-sync path), which silently heals faults like "an input
+        // carries both a value and a connection" — so validating
+        // parsed.doc directly would show a document opened WITH real
+        // faults as perfectly clean the moment any snapshot fires (undo
+        // snapshots alone fire ~350ms after every edit). Building a
+        // fresh, throwaway document straight from the raw XML string
+        // instead means the graph editor's Validate button/dialog always
+        // reports on exactly the same text the VS Code extension's own
+        // validator (vscode_extension/src/validator.js's tier-2 path,
+        // mtlxNode.js's validateSemantic — which likewise just
+        // readFromXmlString's the raw buffer text, xi:include and all)
+        // would report — the actual on-disk/in-buffer document, at every
+        // moment, not "the document as the graph editor has quietly
+        // fixed it so far".
+        //
+        // Returns one of:
+        //   { kind: 'valid' }
+        //   { kind: 'invalid', issues: [ ...verbatim diagnostic lines ] }
+        //   { kind: 'unavailable' } — wasm not ready, no validate()
+        //                             binding in this build, or any other
+        //                             unexpected throw
+        const validateMtlxXml = async (xml) => {
+            if (!xml) return { kind: 'unavailable' };
+            try {
+                const { mx, stdlib } = await getMxEnv();
+                if (typeof mx.createDocument !== 'function' || typeof mx.readFromXmlString !== 'function') {
+                    return { kind: 'unavailable' };
+                }
+                const doc = mx.createDocument();
+                try {
+                    await mx.readFromXmlString(doc, xml);
+                } catch (e) {
+                    // A document that doesn't even parse is certainly not
+                    // valid — report the parse error itself as the sole
+                    // issue, the same way VS Code's tier-1 XML scanner
+                    // (validator.js's scanXml) reports a malformed file
+                    // before tier 2 (this same wasm validate path) ever runs.
+                    return { kind: 'invalid', issues: [mxErr(mx, e)] };
+                }
+                if (typeof doc.setDataLibrary === 'function') {
+                    doc.setDataLibrary(stdlib);
+                }
+                if (typeof doc.validate !== 'function') return { kind: 'unavailable' };
+                const holder = {};
+                let ok;
+                try {
+                    ok = doc.validate(holder);
+                } catch (e) {
+                    return { kind: 'unavailable' };
+                }
+                if (ok) return { kind: 'valid' };
+                // The WASM binding's validate() has an overloadTable
+                // {'0','1'} — the 1-arg overload fills holder.message with
+                // the FULL newline-separated MaterialX diagnostic list on
+                // failure. Shown VERBATIM (no reformatting) — same
+                // contract the old validateOpen-gated effect in
+                // js/graph-app.jsx used to follow.
+                const issues = String(holder.message || '')
+                    .split(/\r\n|\r|\n/)
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                // holder.message empty despite a false result (build
+                // variance, or a failure validate() itself can't
+                // attribute to any single line) -> a single generic
+                // fallback issue, never an empty "invalid" dialog.
+                if (!issues.length) issues.push('The document failed validation.');
+                return { kind: 'invalid', issues };
+            } catch (e) {
+                return { kind: 'unavailable' };
+            }
+        };
+
         // Serialize a parsed document to XML — shared by Export and the
         // undo/redo snapshot capture. Transient '__pv_*' preview wrappers
         // only exist inside an in-flight generation; if one is caught
@@ -100,6 +176,14 @@
                 err.transient = true;
                 throw err;
             }
+            // Item 9 belt-and-suspenders: strip any input that carries both
+            // a value and a connection before every write. This is the ONE
+            // choke point every caller of serializeDocXml goes through
+            // (Export dialog, undo/redo snapshots via flushUndoSnapshot,
+            // AND the VS Code text-sync path), so it also self-heals
+            // documents that predate this fix or were authored outside the
+            // graph editor, right on the next serialize.
+            mxSafe(() => stripValuesFromConnectedInputs(parsed.doc), 0);
             return parsed.mx.writeToXmlString(parsed.doc);
         };
 
@@ -477,7 +561,7 @@
         };
 
 Object.assign(window, {
-    DEFAULT_GRAPH_URL, parseMtlxDocument, serializeDocXml, kindOfNode,
+    DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef, signatureInputTypes, CLOSURE_TYPES, isClosureModifier,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG,
 });

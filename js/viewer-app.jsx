@@ -176,6 +176,11 @@
                 if (!loaded || !loaded.doc) return;
                 let xml;
                 try {
+                    // Item 9 belt-and-suspenders: strip any input that carries
+                    // both a value and a connection before handing the document
+                    // to the graph editor — self-heals documents loaded here
+                    // before this fix existed, not just ones built in this app.
+                    mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
                     xml = loaded.mx.writeToXmlString(loaded.doc);
                 } catch (e) {
                     console.warn('Send to Editor: failed to serialize the document', e);

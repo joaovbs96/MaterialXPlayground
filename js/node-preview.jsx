@@ -285,6 +285,13 @@
                 if (DEBUG_SHADERS) {
                     console.log('export input types (non-default only) →', typeReport.join(', ') || '(all at defaults)');
                 }
+                // Item 9 belt-and-suspenders: the wiring sites below (translation,
+                // convert.in x2, surface_unlit.emission_color) already strip the
+                // value themselves right after connecting, but this sweep also
+                // catches anything from an older build of this function or a
+                // loaded document that predates the fix — never export an input
+                // with both a value and a connection.
+                mxSafe(() => stripValuesFromConnectedInputs(ed.doc), 0);
                 // 2) Serialize the DOCUMENT itself — no options, no
                 //    predicate, no fallback. The standard library is attached
                 //    via setDataLibrary (referenced, not contained), so the
@@ -587,7 +594,12 @@
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
-                            addTypedInput(renderable, 'bsdf', 'BSDF').setNodeName('preview_bsdf');
+                            const bsdfInp = addTypedInput(renderable, 'bsdf', 'BSDF');
+                            bsdfInp.setNodeName('preview_bsdf');
+                            // Item 9: addTypedInput may have copied the
+                            // nodedef default VALUE onto this fresh input —
+                            // strip it now that it's connected.
+                            mxSafe(() => { bsdfInp.removeAttribute('value'); return true; }, false);
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'edf') {
@@ -596,7 +608,12 @@
                             applyOverrides(previewInstance);
                             createdNodes.push(previewInstance);
                             renderable = doc.addNode('surface', 'preview_surface', 'surfaceshader');
-                            addTypedInput(renderable, 'edf', 'EDF').setNodeName('preview_edf');
+                            const edfInp = addTypedInput(renderable, 'edf', 'EDF');
+                            edfInp.setNodeName('preview_edf');
+                            // Item 9: addTypedInput may have copied the
+                            // nodedef default VALUE onto this fresh input —
+                            // strip it now that it's connected.
+                            mxSafe(() => { edfInp.removeAttribute('value'); return true; }, false);
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'translation') {
@@ -621,9 +638,18 @@
                                 const inp = addTypedInput(renderable, iName, oTypeStr);
                                 inp.setNodeName('preview_node');
                                 inp.setAttribute('output', oName);
+                                // Item 9: addTypedInput (ensureTypedInput) may have
+                                // copied the nodedef default VALUE onto this fresh
+                                // input — a connected input must not also carry one.
+                                mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
                             }
                             const mat = doc.addNode('surfacematerial', 'preview_material', 'material');
-                            addTypedInput(mat, 'surfaceshader', 'surfaceshader').setNodeName('preview_surface');
+                            const matInp = addTypedInput(mat, 'surfaceshader', 'surfaceshader');
+                            matInp.setNodeName('preview_surface');
+                            // Item 9: addTypedInput may have copied the
+                            // nodedef default VALUE onto this fresh input —
+                            // strip it now that it's connected.
+                            mxSafe(() => { matInp.removeAttribute('value'); return true; }, false);
                             createdNodes.push(mat);
                             needsLighting = true;
                         } else if (kind === 'color') {
@@ -656,6 +682,10 @@
                                     const inp = addTypedInput(conv, 'in', prevType);
                                     if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
                                     else inp.setNodeName(srcName);
+                                    // Item 9: addTypedInput may have copied the
+                                    // nodedef default VALUE onto `inp` — strip it
+                                    // now that it's connected, either branch above.
+                                    mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
                                     createdNodes.push(conv);
                                     srcName = isLast ? 'preview_surface' : 'preview_convert' + (i || '');
                                     srcIsPreviewNode = false;
@@ -684,6 +714,10 @@
                                     // selection); later hops chain convert→convert.
                                     if (srcIsPreviewNode) connectToPreview(inp, 'preview_node');
                                     else inp.setNodeName(srcName);
+                                    // Item 9: addTypedInput may have copied the
+                                    // nodedef default VALUE onto `inp` — strip it
+                                    // now that it's connected, either branch above.
+                                    mxSafe(() => { inp.removeAttribute('value'); return true; }, false);
                                     createdNodes.push(conv);
                                     srcName = 'preview_convert' + (i || '');
                                     srcIsPreviewNode = false;
@@ -703,6 +737,10 @@
                                 // itself for multi-output color3 taps.
                                 if (srcIsPreviewNode) connectToPreview(emiss, 'preview_node');
                                 else emiss.setNodeName(srcName);
+                                // Item 9: addTypedInput may have copied the
+                                // nodedef default VALUE onto `emiss` — strip it
+                                // now that it's connected, either branch above.
+                                mxSafe(() => { emiss.removeAttribute('value'); return true; }, false);
                             }
                         } else {
                             const shown = (types || []).join(', ') || 'unknown';
@@ -717,7 +755,12 @@
                         if (kind !== 'translation') {
                             try {
                                 const mat0 = doc.addNode('surfacematerial', 'preview_material', 'material');
-                                addTypedInput(mat0, 'surfaceshader', 'surfaceshader').setNodeName('preview_surface');
+                                const mat0Inp = addTypedInput(mat0, 'surfaceshader', 'surfaceshader');
+                                mat0Inp.setNodeName('preview_surface');
+                                // Item 9: addTypedInput may have copied the
+                                // nodedef default VALUE onto this fresh input —
+                                // strip it now that it's connected.
+                                mxSafe(() => { mat0Inp.removeAttribute('value'); return true; }, false);
                                 createdNodes.push(mat0);
                             } catch (matErr) { /* export falls back to wrapper-less doc */ }
                         }
@@ -746,10 +789,20 @@
                                 console.warn('writeToXmlString failed:', mxErr(mx, xmlErr));
                             }
                         }
+                        // The WASM binding's validate() has an overloadTable
+                        // {'0','1'} — the previous "boolean-only" comment here
+                        // was WRONG (verified headless, see graph-app.jsx's
+                        // matching fix for the Validate dialog). The 1-arg
+                        // overload `validate(holder)` fills holder.message
+                        // with the full newline-separated MaterialX diagnostic
+                        // list on failure, so a debug build gets the real
+                        // reason instead of a bare boolean.
                         if (typeof doc.validate === 'function') {
                             try {
-                                if (!doc.validate()) {
+                                const holder = {};
+                                if (!doc.validate(holder)) {
                                     console.warn(`MaterialX document failed validate() for "${nodeName}" — generation will likely fail.`);
+                                    if (DEBUG_SHADERS) console.warn(holder.message || '(no message)');
                                 }
                             } catch (vErr) {
                                 console.warn('doc.validate() threw:', mxErr(mx, vErr));

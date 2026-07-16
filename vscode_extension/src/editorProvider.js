@@ -539,4 +539,4 @@ class MaterialXEditorProvider {
     }
 }
 
-module.exports = { MaterialXEditorProvider, wireCommonWebviewMessages, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel };
+module.exports = { MaterialXEditorProvider, wireCommonWebviewMessages, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel };

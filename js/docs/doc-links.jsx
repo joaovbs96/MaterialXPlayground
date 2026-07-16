@@ -23,18 +23,72 @@
         // 'stdlib' winning ties so ambiguous names resolve deterministically.
         const selToHash = (sel) =>
             sel ? '#/' + [sel.lib, sel.group, sel.name].map(encodeURIComponent).join('/') : '';
+
+        // Parses a `?sig=<token>` query suffix — a VS Code hover deep
+        // link only (see vscode_extension/src/extension.js's openDocs
+        // command and its SIG_TOKEN_RE; selToHash above never emits one)
+        // — into { out, ins: [{name, type}] }, or null when absent/
+        // malformed. Token shape mirrors vscode_extension/src/
+        // nodeSignature.js's buildSigToken output exactly: `<outType>`
+        // optionally followed by `(<name>:<type>,...)`. extension.js
+        // already shape-validated the token before ever building the
+        // hash, but this parse is independently defensive — a hand-
+        // typed/pasted/bookmarked hash is untrusted input too.
+        const SIG_HINT_RE = /^([\w.\-:]+)(?:\(([^)]*)\))?$/;
+        const parseSigHint = (query) => {
+            if (!query) return null;
+            let sigRaw = null;
+            for (const pair of query.split('&')) {
+                if (pair.slice(0, 4) === 'sig=') { sigRaw = pair.slice(4); break; }
+            }
+            if (!sigRaw) return null;
+            let sig;
+            try { sig = decodeURIComponent(sigRaw); } catch (e) { return null; }
+            const m = SIG_HINT_RE.exec(sig);
+            if (!m) return null;
+            const ins = [];
+            if (m[2]) {
+                for (const pair of m[2].split(',')) {
+                    const idx = pair.indexOf(':');
+                    if (idx === -1) continue; // malformed pair — skip, not fatal
+                    const name = pair.slice(0, idx);
+                    const type = pair.slice(idx + 1);
+                    if (name && type) ins.push({ name, type });
+                }
+            }
+            return { out: m[1], ins };
+        };
+
         const hashToSel = (data, hash) => {
             if (!data || !hash) return null;
-            const body = hash.replace(/^#\/?/, '');
+            let body = hash.replace(/^#\/?/, '');
             if (!body) return null;
+
+            // Strip a `?sig=...` suffix BEFORE splitting into lib/group/
+            // name segments — it's not part of the addressing scheme,
+            // just an optional hint for which signature to pre-select
+            // once the node itself resolves. `q === -1` (no '?' at all —
+            // every permalink the site itself ever writes) leaves body/
+            // sigHint exactly as they were before this feature existed,
+            // so existing permalinks resolve identically.
+            const q = body.indexOf('?');
+            const sigHint = q === -1 ? null : parseSigHint(body.slice(q + 1));
+            if (q !== -1) body = body.slice(0, q);
+
             const parts = body.split('/').map((s) => { try { return decodeURIComponent(s); } catch (e) { return s; } });
+            // Attaches sigHint (when one was parsed) onto an otherwise-
+            // resolved selection, on every successful return path below.
+            const withSig = (sel) => {
+                if (sel && sigHint) sel.sigHint = sigHint;
+                return sel;
+            };
 
             // Canonical form: #/lib/group/name (what this page itself writes).
             if (parts.length >= 3) {
                 const name = parts.slice(2).join('/'); // names shouldn't contain '/', but be safe
                 const [lib, group] = parts;
                 if (data[lib] && data[lib][group] && data[lib][group][name]) {
-                    return { lib, group, name, info: data[lib][group][name] };
+                    return withSig({ lib, group, name, info: data[lib][group][name] });
                 }
                 return null;
             }
@@ -51,7 +105,7 @@
             for (const lib of libs) {
                 for (const group of Object.keys(data[lib]).sort()) {
                     const nodes = data[lib][group];
-                    if (nodes[want]) return { lib, group, name: want, info: nodes[want] };
+                    if (nodes[want]) return withSig({ lib, group, name: want, info: nodes[want] });
                     if (!fuzzy) {
                         for (const name of Object.keys(nodes)) {
                             if (squash(name) === wantKey) { fuzzy = { lib, group, name, info: nodes[name] }; break; }
@@ -59,7 +113,7 @@
                     }
                 }
             }
-            return fuzzy;
+            return withSig(fuzzy);
         };
 
         // ---- Official spec deep-links ----

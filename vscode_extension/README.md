@@ -107,6 +107,76 @@ replacing the default text editor). To make it the default, add to your
 }
 ```
 
+## Language features (`.mtlx` editing, validation, hover docs)
+
+These work in **any** editor for a `.mtlx` file — including VS Code's plain
+built-in text editor, not just the MaterialX Playground custom editor
+above — because they're registered against the `mtlx` language id
+(`.mtlx` files activate it automatically), independent of the custom
+editor.
+
+- **Syntax highlighting**: `.mtlx` files get XML-style syntax highlighting
+  (the bundled grammar just includes VS Code's own built-in `text.xml`
+  grammar — no MaterialX-specific tokenizing to maintain) plus
+  language-aware editing behavior: `Ctrl+/` toggles `<!-- -->` block
+  comments, and `<>`/quotes auto-close and surround a selection. The
+  language mode shows as "MaterialX" in the status bar.
+- **Live validation** (Problems squiggles + status bar), in two tiers,
+  re-run on a 400ms debounce as you type:
+  - **Tier 1 — XML well-formedness.** A small, dependency-free scanner
+    (this extension ships **zero** npm dependencies) that tokenizes tags
+    and attributes to catch mismatched/unclosed tags, malformed
+    attributes, duplicate attributes, and stray unescaped `&`/`<` —
+    with precise `{line, character}` squiggle ranges.
+  - **Tier 2 — MaterialX semantic validation.** Runs only once tier 1 is
+    clean: loads the same bundled MaterialX WASM build the Material
+    Viewer/Node Graph Editor use (headless, inside the extension host)
+    and actually parses + `validate()`s the document — catching things
+    like a node graph referencing a nonexistent node. Because this
+    build's `validate()` binding is boolean-only (no message strings) and
+    the WASM binding hands back no character offsets at all, the
+    resulting diagnostics are a best-effort scan for dangling references
+    and their squiggle lands near the *named* element rather than at an
+    exact reported column — an accepted approximation, not a bug.
+  - If the WASM build fails to load — most commonly a CRLF-corrupted
+    `JsMaterialXGenShader.data` archive from a bad Windows checkout of
+    this binary file — tier 2 silently and **permanently** degrades to
+    tier-1-only for the rest of that session (retrying on every
+    keystroke would be both slow and pointless). XML validation keeps
+    working regardless, and the reason is logged once to the
+    **MaterialX Playground** output channel.
+  - A status bar item, visible only while a `.mtlx` editor is active,
+    shows `$(check) MaterialX` when the open document is clean or
+    `$(error) MaterialX: N` with a tooltip listing the first few issues;
+    click it to jump to the Problems panel.
+- **Hover documentation**: hovering a node **category** — an element tag
+  name like `<standard_surface>` or `<mix>` (MaterialX nodes are just
+  elements named by category), or the value of a `node="..."` attribute
+  (`<nodedef>`/`<materialassign>` references) — shows that node's
+  description straight from the MaterialX specification (parsed from the
+  `MaterialX.PBRSpec.md` / `MaterialX.NPRSpec.md` /
+  `MaterialX.StandardNodes.md` files committed at the repo root) plus an
+  **Open documentation** link that opens/reuses the
+  `MaterialX: Open Node Documentation` panel scoped directly to that
+  node. Structural/document elements — `<materialx>`, `<nodegraph>`,
+  `<input>`, `<output>`, `<nodedef>`, `<look>`, `<xi:include>`, and
+  similar schema scaffolding — never produce a hover, only actual node
+  categories do. A category with no matching spec entry (e.g. a custom
+  node defined outside the standard libraries) still gets a headline plus
+  the Open documentation link; the docs site resolves name-only
+  permalinks by search rather than requiring an exact spec match.
+- **Docs panels default to 3D previews off**: the node documentation
+  panel's per-node 3D previews — whether opened via
+  `MaterialX: Open Node Documentation` or a hover's Open documentation
+  link above — start with 3D previews switched OFF. Each preview is its
+  own WASM shader-gen + WebGL context, which is heavy to pile on top of a
+  VS Code webview that, in practice, often already has a live MaterialX
+  Playground editor tab running its own such session. Toggling previews
+  on in the docs view's own UI sticks for the rest of that webview's
+  session (it does not silently flip back off); this default is scoped
+  to docs panels only — the Material Viewer/Node Graph Editor views never
+  read this preference at all.
+
 ## Settings
 
 - `materialx.defaultView` (`"viewer"` | `"graph"`, default `"viewer"`) —
@@ -162,17 +232,41 @@ replacing the default text editor). To make it the default, add to your
 
 ## How it works (brief)
 
-- `src/extension.js` registers the custom editor and its three commands
-  (send-to-playground, save-graph, open-docs).
+- `src/extension.js` registers the custom editor, its commands
+  (send-to-playground, save-graph, undo/redo-graph, open-docs — the last
+  accepts an optional node-category argument, see hover documentation
+  above), the diagnostic collection + status bar (`src/validator.js`),
+  and the hover provider (`src/hoverProvider.js`).
 - `src/editorProvider.js` builds the webview's HTML from
   `media/webview.html` (a hand-maintained mirror of `../index.html`'s
   `<head>`/`<body>`, kept in sync — see the comment at the top of that
   file) and wires up the extension<->webview messaging + live reload.
+  Also backs the document-less docs panel singleton
+  (`materialxPlayground.openDocs`), threading an arbitrary `location.hash`
+  (`#!docs`, or `#/<category>` for a hover's deep link) through to a
+  fresh panel or a re-navigated existing one.
 - `src/docScanner.js` is a Node-side port of the site's own
   `xi:include`/texture-reference crawler (`js/mtlx-engine.js`
   `resolveIncludes`, `js/graph-app.jsx` `extractFilenameRefs` +
   `loadPreset`'s BFS), so the same resolution logic runs against the real
   filesystem instead of an in-memory drag-and-drop file map.
+- `src/validator.js` is the two-tier `.mtlx` diagnostics engine described
+  under "Live validation" above: a dependency-free XML tokenizer (tier 1)
+  plus `src/mtlxNode.js`, a headless (no rendering/WebGL touched) loader
+  for the bundled MaterialX WASM build used for tier 2's actual
+  parse/`validate()` pass.
+- `src/specDocs.js` is a trimmed, Node-side port of `js/spec-parser.js`'s
+  markdown state machine (anchors/headings -> following paragraph text,
+  with the same link/bold/italic/entity cleanup), extracting only the
+  per-node DESCRIPTION text — not the full doc database (notes, port
+  tables, references) `js/spec-parser.js` builds for the website itself —
+  from the three spec `.md` files committed at the repo root. Parsed once
+  and cached for the life of the extension host process.
+- `src/hoverProvider.js` registers the hover provider: detects a node
+  category under the cursor (an element tag name, excluding structural/
+  document elements, or a `node="..."` attribute value), looks it up via
+  `src/specDocs.js`, and renders a trusted `MarkdownString` with the
+  description and an `Open documentation` command link.
 - `media/bootstrap.js` runs first inside the webview and adapts the
   extension's message into the exact
   `window.__mtlxPendingImport`/`__mtlxPendingViewerImport` +

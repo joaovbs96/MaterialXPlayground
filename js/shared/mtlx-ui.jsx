@@ -219,6 +219,8 @@ const EnvDialog = ({
     exposure, onExposureChange,
     onImportFile, onReset,
     importError,
+    placement,
+    edgeRef,
 }) => {
     const popRef = React.useRef(null);
     const [pos, setPos] = React.useState(null);
@@ -230,18 +232,38 @@ const EnvDialog = ({
     // position would push this 224px-wide dialog past both the right and
     // bottom edges. Vertical flip is modeled on ColorSwatch.openPopover
     // above.
+    // This dialog is shared by the viewer/docs previews AND the graph
+    // preview. The graph preview panel is itself docked at the screen's
+    // right edge, so the default below/right-aligned placement would drop
+    // the dialog on top of the 3D canvas it belongs to — placement="left"
+    // is an opt-in used only there, opening the dialog over the graph
+    // canvas instead (harmless to cover).
     React.useEffect(() => {
         if (!open) return undefined;
         const rect = anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
         if (rect) {
-            const left = Math.max(8, Math.min(rect.right - ENV_DIALOG_W, window.innerWidth - ENV_DIALOG_W - 8));
-            const flip = rect.bottom + ENV_DIALOG_H > window.innerHeight;
-            setPos(flip
-                ? { left, bottom: window.innerHeight - rect.top + 4 }
-                : { left, top: rect.bottom + 4 });
+            if (placement === 'left') {
+                // Horizontal anchor is the PANEL's left edge (edgeRef), not
+                // the button's — the env button sits near the right edge of
+                // the (right-docked) preview panel, so anchoring to it would
+                // leave the dialog overlapping most of the panel, including
+                // the 3D canvas. Falls back to the button rect if no
+                // edgeRef was supplied. Vertical position is still taken
+                // from the button rect (unchanged).
+                const edgeRect = (edgeRef && edgeRef.current) ? edgeRef.current.getBoundingClientRect() : rect;
+                const left = Math.max(8, edgeRect.left - ENV_DIALOG_W - 8);
+                const top = Math.min(rect.top, window.innerHeight - ENV_DIALOG_H - 8);
+                setPos({ left, top });
+            } else {
+                const left = Math.max(8, Math.min(rect.right - ENV_DIALOG_W, window.innerWidth - ENV_DIALOG_W - 8));
+                const flip = rect.bottom + ENV_DIALOG_H > window.innerHeight;
+                setPos(flip
+                    ? { left, bottom: window.innerHeight - rect.top + 4 }
+                    : { left, top: rect.bottom + 4 });
+            }
         }
         return undefined;
-    }, [open]);
+    }, [open, placement]);
 
     useEscapeToClose(onClose, open);
 
@@ -344,6 +366,7 @@ const ViewportControls = ({
     isFullscreen, onToggleFullscreen,
     children,
     trailingChildren,
+    envDialogPlacement,
     containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
     selectClassName = 'h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300',
     buttonClassName = (active) => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
@@ -353,6 +376,11 @@ const ViewportControls = ({
     }`,
 }) => {
     const envBtnRef = React.useRef(null);
+    // Spans the full containerClassName strip (which itself spans the full
+    // panel width in the graph preview's docked layout), so its left edge
+    // approximates the PANEL's left edge — used by EnvDialog's placement="left"
+    // branch to clear the whole panel instead of just the env button.
+    const panelEdgeRef = React.useRef(null);
     const [envOpen, setEnvOpen] = React.useState(false);
     const [envRotation, setEnvRotation] = React.useState(0);   // degrees, 0-360
     const [envExposure, setEnvExposure] = React.useState(1.0);
@@ -414,7 +442,7 @@ const ViewportControls = ({
     };
 
     return (
-    <div className={containerClassName}>
+    <div ref={panelEdgeRef} className={containerClassName}>
         {children}
         <select
             value={geom}
@@ -444,8 +472,10 @@ const ViewportControls = ({
                 {viewRef && (
                     <EnvDialog
                         anchorRef={envBtnRef}
+                        edgeRef={panelEdgeRef}
                         open={envOpen}
                         onClose={() => setEnvOpen(false)}
+                        placement={envDialogPlacement}
                         envBg={envBg}
                         onToggleEnvBg={onToggleEnvBg}
                         rotation={envRotation}

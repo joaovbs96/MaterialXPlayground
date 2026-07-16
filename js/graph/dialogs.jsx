@@ -233,12 +233,20 @@
             );
         }
 
-        // Validation popup (item 9's "Validate" button): a defensive,
-        // best-effort check over the CURRENT document. `result` is computed
-        // by the caller (in a useEffect gated on validateOpen) so it stays
-        // fresh across re-opens without recomputing on every render; this
-        // component only renders whatever it was handed.
-        function ValidateDialog({ result, open, onClose }) {
+        // Validation popup (item 9's "Validate" button): renders the
+        // shared `status` — { kind: 'valid' | 'invalid' | 'unavailable',
+        // issues? } — computed in js/graph-app.jsx by validateMtlxXml
+        // (js/graph/model.jsx) against the document's raw TEXT (docXmlRef),
+        // not the live in-memory doc. Unlike the old per-open computation
+        // this replaced, `status` is now a BACKGROUND value that also
+        // drives the toolbar Validate button's own green/red coloring, so
+        // it can already be non-null the moment this dialog mounts;
+        // opening the dialog additionally forces one immediate refresh
+        // (see graph-app.jsx's validateOpen-gated effect) so a stale
+        // pre-edit result never lingers. Issues are shown VERBATIM — no
+        // truncation, no reformatting — this component only renders
+        // whatever it was handed.
+        function ValidateDialog({ status, open, onClose }) {
             useEscapeToClose(onClose, open);
             if (!open) return null;
             return (
@@ -251,21 +259,21 @@
                             <button onClick={onClose} title="Close" className="text-gray-400 hover:text-gray-200 leading-none text-lg px-1">{'×'}</button>
                         </div>
                         <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
-                            {!result && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
-                            {result && result.kind === 'valid' && (
+                            {!status && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
+                            {status && status.kind === 'valid' && (
                                 <div className="text-green-400 font-bold">{'✓ Document is valid'}</div>
                             )}
-                            {result && result.kind === 'invalid' && (
+                            {status && status.kind === 'invalid' && (
                                 <div>
                                     <div className="text-red-400 font-bold mb-2">{'✗ Validation failed'}</div>
-                                    {result.issues && result.issues.length > 0 && (
+                                    {status.issues && status.issues.length > 0 && (
                                         <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
-                                            {result.issues.map((s, i) => <li key={i}>{s}</li>)}
+                                            {status.issues.map((s, i) => <li key={i}>{s}</li>)}
                                         </ul>
                                     )}
                                 </div>
                             )}
-                            {result && result.kind === 'unavailable' && (
+                            {status && status.kind === 'unavailable' && (
                                 <div className="text-gray-400">Validation is not available in this build.</div>
                             )}
                         </div>
@@ -293,9 +301,12 @@
             useEscapeToClose(onClose, open && !busy);
 
             // Reset to the caller's latest defaults each time the dialog is
-            // (re)opened — mirrors XmlDialog/ValidateDialog's "computed once
-            // per open by the caller" contract, just applied to local state
-            // instead of a prop that's recomputed from scratch.
+            // (re)opened — mirrors XmlDialog's "computed once per open by
+            // the caller" contract, just applied to local state instead of
+            // a prop that's recomputed from scratch. (ValidateDialog's own
+            // `status` used to follow this same contract too, but is now a
+            // background value refreshed independently of any one open —
+            // see its effect in js/graph-app.jsx.)
             const wasOpen = React.useRef(false);
             React.useEffect(() => {
                 if (open && !wasOpen.current) {

@@ -24,6 +24,35 @@
     // branch on it — e.g. to hide a browser-only affordance.
     window.__MTLX_VSCODE__ = true;
 
+    // Default the docs view's 3D previews OFF, once per webview state.
+    // The site's node-documentation grid (js/docs/) reads/writes
+    // localStorage 'mtlx_show_previews' as a hard kill-switch for its
+    // per-node Node3DPreview (each preview is its own WASM shader-gen +
+    // WebGL context) — '0' means off, anything else (including unset)
+    // means on. Outside VS Code that's a reasonable default (a browser
+    // tab is cheap to open/close), but a VS Code docs panel is usually
+    // opened alongside a live custom-editor webview that's ALREADY
+    // running its own WASM/WebGL instance (see docScanner/editorProvider
+    // and the "Multiple open .mtlx tabs" note in README.md) — piling a
+    // grid of per-node 3D previews on top, inside the same constrained
+    // webview host process, is heavy enough to want off by default here.
+    // Only touches the key if it has NEVER been set in this webview's
+    // storage (=== null), so: this fires once per fresh webview state,
+    // and the user's own later in-UI "3D previews: On" toggle (which
+    // writes '1') sticks for the rest of that session — this default
+    // never fights it back off. Embed/chromeless iframes (the graph
+    // editor's inline "?" docs dialog) force previews on regardless of
+    // this key, and the Graph/Viewer views never read it at all — this
+    // only affects docs panels/tabs.
+    try {
+        if (window.localStorage.getItem('mtlx_show_previews') === null) {
+            window.localStorage.setItem('mtlx_show_previews', '0');
+        }
+    } catch (e) {
+        // localStorage can throw (disabled storage, quota, etc.) — never
+        // let this default block the rest of bootstrap from running.
+    }
+
     // Decode a base64 string into a Uint8Array. Used for every binary
     // payload that crosses the extension<->webview postMessage boundary
     // (see the 'mtlx-fetch-result' and 'mtlx-open' handlers below) —

@@ -219,15 +219,20 @@
             // once when the dialog opens (not on every render) and held here.
             const [xmlDialogOpen, setXmlDialogOpen] = React.useState(false);
             const [xmlDialogXml, setXmlDialogXml] = React.useState('');
-            // Validate popup: result is recomputed fresh each time the
-            // dialog opens (see the useEffect gated on validateOpen below).
+            // Validate popup + toolbar button: validateStatus is now a
+            // BACKGROUND status (see the docXmlRev-gated effect below),
+            // not a one-shot computed-on-open result — it's what colors
+            // the toolbar Validate button even before it's ever clicked.
+            // Opening the dialog (validateOpen) additionally forces an
+            // immediate, non-debounced refresh (see that effect too) so
+            // it never shows a stale pre-edit result.
             const [validateOpen, setValidateOpen] = React.useState(false);
-            const [validateResult, setValidateResult] = React.useState(null);
+            const [validateStatus, setValidateStatus] = React.useState(null);
             // Export dialog (toolbar "Export" button, item B1): holds
             // { defaultName, textures } computed once when the dialog is
             // opened (openExportDialog below), or null while closed — same
             // "computed once by the caller, not on every render" contract
-            // as xmlDialogXml/validateResult above.
+            // as xmlDialogXml above.
             const [exportDialog, setExportDialog] = React.useState(null);
             // Presets dialog (toolbar "Presets" button, item F3.2): a
             // curated list of official MaterialX example documents (see
@@ -245,6 +250,23 @@
             // Bumped on every committed edit that reached the MaterialX
             // document — the material preview regenerates from the live doc.
             const [docRev, setDocRev] = React.useState(0);
+            // Validate source-of-truth: the exact XML TEXT the Validate
+            // button/dialog checks — deliberately NOT `parsed`/parsedRef.
+            // Written in exactly two places: the raw as-opened text at
+            // ingest (loadDocument below), and the canonical serialized
+            // XML flushUndoSnapshot (above the undo stack further down)
+            // just handed to window.__mtlxNotifyEdit. Never the live doc
+            // itself, because serializeDocXml heals connected-input
+            // faults IN PLACE on every snapshot — validating parsed.doc
+            // would silently mask exactly the faults this feature exists
+            // to surface (see validateMtlxXml, js/graph/model.jsx). `rev`
+            // is a cheap monotonic counter so an in-flight background
+            // validation that's since been superseded by a newer edit can
+            // detect it's stale and drop its result instead of clobbering
+            // a fresher one; docXmlRev is its render-triggering twin (a
+            // plain ref write doesn't cause an effect to re-run).
+            const docXmlRef = React.useRef({ xml: null, rev: 0 });
+            const [docXmlRev, setDocXmlRev] = React.useState(0);
             // Unsaved-changes tracking, deliberately SEPARATE from docRev:
             // docRev only bumps for edits that need a preview recompile, but
             // a dragged node's xpos/ypos or a freshly-added-but-unconnected
@@ -358,6 +380,13 @@
             const UNDO_CAP = 50;
             const UNDO_DEBOUNCE_MS = 350;
             const UNDO_RETRY_MAX = 10;
+            // Background document-text validation's own debounce (see the
+            // docXmlRev-gated effect further down) — slightly longer than
+            // UNDO_DEBOUNCE_MS since validating is the least urgent of the
+            // two and a burst of edits (each bumping docXmlRev right
+            // alongside an undo snapshot) shouldn't run doc.validate()
+            // once per settle either.
+            const VALIDATE_DEBOUNCE_MS = 500;
 
             // Flush a pending debounced snapshot immediately (synchronous
             // body shared by the timer callback and undoDoc, so Ctrl+Z right
@@ -389,6 +418,15 @@
                 // reusing this function's existing debounce/coalescing
                 // instead of re-implementing it on the extension side.
                 if (typeof window.__mtlxNotifyEdit === 'function') window.__mtlxNotifyEdit(xml);
+                // Keep the Validate source-of-truth (docXmlRef, declared
+                // above near docRev) in lockstep with whatever XML just
+                // got handed to the VS Code bridge (or would have, in the
+                // standalone browser) — same `xml` value, so it's cheap
+                // (no serialization of our own; serializeDocXml already
+                // ran above). This is the second of the two write sites —
+                // see docXmlRef's comment for the first (loadDocument).
+                docXmlRef.current = { xml, rev: docXmlRef.current.rev + 1 };
+                setDocXmlRev((r) => r + 1);
                 const u = undoStateRef.current;
                 u.stack.length = u.index + 1; // drop any redo branch
                 if (u.savedIndex > u.index) u.savedIndex = -1;
@@ -667,6 +705,21 @@
                 setStatus('Parsing ' + path + ' \u2026');
                 try {
                     let xml = await map[path].text();
+                    // Validate source-of-truth write site #1 (see
+                    // docXmlRef's declaration near docRev above): the RAW,
+                    // as-opened text of the picked file — captured BEFORE
+                    // xi:include resolution splices in other files'
+                    // content below, and well before parseMtlxDocument or
+                    // any healing ever touches it. This is exactly what
+                    // the VS Code extension's own tier-2 validator
+                    // (vscode_extension/src/mtlxNode.js's
+                    // validateSemantic) validates too — it readFromXmlString's
+                    // the raw buffer text verbatim, xi:include and all —
+                    // so capturing the resolved/merged text here instead
+                    // would let the graph's Validate button diverge from
+                    // what VS Code shows for any document using includes.
+                    docXmlRef.current = { xml, rev: docXmlRef.current.rev + 1 };
+                    setDocXmlRev((r) => r + 1);
                     if (/<xi:include\b/.test(xml)) {
                         const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
                         xml = await resolveIncludes(xml, map, dir);
@@ -2059,46 +2112,55 @@
                 setXmlDialogOpen(true);
             };
 
-            // Validation popup (item 9's "Validate" button): recomputed
-            // fresh every time the dialog opens. The WASM binding's
-            // validate() is boolean-only in this build (see NodePreview's
-            // identical defensive call above — the only other caller), so
-            // a false result is paired with a cheap best-effort scan for
-            // dangling nodename/nodegraph references on top-level nodes
-            // rather than a real diagnostic list. Wrapped in `safe` end to
-            // end so any WASM quirk degrades to the boolean-only view.
+            // Background document-text validation (item 9's "Validate"
+            // button/dialog, now source-of-truth-driven): recomputes
+            // validateStatus from docXmlRef's cached TEXT (declared near
+            // docRev above) whenever that text changes — NOT gated on the
+            // dialog being open, so the toolbar button itself can show a
+            // live green/red badge before Validate is ever clicked. Runs
+            // through validateMtlxXml (js/graph/model.jsx), which builds
+            // a THROWAWAY document from the raw XML instead of calling
+            // parsed.doc.validate() directly — the live doc gets healed
+            // (stripValuesFromConnectedInputs) by every serializeDocXml
+            // call, so validating it would mask exactly the faults this
+            // feature exists to surface. Debounced on the same idea as
+            // flushUndoSnapshot's own undo-snapshot debounce, just on a
+            // slightly longer cadence (VALIDATE_DEBOUNCE_MS) since a rapid
+            // burst of edits (each bumping docXmlRev) shouldn't run
+            // doc.validate() once per settle.
+            React.useEffect(() => {
+                const { xml, rev } = docXmlRef.current;
+                if (!xml) { setValidateStatus(null); return; } // nothing loaded yet — don't spam validation attempts
+                const t = setTimeout(() => {
+                    validateMtlxXml(xml).then((res) => {
+                        // Stale guard: a newer edit landed (docXmlRef.current.rev
+                        // bumped again) while this validation was in flight —
+                        // drop this result; the effect run it superseded
+                        // will produce (and apply) its own.
+                        if (docXmlRef.current.rev !== rev) return;
+                        setValidateStatus(res);
+                    });
+                }, VALIDATE_DEBOUNCE_MS);
+                return () => clearTimeout(t);
+            }, [docXmlRev]);
+
+            // Validation popup (item 9's "Validate" button): consumes the
+            // background validateStatus above, but ALSO forces an
+            // immediate (non-debounced) validation pass right when the
+            // dialog opens — otherwise a dialog opened mid-debounce would
+            // show whatever the last SETTLED result was (or nothing, on
+            // the very first-ever open) for up to VALIDATE_DEBOUNCE_MS.
+            // Same staleness guard as the background effect above, so an
+            // edit landing mid-flight can't clobber a fresher result.
             React.useEffect(() => {
                 if (!validateOpen) return;
-                setValidateResult(null);
-                setValidateResult(mxSafe(() => {
-                    if (!parsed || !parsed.doc || typeof parsed.doc.validate !== 'function') {
-                        return { kind: 'unavailable' };
-                    }
-                    let ok;
-                    try {
-                        ok = parsed.doc.validate();
-                    } catch (e) {
-                        return { kind: 'unavailable' };
-                    }
-                    if (ok) return { kind: 'valid' };
-                    const issues = [];
-                    const nodes = vecToArray(mxSafe(() => parsed.doc.getNodes(), []));
-                    for (const n of nodes) {
-                        const nm = mxElName(n);
-                        for (const inp of vecToArray(mxSafe(() => n.getInputs(), []))) {
-                            const nn = mxElAttr(inp, 'nodename');
-                            if (nn && !mxSafe(() => parsed.doc.getNode(nn), null)) {
-                                issues.push(nm + '.' + mxElName(inp) + ' references missing node "' + nn + '"');
-                            }
-                            const ng = mxElAttr(inp, 'nodegraph');
-                            if (ng && !mxSafe(() => parsed.doc.getNodeGraph(ng), null)) {
-                                issues.push(nm + '.' + mxElName(inp) + ' references missing nodegraph "' + ng + '"');
-                            }
-                        }
-                    }
-                    return { kind: 'invalid', issues };
-                }, { kind: 'unavailable' }));
-            }, [validateOpen, parsed]);
+                const { xml, rev } = docXmlRef.current;
+                if (!xml) { setValidateStatus(null); return; }
+                validateMtlxXml(xml).then((res) => {
+                    if (docXmlRef.current.rev !== rev) return;
+                    setValidateStatus(res);
+                });
+            }, [validateOpen]);
 
             // ---- Graph editing: connect / disconnect / delete ------------
             // Same contract as applyParamEdit: every edit is written into
@@ -3511,9 +3573,15 @@
                         if (inp.nodename && nameMap[inp.nodename]) {
                             mxSafe(() => { target.setAttribute('nodename', nameMap[inp.nodename]); return true; }, false);
                             if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                            // Item 9: ensureTypedInput above may have copied the
+                            // nodedef default VALUE onto this freshly-created
+                            // input — a connected input must not also carry one.
+                            mxSafe(() => { target.removeAttribute('value'); return true; }, false);
                         } else if (inp.nodegraph && nameMap[inp.nodegraph]) {
                             mxSafe(() => { target.setAttribute('nodegraph', nameMap[inp.nodegraph]); return true; }, false);
                             if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                            // Item 9: same as the nodename branch above.
+                            mxSafe(() => { target.removeAttribute('value'); return true; }, false);
                         } else if (inp.value !== '') {
                             mxSafe(() => { mxWriteValue(target, inp.value, inp.type); return true; }, false);
                         }
@@ -3670,6 +3738,11 @@
                                 if (!target) continue;
                                 mxSafe(() => { target.setAttribute('nodename', inp.nodename); return true; }, false);
                                 if (inp.output) mxSafe(() => { target.setAttribute('output', inp.output); return true; }, false);
+                                // Item 9: ensureTypedInput may have copied the
+                                // nodedef default VALUE onto this input — strip
+                                // it now that it's connected (matches the
+                                // external branch below, which already does this).
+                                mxSafe(() => { target.removeAttribute('value'); return true; }, false);
                                 continue;
                             }
                             const external = inp.nodename || inp.nodegraph || inp.interfacename;
@@ -5170,9 +5243,16 @@
                             <button
                                 onClick={() => setValidateOpen(true)}
                                 title="Run the MaterialX library's document validation"
-                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors '
+                                    + (validateStatus && validateStatus.kind === 'valid'
+                                        ? 'border-green-500/60 text-green-300'
+                                        : validateStatus && validateStatus.kind === 'invalid'
+                                            ? 'border-red-500/60 text-red-300'
+                                            : 'border-gray-600 text-gray-300')}
                             >
-                                <MtlxIcon name="copy-check" className="w-3.5 h-3.5" />
+                                <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
+                                    : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
+                                    className="w-3.5 h-3.5" />
                                 <span>Validate</span>
                             </button>
                         )}
@@ -5210,7 +5290,7 @@
 
                     {/* Validation popup ("Validate" button, item 9). */}
                     {validateOpen && (
-                        <ValidateDialog result={validateResult} open={validateOpen} onClose={() => setValidateOpen(false)} />
+                        <ValidateDialog status={validateStatus} open={validateOpen} onClose={() => setValidateOpen(false)} />
                     )}
 
                     {/* Export dialog ("Export" button, item B1). */}
@@ -5572,7 +5652,10 @@
                             ><MtlxIcon name="zoom-in-area" className="w-3.5 h-3.5" /></button>
                         </div>
                         {legendOpen ? (
-                            <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-60">
+                            // w-80 (not w-60): the longest type name (displacementshader,
+                            // ~133px at this legend's text-[11px] font-mono) doesn't fit
+                            // in a grid-cols-2 column at the old width.
+                            <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80">
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
                                     <div className="flex items-center -mr-1">
