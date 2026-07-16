@@ -33,9 +33,25 @@
     "materialx editor"
   ],
   "activationEvents": [
-    "onCustomEditor:materialxPlayground.editor"
+    "onCustomEditor:materialxPlayground.editor",
+    "onLanguage:mtlx"
   ],
   "contributes": {
+    "languages": [
+      {
+        "id": "mtlx",
+        "extensions": [".mtlx"],
+        "aliases": ["MaterialX", "mtlx"],
+        "configuration": "./vscode_extension/language/mtlx.language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mtlx",
+        "scopeName": "text.mtlx",
+        "path": "./vscode_extension/language/mtlx.tmLanguage.json"
+      }
+    ],
     "customEditors": [
       {
         "viewType": "materialxPlayground.editor",

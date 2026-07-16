@@ -1,0 +1,7 @@
+{
+  "name": "MaterialX",
+  "scopeName": "text.mtlx",
+  "patterns": [
+    { "include": "text.xml" }
+  ]
+}

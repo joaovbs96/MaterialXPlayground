@@ -1197,10 +1197,12 @@ const makeEnvTexture = (w, h, blurred) => {
         }
     }
     const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
-    // Equirect mapping: irrelevant for the IBL sampler uniforms;
-    // the visible background uses a flipY=true copy of this texture
-    // (makeBackgroundTexture) — three's background convention is
-    // mirrored vertically from MaterialX's latlong lookup.
+    // Equirect mapping: irrelevant for the IBL sampler uniforms; the
+    // visible skybox mesh (bgMesh, see createMtlxRenderView) uses a
+    // flipY=true copy of this texture (makeBackgroundTexture) — see
+    // that function's header comment for why flipY=true is correct
+    // for the mirrored-sphere backdrop (not merely a scene.background
+    // leftover — scene.background is gone entirely, see bgMesh).
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -1284,24 +1286,29 @@ const prepareEnv = (tex) => {
     t.needsUpdate = true;
     return t;
 };
-// Build the texture used as the VISIBLE scene.background from a
-// prepared radiance texture. It must be a SEPARATE texture from the
-// IBL sampler, because the two consumers disagree on V orientation:
+// Build the texture used as the shell-owned skybox mesh's visible
+// backdrop (bgMesh, see createMtlxRenderView) from a prepared radiance
+// texture. It must be a SEPARATE texture from the IBL sampler, because
+// the two consumers disagree on V orientation:
 //   - MaterialX's mx_latlong_map_lookup maps "up" to v = 0, i.e. it
 //     wants the .hdr's first scanline at v = 0 → flipY = FALSE
 //     (what a fresh DataTexture gives us — reflections are correct).
-//   - three's background path (equirectUv in the equirect→cubemap
-//     conversion) maps "up" to v = 1 → it needs flipY = TRUE, which
-//     is what RGBELoader sets on the textures it loads.
-// The official viewer gets this for free: prepareEnvTexture rebuilds
-// a flipY=false DataTexture for the IBL uniforms, but the background
-// is the ORIGINAL loader texture (flipY=true). Reusing the IBL
-// texture as scene.background mirrors the environment vertically.
+//   - The skybox mesh samples this texture through three's own
+//     SphereGeometry UVs (uv.y = 1 - v, so uv.y = 1 sits at the +Y
+//     pole — see BG_BASE/BG_SIGN's derivation comment above
+//     createMtlxRenderView for the full walk-through), which wants the
+//     .hdr's first scanline at v = 1 → flipY = TRUE.
+// This is NOT a stale leftover from the old scene.background design —
+// it was re-derived independently for the mirrored-sphere mesh above
+// and lands on the SAME flag value, because three's own classic
+// equirect-panorama recipe (webgl_panorama_equirectangular: a plain
+// image texture, default flipY=true, on `SphereGeometry(...).scale(
+// -1,1,1)`) makes the identical assumption on the identical geometry.
 // Shares the pixel data; only the upload orientation differs.
 const makeBackgroundTexture = (src) => {
     const img = src.image;
     const bg = new THREE.DataTexture(img.data, img.width, img.height, src.format, src.type);
-    bg.flipY = true; // three's equirect background convention
+    bg.flipY = true; // correct for the mirrored skybox sphere — see header comment above
     bg.mapping = THREE.EquirectangularReflectionMapping;
     bg.wrapS = THREE.RepeatWrapping;
     bg.wrapT = THREE.ClampToEdgeWrapping;
@@ -1559,9 +1566,9 @@ const getEnvironment = () => {
             const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
             const img = radiance.image;
             const mips = Math.trunc(Math.log2(Math.max(img.width, img.height))) + 1;
-            // Correctly-oriented copy for scene.background (see
-            // makeBackgroundTexture — the IBL texture is mirrored
-            // vertically from three's background convention).
+            // Correctly-oriented copy for the visible skybox mesh (see
+            // makeBackgroundTexture — the IBL texture's flipY=false
+            // doesn't match the mirrored-sphere backdrop's sampling).
             const background = makeBackgroundTexture(radiance);
             return { radiance, irradiance, mips, background, prefilteredIrr: !!irrRaw };
         });
@@ -2218,6 +2225,67 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 // isMounted() went false mid-way through THIS build (already cleaned
 // up). Throws Error with a decoded MaterialX/GLSL message on failure.
 // ------------------------------------------------------------------
+// Skybox backdrop rotation calibration — read by createMtlxRenderView's
+// shell init (applies the persisted envRotationRad to bgMesh before the
+// first frame) and its setEnvRotation(rad) handle method, so a single
+// constant pair keeps both call sites in lockstep.
+//
+// Derivation (this is the load-bearing part of F1 — re-derive rather
+// than guess if the backdrop ever looks wrong; BG_SIGN is the more
+// likely one to need flipping, BG_BASE the less likely):
+//
+// 1. The material's env lookup (see u_envMatrix in bindMaterialUniforms
+//    below) rotates the SAMPLE direction by RotationY(PI/2 + rad)
+//    before projecting it to latlong (u,v) via MaterialX's
+//    mx_latlong_map_projection (theta = acos(dy), phi = atan2(dz,dx);
+//    u = phi/2PI, v = theta/PI, v = 0 at the +Y pole — the same
+//    (sin(theta)cos(phi), cos(theta), sin(theta)sin(phi)) convention
+//    re-derived independently in the shIrradianceFromEquirect comment
+//    above). Rotating the QUERY direction forward by angle a, with
+//    world axes held fixed, reads identically to the ENVIRONMENT
+//    CONTENT having rotated backward by a — so the lighting behaves as
+//    if it had spun by -(PI/2 + rad) about Y.
+//
+// 2. bgMesh is `SphereGeometry(...).scale(-1,1,1)` (see its
+//    construction below). three's SphereGeometry sets uv.x = u =
+//    ix/widthSegments (phi = u*2PI; the x-mirror only negates
+//    vertex.x, not UVs) and uv.y = 1 - v where v = iy/heightSegments
+//    (theta = v*PI, so uv.y = 1 sits at the +Y pole, theta = 0). After
+//    the mirror, the vertex at (uv.x, uv.y) sits at object-space
+//    direction (cos(phi)sin(theta), cos(theta), sin(phi)sin(theta))
+//    with phi = uv.x*2PI, theta = (1 - uv.y)*PI — the SAME functional
+//    form as step 1's direction-from-(u,v), just parameterized by
+//    (uv.x, 1 - uv.y) instead of MaterialX's own (u,v).
+//
+// 3. makeBackgroundTexture sets flipY=true (see its header comment for
+//    why), so sampling bgMesh's texture at (uv.x, uv.y) actually reads
+//    the RAW .hdr data row/col at (uv.x, 1 - uv.y) — flipY flips which
+//    data row lands at a given GL v. Combined with step 2: a raw .hdr
+//    texel at MaterialX address (u,v) = (uv.x, 1 - uv.y) sits, at
+//    mesh.rotation.y = 0, at EXACTLY the object-space direction
+//    MaterialX's own (inverse) projection would place it at — the
+//    un-rotated skybox already matches MaterialX's un-rotated latlong
+//    convention texel-for-texel.
+//
+// 4. So rotating bgMesh by angle b moves every raw texel to
+//    (that texel's direction) rotated by RotationY(b) — i.e. (by the
+//    same phi-shifts-by-minus-the-angle rule used in step 1) the
+//    backdrop's visible content spins by -b in world space. Matching
+//    that to step 1's "-(PI/2 + rad)" lighting spin:
+//        -b = -(PI/2 + rad)  =>  b = -(PI/2 + rad)
+//    i.e. mesh.rotation.y = -(Math.PI / 2) + (-1) * rad — which is
+//    just the NEGATION of u_envMatrix's own (PI/2 + rad) angle, which
+//    makes sense given step 1's "query rotation forward = content
+//    rotation backward" equivalence.
+//
+// Verified analytically against r128's THREE.Matrix4.makeRotationY and
+// SphereGeometry source, NOT verified visually — the user's rotation-
+// slider check (see the plan) is the final word. If the backdrop
+// tracks the highlight but 180 degrees out of phase, adjust BG_BASE;
+// if it counter-rotates instead of co-rotating, flip BG_SIGN's -1.
+// ------------------------------------------------------------------
+const BG_BASE = -Math.PI / 2;
+const BG_SIGN = -1;
 const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
@@ -2257,10 +2325,29 @@ const createMtlxRenderView = async ({
     // each one individually.
     let mesh = null, material = null, geometry = null, uniforms = null;
     // The radiance texture, kept so the caller can toggle it as the
-    // visible scene background (setEnvBackground) — the IBL uniforms
-    // are bound regardless.
+    // visible backdrop (setEnvBackground) via bgMesh below — the IBL
+    // uniforms are bound regardless.
     let envBgTexture = null;
     let envRadSamplerName = null, envIrrSamplerName = null, envRotationRad = 0;
+    // Shell-owned skybox mesh — replaces scene.background entirely.
+    // Built once (below, in the needsLighting env-fetch block) when an
+    // env exists; stays null for unlit previews (needsLighting=false),
+    // so every bgMesh-touching line in this function guards with
+    // `if (bgMesh)` and is a safe no-op there.
+    //
+    // WHY not scene.background: envBgTexture has mapping =
+    // EquirectangularReflectionMapping, so r128's WebGLBackground
+    // module converts it ONCE into a cubemap and caches that cubemap
+    // in a WeakMap keyed by the source texture (invalidated only by
+    // texture.dispose()) — the cube-map background path it then draws
+    // completely ignores texture.offset/texture.matrix, so the old
+    // per-frame `envBgTexture.offset.x = ...` write (see git history)
+    // was a silent no-op: the lighting rotated but the backdrop never
+    // moved. three doesn't gain a rotatable scene.background
+    // (scene.backgroundRotation) until r163; this codebase targets
+    // r128. Owning the mesh ourselves sidesteps that cache entirely —
+    // rotating bgMesh.rotation.y is a normal, un-cached transform.
+    let bgMesh = null;
     // Shell-level env (IBL) state — fetched ONCE, below (see the
     // env-fetch block after the ResizeObserver setup), rather than
     // inside every material apply: the env textures never change
@@ -2296,6 +2383,21 @@ const createMtlxRenderView = async ({
         // live at final teardown).
         try { if (material) material.dispose(); } catch (e) { /* already disposed/invalid */ }
         try { if (geometry) geometry.dispose(); } catch (e) { /* ditto */ }
+        // bgMesh: dispose its OWN geometry (a SphereGeometry built
+        // fresh per shell, below — nobody else references it) and
+        // material (a MeshBasicMaterial, ditto), and drop it from the
+        // scene. Do NOT dispose bgMesh.material.map (envBgTexture) —
+        // env textures are shared/cached (getEnvironment()'s
+        // envPromise, setEnvOverride's broadcast env) across every
+        // live view; same non-disposal policy this function already
+        // applies to envRadiance/envIrradiance, never disposed here.
+        try {
+            if (bgMesh) {
+                scene.remove(bgMesh);
+                bgMesh.geometry.dispose();
+                bgMesh.material.dispose();
+            }
+        } catch (e) { /* already disposed/invalid, or scene never got this far */ }
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total — everything below, from shader
@@ -2440,7 +2542,37 @@ const createMtlxRenderView = async ({
                         envBgTexture = makeBackgroundTexture(envRadiance);
                         envHasFile = false;
                     }
-                    if (envBackground) scene.background = envBgTexture;
+                    // Shell-owned skybox mesh — see bgMesh's
+                    // declaration above for the WHY-not-scene.
+                    // background rationale. SphereGeometry + the x-
+                    // mirror is the canonical r128 "camera inside a
+                    // sphere" panorama recipe. R=50 sits well inside
+                    // the camera's far=100 (see the PerspectiveCamera
+                    // constructed above) with plenty of margin.
+                    // MeshBasicMaterial is unlit (a backdrop, not a
+                    // lit surface) with depthWrite:false + a very low
+                    // renderOrder so it's drawn FIRST and every real
+                    // object simply paints over it — depthWrite:false
+                    // means it never touches the depth buffer, so draw
+                    // order (not depth testing) is what keeps it
+                    // behind everything, regardless of the actual
+                    // (large) sphere radius.
+                    // rotation.y is seeded from envRotationRad (not a
+                    // bare 0) so a persisted rotation is already
+                    // correct on the very first rendered frame — same
+                    // DELIBERATE TWEAK pattern u_envMatrix uses in
+                    // bindMaterialUniforms below. See BG_BASE/BG_SIGN's
+                    // derivation comment above createMtlxRenderView.
+                    const bgGeometry = new THREE.SphereGeometry(50, 64, 32);
+                    bgGeometry.scale(-1, 1, 1);
+                    bgMesh = new THREE.Mesh(
+                        bgGeometry,
+                        new THREE.MeshBasicMaterial({ map: envBgTexture, depthWrite: false })
+                    );
+                    bgMesh.renderOrder = -1000;
+                    bgMesh.rotation.y = BG_BASE + BG_SIGN * envRotationRad;
+                    bgMesh.visible = !!envBackground;
+                    scene.add(bgMesh);
                 }
 
                 // Selected preview geometry (sphere/cube/shaderball),
@@ -2751,10 +2883,11 @@ const createMtlxRenderView = async ({
                 fallbackSpin = !!on;
                 if (controls) controls.autoRotate = !!on;
             },
-            // Show/hide the environment map as the visible background.
-            // No-op when there is no env (unlit previews).
+            // Show/hide the environment map as the visible backdrop
+            // (bgMesh). No-op when there is no env (unlit previews —
+            // bgMesh is null, see its declaration above).
             setEnvBackground: (on) => {
-                scene.background = (on && envBgTexture) ? envBgTexture : null;
+                if (bgMesh) bgMesh.visible = !!on;
             },
             // Whether this view HAS an environment to show — lets the
             // UI hide the toggle for unlit previews instead of
@@ -2770,17 +2903,15 @@ const createMtlxRenderView = async ({
                     uniforms.u_envMatrix.value = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad);
                 }
                 envRotationRad = rad;
-                // Best-effort: also rotate the visible backdrop via the
-                // background texture's offset (wrapS is RepeatWrapping —
-                // see makeBackgroundTexture). r128's equirect background
-                // path may or may not actually sample through
-                // texture.offset; if it doesn't, the lighting rotates but
-                // the backdrop stays fixed (there's no
-                // scene.backgroundRotation before three r163) — harmless
-                // either way, and this keeps working for free if it does.
-                if (envBgTexture) {
-                    envBgTexture.offset.x = -rad / (2 * Math.PI);
-                }
+                // Rotate the visible backdrop mesh to match — see
+                // BG_BASE/BG_SIGN's derivation comment above
+                // createMtlxRenderView (this is a real geometry
+                // rotation, not a texture-offset hack: bgMesh's
+                // declaration above explains why the old offset.x
+                // write never worked on r128). bgMesh is null for
+                // previews with no env; guard so this stays a no-op
+                // there, mirroring hasEnvBackground()'s contract.
+                if (bgMesh) bgMesh.rotation.y = BG_BASE + BG_SIGN * rad;
             },
             // IBL-only exposure multiplier — direct lights are
             // unaffected, but IBL is the dominant light source in these
@@ -2797,11 +2928,11 @@ const createMtlxRenderView = async ({
             },
             // Live-swap the environment (radiance/irradiance/mips/
             // background) without a shader rebuild — used by the
-            // Environment dialog's Import.../Reset. Re-applies the
-            // current rotation offset to the new background texture, and
-            // only touches scene.background if it's currently shown (a
-            // hidden background — scene.background falsy — stays hidden).
-            // No-op (safely) on views with no lighting/env samplers.
+            // Environment dialog's Import.../Reset. Swaps bgMesh's
+            // texture in place (rotation/visibility are left exactly
+            // as they were — this only changes WHAT's shown, never
+            // WHETHER it's shown). No-op (safely) on views with no
+            // lighting/env samplers.
             setEnvironment: (env) => {
                 if (!env) return;
                 if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
@@ -2818,8 +2949,14 @@ const createMtlxRenderView = async ({
                 envIrradiance = env.irradiance;
                 envMips = env.mips;
                 envBgTexture = env.background;
-                if (envBgTexture) envBgTexture.offset.x = -envRotationRad / (2 * Math.PI);
-                if (scene.background) scene.background = envBgTexture;
+                // bgMesh is null for previews with no env — guard so
+                // an Import/Reset broadcast (setEnvOverride's
+                // LIVE_VIEWS loop, which also try/catches each call as
+                // a backstop) can't throw calling this standalone.
+                if (bgMesh) {
+                    bgMesh.material.map = envBgTexture;
+                    bgMesh.material.needsUpdate = true;
+                }
             },
             // Apply a newly-generated (or already-generated, via `srcs`)
             // material into this SAME shell — the persistent-shell
