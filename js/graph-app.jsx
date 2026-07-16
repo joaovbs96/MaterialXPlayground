@@ -310,6 +310,11 @@
             // owning doc), so they stay small even for big graphs.
             const parsedRef = React.useRef(null);
             parsedRef.current = parsed;
+            // Lets smartFitView (invoked from the F-key handler's stale
+            // closure, registered once on mount) always see the current
+            // sidebar state instead of the value from first render.
+            const paramsOpenRef = React.useRef(paramsOpen);
+            paramsOpenRef.current = paramsOpen;
             // Lets a future multi-view shell pause this view's background work
             // (WebGL render loop, global keydown/drag-drop) while another view is
             // visible, without unmounting (so undo history/parsed doc/dirty state
@@ -714,7 +719,7 @@
                     const inst = rfInstRef.current;
                     if (!inst || typeof inst.fitView !== 'function') return;
                     e.preventDefault();
-                    inst.fitView({ padding: 0.15, duration: 350 });
+                    smartFitView({ padding: 0.15, duration: 350 });
                 };
                 window.addEventListener('keydown', onKey);
                 return () => window.removeEventListener('keydown', onKey);
@@ -1362,11 +1367,51 @@
                 return () => window.removeEventListener('beforeunload', onBeforeUnload);
             }, [isDirty]);
 
+            // Sidebar-aware replacement for inst.fitView(opts): the params
+            // panel is an absolutely-positioned overlay on the SAME stage
+            // the canvas fills (see panelRef), not a flex sibling that
+            // shrinks the canvas — so a plain fitView() has no idea part of
+            // the visible area is occluded on the right and centers nodes
+            // as if the full width were free, hiding them underneath the
+            // panel. Computes the fit by hand into the ACTUAL visible width
+            // instead — mirrors the MiniMap's own occlusion-width constant
+            // (304px open, 15px collapsed) a few hundred lines below.
+            // Returns false in the same "not measured yet" cases
+            // inst.fitView() itself signals, so fitViewSoon's retry loop
+            // keeps working unchanged. Falls back to plain fitView if this
+            // RF build doesn't expose what's needed.
+            const smartFitView = (opts) => {
+                const inst = rfInstRef.current;
+                const host = panelRef.current;
+                if (!inst) return false;
+                const getBounds = RF && RF.getNodesBounds;
+                const getViewport = RF && RF.getViewportForBounds;
+                if (!host || typeof getBounds !== 'function' || typeof getViewport !== 'function'
+                    || typeof inst.setViewport !== 'function' || typeof inst.getNodes !== 'function') {
+                    return typeof inst.fitView === 'function' ? inst.fitView(opts) : false;
+                }
+                const allNodes = inst.getNodes();
+                const targetNodes = (opts && opts.nodes)
+                    ? allNodes.filter((n) => opts.nodes.some((t) => t.id === n.id))
+                    : allNodes;
+                if (!targetNodes.length || targetNodes.some((n) => !n.width || !n.height)) return false;
+                const rect = host.getBoundingClientRect();
+                if (!rect.width || !rect.height) return false;
+                const sidebarWidth = (parsedRef.current && paramsOpenRef.current) ? 304 : 15; // mirrors the MiniMap's own occlusion constant
+                const visibleWidth = Math.max(50, rect.width - sidebarWidth);
+                const bounds = getBounds(targetNodes);
+                const padding = (opts && typeof opts.padding === 'number') ? opts.padding : 0.15;
+                const minZoom = (opts && opts.minZoom) || 0.05;
+                const maxZoom = (opts && opts.maxZoom) || 2;
+                const viewport = getViewport(bounds, visibleWidth, rect.height, minZoom, maxZoom, padding);
+                inst.setViewport(viewport, { duration: (opts && opts.duration) || 0 });
+                return true;
+            };
+
             const fitViewSoon = (opts, tries = 40) => {
                 const attempt = (left) => {
                     const inst = rfInstRef.current;
-                    const ok = inst && typeof inst.fitView === 'function'
-                        && inst.fitView(opts) !== false;
+                    const ok = inst && smartFitView(opts) !== false;
                     if (!ok && left > 0) requestAnimationFrame(() => attempt(left - 1));
                 };
                 requestAnimationFrame(() => attempt(tries));
@@ -1408,7 +1453,7 @@
                 if (pan) {
                     const inst = rfInstRef.current;
                     if (inst && typeof inst.fitView === 'function') {
-                        inst.fitView({ nodes: [{ id }], duration: 400, padding: 0.4, maxZoom: 1.2 });
+                        smartFitView({ nodes: [{ id }], duration: 400, padding: 0.4, maxZoom: 1.2 });
                     }
                 }
             };
@@ -4891,7 +4936,7 @@
                             nodes={flow.nodes}
                             edges={rfEdges}
                             nodeTypes={NODE_TYPES}
-                            onInit={(inst) => { rfInstRef.current = inst; }}
+                            onInit={(inst) => { rfInstRef.current = inst; fitViewSoon({ padding: 0.15 }); }}
                             onNodesChange={onNodesChange}
                             onNodeDragStop={onNodeDragStop}
                             onSelectionDragStop={onNodeDragStop}
@@ -4910,8 +4955,6 @@
                             onEdgeUpdateEnd={onEdgeUpdateEnd}
                             // slightly enlarged (default 10) so the updater's grab zone covers the occupied port's dot+halo area now that connected handles are click-through (see index.html's .mtlx-handle-connected rule)
                             edgeUpdaterRadius={12}
-                            fitView
-                            fitViewOptions={{ padding: 0.15 }}
                             minZoom={0.05}
                             zoomOnDoubleClick={false}
                             nodesConnectable={true}
