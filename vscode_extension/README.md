@@ -182,7 +182,10 @@ editor.
   (`<nodedef>`/`<materialassign>` references) — shows that node's
   description straight from the MaterialX specification (parsed from the
   `MaterialX.PBRSpec.md` / `MaterialX.NPRSpec.md` /
-  `MaterialX.StandardNodes.md` files committed at the repo root) plus an
+  `MaterialX.StandardNodes.md` files — read from `vendor/materialx/` when
+  present (the offline build, populated by `npm run vendor:offline`),
+  otherwise fetched once from the MaterialX repository on GitHub and
+  cached in memory for the rest of the session) plus an
   **Open documentation** link that opens/reuses the
   `MaterialX: Open Node Documentation` panel scoped directly to that
   node. Structural/document elements — `<materialx>`, `<nodegraph>`,
@@ -307,8 +310,12 @@ editor.
   with the same link/bold/italic/entity cleanup), extracting only the
   per-node DESCRIPTION text — not the full doc database (notes, port
   tables, references) `js/spec-parser.js` builds for the website itself —
-  from the three spec `.md` files committed at the repo root. Parsed once
-  and cached for the life of the extension host process.
+  from the three spec `.md` files, vendor-first/remote-fallback like the
+  site's own `js/mtlx-assets.js` resolver: read from `vendor/materialx/`
+  when present, otherwise fetched once from GitHub. Merged in and cached
+  in memory for the life of the extension host process as each file's
+  text becomes available (synchronously for a vendored file, or
+  asynchronously once its remote fetch settles).
 - `src/hoverProvider.js` registers the hover provider: detects a node
   category under the cursor (an element tag name, excluding structural/
   document elements, or a `node="..."` attribute value), looks it up via

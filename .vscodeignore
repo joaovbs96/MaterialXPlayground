@@ -2,6 +2,5 @@
 .claude/**
 .vscode/**
 .gitignore
-spec_parser.py
 node_modules/**
 scripts/**

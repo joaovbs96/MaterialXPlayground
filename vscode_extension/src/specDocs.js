@@ -1,53 +1,72 @@
 // specDocs.js — headless (extension-host) extractor for per-node
 // DESCRIPTIONS and PORT TABLES out of the three MaterialX specification
-// markdown files committed at the repo root (MaterialX.PBRSpec.md,
-// MaterialX.NPRSpec.md, MaterialX.StandardNodes.md). Pure Node: this
-// module must NOT require('vscode') anywhere, so it stays independently
-// loadable/testable with plain `node` — same rule validator.js/
-// mtlxNode.js/docScanner.js already follow, for the same reason
-// (hoverProvider.js is the only caller, and it's fine for THAT file to
-// depend on vscode; this one stays free of it).
+// markdown files (MaterialX.PBRSpec.md, MaterialX.NPRSpec.md,
+// MaterialX.StandardNodes.md). Vendor-first, remote-fallback — mirrors
+// js/mtlx-assets.js's local-vs-remote split (see readLocalSpecFile/
+// fetchRemoteSpecFile below): a file present under
+// vendor/materialx/documents/Specification/ (the offline build) is read
+// locally and never touches the network; otherwise it's fetched once
+// from raw.githubusercontent.com at SPEC_TAG and cached in memory for
+// the rest of the extension host session. Pure Node: this module must
+// NOT require('vscode') anywhere, so it stays independently loadable/
+// testable with plain `node` — same rule validator.js/mtlxNode.js/
+// docScanner.js already follow, for the same reason (hoverProvider.js is
+// the only caller, and it's fine for THAT file to depend on vscode; this
+// one stays free of it).
 //
 // This is a deliberately trimmed Node port of js/spec-parser.js's
 // parseMdDocs() state machine (anchors -> `### \`name\`` headings ->
 // following paragraph text -> Port-column tables -> cleanText/
 // cleanCellValue markdown cleanup), NOT a require() of it —
 // js/spec-parser.js is a browser global-scope IIFE that fetches the spec
-// files over the network (raw.githubusercontent.com) and joins them
-// against live WASM nodedefs for the FULL doc database (description +
-// notes + port tables + references); this module only ever wants the
-// description paragraph(s) that appear directly after a node's heading,
-// plus the Port-column table(s) that follow them (skipping "notes" prose
-// AFTER those tables and footnote references), read from the LOCAL
-// committed copies. Where the two logics overlap (heading/anchor
-// recognition, paragraph accumulation, table header/row parsing,
-// cleanText/cleanCellValue's link/bold/italic/entity/sentinel cleanup)
-// the logic here mirrors spec-parser.js line for line; see the
-// deviations called out inline below.
+// files over the network (raw.githubusercontent.com, via js/mtlx-assets.js's
+// resolver) and joins them against live WASM nodedefs for the FULL doc
+// database (description + notes + port tables + references); this module
+// only ever wants the description paragraph(s) that appear directly after
+// a node's heading, plus the Port-column table(s) that follow them
+// (skipping "notes" prose AFTER those tables and footnote references).
+// Where the two logics overlap (heading/anchor recognition, paragraph
+// accumulation, table header/row parsing, cleanText/cleanCellValue's
+// link/bold/italic/entity/sentinel cleanup) the logic here mirrors
+// spec-parser.js line for line; see the deviations called out inline
+// below.
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 // ---------------------------------------------------------------------
 // Spec revision/link configuration — kept in lockstep with the constants
 // of the same name in js/spec-parser.js so a spec_url produced here
 // points at exactly the same GitHub blob/anchor the website would show
-// for the same node.
+// for the same node. SPEC_TAG is also the single source of truth for the
+// remote raw-content fetch below (RAW_BASE) — one tag constant, two
+// consumers.
 const REPO = 'AcademySoftwareFoundation/MaterialX';
 const SPEC_TAG = 'v1.39.5';
 const SPEC_DIR = 'documents/Specification/';
 const BLOB_BASE = 'https://github.com/' + REPO + '/blob/' + SPEC_TAG + '/' + SPEC_DIR;
 
-// Files to parse, in the order they're merged (see buildCombinedMap
-// below) — stdlib first since it's the largest/most commonly-hovered
-// library, then the two extension libraries. Order only matters as a
-// tie-break for which file's anchor "wins" when the SAME category name
-// is documented in more than one spec file (e.g. `mix`/`add` each have a
-// generic stdlib entry AND a PBR-specific BSDF-layering entry) — the
-// description itself is the concatenation of every entry found across
-// every file/duplicate heading (see the merge comment below), so no
-// prose is lost either way, only the spec_url's target file/anchor.
+// Vendor-first source locations, mirroring js/mtlx-assets.js's LOCAL_ROOT/
+// repoUrl split (see readLocalSpecFile/fetchRemoteSpecFile below for the
+// actual local-vs-remote decision): the offline build populates
+// vendor/materialx/ with a mirror of the upstream repo's own directory
+// layout, so the local path is just repoRoot + LOCAL_ROOT + SPEC_DIR +
+// <file> — no separate mapping table to keep in sync.
+const LOCAL_ROOT = 'vendor/materialx/';
+const RAW_BASE = 'https://raw.githubusercontent.com/' + REPO + '/' + SPEC_TAG + '/' + SPEC_DIR;
+
+// Files to parse, in the order they're merged (see mergeFileText/
+// ensureSourcesLoading below) — stdlib first since it's the largest/most
+// commonly-hovered library, then the two extension libraries. Order only
+// matters as a tie-break for which file's anchor "wins" when the SAME
+// category name is documented in more than one spec file (e.g. `mix`/
+// `add` each have a generic stdlib entry AND a PBR-specific BSDF-layering
+// entry) — the description itself is the concatenation of every entry
+// found across every file/duplicate heading (see the merge comment
+// below), so no prose is lost either way, only the spec_url's target
+// file/anchor.
 const SPEC_FILES = ['MaterialX.StandardNodes.md', 'MaterialX.PBRSpec.md', 'MaterialX.NPRSpec.md'];
 
 // ---------------------------------------------------------------------
@@ -322,8 +341,66 @@ function parseSpecFile(text, repoFile) {
 }
 
 // ---------------------------------------------------------------------
+// Source loading — vendor-first (synchronous), remote-fallback (async).
+//
+// readLocalSpecFile: the offline-build path, mirroring js/mtlx-assets.js's
+// LOCAL mode — a file present under vendor/materialx/documents/
+// Specification/ is read synchronously and NEVER touches the network for
+// that file, same "hard mode isolation" guarantee mtlx-assets.js documents
+// for the browser build. Missing/unreadable -> null (fail soft, same as
+// the single try/catch this replaces), not an exception: the offline
+// build not having vendored these three files yet is an expected,
+// non-fatal state.
+function readLocalSpecFile(repoRoot, file) {
+    try {
+        return fs.readFileSync(path.join(repoRoot, LOCAL_ROOT, SPEC_DIR, file), 'utf8');
+    } catch (e) {
+        return null;
+    }
+}
+
+// fetchRemoteSpecFile: the online-build fallback for a file NOT found
+// locally. Plain `https`, no fetch()/dependency — this module stays as
+// dependency-light as validator.js/mtlxNode.js/docScanner.js, and `https`
+// needs no Node-version feature-detection (unlike global fetch, whose
+// availability tracks the Node version bundled with whatever VS Code
+// version this extension's package.json `engines.vscode` ends up running
+// under). Resolves to the response body on a 200, or null on ANY failure
+// (network error, non-200 status, timeout) — NEVER rejects, so callers
+// don't need a `.catch()` of their own, and a null return threads through
+// mergeFileText below exactly like a local miss does.
+const FETCH_TIMEOUT_MS = 10000;
+function fetchRemoteSpecFile(file) {
+    return new Promise((resolve) => {
+        const req = https.get(RAW_BASE + file, (res) => {
+            if (res.statusCode !== 200) {
+                res.resume(); // drain so the socket can be released
+                resolve(null);
+                return;
+            }
+            res.setEncoding('utf8');
+            let body = '';
+            res.on('data', (chunk) => { body += chunk; });
+            res.on('end', () => resolve(body));
+            res.on('error', () => resolve(null));
+        });
+        req.on('error', () => resolve(null));
+        req.setTimeout(FETCH_TIMEOUT_MS, () => {
+            req.destroy();
+            resolve(null);
+        });
+    });
+}
+
+// ---------------------------------------------------------------------
 // Combine all three files into one category -> { description, port_tables,
 // specUrl? } map, plus a squashed-lowercase index for the fallback lookup.
+// Split into an incremental merge step (mergeFileText) and a derive step
+// (deriveByNameMaps) so a file's contribution can land whenever its text
+// becomes available — synchronously for a vendored file, or asynchronously
+// whenever its remote fetch settles (see ensureSourcesLoading below) —
+// instead of requiring every file to be in hand up front the way a single
+// synchronous buildCombinedMap(repoRoot) used to.
 //
 // A category found in more than one file/heading (see SPEC_FILES' order
 // comment above) has its descriptions CONCATENATED and its port_tables
@@ -338,42 +415,49 @@ function parseSpecFile(text, repoFile) {
 // unconditionally rather than as one branch of resolveDoc.
 const squash = (s) => String(s).replace(/[-_]/g, '').toLowerCase();
 
-function buildCombinedMap(repoRoot) {
-    const merged = new Map(); // name -> { descParas: [], portTables: [], anchor: null, file: null }
+const merged = new Map(); // name -> { descParas: [], portTables: [], anchor: null, file: null }
+let dirty = false;        // true once `merged` changed since the last deriveByNameMaps() call
+let derivedMap = null;    // { byName, bySquashed } derived from `merged`, recomputed lazily below
 
-    for (const file of SPEC_FILES) {
-        let text;
-        try {
-            text = fs.readFileSync(path.join(repoRoot, file), 'utf8');
-        } catch (e) {
-            continue; // fail soft: missing/unreadable file -> skip it, per-file
+// Folds ONE file's parsed entries into the shared `merged` map (mutates
+// in place, marks `dirty`). `text` may be null (missing locally AND
+// remote fetch failed/still pending) — a no-op fail-soft skip, same as
+// the old per-file try/catch's `continue`.
+function mergeFileText(file, text) {
+    if (!text) return;
+    const perFile = parseSpecFile(text, file);
+    for (const name of Object.keys(perFile)) {
+        let combined = merged.get(name);
+        if (!combined) {
+            combined = { descParas: [], portTables: [], anchor: null, file: null };
+            merged.set(name, combined);
         }
-        const perFile = parseSpecFile(text, file);
-        for (const name of Object.keys(perFile)) {
-            let combined = merged.get(name);
-            if (!combined) {
-                combined = { descParas: [], portTables: [], anchor: null, file: null };
-                merged.set(name, combined);
+        for (const entry of perFile[name]) {
+            if (entry.description) combined.descParas.push(entry.description);
+            if (entry.port_tables && entry.port_tables.length) {
+                combined.portTables = combined.portTables.concat(entry.port_tables);
             }
-            for (const entry of perFile[name]) {
-                if (entry.description) combined.descParas.push(entry.description);
-                if (entry.port_tables && entry.port_tables.length) {
-                    combined.portTables = combined.portTables.concat(entry.port_tables);
-                }
-                // First anchor found (in SPEC_FILES order, then file
-                // order) wins the spec_url's target file — every node
-                // heading in these files is immediately preceded by its
-                // own <a id="node-..."> line, so this is the anchor for
-                // the exact entry the description text came from, not a
-                // guess.
-                if (!combined.anchor && entry.anchor) {
-                    combined.anchor = entry.anchor;
-                    combined.file = file;
-                }
+            // First anchor found (in SPEC_FILES order, then file
+            // order) wins the spec_url's target file — every node
+            // heading in these files is immediately preceded by its
+            // own <a id="node-..."> line, so this is the anchor for
+            // the exact entry the description text came from, not a
+            // guess.
+            if (!combined.anchor && entry.anchor) {
+                combined.anchor = entry.anchor;
+                combined.file = file;
             }
         }
     }
+    dirty = true;
+}
 
+// Derives the byName/bySquashed lookup getNodeDoc actually queries from
+// whatever `merged` currently holds. Recomputed lazily (guarded by
+// `dirty` in getNodeDoc below) rather than incrementally — cheap relative
+// to a network round trip, and correctness (picking up a file that just
+// finished a remote fetch) matters more than micro-perf here.
+function deriveByNameMaps() {
     const byName = new Map();
     const bySquashed = new Map(); // squashed key -> canonical category name, first match wins
     for (const [name, combined] of merged) {
@@ -396,17 +480,47 @@ function buildCombinedMap(repoRoot) {
     return { byName, bySquashed };
 }
 
+// Kicked off once per extension host session (see `initStarted` below).
+// For each of the three files, IN SPEC_FILES ORDER: read it locally if
+// vendored (synchronous, merged immediately); otherwise fetch it from
+// GitHub (async) and merge it in once that settles, THEN move on to the
+// next file — deliberately sequential (`await`ed inside the loop, not
+// fired off in parallel) rather than a bare fire-and-forget per file, so
+// that when two+ files fall back to remote (e.g. a plain dev checkout
+// with no vendor/materialx/ at all — `npm run vendor` alone doesn't
+// populate it, only `vendor:offline` does) they still land in
+// mergeFileText in the SAME order raw network completion order would
+// otherwise scramble; mergeFileText's/deriveByNameMaps' "first anchor in
+// SPEC_FILES order wins" and "descriptions concatenated in SPEC_FILES
+// order" guarantees (see their own comments above) depend on that order,
+// not on which request happens to come back first. The IIFE itself is
+// NOT awaited by ensureSourcesLoading's caller (getNodeDoc stays fully
+// synchronous) — it just runs to completion in the background. A
+// getNodeDoc call made before a later file's fetch resolves simply sees
+// that file's categories as undocumented yet — the same graceful "no
+// doc" path a genuinely-undocumented category already takes (see
+// getNodeDoc's own doc comment) — and self-heals on a later hover once
+// the fetch lands, since `merged`/`dirty` are module-level and mutated
+// in place rather than rebuilt from scratch.
+let initStarted = false;
+function ensureSourcesLoading(repoRoot) {
+    if (initStarted) return;
+    initStarted = true;
+    (async () => {
+        for (const file of SPEC_FILES) {
+            const localText = readLocalSpecFile(repoRoot, file);
+            if (localText !== null) {
+                mergeFileText(file, localText);
+                continue;
+            }
+            const remoteText = await fetchRemoteSpecFile(file);
+            mergeFileText(file, remoteText);
+        }
+    })();
+}
+
 // ---------------------------------------------------------------------
 // Public API.
-
-// Lazy + cached: parsed once, on the first getNodeDoc() call, then
-// reused for the lifetime of the extension host process — repo root is
-// fixed for the whole session (there is exactly one extension host
-// process and exactly one repo root, same assumption mtlxNode.js
-// documents for its own singleton). A later call with a different
-// repoRoot does NOT reparse; this mirrors mtlxNode.js's "first caller's
-// repoRoot wins forever" precedent for the same reason.
-let cachedMap = null;
 
 /**
  * getNodeDoc(repoRoot, category) -> { description, port_tables, specUrl? } | null
@@ -421,16 +535,32 @@ let cachedMap = null;
  * (d) specUrl included only when an anchor was actually found for that
  *     category in one of the three files, omitted otherwise.
  * Returns null when the category isn't documented in any of the three
- * spec files under either lookup.
+ * spec files under either lookup — including, transiently, one whose
+ * file is still an in-flight remote fetch (see ensureSourcesLoading
+ * above). This stays a plain, synchronous lookup — no promise/callback
+ * surfaced to the caller (hoverProvider.js's buildHoverMarkdown), which
+ * already treats a null doc as "no description/table available".
+ *
+ * repoRoot is fixed for the whole session (there is exactly one
+ * extension host process and exactly one repo root, same assumption
+ * mtlxNode.js documents for its own singleton) — a later call with a
+ * different repoRoot does NOT restart source loading; this mirrors
+ * mtlxNode.js's "first caller's repoRoot wins forever" precedent for the
+ * same reason.
  */
 function getNodeDoc(repoRoot, category) {
     if (!category) return null;
-    if (!cachedMap) cachedMap = buildCombinedMap(repoRoot);
+    ensureSourcesLoading(repoRoot);
+    if (dirty) {
+        derivedMap = deriveByNameMaps();
+        dirty = false;
+    }
+    if (!derivedMap) return null; // nothing merged yet — every source still in flight
 
-    let entry = cachedMap.byName.get(category);
+    let entry = derivedMap.byName.get(category);
     if (!entry) {
-        const canonical = cachedMap.bySquashed.get(squash(category));
-        if (canonical) entry = cachedMap.byName.get(canonical);
+        const canonical = derivedMap.bySquashed.get(squash(category));
+        if (canonical) entry = derivedMap.byName.get(canonical);
     }
     if (!entry) return null;
 

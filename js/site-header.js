@@ -21,10 +21,12 @@
     // docs/viewer/graph views as hash-routed views instead of separate
     // pages? When true, nav links must switch views via hash instead of
     // navigating to another page. Every shell-only behavior below is
-    // guarded behind this flag so classic (non-shell) pages are unaffected.
-    // The old standalone pages (material-viewer.html, node-graph.html,
-    // app.html) are now just redirect stubs that never load this script, so
-    // the non-shell branch below is retained only as dead-code safety.
+    // guarded behind this flag. The old standalone pages (material-viewer,
+    // node-graph, app) briefly lived on as redirect stubs and have since
+    // been deleted outright — this script is now loaded ONLY from inside
+    // the shell (index.html here, the VS Code webview below), so IS_SHELL
+    // is always true in every context that actually runs this file; NAV
+    // below is shellHref-only for the same reason.
     // Inside the VS Code webview the document URL is a vscode-webview://
     // resource and never ends in index.html, but it genuinely IS the shell
     // (hash-routed docs/viewer/graph views, same as index.html in a
@@ -54,16 +56,20 @@
         '<path d="M7.113213314864547,17.836439757602623 C3.962962545544091,14.629149767071237 4.00919965907034,9.475663485904064 7.216489095788643,6.325413260547549 C10.423779086320033,3.1751624912270877 15.577264823523263,3.221399050940242 18.72751559284372,6.428689041471628 C21.87776581820023,9.635978478189926 21.831529802451016,14.789464769206242 18.624239811919622,17.939715538526702 C15.416950375201322,21.08996576388322 10.26346354022106,21.04372919432092 7.113213314864547,17.836439757602623 C7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 ZM8.91732412511588,9.218661251949928 C9.232340172246467,9.539381057705786 9.747706415252441,9.544005421136866 10.068426774821386,9.228988830042336 C11.67202746503994,7.653906962497572 14.248858155804163,7.677026030285823 15.823940023348927,9.280626720504376 C16.138956614443458,9.601347080073324 16.654322867298575,9.605970345727371 16.975042673054432,9.290954298596784 C17.29576247881029,8.975938251466197 17.300386842241373,8.460572008460225 16.985370251146843,8.139851648891277 C14.780255745376962,5.894810793347922 11.172692558751647,5.86244409647454 8.92765170320829,8.067558602244421 C8.606931343639342,8.382575193338951 8.602308077985294,8.897941446194071 8.91732412511588,9.218661251949928 C8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 Z" fill="#ffffff" />' +
         '<path d="M12,2 C17.523000717163086,2 22,6.4770002365112305 22,12 C22,17.523000717163086 17.523000717163086,22 12,22 C6.4770002365112305,22 2,17.523000717163086 2,12 C2,6.4770002365112305 6.4770002365112305,2 12,2 C12,2 12,2 12,2 ZM18,11 C17.447715759277344,11 17,11.447714805603027 17,12 C17,14.76142406463623 14.76142406463623,17 12,17 C11.447714805603027,17 11,17.447715759277344 11,18 C11,18.552284240722656 11.447714805603027,19 12,19 C15.86599349975586,19 19,15.86599349975586 19,12 C19,11.447714805603027 18.552284240722656,11 18,11 C18,11 18,11 18,11 Z" fill="currentColor" />';
 
-    // Pages of the site, in nav order. `match` tests location.pathname;
-    // index.html is also the "/" default. Inside the shell (app.html) the
-    // three views live behind hash routes instead: docs is the canonical
-    // "#/" (or any hash that isn't a shell route), viewer is "#!viewer",
-    // graph is "#!graph".
+    // Pages of the site, in nav order. shellHref-only (no plain `href` /
+    // pathname `match` fields): this script only ever runs inside the
+    // shell (see IS_SHELL above), and the standalone pages that used to
+    // need a real per-page href + `match` — material-viewer.html,
+    // node-graph.html — are gone, so there's no non-shell nav destination
+    // left to link to or detect. Inside the shell the three non-home views
+    // live behind hash routes: docs is the canonical "#!docs" (or any hash
+    // that isn't a shell route, e.g. legacy "#/..." docs permalinks),
+    // viewer is "#!viewer", graph is "#!graph".
     var NAV = [
-        { id: 'home', label: 'Home', href: 'index.html', shellHref: '#!home', match: /(^|\/)(index\.html)?$/ },
-        { id: 'docs', label: 'Node Library & Documentation', href: 'index.html', shellHref: '#!docs', match: /(^|\/)(index\.html)?$/ },
-        { id: 'viewer', label: 'Material Viewer', href: 'material-viewer.html', shellHref: '#!viewer', match: /material-viewer\.html$/ },
-        { id: 'graph', label: 'Node Graph Editor', href: 'node-graph.html', shellHref: '#!graph', match: /node-graph\.html$/ },
+        { id: 'home', label: 'Home', shellHref: '#!home' },
+        { id: 'docs', label: 'Node Library & Documentation', shellHref: '#!docs' },
+        { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer' },
+        { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph' },
     ];
 
     // Given the current hash, which shell view is active? Shared with
@@ -82,15 +88,12 @@
     // Thin wrapper kept for readability at this file's own call sites.
     function shellActiveId(hash) { return shellRouteFor(hash); }
 
-    var activeId = 'docs';
-    if (IS_SHELL) {
-        activeId = shellActiveId(window.location.hash || '');
-    } else {
-        var path = window.location.pathname || '';
-        for (var i = 0; i < NAV.length; i++) {
-            if (NAV[i].match.test(path)) { activeId = NAV[i].id; }
-        }
-    }
+    // NAV carries no pathname `match` anymore (see above) — there's no
+    // standalone-page branch left to fall back to, so the active tab
+    // always comes from the current hash. (This is exactly what the
+    // IS_SHELL branch already did unconditionally in every real context,
+    // since IS_SHELL is always true here — see IS_SHELL's own comment.)
+    var activeId = shellActiveId(window.location.hash || '');
 
     var tabBase = 'flex items-center px-3 sm:px-4 border-b-2 transition-colors text-sm font-medium whitespace-nowrap';
     var tabOn = ' border-blue-500 text-blue-300';
@@ -120,7 +123,7 @@
 
     var tabs = navItems.map(function (item) {
         var active = item.id === activeId;
-        var href = IS_SHELL ? item.shellHref : item.href;
+        var href = item.shellHref; // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
@@ -138,7 +141,7 @@
 
     var mobileTabs = navItems.map(function (item) {
         var active = item.id === activeId;
-        var href = IS_SHELL ? item.shellHref : item.href;
+        var href = item.shellHref; // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
