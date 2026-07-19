@@ -188,5 +188,9 @@
         isLocal: isLocal,
         repoUrl: repoUrl,
         resourcesRoot: resourcesRoot,
+        // Pinned MaterialX repo tag, exposed so other single-file scripts
+        // (js/spec-parser.js, js/site-header.js) can default to this
+        // module's DEFAULT_TAG instead of duplicating the literal.
+        MTLX_TAG: DEFAULT_TAG,
     };
 })();

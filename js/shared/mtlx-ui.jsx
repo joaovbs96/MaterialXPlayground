@@ -17,6 +17,15 @@
 // leave those as their own inline strings rather than forcing a match.
 const BTN_SECONDARY = 'h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
 const BTN_PRIMARY = 'h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
+// The graph editor's toolbar button (New/Import/Presets/Export/... and the
+// top-right cluster) — canonicalized on gap-1 (a couple of call sites used
+// gap-1.5 before this constant existed; the 2px difference wasn't visually
+// meaningful, so this is the one shape now).
+const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+
+// Formats a caught value for display: an Error's .message, or the value
+// itself stringified (some rejections/throws aren't Error instances).
+const errMsg = (e) => String((e && e.message) || e);
 
 // Adds a window keydown listener that calls onClose() on Escape, active
 // whenever `when` isn't exactly `false` (so callers can pass a boolean
@@ -467,7 +476,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             .catch((e) => {
                 if (runRef.current !== id) return;
                 setStages(null);
-                setError(String((e && e.message) || e));
+                setError(errMsg(e));
                 setBusy(false);
             });
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -503,7 +512,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
         try {
             blob = await zip.generateAsync({ type: 'blob' });
         } catch (e) {
-            setError('Export failed: ' + String((e && e.message) || e));
+            setError('Export failed: ' + errMsg(e));
             return;
         }
         downloadBlob(blob, base + '.zip');
@@ -1094,7 +1103,7 @@ const ViewportControls = ({
             // call viewRef.current.setEnvironment here.
             window.setEnvOverride(env);
         } catch (e) {
-            setEnvImportError(String((e && e.message) || e));
+            setEnvImportError(errMsg(e));
         }
     };
 
@@ -1526,7 +1535,8 @@ class PreviewErrorBoundary extends React.Component {
 }
 
 Object.assign(window, {
-    BTN_SECONDARY, BTN_PRIMARY,
+    BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
+    errMsg,
     useEscapeToClose, useFullscreen, useViewToggle,
     downloadSnapshot, downloadBlob, downloadXml,
     useViewportControls, usePersistedGeom,

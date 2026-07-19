@@ -82,8 +82,17 @@ const getMxEnv = () => {
                 // preview out. A rig that defines no lights now yields
                 // rigLights = [] → pure image-based lighting, zero active
                 // direct light sources. A future rig file CAN still add
-                // real lights — the <directional_light> parsing below is
-                // unchanged and fully supports it.
+                // real lights — the <directional_light> parsing below uses
+                // a real XML parser (DOMParser) and fully supports it. An
+                // earlier version of this parser used regexes, including a
+                // dynamically-built RegExp('<input\\\\s+name="...') whose
+                // FOUR backslashes compiled to a literal-backslash pattern
+                // that could never match real XML — every authored light
+                // silently fell back to defaults. Replaced outright with
+                // DOMParser rather than patched, since this file is
+                // browser-only (DOMParser is always available here) and
+                // XML attribute order/whitespace/self-closing tags aren't
+                // safely regexable anyway.
                 return fetch('./environment_map.mtlx')
                     .then((r) => (r.ok ? r.text() : null))
                     .catch(() => null)
@@ -99,25 +108,55 @@ const getMxEnv = () => {
                                     const opts = genContext.getOptions();
                                     opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, 1);
                                 } catch (e) { /* keep default */ }
-                                // Parse directional_light instances from the rig.
+                                // Parse directional_light instances from the rig
+                                // with a real XML parser (DOMParser), not regex —
+                                // handles attribute order/whitespace and
+                                // self-closing <directional_light .../> elements
+                                // (no <input> children, but still a light with
+                                // fallback direction/color/intensity) correctly,
+                                // things a hand-rolled regex can't reliably do.
+                                // Parse failure (or no DOMParser) yields zero rig
+                                // lights via a console.warn, never a throw — this
+                                // env must still load with pure IBL if the rig is
+                                // malformed/absent.
                                 const rigLights = [];
                                 if (rigXml) {
-                                    const blocks = rigXml.match(/<directional_light\b[\s\S]*?<\/directional_light>/g) || [];
-                                    for (const bl of blocks) {
-                                        const inp = (nm) => {
-                                            const m = bl.match(new RegExp('<input\\\\s+name="' + nm + '"[^>]*value="([^"]*)"'));
-                                            return m ? m[1] : null;
-                                        };
-                                        const v3 = (str, fb) => {
-                                            if (!str) return fb;
-                                            const p = str.split(',').map((x) => parseFloat(x.trim()));
-                                            return p.length === 3 && !p.some(isNaN) ? p : fb;
-                                        };
-                                        rigLights.push({
-                                            direction: v3(inp('direction'), [0, -1, 0]),
-                                            color: v3(inp('color'), [1, 1, 1]),
-                                            intensity: parseFloat(inp('intensity')) || 1.0,
-                                        });
+                                    try {
+                                        const rigDoc = new DOMParser().parseFromString(rigXml, 'text/xml');
+                                        const perr = rigDoc.getElementsByTagName('parsererror');
+                                        if (perr.length) {
+                                            console.warn('direct-light rig: environment_map.mtlx failed to parse as XML — no rig lights loaded.', perr[0].textContent);
+                                        } else {
+                                            const v3 = (str, fb) => {
+                                                if (!str) return fb;
+                                                const p = str.split(',').map((x) => parseFloat(x.trim()));
+                                                return p.length === 3 && !p.some(isNaN) ? p : fb;
+                                            };
+                                            const lightEls = rigDoc.getElementsByTagName('directional_light');
+                                            for (let i = 0; i < lightEls.length; i++) {
+                                                const lightEl = lightEls[i];
+                                                // getElementsByTagName is scoped to
+                                                // lightEl's own subtree, so this
+                                                // can't pick up a sibling light's
+                                                // <input>.
+                                                const inputEls = lightEl.getElementsByTagName('input');
+                                                const inp = (nm) => {
+                                                    for (let j = 0; j < inputEls.length; j++) {
+                                                        if (inputEls[j].getAttribute('name') === nm) {
+                                                            return inputEls[j].getAttribute('value');
+                                                        }
+                                                    }
+                                                    return null; // absent (or self-closing light) -> caller's fallback
+                                                };
+                                                rigLights.push({
+                                                    direction: v3(inp('direction'), [0, -1, 0]),
+                                                    color: v3(inp('color'), [1, 1, 1]),
+                                                    intensity: parseFloat(inp('intensity')) || 1.0,
+                                                });
+                                            }
+                                        }
+                                    } catch (e) {
+                                        console.warn('direct-light rig: DOMParser failed on environment_map.mtlx — no rig lights loaded.', e);
                                     }
                                 }
                                 // NO FALLBACK LIGHT (2026-07-18 decision):
@@ -170,14 +209,63 @@ const getMxEnv = () => {
 // errors ("Node has no outputs defined"). One promise chain = one wasm
 // operation at a time. Rejections don't break the chain.
 let mxQueueTail = Promise.resolve();
+// Lock-discipline diagnostics (not enforcement — see mxWarnIfLocked
+// below, used by the exported synchronous doc-mutating/reading helpers).
+// mxLockDepth counts in-flight mxExclusive calls: incremented when a
+// call is queued, decremented once its fn — and anything fn internally
+// awaits — has fully settled. mxExclusiveHeldSync is true ONLY while
+// fn's own synchronous body is executing on the lock owner's stack: set
+// right before calling fn, cleared in a finally immediately after fn()
+// returns or throws (for an async fn that's the instant it hands back
+// its pending Promise, before any of its internal awaits resume). Every
+// mxExclusive fn in this codebase is a synchronous arrow with no
+// internal await (the three call sites in this file, and JSX-layer ones
+// like `mxExclusive(() => listDocRenderables(doc))`), so in practice
+// mxExclusiveHeldSync stays true for fn's ENTIRE body — including any
+// synchronous helper calls fn makes — which is exactly the "called from
+// inside the lock, legitimate" case mxWarnIfLocked must not flag. A
+// helper invoked from a genuine async gap (after some OTHER operation's
+// await resumes, or from a stray unlocked call racing a generate/
+// compile) sees mxLockDepth > 0 && !mxExclusiveHeldSync and warns.
+let mxLockDepth = 0;
+let mxExclusiveHeldSync = false;
 function mxExclusive(fn) {
-    const run = () => Promise.resolve().then(fn);
+    mxLockDepth++;
+    const run = () => Promise.resolve().then(() => {
+        mxExclusiveHeldSync = true;
+        try {
+            return fn();
+        } finally {
+            mxExclusiveHeldSync = false;
+        }
+    });
     const p = mxQueueTail.then(run, run);
     // The tail must never carry a rejection forward (it would look like
     // every later caller failed) — settle it to undefined either way.
     mxQueueTail = p.then(() => undefined, () => undefined);
+    // Lock depth follows the OUTER promise (fn plus anything it awaits),
+    // not just the synchronous run() above — settles whether fn resolved
+    // or rejected.
+    p.then(() => { mxLockDepth--; }, () => { mxLockDepth--; });
     return p;
 }
+
+// Diagnostic tripwire for the exported SYNCHRONOUS wasm-mutating/reading
+// helpers (ensureTypedInput, mxWriteValue, mxSetColorspace,
+// stripValuesFromConnectedInputs, listDocRenderables, findConvertChain,
+// resolveNodeKind, collectMxUniforms — see the window export bag at the
+// bottom of this file). They're called lock-free from the JSX layer and
+// can't be made self-locking without turning async, which would break
+// every synchronous call site this file doesn't own. This never throws
+// and never blocks a call — it only warns when a helper runs during a
+// genuinely concurrent mxExclusive operation (see mxExclusiveHeldSync
+// above for what "genuinely" excludes), the exact window where the wasm
+// heap could grow out from under an in-flight pointer/typed-array view.
+const mxWarnIfLocked = (name) => {
+    if (mxLockDepth > 0 && !mxExclusiveHeldSync) {
+        console.warn('[mtlx] ' + name + ' called while an exclusive wasm operation is in flight — possible heap-detach hazard; route this call through mxExclusive.');
+    }
+};
 
 // Logs the generated GLSL + discovered uniforms to the console — the
 // fastest way to diagnose a black/!runnable shader. Off by default, opt in
@@ -202,16 +290,31 @@ const DEBUG_SHADERS = (() => {
 // link succeeded, so we can't avoid it at the source without turning
 // off renderer.debug.checkShaderErrors — which would also kill the
 // real-error path below (badProg diagnostics). Instead, drop only
-// link-SUCCEEDED logs that contain warnings and no errors, for the
-// duration of this compile. With DEBUG_SHADERS they're kept visible
-// at debug level for anyone who goes looking.
+// link-SUCCEEDED logs carrying the SPECIFIC fxc X4008/"division by
+// zero" signature quoted above — not just any program-info-log
+// containing the generic word "warning" (that over-broad match could
+// also swallow a genuinely different driver warning riding along in the
+// same info log) — for the duration of this compile. Every OTHER
+// console.warn during the window (any other call shape, any other
+// message) passes straight through to the real console.warn
+// unaffected — this patch only ever intercepts this one exact, known
+// noise pattern. Restoration is unconditional via `finally`, so a throw
+// out of renderer.compile can't leave console.warn patched. With
+// DEBUG_SHADERS they're kept visible at debug level for anyone who goes
+// looking.
 const compileFilteringDriverNoise = (renderer, scene, camera) => {
     const origWarn = console.warn;
     console.warn = function (...args) {
         const isProgLog = typeof args[0] === 'string' &&
             args[0].indexOf('THREE.WebGLProgram: gl.getProgramInfoLog()') === 0;
         const text = args.join(' ');
-        if (isProgLog && /warning/i.test(text) && !/error/i.test(text)) {
+        // Anchored on the exact fxc noise signature from the header
+        // comment (X4008 + "division by zero"), not the generic word
+        // "warning" — a program-info-log carrying some OTHER warning
+        // must still reach the real console.warn.
+        const isKnownDriverNoise = isProgLog && /\bX4008\b/.test(text) &&
+            /division by zero/i.test(text) && !/error/i.test(text);
+        if (isKnownDriverNoise) {
             if (DEBUG_SHADERS) console.debug('[mtlx] driver warnings (benign, filtered):', ...args);
             return;
         }
@@ -283,10 +386,17 @@ const patchUnlitLightingRefs = (src) => {
             const insertAt = structIdx !== -1 ? src.indexOf('};', structIdx) + 2 : -1;
             if (insertAt > 1) {
                 src = src.slice(0, insertAt) + header + fresnel + src.slice(insertAt);
+            } else {
+                // Lighting refs WERE detected (needsRad/needsTrans) but the
+                // "struct FresnelData" anchor this patch depends on is
+                // missing — a silent skip here used to leave
+                // mx_environment_radiance/mx_surface_transmission called
+                // but never stubbed, failing to compile later with a
+                // cryptic GLSL error (or worse). Invariant: if lighting
+                // refs are detected, the stub MUST be inserted or this
+                // throws — never a silent no-op.
+                throw new Error('patchUnlitLightingRefs: could not locate the "struct FresnelData" anchor (or its closing "};") in generated fragment shader — MaterialX output format may have changed');
             }
-            // No FresnelData in source: the stub couldn't compile either, and
-            // neither could the call site — leave the source untouched so the
-            // real error surfaces.
         }
     }
 
@@ -365,11 +475,17 @@ const patchUnlitLightingRefs = (src) => {
 // renderer.toneMappingExposure, or the RawShaderMaterial ball will
 // drift from the rest of the scene again.
 const encodeDisplay = (src) => {
+    // Both anchors below are load-bearing: a silent skip here used to mean
+    // the raw-linear MaterialX output shipped straight to the display
+    // buffer with no tone map / sRGB encode — a wrong (too-dark, blown-
+    // highlight) image with no error anywhere. Fail loud instead so a
+    // MaterialX output-format change surfaces immediately, not as a
+    // "why does this look wrong" bug report.
     const m = src.match(/\bout\s+vec4\s+(\w+)\s*;/);
-    if (!m) return src;
+    if (!m) throw new Error('encodeDisplay: could not locate the fragment shader\'s "out vec4 <name>;" declaration — MaterialX output format may have changed');
     const v = m[1];
     const idx = src.lastIndexOf('}');
-    if (idx === -1) return src;
+    if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader — MaterialX output format may have changed');
     const inject =
         '\n    // Injected by previewer: ACES filmic tone map (three r128\'s Hill fit — see encodeDisplay()\'s header comment) then sRGB.\n' +
         '    {\n' +
@@ -421,6 +537,7 @@ const mxErr = (mx, e) => {
 // string-typed export and the colorspace nodedef failures. Writing
 // the raw `value` attribute never touches the type.
 const mxWriteValue = (inp, str, type) => {
+    mxWarnIfLocked('mxWriteValue'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
     try {
         if (typeof inp.setAttribute === 'function') {
             inp.setAttribute('value', String(str));
@@ -462,11 +579,14 @@ const mxRemoveAttr = (el, name) => mxSafe(() => { el.removeAttribute(name); retu
 // Tag an element's colorspace, preferring the typed setColorSpace()
 // binding when present and falling back to the raw attribute otherwise —
 // not every element's wasm binding exposes the typed setter.
-const mxSetColorspace = (el, cs) => mxSafe(() => {
-    if (typeof el.setColorSpace === 'function') el.setColorSpace(cs);
-    else el.setAttribute('colorspace', cs);
-    return true;
-}, false);
+const mxSetColorspace = (el, cs) => {
+    mxWarnIfLocked('mxSetColorspace'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
+    return mxSafe(() => {
+        if (typeof el.setColorSpace === 'function') el.setColorSpace(cs);
+        else el.setAttribute('colorspace', cs);
+        return true;
+    }, false);
+};
 
 // Shortest chain of `convert` hops fromType->toType using ONLY the
 // conversions the loaded library actually defines. This matters because
@@ -478,6 +598,7 @@ const mxSetColorspace = (el, cs) => mxSafe(() => {
 // the emitted function (GLSL: "'NG_convert_float_color3' : no matching
 // overloaded function found"). [] = no convert needed, null = unreachable.
 const findConvertChain = (doc, fromType, toType) => {
+    mxWarnIfLocked('findConvertChain'); // exported doc-reading helper — see mxWarnIfLocked's header comment
     if (fromType === toType) return [];
     const typeStr = (t) => (t && t.getName) ? t.getName() : String(t || '');
     // convert nodedefs -> directed edges inType -> outType
@@ -533,6 +654,7 @@ const findConvertChain = (doc, fromType, toType) => {
 // the generator resolve the WRONG convert nodedef. So the def whose
 // input TYPE matches `wantedType` is preferred when one is found.
 const ensureTypedInput = (doc, node, inputName, wantedType) => {
+    mxWarnIfLocked('ensureTypedInput'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
     let inp = mxSafe(() => node.getInput(inputName), null);
     let how = 'existing';
     if (!inp) {
@@ -631,6 +753,7 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
 // should hit. Returns the number of attributes stripped, for perf/debug
 // logging by callers that want it.
 const stripValuesFromConnectedInputs = (doc, maxDepth) => {
+    mxWarnIfLocked('stripValuesFromConnectedInputs'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
     const cap = (typeof maxDepth === 'number') ? maxDepth : 10;
     let stripped = 0;
     const walk = (el, depth) => {
@@ -681,6 +804,7 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
 // from XML) must invoke this from inside mxExclusive — it walks wasm
 // document state and does no locking of its own.
 const listDocRenderables = (doc) => {
+    mxWarnIfLocked('listDocRenderables'); // exported doc-reading helper — see mxWarnIfLocked's header comment
     const renderables = [];
     const seen = new Set();
     // Defensive skip of transient __pv_* wrapper nodes. The graph
@@ -1042,6 +1166,7 @@ const mxDataToPlainArray = (d) => {
 // exactly that — do not add a new caller outside the lock without the same
 // treatment.
 const collectMxUniforms = (stage) => {
+    mxWarnIfLocked('collectMxUniforms'); // exported doc-reading helper (per shader-gen, not per-frame) — see mxWarnIfLocked's header comment
     const out = [];
     const blocks = []; // { key, blk }
     let blockMap = null;
@@ -1473,6 +1598,7 @@ const COLOR_VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vect
 // diverges from the instantiated type. Unresolvable names fall through to
 // the defFilter-narrowed behavior, unaffected by preferDefName.
 const resolveNodeKind = (doc, nodeName, defFilter, preferType, preferDefName) => {
+    mxWarnIfLocked('resolveNodeKind'); // exported doc-reading helper (per node-selection, not per-frame) — see mxWarnIfLocked's header comment
     let defs = vecToArray(doc.getMatchingNodeDefs(nodeName));
     let named = null;
     if (preferDefName) {
@@ -2314,12 +2440,28 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // detection switches the generated blending path (glass etc.);
     // COMPLETE interface exposes every input as a uniform for the
     // editor.
+    //
+    // genContext (and its options) are SHARED module-scope state across
+    // every material generated in a session — this is the only per-call
+    // customization point. hwTransparency in particular MUST be
+    // deterministic per call: it used to be left untouched on a thrown
+    // isTransparentSurface (or an absent function), which meant a
+    // transparent material A generated just before an opaque material B
+    // could leave B rendering with A's stale hwTransparency=true if B's
+    // detection attempt failed — order-dependent, wrong-looking output
+    // with no error. Reset first, unconditionally, in its own try/catch
+    // (getOptions() could in principle throw too); THEN attempt the real
+    // detection in its existing try/catch. Invariant: on any detection
+    // failure the material is opaque (false), never "whatever the
+    // previous material left" — deterministic default, opaque on
+    // failure.
+    try { genContext.getOptions().hwTransparency = false; } catch (e) { /* option absent */ }
     try {
         if (typeof mx.isTransparentSurface === 'function') {
             genContext.getOptions().hwTransparency =
                 mx.isTransparentSurface(renderable, gen.getTarget());
         }
-    } catch (e) { /* keep previous value */ }
+    } catch (e) { /* reset above already put this at the deterministic false default */ }
     try {
         if (mx.ShaderInterfaceType) {
             genContext.getOptions().shaderInterfaceType =

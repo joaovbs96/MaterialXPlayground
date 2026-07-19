@@ -1,7 +1,9 @@
-// Extracted verbatim from node-graph.html's inline <script type="text/babel">
-// block. Uses the same literal \uXXXX escape-text convention as the rest of
-// this codebase (e.g. an em-dash may appear as the source text —, not
-// an actual glyph) — do not normalize or "fix" these.
+// js/graph-app.jsx — the node graph editor's top-level view component
+// (NodeGraphApp), lazy-loaded by js/shell.jsx as the graph view's `app`
+// bundle (see VIEW_DEPS.graph there). Uses the same literal \uXXXX
+// escape-text convention as the rest of this codebase (e.g. an em-dash may
+// appear as the source text —, not an actual glyph) — do not normalize or
+// "fix" these.
 //
 // This file now holds only NodeGraphApp itself; the document model, layout/
 // color, node card, per-node preview, catalog, dialogs and panel pieces it
@@ -321,11 +323,13 @@
             // sidebar state instead of the value from first render.
             const paramsOpenRef = React.useRef(paramsOpen);
             paramsOpenRef.current = paramsOpen;
-            // Lets a future multi-view shell pause this view's background work
-            // (WebGL render loop, global keydown/drag-drop) while another view is
-            // visible, without unmounting (so undo history/parsed doc/dirty state
-            // survive switching away and back). Standalone node-graph.html never
-            // passes this prop, so it defaults true and nothing changes there.
+            // Lets this view's background work (WebGL render loop, global
+            // keydown/drag-drop) pause while another view is visible in the
+            // shell's multi-view layout, without unmounting (so undo
+            // history/parsed doc/dirty state survive switching away and
+            // back) — see js/shell.jsx's renderView, which passes
+            // `active={activeView === 'graph'}`. Defaults true so a caller
+            // that doesn't pass it sees no behavior change.
             const activeRef = React.useRef(active);
             activeRef.current = active;
             // The live preview's createMtlxRenderView() handle, kept in sync
@@ -606,7 +610,7 @@
                 setAddOpen(true);
                 buildNodeCatalog().then(setCatalog).catch((e) => {
                     setAddOpen(false);
-                    setError(String((e && e.message) || e));
+                    setError(errMsg(e));
                 });
             };
             const openAddRef = React.useRef(openAddSearch);
@@ -765,7 +769,7 @@
                     markSaved(); // a freshly loaded document has no unsaved edits of its own
                 } catch (e2) {
                     setStatus(null);
-                    setError(String(e2 && e2.message || e2));
+                    setError(errMsg(e2));
                 } finally {
                     setBusy(false);
                 }
@@ -805,7 +809,7 @@
                     markSaved(); // a freshly created document has no unsaved edits of its own
                 } catch (e2) {
                     setStatus(null);
-                    setError(String(e2 && e2.message || e2));
+                    setError(errMsg(e2));
                 } finally {
                     setBusy(false);
                 }
@@ -824,7 +828,7 @@
                 try {
                     await expandZips(map);
                 } catch (e) {
-                    setError(String(e && e.message || e));
+                    setError(errMsg(e));
                     return;
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
@@ -942,7 +946,7 @@
                     // (e.g. the user is mid-keystroke on an unbalanced tag
                     // in their own editor) — keep the current graph up
                     // instead of blanking it.
-                    setError('External edit could not be parsed — keeping the current graph (' + String(e && e.message || e) + ').');
+                    setError('External edit could not be parsed — keeping the current graph (' + errMsg(e) + ').');
                     return;
                 }
 
@@ -1235,7 +1239,7 @@
                     if (switchedScope) fitViewSoon({ padding: 0.15, duration: 350 });
                 } catch (e) {
                     setFlow({ nodes: [], edges: [] });
-                    setError(String(e && e.message || e));
+                    setError(errMsg(e));
                 } finally {
                     // Unconditional on every exit path (success or error) so
                     // the "Loading graph…" overlay set by changeScope() can
@@ -1763,7 +1767,7 @@
                         }
                         return { xml: null, error: 'a preview render is stuck mid-generation — please try again.' };
                     }
-                    return { xml: null, error: String(e && e.message || e) };
+                    return { xml: null, error: errMsg(e) };
                 }
             };
 
@@ -1842,7 +1846,7 @@
                             markSaved();
                             return true;
                         } catch (e) {
-                            setError('Export failed: ' + String(e && e.message || e));
+                            setError('Export failed: ' + errMsg(e));
                             return false;
                         }
                     }
@@ -1889,7 +1893,7 @@
                 try {
                     blob = await zip.generateAsync({ type: 'blob' });
                 } catch (e) {
-                    setError('Export failed: ' + String(e && e.message || e));
+                    setError('Export failed: ' + errMsg(e));
                     return false;
                 }
                 downloadBlob(blob, name + '.zip');
@@ -1983,7 +1987,7 @@
                             ingestRef.current(map, rootKey);
                             setPresetsOpen(false);
                         } catch (e) {
-                            setError('Could not load preset: ' + String(e && e.message || e));
+                            setError('Could not load preset: ' + errMsg(e));
                         } finally {
                             setPresetsBusy(false);
                             setPresetsBusyPath(null);
@@ -2011,7 +2015,7 @@
                 try {
                     rs = await mxExclusive(() => listDocRenderables(parsed.doc));
                 } catch (e) {
-                    setError('Export Shader Code failed: ' + String(e && e.message || e));
+                    setError('Export Shader Code failed: ' + errMsg(e));
                     return;
                 }
                 if (!rs.length) {
@@ -3810,7 +3814,7 @@
                     setSelectedEdgeId(null);
                     setParamsOpen(true);
                     } catch (e) {
-                        setError('Encapsulation failed: ' + String((e && e.message) || e));
+                        setError('Encapsulation failed: ' + errMsg(e));
                     } finally {
                         setActionBusy(null);
                         if (MTLX_PERF_LOG) {
@@ -4157,7 +4161,7 @@
                                 + ' reference(s) with no explicit output selector could not be resolved — check the XML view.');
                         }
                     } catch (e) {
-                        setError('Ungroup failed: ' + String((e && e.message) || e));
+                        setError('Ungroup failed: ' + errMsg(e));
                     } finally {
                         setActionBusy(null);
                         if (MTLX_PERF_LOG) {
@@ -4896,7 +4900,7 @@
                                 <div className="flex flex-wrap justify-end gap-2">
                                     <button
                                         onClick={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}
-                                        className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                        className={BTN_SECONDARY}
                                     >Cancel</button>
                                     <button
                                         onClick={() => {
@@ -4905,7 +4909,7 @@
                                             setConfirmCloseOpen(false);
                                             if (a) a();
                                         }}
-                                        className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                        className={BTN_SECONDARY}
                                     >Discard & Continue</button>
                                     <button
                                         onClick={async () => {
@@ -5008,7 +5012,7 @@
                             <button
                                 onClick={guardedNewDocument}
                                 title="New material (empty document)"
-                                className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
                                 <span>New Material</span>
@@ -5028,7 +5032,7 @@
                             <button
                                 onClick={() => setPresetsOpen(true)}
                                 title="Load a curated official MaterialX example document"
-                                className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 {/* 'environment' renders as a framed photo/landscape
                                     glyph (see MTLX_ICON_PATHS in mtlx-engine.js) — reads
@@ -5046,7 +5050,7 @@
                                 <button
                                     onClick={openExportDialog}
                                     title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
-                                    className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                    className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                                     <span>Export</span>
@@ -5056,7 +5060,7 @@
                                 <button
                                     onClick={openShaderExport}
                                     title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
-                                    className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                    className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
                                     <span>Shader Code</span>
@@ -5065,7 +5069,7 @@
                             <button
                                 onClick={undoDoc}
                                 title="Undo (Ctrl+Z)"
-                                className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
                                 <span>Undo</span>
@@ -5073,7 +5077,7 @@
                             <button
                                 onClick={redoDoc}
                                 title="Redo (Ctrl+Shift+Z)"
-                                className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
                                 <span>Redo</span>
@@ -5167,7 +5171,7 @@
                             <button
                                 onClick={openAddSearch}
                                 title="Add a node from the standard library (shortcut: Tab)"
-                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                 <span>Add Node</span>
@@ -5178,7 +5182,7 @@
                             <button
                                 onClick={() => reorganize()}
                                 title="Re-run the automatic layout once (A)"
-                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
                                 <span>Auto Layout</span>
@@ -5189,7 +5193,7 @@
                             <button
                                 onClick={openXmlDialog}
                                 title="View the current document's raw MaterialX XML"
-                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
                                 <span>Document</span>
@@ -5670,7 +5674,7 @@
                             <button
                                 onClick={() => setLegendOpen(true)}
                                 title="Show the type color legend"
-                                className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={BTN_TOOLBAR}
                             >
                                 {legendTypes.slice(0, 3).map((t) => (
                                     <span key={t} className="w-2 h-2 rounded-full" style={{ background: typeColor(t) }} />

@@ -35,18 +35,18 @@ dependencies — it runs directly out of a checkout of this repo.
 - **Explorer context menu / editor tab context menu / Command Palette**:
   right-click a `.mtlx` file (in the Explorer or an editor tab), or run
   from the Command Palette (`Ctrl+Shift+P`):
-  - `Send to MaterialX Playground` — loads the file into both the
+  - `MaterialX Playground: Open MaterialX Document` — loads the file into both the
     Material Viewer and the Node Graph Editor at once; `materialx.defaultView`
     picks which one is shown first, and the header nav switches to the
     other, already-loaded view. Only available for `.mtlx` files — the
     Command Palette entry is hidden entirely unless a `.mtlx` file is
     active, and the command itself is disabled outside that context. See
     "Opening the playground" below for *where* it opens.
-  - `MaterialX: Open Node Documentation` — opens the node-library docs
+  - `MaterialX Playground: Open Node Library Documentation` — opens the node-library docs
     view on its own, with no file involved. Available from the Command
     Palette at any time (no `.mtlx` file needed), and also from the
     Explorer/editor-tab context menu on a `.mtlx` file, right alongside
-    `Send to MaterialX Playground`.
+    `MaterialX Playground: Open MaterialX Document`.
 
 ### Opening the playground
 
@@ -180,14 +180,16 @@ editor.
   name like `<standard_surface>` or `<mix>` (MaterialX nodes are just
   elements named by category), or the value of a `node="..."` attribute
   (`<nodedef>`/`<materialassign>` references) — shows that node's
-  description straight from the MaterialX specification (parsed from the
+  description plus its port table (inputs/outputs, matched to the hovered
+  element's own signature when derivable) straight from the MaterialX
+  specification (parsed from the
   `MaterialX.PBRSpec.md` / `MaterialX.NPRSpec.md` /
   `MaterialX.StandardNodes.md` files — read from `vendor/materialx/` when
   present (the offline build, populated by `npm run vendor:offline`),
   otherwise fetched once from the MaterialX repository on GitHub and
   cached in memory for the rest of the session) plus an
   **Open documentation** link that opens/reuses the
-  `MaterialX: Open Node Documentation` panel scoped directly to that
+  `MaterialX Playground: Open Node Library Documentation` panel scoped directly to that
   node. Structural/document elements — `<materialx>`, `<nodegraph>`,
   `<input>`, `<output>`, `<nodedef>`, `<look>`, `<xi:include>`, and
   similar schema scaffolding — never produce a hover, only actual node
@@ -197,7 +199,7 @@ editor.
   permalinks by search rather than requiring an exact spec match.
 - **Docs panels default to 3D previews off**: the node documentation
   panel's per-node 3D previews — whether opened via
-  `MaterialX: Open Node Documentation` or a hover's Open documentation
+  `MaterialX Playground: Open Node Library Documentation` or a hover's Open documentation
   link above — start with 3D previews switched OFF. Each preview is its
   own WASM shader-gen + WebGL context, which is heavy to pile on top of a
   VS Code webview that, in practice, often already has a live MaterialX
@@ -263,7 +265,7 @@ editor.
 - The graph editor's **node-documentation dialog** (the "?" button on the
   parameter panel) renders the docs view INLINE inside the same webview —
   no iframe, no separate panel — identical to the website. The
-  `MaterialX: Open Node Documentation` command-palette panel described
+  `MaterialX Playground: Open Node Library Documentation` command-palette panel described
   above still exists separately, for browsing the node library without a
   file open.
 - **`localStorage`-backed preferences** (e.g. remembered UI toggles) may
@@ -307,10 +309,10 @@ editor.
   parse/`validate()` pass.
 - `src/specDocs.js` is a trimmed, Node-side port of `js/spec-parser.js`'s
   markdown state machine (anchors/headings -> following paragraph text,
-  with the same link/bold/italic/entity cleanup), extracting only the
-  per-node DESCRIPTION text — not the full doc database (notes, port
-  tables, references) `js/spec-parser.js` builds for the website itself —
-  from the three spec `.md` files, vendor-first/remote-fallback like the
+  Port-column tables, with the same link/bold/italic/entity cleanup),
+  extracting the per-node DESCRIPTION text and PORT TABLES — not the full
+  doc database (notes, references) `js/spec-parser.js` builds for the
+  website itself — from the three spec `.md` files, vendor-first/remote-fallback like the
   site's own `js/mtlx-assets.js` resolver: read from `vendor/materialx/`
   when present, otherwise fetched once from GitHub. Merged in and cached
   in memory for the life of the extension host process as each file's

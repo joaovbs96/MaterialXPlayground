@@ -566,9 +566,50 @@ async function runCollect() {
 }
 
 // ---------------------------------------------------------------------------
+// --check: MaterialX tag agreement. MTLX_TAG above is duplicated as a
+// literal fallback in a handful of browser/extension files that can't share
+// this ESM module at runtime (plain <script> tags loaded before any bundler
+// or module graph exists, and a separate VS Code extension source tree).
+// This reads each file as text and asserts its own tag literal still
+// matches MTLX_TAG, so bumping the tag here can't silently leave one of
+// those copies behind. Purely local text reads — no network access.
+// ---------------------------------------------------------------------------
+const TAG_AGREEMENT_FILES = [
+  { path: "js/mtlx-assets.js", re: /var DEFAULT_TAG\s*=\s*'([^']+)'/ },
+  { path: "js/spec-parser.js", re: /const SPEC_TAG\s*=[\s\S]*?\|\|\s*'([^']+)'/ },
+  { path: "js/site-header.js", re: /var MTLX_TAG\s*=[\s\S]*?\|\|\s*'([^']+)'/ },
+  { path: "vscode_extension/src/specDocs.js", re: /const SPEC_TAG\s*=\s*'([^']+)'/ },
+  { path: "README.md", re: /Built on the MaterialX (v[\d.]+) WebAssembly/ },
+];
+
+/** Read each file in TAG_AGREEMENT_FILES, extract its tag literal via the file's regex, and
+ * report any that disagree with MTLX_TAG. Returns an array of problem strings (empty = all agree). */
+async function checkTagAgreement() {
+  const problems = [];
+  for (const { path: relPath, re } of TAG_AGREEMENT_FILES) {
+    const absPath = path.join(REPO_ROOT, relPath);
+    if (!existsSync(absPath)) {
+      problems.push(`  - ${relPath}: file not found (expected to check its MaterialX tag literal)`);
+      continue;
+    }
+    const text = await readFile(absPath, "utf8");
+    const match = text.match(re);
+    if (!match) {
+      problems.push(`  - ${relPath}: could not find a tag literal matching the expected pattern (${re}) — update TAG_AGREEMENT_FILES in scripts/vendor.mjs if this file's shape changed`);
+      continue;
+    }
+    const foundTag = match[1];
+    if (foundTag !== MTLX_TAG) {
+      problems.push(`  - ${relPath}: tag "${foundTag}" != MTLX_TAG "${MTLX_TAG}" (scripts/vendor.mjs)`);
+    }
+  }
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
 // --check: verify vendor/ matches the COPIES/DOWNLOADS spec and the hashes
 // recorded in vendor-manifest.json, WITHOUT writing or downloading anything.
-// Three classes of drift are detected:
+// Four classes of drift are detected:
 //   1. Manifest set of paths != spec's expected set (added/removed vendor file).
 //   2. On-disk vendor/<path> bytes don't hash to the manifest's recorded sha256
 //      (someone hand-edited a vendored file, or a checkout mangled it).
@@ -577,6 +618,8 @@ async function runCollect() {
 //      `npm run vendor` wasn't re-run — the committed vendor/ is now stale).
 //   For DOWNLOADS, the manifest's own sha256 must equal the pinned constant
 //   in the DOWNLOADS table (guards against a hand-edited manifest).
+//   4. MaterialX tag agreement (checkTagAgreement above) — every duplicated
+//      tag literal across the repo still matches MTLX_TAG.
 // ---------------------------------------------------------------------------
 async function runCheck() {
   if (!existsSync(MANIFEST_PATH)) {
@@ -679,6 +722,19 @@ async function runCheck() {
   if (materialxChecked > 0) {
     log(`OK — vendor/materialx/ matches its manifest (${materialxChecked} file(s)).`);
   }
+
+  const tagProblems = await checkTagAgreement();
+  if (tagProblems.length > 0) {
+    fail(
+      [
+        `error: MaterialX tag literals are out of sync with MTLX_TAG ("${MTLX_TAG}") in scripts/vendor.mjs:`,
+        ...tagProblems,
+        "",
+        "Update the disagreeing file(s) to match, or update MTLX_TAG here if this is an intentional re-vend.",
+      ].join("\n")
+    );
+  }
+  log(`OK — MaterialX tag agrees across ${TAG_AGREEMENT_FILES.length} file(s) (${MTLX_TAG}).`);
 }
 
 if (CHECK_MODE) {

@@ -25,9 +25,10 @@ const nodeSignature = require('./nodeSignature');
 // named by category (<standard_surface>, <mix>, <image>, ...), so
 // anything NOT in this set that looks like an element name is treated as
 // a node category. Built from the plan's explicit minimum list, cross-
-// checked against the MaterialX.*.md spec files committed at the repo
-// root (none of these names appear as a `### \`name\`` node heading in
-// any of the three) and against docScanner.js (which already treats
+// checked against the MaterialX.*.md spec files (resolved vendor-first,
+// remote-fallback by specDocs.js — see its header comment) (none of these
+// names appear as a `### \`name\`` node heading in any of the three) and
+// against docScanner.js (which already treats
 // <nodegraph>/<input>/<xi:include> as structural for its own include/
 // texture-ref walk). 'comment' is MaterialX's XML <comment> element (an
 // explicit doc/comment node in the schema, distinct from `<!-- -->`).

@@ -38,9 +38,16 @@
     // (header, and — via window.SITE_TITLE — anything React renders).
     var SITE_TITLE = 'MaterialX Playground';
 
+    // Falls back to js/mtlx-assets.js's MTLX_TAG (the single source of
+    // truth) when available — that script loads before this one in both
+    // entry HTMLs (see the header comment above) — with the literal
+    // fallback covering contexts where mtlx-assets.js hasn't run yet.
+    // scripts/vendor.mjs's --check guards this literal against drift.
+    var MTLX_TAG = (window.MtlxAssets && window.MtlxAssets.MTLX_TAG) || 'v1.39.5';
+
     var LINKS = {
         repo: 'https://github.com/joaovbs96/MaterialXNodeDocs',
-        spec: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/v1.39.5/documents/Specification',
+        spec: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/' + MTLX_TAG + '/documents/Specification',
         // The footer's "source of truth" link deliberately points at main,
         // not the pinned tag: it names the authority, not what we parse.
         specMain: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification',
@@ -367,10 +374,10 @@
     // never triggers getMxEnv(), though, so window.__mtlxVersion stays unset
     // there and the badge would otherwise be blank until docs/viewer/graph
     // loads the WASM. Fall back to the vendored build's known version —
-    // matches the vendored WASM build (see the pinned v1.39.5 spec URL
-    // above); update this when re-vendoring. The live 'mtlx-version' event
-    // still overrides it if they ever differ.
-    var MTLX_VERSION_FALLBACK = '1.39.5';
+    // matches the vendored WASM build (see MTLX_TAG above); update this when
+    // re-vendoring. The live 'mtlx-version' event still overrides it if they
+    // ever differ. Bare (no leading 'v') to match the badge's own format.
+    var MTLX_VERSION_FALLBACK = MTLX_TAG.replace(/^v/, '');
     var setVer = function (v) {
         if (!v) return;
         var els = document.querySelectorAll('#mtlx-header-version [data-role="ver"], #mtlx-header-version-mobile [data-role="ver"]');

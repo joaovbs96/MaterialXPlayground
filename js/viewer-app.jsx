@@ -148,7 +148,7 @@
                 try {
                     takeScreenshotRaw();
                 } catch (e) {
-                    setError('Save PNG preview failed: ' + String(e && e.message || e));
+                    setError('Save PNG preview failed: ' + errMsg(e));
                 }
             };
             // Hand the currently loaded document off to the node graph editor:
@@ -191,7 +191,7 @@
                     await ingestRef.current(map, rootKey);
                     setPresetsOpen(false);
                 } catch (e) {
-                    setError('Could not load preset: ' + String(e && e.message || e));
+                    setError('Could not load preset: ' + errMsg(e));
                 } finally {
                     setPresetsBusy(false);
                     setPresetsBusyPath(null);
@@ -203,7 +203,7 @@
                 try {
                     await expandZips(map);
                 } catch (e) {
-                    setError(String(e && e.message || e));
+                    setError(errMsg(e));
                     return;
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
@@ -421,7 +421,7 @@
                 } catch (e2) {
                     setStatus(null);
                     setBusy(false);
-                    setError(String(e2 && e2.message || e2));
+                    setError(errMsg(e2));
                 }
             };
 
@@ -464,7 +464,7 @@
                         if (mounted) {
                             setStatus(null);
                             setBusy(false);
-                            setError(String(e2 && e2.message || e2));
+                            setError(errMsg(e2));
                         }
                     }
                 };

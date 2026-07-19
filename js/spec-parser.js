@@ -37,7 +37,11 @@
     // for BOTH the raw-file fetches and every resolved link / spec_url,
     // so docs, deep links, and anchors always agree with each other.
     // ------------------------------------------------------------------
-    const SPEC_TAG = 'v1.39.5';
+    // Defaults from js/mtlx-assets.js's MTLX_TAG (the single source of
+    // truth) when available; the literal fallback covers standalone /
+    // extension-webview contexts where mtlx-assets.js hasn't run yet — see
+    // scripts/vendor.mjs's --check for the drift guard between the two.
+    const SPEC_TAG = (window.MtlxAssets && window.MtlxAssets.MTLX_TAG) || 'v1.39.5';
     const REPO = 'AcademySoftwareFoundation/MaterialX';
     const SPEC_DIR = 'documents/Specification/';
     // Raw file content. Resolved through window.MtlxAssets (js/mtlx-assets.js,

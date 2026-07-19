@@ -117,17 +117,17 @@ async function loadJsxApp(src) {
     __scriptCache.set(src, p);
     return p;
 }
-// The engine is eagerly loaded by app.html's own <script type="text/babel">
+// The engine is eagerly loaded by index.html's own <script type="text/babel">
 // tag; pre-seed the cache so a manifest entry for it (if ever re-added)
 // becomes a no-op instead of a fatal duplicate-declaration injection.
 __scriptCache.set('js/mtlx-engine.js', Promise.resolve());
 
 // ------------------------------------------------------------------
-// Per-view dependency manifests (vendored + local scripts, IN ORDER —
-// copied exactly from the <head>/<body> script tags of index.html,
-// material-viewer.html and node-graph.html; the CDN URLs those tags once
-// pointed at now resolve to pinned copies under vendor/ instead — see
-// scripts/vendor.mjs).
+// Per-view dependency manifests (vendored + local scripts, IN ORDER). This
+// is the single source of truth for what each view needs — there's no
+// longer a separate standalone HTML page per view to keep in sync with.
+// The CDN URLs these scripts once loaded from now resolve to pinned copies
+// under vendor/ instead — see scripts/vendor.mjs.
 //
 // Every entry is split into `scripts` (plain JS, no Babel — loaded via
 // loadScript) and `babelScripts` (type="text/babel" JSX/ESNext files —
@@ -137,7 +137,7 @@ __scriptCache.set('js/mtlx-engine.js', Promise.resolve());
 // plain pre-built UMD/JS with a .js URL, so they belong in `scripts`,
 // while local JSX-adjacent/ESNext sources belong in `babelScripts`.
 //
-// js/mtlx-engine.js is NOT listed in any manifest below. app.html loads
+// js/mtlx-engine.js is NOT listed in any manifest below. index.html loads
 // it EAGERLY, exactly once, via its own <script type="text/babel"> tag
 // before the shell ever runs — all three views depend on the globals it
 // defines, but none of them may re-list it here: the lazy loader has no
@@ -331,23 +331,24 @@ function Shell() {
         if (!st.mounted) return null;
         const dep = VIEW_DEPS[view];
         const isActive = activeView === view;
-        // Each view reconstructs the EXACT wrapper chain its standalone page
-        // gave it (below #root), since each app's own top-level markup was
-        // written assuming that specific ancestor contract:
-        //   - docs   (index.html #page-wrap):        p-2 sm:p-6 flex-1 md:min-h-0
+        // Each view's own top-level markup expects a specific ancestor
+        // wrapper contract, built here by wrapClass below — index.html's
+        // sole DOM host is one #root div (class `flex-1 relative min-h-0`),
+        // and every view's padded/max-width wrapper lives inside it,
+        // constructed by renderView rather than authored in the HTML:
+        //   - docs:   p-2 sm:p-6 flex-1 md:min-h-0
         //     -> App's own root div is `md:h-full md:flex md:flex-col
         //        md:min-h-0`, i.e. it needs a percentage-height chain so it
         //        can scroll its OWN panels internally instead of the page,
-        //        on md+ screens (mirrors index.html's body having
-        //        `md:h-screen`, which this shell's <body> also has).
-        //   - viewer (material-viewer.html's wrapper): p-2 sm:p-6 flex-1
+        //        on md+ screens (mirrors index.html's <body> having
+        //        `md:h-screen`, which every view shares).
+        //   - viewer: p-2 sm:p-6 flex-1
         //     -> deliberately OMITS md:min-h-0: MaterialViewerApp's own root
         //        div (`space-y-4 sm:space-y-6`) has no height contract at
         //        all, so this flex item must refuse to shrink and overflow
-        //        the flex column instead — reproducing material-viewer.html's
-        //        natural whole-page scroll even though <body> here (unlike
-        //        the original material-viewer.html) is height-capped via
-        //        `md:h-screen` (needed for the graph view, see below).
+        //        the flex column instead — giving the viewer its natural
+        //        whole-page scroll even though <body> here is height-capped
+        //        via `md:h-screen` (needed for the graph view, see below).
         //        Under VS Code, though, MaterialViewerApp's own root switches
         //        to a percentage-height chain (h-full min-h-0 flex flex-col,
         //        see viewer-app.jsx) so the render viewport can fill all
@@ -355,16 +356,15 @@ function Shell() {
         //        deliberately, for the webview only: the padding goes and
         //        min-h-0 is REQUIRED so this flex item shrinks to #root's
         //        definite height instead of overflowing it.
-        //   - graph  (node-graph.html #root itself): no wrapper classes.
+        //   - graph:  no wrapper classes.
         //     -> NodeGraphApp's own root div is `absolute inset-0`, which
         //        positions against the nearest `position: relative`
-        //        ancestor with a definite height. That's #root in app.html
-        //        (flex-1 relative min-h-0, node-graph.html's exact
-        //        contract) — NOT this wrapper, which deliberately stays
-        //        `position: static` so it doesn't hijack that positioning
-        //        context. The wrapper's own (collapsed, since its child is
-        //        taken out of flow) box size is irrelevant to how
-        //        NodeGraphApp paints.
+        //        ancestor with a definite height — that's #root itself
+        //        (flex-1 relative min-h-0), NOT this wrapper, which
+        //        deliberately stays `position: static` so it doesn't hijack
+        //        that positioning context. The wrapper's own (collapsed,
+        //        since its child is taken out of flow) box size is
+        //        irrelevant to how NodeGraphApp paints.
         const wrapClass = {
             home: 'p-2 sm:p-6 flex-1',
             docs: EMBED ? 'p-2 flex-1 md:min-h-0' : 'p-2 sm:p-6 flex-1 md:min-h-0',
@@ -396,15 +396,17 @@ function Shell() {
                 // other views' wrapper contract.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else if (view === 'docs') {
-                // Reconstructs index.html's #root (`max-w-[1600px] mx-auto
-                // md:h-full`) so App's own `md:h-full` resolves correctly.
+                // Gives App the wrapper contract its own root markup expects
+                // (`max-w-[1600px] mx-auto md:h-full`) so App's own
+                // `md:h-full` resolves correctly.
                 content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
             } else if (view === 'viewer') {
-                // Reconstructs material-viewer.html's #root (`max-w-[1600px]
-                // mx-auto`, no height class — it just grows with content).
-                // Under VS Code: no max-width cap and a height pass-through
-                // (w-full h-full min-h-0) so MaterialViewerApp's own
-                // percentage-height chain resolves against a definite size.
+                // Gives MaterialViewerApp the wrapper contract its own root
+                // markup expects (`max-w-[1600px] mx-auto`, no height class —
+                // it just grows with content). Under VS Code: no max-width
+                // cap and a height pass-through (w-full h-full min-h-0) so
+                // MaterialViewerApp's own percentage-height chain resolves
+                // against a definite size.
                 content = <div className={IN_VSCODE ? 'w-full h-full min-h-0' : 'max-w-[1600px] mx-auto'}>{rendered}</div>;
             } else {
                 // graph: no extra container — NodeGraphApp fills #root
