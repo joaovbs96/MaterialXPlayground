@@ -1575,6 +1575,46 @@
                 return true; // continuous rAF shows it next frame
             };
 
+            // Commit-time transparency re-check for edits that took the uniform fast
+            // path above (no regeneration): the hwTransparency verdict baked into the
+            // live shader may have gone stale (e.g. opacity dragged from 1.0 to 0.5 on
+            // an opaque-generated material). Re-runs isTransparentSurface via the
+            // engine helper and bumps docRev — the normal regeneration path — only
+            // when the verdict actually flipped. Name-agnostic by design: catches
+            // interface-forwarded/custom-named inputs a name heuristic would miss.
+            const transparencyRecheckRef = React.useRef({ running: false, queued: false });
+            const scheduleTransparencyRecheck = () => {
+                const st = transparencyRecheckRef.current;
+                if (st.running) { st.queued = true; return; }
+                st.running = true;
+                (async () => {
+                    try {
+                        do {
+                            st.queued = false;
+                            const view = previewViewRef.current;
+                            // Verdict flips don't affect rendering while Force Transparency is
+                            // off — skip the recheck (the docRev regen on a flip would be wasted work).
+                            if (!(window.getForceTransparency && window.getForceTransparency())) continue;
+                            if (!parsed || !view || view.__outdated) continue;
+                            const wasTransparent = !!view.isTransparent;
+                            let verdict = null;
+                            try {
+                                const { mx, gen } = await getMxEnv();
+                                verdict = await window.checkTargetTransparency({
+                                    mx, gen,
+                                    buildRenderable: () => window.buildPreviewRenderable(parsed, previewTarget),
+                                });
+                            } catch (e) { /* verdict stays null (indeterminate) */ }
+                            const cur = previewViewRef.current;
+                            if (verdict === null || cur !== view || cur.__outdated) continue;
+                            if (!!verdict !== wasTransparent) setDocRev((r) => r + 1);
+                        } while (st.queued);
+                    } finally {
+                        st.running = false;
+                    }
+                })();
+            };
+
             // Resolve a flow id ('n:'/'g:' prefixed) to its document
             // element — a real node looked up on `container`, a nodegraph
             // instance looked up on `doc` regardless of scope. Shared by
@@ -1658,6 +1698,8 @@
                         // rebuild (shader re-gen + view teardown) entirely.
                         if (!tryFastUniformUpdate(nodeId, inputName, newValue, fastType)) {
                             setDocRev((r) => r + 1); // document changed → re-render the material preview
+                        } else {
+                            scheduleTransparencyRecheck(); // fast path skipped regen — transparency verdict may be stale
                         }
                         markDirty('param:' + nodeId + ':' + inputName);
                     } else console.warn('node-graph: value shown on screen, but the document element could not be written (' + nodeId + '/' + inputName + ')');
@@ -5034,15 +5076,12 @@
                                 title="Load a curated official MaterialX example document"
                                 className={BTN_TOOLBAR}
                             >
-                                {/* 'environment' renders as a framed photo/landscape
-                                    glyph (see MTLX_ICON_PATHS in mtlx-engine.js) — reads
-                                    as "browse a gallery of ready-made looks" and, unlike
-                                    file-code/file-plus/file-upload/file-download already
-                                    in this same New/Import/Export cluster, isn't reused
-                                    anywhere else in the graph editor's own toolbar (its
-                                    only other use is the unrelated env-map-background
-                                    toggle in the preview panel, js/shared/mtlx-ui.jsx). */}
-                                <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                                {/* 'presets' renders as a framed photo/landscape glyph
+                                    (see MTLX_ICON_PATHS in mtlx-engine.js) — reads as
+                                    "browse a gallery of ready-made looks". Its own glyph,
+                                    no longer shared with the unrelated env-map-background
+                                    toggle in the preview panel (js/shared/mtlx-ui.jsx). */}
+                                <MtlxIcon name="presets" className="w-3.5 h-3.5" />
                                 <span>Presets</span>
                             </button>
                             )}

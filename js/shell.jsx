@@ -342,20 +342,22 @@ function Shell() {
         //        can scroll its OWN panels internally instead of the page,
         //        on md+ screens (mirrors index.html's <body> having
         //        `md:h-screen`, which every view shares).
-        //   - viewer: p-2 sm:p-6 flex-1
-        //     -> deliberately OMITS md:min-h-0: MaterialViewerApp's own root
-        //        div (`space-y-4 sm:space-y-6`) has no height contract at
-        //        all, so this flex item must refuse to shrink and overflow
-        //        the flex column instead — giving the viewer its natural
-        //        whole-page scroll even though <body> here is height-capped
-        //        via `md:h-screen` (needed for the graph view, see below).
-        //        Under VS Code, though, MaterialViewerApp's own root switches
-        //        to a percentage-height chain (h-full min-h-0 flex flex-col,
-        //        see viewer-app.jsx) so the render viewport can fill all
-        //        space below the header — that reverses the choice above,
-        //        deliberately, for the webview only: the padding goes and
-        //        min-h-0 is REQUIRED so this flex item shrinks to #root's
-        //        definite height instead of overflowing it.
+        //   - viewer (browser): '' (no wrapper classes)
+        //     -> MaterialViewerApp's own root div is `absolute inset-0`,
+        //        positioning against the nearest `position: relative`
+        //        ancestor with a definite height — that's #root itself
+        //        (flex-1 relative min-h-0), NOT this wrapper (which stays
+        //        `position: static`, same rationale as the graph case
+        //        below). It's a full-bleed, graph-editor-style stage now;
+        //        the old padded/max-width column with natural whole-page
+        //        scroll is gone.
+        //   - viewer (VS Code): flex-1 min-h-0
+        //     -> MaterialViewerApp's own root switches to a percentage-
+        //        height chain (h-full min-h-0 flex flex-col, see
+        //        viewer-app.jsx) so the render viewport can fill all space
+        //        below the header — min-h-0 is REQUIRED so this flex item
+        //        shrinks to #root's definite height instead of overflowing
+        //        it. Unchanged by the browser redesign above.
         //   - graph:  no wrapper classes.
         //     -> NodeGraphApp's own root div is `absolute inset-0`, which
         //        positions against the nearest `position: relative`
@@ -371,7 +373,7 @@ function Shell() {
             // VS Code: full-bleed viewport, no page padding; min-h-0 lets
             // this flex item shrink to #root's height instead of growing
             // past it (see the comment block above).
-            viewer: IN_VSCODE ? 'flex-1 min-h-0' : 'p-2 sm:p-6 flex-1',
+            viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
         }[view] + (isActive ? '' : ' hidden');
 
@@ -401,13 +403,13 @@ function Shell() {
                 // `md:h-full` resolves correctly.
                 content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
             } else if (view === 'viewer') {
-                // Gives MaterialViewerApp the wrapper contract its own root
-                // markup expects (`max-w-[1600px] mx-auto`, no height class —
-                // it just grows with content). Under VS Code: no max-width
-                // cap and a height pass-through (w-full h-full min-h-0) so
-                // MaterialViewerApp's own percentage-height chain resolves
-                // against a definite size.
-                content = <div className={IN_VSCODE ? 'w-full h-full min-h-0' : 'max-w-[1600px] mx-auto'}>{rendered}</div>;
+                // Browser: no wrapper at all — MaterialViewerApp's own root
+                // is `absolute inset-0`, a full-bleed stage that positions
+                // directly against #root (mirrors the graph case below).
+                // Under VS Code: a height pass-through (w-full h-full
+                // min-h-0) so MaterialViewerApp's own percentage-height
+                // chain resolves against a definite size.
+                content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
             } else {
                 // graph: no extra container — NodeGraphApp fills #root
                 // directly via its own `absolute inset-0`.

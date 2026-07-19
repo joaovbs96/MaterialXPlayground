@@ -275,6 +275,31 @@ const DEBUG_SHADERS = (() => {
     try { return !!localStorage.getItem('mtlxDebugShaders'); } catch (e) { return false; }
 })();
 
+// "Force Transparency" (Settings dialog, experimental, DEFAULT OFF).
+// OFF = official-viewer parity: the hwTransparency verdict from shader
+// generation stays write-only and every preview material renders opaque
+// (the pre-feature behavior). ON = transparent materials get real alpha
+// blending (transparent/FrontSide/depthWrite:false in
+// applyMaterialInternal). Cached in memory; persisted as '1'/'0'.
+// Setting it dispatches 'mtlx-settings-changed' so each view can rebuild
+// its live preview (the flag is baked in at material build time).
+let FORCE_TRANSPARENCY = (() => {
+    try { return localStorage.getItem('mtlxForceTransparency') === '1'; } catch (e) { return false; }
+})();
+const getForceTransparency = () => FORCE_TRANSPARENCY;
+const setForceTransparency = (v) => {
+    FORCE_TRANSPARENCY = !!v;
+    try { localStorage.setItem('mtlxForceTransparency', FORCE_TRANSPARENCY ? '1' : '0'); } catch (e) { /* best-effort */ }
+    // Only caller is the Settings dialog's toggle button (js/shared/
+    // mtlx-ui.jsx) — a UI event fired at most once per click, so this
+    // runs long after LIVE_VIEWS (declared further down this module)
+    // has been populated; no load-time TDZ concern. Mutate every live
+    // view's material flags in place — see refreshTransparencyFlags on
+    // the handle (createMtlxRenderView) for why no rebuild is needed.
+    LIVE_VIEWS.forEach((view) => { try { view.refreshTransparencyFlags && view.refreshTransparencyFlags(); } catch (e) { /* view mid-teardown */ } });
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'forceTransparency', value: FORCE_TRANSPARENCY } })); } catch (e) { /* best-effort */ }
+};
+
 // Compile the scene while filtering BENIGN shader-compiler noise.
 // On Windows every browser runs WebGL through ANGLE, which translates
 // GLSL → HLSL and hands it to the D3D compiler (fxc). fxc unrolls the
@@ -2410,13 +2435,59 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
 
 
 // ------------------------------------------------------------------
+// checkTargetTransparency — commit-time transparency re-check for the
+// fast-uniform-edit path (tryFastUniformUpdate in graph-app.jsx), which
+// intentionally SKIPS regenerating shader sources for edits that only
+// change uniform values. That path still needs to know whether the
+// target's surface is transparent (e.g. an edit flips a mix/mask input
+// that changes isTransparentSurface's verdict even though no shader
+// text is touched) so it can keep the live material's transparent/
+// depthWrite flags in sync without paying for a full regenerate.
+//
+// Same H-B1 single-hold rationale as prewarmPreviewTarget above: build
+// -> read the verdict -> cleanup, all inside ONE synchronous mxExclusive
+// callback, so the transient __pv_* wrapper nodes never outlive the
+// lock (see prewarmPreviewTarget's comment above for the full
+// explanation of why a wrapper surviving past the lock is dangerous).
+//
+// Returns a boolean verdict, or null when indeterminate (no renderable,
+// isTransparentSurface unavailable, or any thrown error) — NEVER
+// throws. Callers should treat null as "don't change the existing
+// transparency flags", not as false.
+//
+// NEVER call this from inside an existing mxExclusive callback — same
+// deadlock convention as generatePreviewSources/prewarmPreviewTarget
+// above: mxExclusive queues callbacks strictly in call order, so a
+// callback that awaits THIS function's return (which itself needs a
+// fresh turn of that same queue) would wait on work that can only run
+// after it.
+// ------------------------------------------------------------------
+const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
+    try {
+        return await mxExclusive(() => {
+            const built = buildRenderable();
+            if (!built || !built.renderable) return null;
+            try {
+                if (typeof mx.isTransparentSurface !== 'function') return null;
+                return !!mx.isTransparentSurface(built.renderable, gen.getTarget());
+            } catch (e) {
+                return null;
+            } finally {
+                try { built.cleanup && built.cleanup(); } catch (e) { /* best-effort */ }
+            }
+        });
+    } catch (e) { return null; }
+};
+
+
+// ------------------------------------------------------------------
 // generatePreviewSources — shader-generation slice of
 // createMtlxRenderView, extracted so tryRefreshRenderView can
 // regenerate + diff a target's sources against a live view's
 // compiled sources without paying for a full view rebuild (measured
 // gen.generate: 20-40ms, vs. WebGLRenderer init + GL compile for a
 // full rebuild). Args: { mx, gen, genContext, renderable, label,
-// isMounted }. Returns { vs, fs, introspected } or null when
+// isMounted }. Returns { vs, fs, introspected, transparent } or null when
 // isMounted() went false before generation started (nothing GL-side
 // exists yet at that point, so there's nothing to clean up here; the
 // caller decides whether it needs disposePartial). Throws Error with a
@@ -2455,13 +2526,23 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // failure the material is opaque (false), never "whatever the
     // previous material left" — deterministic default, opaque on
     // failure.
+    //
+    // `transparent` mirrors whatever hwTransparency ends up being on
+    // genContext's options, captured locally so it can ride along in
+    // this function's return value (three.js material flags downstream
+    // need to know the verdict codegen actually used — see
+    // applyMaterialInternal in createMtlxRenderView). Set ONLY after the
+    // option write itself succeeds, so it can never disagree with what
+    // gen.generate() below actually saw.
+    let transparent = false;
     try { genContext.getOptions().hwTransparency = false; } catch (e) { /* option absent */ }
     try {
         if (typeof mx.isTransparentSurface === 'function') {
-            genContext.getOptions().hwTransparency =
-                mx.isTransparentSurface(renderable, gen.getTarget());
+            const t = !!mx.isTransparentSurface(renderable, gen.getTarget());
+            genContext.getOptions().hwTransparency = t;
+            transparent = t; // set only after the option write succeeded
         }
-    } catch (e) { /* reset above already put this at the deterministic false default */ }
+    } catch (e) { transparent = false; /* reset above already put the option at the deterministic false default */ }
     try {
         if (mx.ShaderInterfaceType) {
             genContext.getOptions().shaderInterfaceType =
@@ -2567,7 +2648,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     }
     introspected = introspected.map(plainizeMxUniformData);
 
-    return { vs, fs, introspected };
+    return { vs, fs, introspected, transparent };
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
@@ -2861,7 +2942,14 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         return { refreshed: false, srcs: null };
     }
     if (!srcs) return { refreshed: false, srcs: null };
-    if (srcs.vs !== view.vs || srcs.fs !== view.fs) return { refreshed: false, srcs };
+    // Belt-and-suspenders: a hwTransparency flip changes the generated
+    // epilogue GLSL too, so the srcs.vs/fs inequality above will normally
+    // already catch this — but compare the verdict explicitly instead of
+    // relying on that as an invariant. Gated on FORCE_TRANSPARENCY: while
+    // the setting is off the verdict is never applied to rendering (see
+    // applyMaterialInternal), so a verdict flip alone is irrelevant here
+    // and forcing a rebuild for it would just be a pointless refresh.
+    if (srcs.vs !== view.vs || srcs.fs !== view.fs || (FORCE_TRANSPARENCY && (!!srcs.transparent !== !!view.isTransparent))) return { refreshed: false, srcs };
 
     // A `filename`-type input's VALUE (the referenced texture path) can
     // change without the generated GLSL text changing at all — the path
@@ -3379,7 +3467,7 @@ const createMtlxRenderView = async ({
                 // mxExclusive-locked generatePreviewSourcesUnlocked before
                 // the lock released — see that function's comment. No
                 // getStage/collectMxUniforms left in this function.
-                const { vs, fs, introspected } = __srcs;
+                const { vs, fs, introspected, transparent } = __srcs;
 
                 // Pre-warm the driver's shader compile on the persistent
                 // hidden GL context BEFORE the display renderer is created
@@ -4029,12 +4117,47 @@ const createMtlxRenderView = async ({
                 // ------------------------------------------------------
                 const applyMaterialInternal = (srcs, applyLabel) => {
                     const newUniforms = bindMaterialUniforms(srcs);
+                    // Transparency verdict comes from generation-time
+                    // isTransparentSurface (see generatePreviewSourcesUnlocked's
+                    // hwTransparency block above) — srcs.transparent is exactly
+                    // what codegen used to pick the epilogue, never re-derived
+                    // here. These flags only take effect when the experimental
+                    // Force Transparency setting (FORCE_TRANSPARENCY, DEFAULT
+                    // OFF) is on; off = the verdict is ignored here entirely,
+                    // matching official-MaterialX-viewer behavior (every
+                    // preview renders opaque, exactly like before this
+                    // feature). Flipping the setting never rebuilds this
+                    // material or its shader — setForceTransparency mutates
+                    // every live view's material.transparent/depthWrite flags
+                    // in place via the handle's refreshTransparencyFlags (see
+                    // its definition below) — the alpha epilogue is already
+                    // baked into srcs.fs regardless of the setting. NormalBlending
+                    // (three.js's default) with STRAIGHT alpha: MaterialX's
+                    // ESSL epilogue emits straight (non-premultiplied) alpha,
+                    // so do NOT set premultipliedAlpha on this material. Known
+                    // tradeoff: DoubleSide + transparent + depthWrite:false
+                    // means the ball's own back/front faces composite in
+                    // whatever order r128 happens to draw them — no intra-mesh
+                    // sorting — so self-overlapping transparent geometry can
+                    // show ordering artifacts; accepted for preview quality,
+                    // no two-pass (depth-prepass) rendering is implemented.
+                    // u_alphaThreshold still gets its generator default
+                    // (0.001) through the existing introspected-uniform
+                    // upload path below; if that upload is ever skipped, a
+                    // null `data` degrades to an implicit 0.0 threshold —
+                    // i.e. never discards — so no extra code is needed here
+                    // for that case. The opaque path (isTransparent false)
+                    // stays byte-equivalent to before: transparent:false,
+                    // depthWrite:true are three.js/r128's own defaults.
+                    const isTransparent = !!srcs.transparent && FORCE_TRANSPARENCY;
                     const newMaterial = new THREE.RawShaderMaterial({
                         vertexShader: srcs.vs,
                         fragmentShader: srcs.fs,
                         glslVersion: THREE.GLSL3,
                         uniforms: newUniforms,
                         side: THREE.DoubleSide,
+                        transparent: isTransparent,
+                        depthWrite: !isTransparent,
                     });
 
                     // Stash the outgoing material/uniforms so a compile
@@ -4123,7 +4246,7 @@ const createMtlxRenderView = async ({
                 // Error on a compile failure, caught by the outer
                 // try/catch below (disposePartial() + rethrow), identical
                 // to today's first-build failure behavior.
-                applyMaterialInternal({ vs, fs, introspected }, label);
+                applyMaterialInternal({ vs, fs, introspected, transparent }, label);
 
                 const animate = () => {
                     if (stopped || !aliveFn()) return;
@@ -4155,6 +4278,7 @@ const createMtlxRenderView = async ({
                 }
         const handle = {
             uniforms, introspected, vs, fs, controls, renderer,
+            isTransparent: !!transparent,
             // Live auto-orbit toggle (no regen needed). No-op in
             // full-scene mode: there's no `controls` instance to toggle
             // (see the Controls block above) and letting fallbackSpin
@@ -4270,6 +4394,19 @@ const createMtlxRenderView = async ({
                     });
                 }
             },
+            // Re-derive the material's blend flags from the stored hwTransparency
+            // verdict and the CURRENT Force Transparency setting, in place — no
+            // shader change is involved (the alpha epilogue is baked at generation
+            // regardless of the setting; the setting only gates these three.js
+            // flags), so a toggle never needs a rebuild. Broadcast to all live
+            // views by setForceTransparency.
+            refreshTransparencyFlags: () => {
+                if (!material) return;
+                const on = !!handle.isTransparent && FORCE_TRANSPARENCY;
+                material.transparent = on;
+                material.depthWrite = !on;
+                material.needsUpdate = true;
+            },
             // Live-swap the environment (radiance/irradiance/mips/
             // background) without a shader rebuild — used by the
             // Environment dialog's Import.../Reset. Swaps bgMesh's
@@ -4382,6 +4519,7 @@ const createMtlxRenderView = async ({
                 handle.introspected = srcs.introspected;
                 handle.vs = srcs.vs;
                 handle.fs = srcs.fs;
+                handle.isTransparent = !!srcs.transparent;
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] applyMaterial total: '
                         + (performance.now() - __applyPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
@@ -4686,6 +4824,8 @@ const MTLX_ICON_PATHS = {
     'chevron-down': { filled: false, inner: '<path d="M6 9l6 6l6 -6"/>' },
     'check': { filled: false, inner: '<path d="M5 12l5 5l10 -10"/>' },
     x: { filled: false, inner: '<path d="M18 6l-12 12"/><path d="M6 6l12 12"/>' },
+    'settings-cog': { filled: false, inner: '<path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" />' },
+    'presets': { filled: false, inner: '<path d="M12 21a9 9 0 1 1 0 -18a9 9 0 0 1 0 18" /><path d="M18 12a6 6 0 0 1 -6 6" />' },
 };
 
 // React component (plain createElement — this file stays JSX-free).
@@ -4745,6 +4885,7 @@ const MtlxIcon = (props) => {
 
 Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mxExclusive,
+    getForceTransparency, setForceTransparency,
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
@@ -4760,7 +4901,7 @@ Object.assign(window, {
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
-    createMtlxRenderView, tryRefreshRenderView, prewarmPreviewTarget,
+    createMtlxRenderView, tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
     MtlxIcon, MTLX_ICON_PATHS,

@@ -363,6 +363,64 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
     );
 }
 
+// Settings dialog (the cogwheel button in ViewportControls' strip below —
+// present in all three apps, since docs/viewer/graph all render
+// ViewportControls, so mounting the dialog there needs zero per-app
+// wiring). Body is a small list of settings rows so more can land here
+// later without restructuring the dialog itself; today there is exactly
+// one row (Force Transparency).
+function SettingsDialog({ open, onClose, overlayClassName }) {
+    useEscapeToClose(onClose, open);
+    // Re-read from the engine's persisted value every time the dialog
+    // opens (not just once on mount) — window.setForceTransparency is the
+    // single source of truth (localStorage-backed), so this only needs to
+    // resync on open rather than track it live.
+    const [forceT, setForceT] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+    React.useEffect(() => {
+        if (open) setForceT(!!(window.getForceTransparency && window.getForceTransparency()));
+    }, [open]);
+    if (!open) return null;
+    return (
+        <DialogFrame
+            open={open}
+            title="Settings"
+            onClose={onClose}
+            overlayClassName={overlayClassName}
+            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] overflow-hidden flex flex-col"
+        >
+            <div className="px-3 py-3 space-y-3 text-[12px]">
+                {/* Settings rows go here — one block per setting, so
+                    future additions are just more blocks in this list
+                    rather than a redesign of the dialog. */}
+                <div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-gray-200">
+                            Force Transparency
+                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                        </span>
+                        <button
+                            onClick={() => {
+                                const next = !forceT;
+                                setForceT(next);
+                                window.setForceTransparency && window.setForceTransparency(next);
+                            }}
+                            title={forceT ? 'Disable forced transparency' : 'Enable forced transparency'}
+                            className={`h-5 px-2 rounded border transition-colors shrink-0 ${
+                                forceT ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                            }`}
+                        >
+                            {forceT ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
+                    </div>
+                </div>
+            </div>
+        </DialogFrame>
+    );
+}
+
 // Copy arbitrary text to the clipboard, with the same two-tier fallback
 // XmlDialog's copyXml used before this extraction: try
 // navigator.clipboard.writeText first (needs a secure context; some
@@ -1067,6 +1125,7 @@ const ViewportControls = ({
     const [envRotation, setEnvRotation] = React.useState(0);   // degrees, 0-360
     const [envExposure, setEnvExposure] = React.useState(1.0);
     const [envImportError, setEnvImportError] = React.useState(null);
+    const [settingsOpen, setSettingsOpen] = React.useState(false);
 
     // Re-apply rotation/exposure onto whatever view is now in
     // viewRef.current every time the host reports a (re)build via
@@ -1124,6 +1183,7 @@ const ViewportControls = ({
     };
 
     return (
+    <React.Fragment>
     <div ref={panelEdgeRef} className={containerClassName}>
         {children}
         {showGeomSelect && (
@@ -1195,6 +1255,13 @@ const ViewportControls = ({
         </button>
         {trailingChildren}
         <button
+            onClick={() => { if (isFullscreen) onToggleFullscreen(); setSettingsOpen(true); }}
+            title="Settings"
+            className={buttonClassName(false)}
+        >
+            <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
+        </button>
+        <button
             onClick={onToggleFullscreen}
             title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
             className={buttonClassName(false)}
@@ -1202,6 +1269,20 @@ const ViewportControls = ({
             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
         </button>
     </div>
+    {/* Mounted as a sibling of the strip (not inside it) with a `fixed`
+        overlay — ViewportControls renders inside scrolling pages in the
+        docs/viewer apps, so an `absolute` backdrop (DialogFrame's
+        default) would only cover the panel's own scrolled-past bounds
+        instead of the whole viewport. Same rationale as the viewer's
+        Presets/Export dialogs (see their header comments). No
+        fullscreen-subtree concerns here since the button above already
+        exits fullscreen before opening this. */}
+    <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+    />
+    </React.Fragment>
     );
 };
 
@@ -1543,6 +1624,6 @@ Object.assign(window, {
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, PreviewErrorBoundary,
-    DialogFrame, PresetsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     fetchPresetFiles, copyTextToClipboard, ShaderExportDialog,
 });

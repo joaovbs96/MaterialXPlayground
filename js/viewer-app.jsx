@@ -99,6 +99,9 @@
             const [error, setError] = React.useState(null);
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
+            // Floating left "Files" sidebar (browser only) — ephemeral, mirroring
+            // the graph editor's paramsOpen (not persisted across reloads).
+            const [sidebarOpen, setSidebarOpen] = React.useState(true);
             // Presets dialog ("Presets" overlay button): a curated list of
             // official MaterialX example documents (MTLX_PRESETS in
             // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks WHICH preset
@@ -244,7 +247,7 @@
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1) ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
                     if (pick) loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one below.');
+                    else setStatus('This drop contains several .mtlx files — pick one in the Files panel.');
                 } else if (chosenMtlx && viewRef.current) {
                     // Textures added to a live view: rebind without regenerating.
                     setTexReport(bindDroppedTextures(viewRef.current, merged));
@@ -252,7 +255,7 @@
                 } else if (chosenMtlx) {
                     loadDocument(chosenMtlx, merged);
                 } else {
-                    setStatus('Textures added — pick a .mtlx below.');
+                    setStatus('Textures added — pick a .mtlx in the Files panel.');
                 }
             };
 
@@ -479,16 +482,22 @@
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
             return (
-                // Under VS Code this becomes a percentage-height chain
-                // (h-full min-h-0 flex flex-col) instead of a stacked,
-                // page-scrolling column, so the render viewport below can
-                // fill all space below the header — full-bleed webview.
-                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'space-y-4 sm:space-y-6'}>
+                // IN_VSCODE: percentage-height chain (h-full min-h-0 flex
+                // flex-col) so the render viewport below can fill all space
+                // below the header — full-bleed webview, unchanged.
+                // Browser: graph-editor-style full-bleed stage, positioned
+                // against #root via `absolute inset-0` (js/shell.jsx's
+                // viewer wrapClass is now empty — see its comment there).
+                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'absolute inset-0 bg-gray-900 overflow-hidden'}>
                     {/* Full-page drop indicator: sits below the sticky header
                         (h-14 = top-14) and lets events pass through to the
-                        window-level drop handlers. */}
+                        window-level drop handlers. z-40 (not the new
+                        sidebar's z-30, which sits later in the DOM): matches
+                        the graph z-convention (controls 10/30 < drop 40 <
+                        dialogs 50); pointer-events-none so this doesn't
+                        change actual behavior. */}
                     {dragOver && (
-                        <div className="fixed left-0 right-0 bottom-0 top-14 z-30 pointer-events-none p-2 sm:p-4">
+                        <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
                             <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
                                 <div className="text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
                                     {'\u2B07\uFE0F'} Drop to load
@@ -497,121 +506,45 @@
                         </div>
                     )}
 
-                    {/* Page intro: the site title/nav/links live in the shared
-                        header (js/site-header.js). Describes page-wide drag-drop,
-                        which doesn't apply under VS Code (single opened .mtlx file). */}
-                    {!IN_VSCODE && (
-                    <p className="text-gray-400 text-sm sm:text-base">
-                        Drag &amp; drop a <code>.mtlx</code> document anywhere on this page — alone, with its
-                        textures (loose files or a subfolder), or as a <code>.zip</code> — and render it
-                        with the same engine as the node previews.
-                    </p>
-                    )}
-
-                    {/* Under VS Code the left column (drop zone, pickers, document/
-                        material selects, texture bind report) is hidden — the editor
-                        is bound to one opened .mtlx file — so the grid collapses to a
-                        single, full-width column for the viewport. */}
-                    {/* Height chain continues: flex-1 min-h-0 flex (not the
-                        browser's grid) so the single remaining column
-                        (viewport card) can grow to fill the app root. */}
-                    <div className={IN_VSCODE ? 'flex-1 min-h-0 flex' : 'grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-6'}>
-                        {/* Left: drop zone + files + pickers */}
-                        {!IN_VSCODE && (
-                        <div className="md:col-span-1 space-y-4">
-                            <div
-                                className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
-                                    dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'
-                                }`}
-                            >
-                                <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-2 text-gray-400" />
-                                <div className="text-sm text-gray-300 font-medium">Drop .mtlx / textures / folder / .zip anywhere on the page</div>
-                                <div className="text-xs text-gray-500 mt-2">or</div>
-                                <div className="flex items-center justify-center gap-2 mt-2 flex-wrap">
-                                    <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
-                                        Choose files
-                                        <input type="file" multiple className="hidden" onChange={onPickFiles} />
-                                    </label>
-                                    <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
-                                        Choose folder
-                                        <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
-                                    </label>
-                                </div>
-                            </div>
-
-                            {fileCount > 0 && (
-                                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs text-gray-400">
-                                    <span className="text-gray-200 font-semibold">{fileCount}</span> file{fileCount === 1 ? '' : 's'} loaded
-                                    ({mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'})
-                                </div>
-                            )}
-
-                            {mtlxPaths.length > 1 && (
-                                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
-                                    <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Document</div>
-                                    <select
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
-                                        value={chosenMtlx || ''}
-                                        onChange={(e) => { setChosenMtlx(e.target.value); loadDocument(e.target.value); }}
-                                    >
-                                        {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
-                                        {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                                    </select>
-                                </div>
-                            )}
-
-                            {/* Geometry selection lives in the viewport overlay;
-                                this panel only hosts the material picker now. */}
-                            {renderables.length > 1 && (
-                                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3">
-                                    <div>
-                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Material</div>
-                                        <select
-                                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
-                                            value={chosenMat}
-                                            onChange={(e) => setChosenMat(Number(e.target.value))}
-                                        >
-                                            {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
-                                        </select>
-                                    </div>
-                                </div>
-                            )}
-
-                            {texReport && (texReport.bound.length > 0 || texReport.missing.length > 0) && (
-                                <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2">
-                                    <div className="font-semibold text-gray-400 uppercase tracking-wider">Textures</div>
-                                    {texReport.bound.map((b, i) => (
-                                        <div key={'b' + i} className="text-green-300/90 font-mono break-all">{'\u2713'} {b}</div>
-                                    ))}
-                                    {texReport.missing.map((m, i) => (
-                                        <div key={'m' + i} className="text-amber-300/90 font-mono break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">{'\u26A0'} {m}</div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                        )}
-
-                        {/* Right: viewport. Spans the full width under VS Code, since
-                            the left column above is hidden there. */}
-                        {/* VS Code: full-bleed card — flex-1 min-h-0 flex
-                            flex-col carries the height chain down to the
-                            viewport; border/rounded/padding dropped since
-                            there's no surrounding page chrome to frame. */}
-                        <div className={IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'md:col-span-2 bg-gray-800 border border-gray-700 rounded-lg p-3 sm:p-4'}>
-                            {status && (
+                    {/* IN_VSCODE: height chain continues (flex-1 min-h-0
+                        flex) so the single remaining column (viewport card)
+                        can grow to fill the app root — unchanged.
+                        Browser: `absolute inset-0` — a graph-style stage
+                        that just hosts the viewport card; the old left
+                        column (drop zone, pickers, document/material
+                        selects, texture bind report) now lives in the
+                        floating "Files" sidebar below instead of a grid
+                        column. */}
+                    <div className={IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'}>
+                        {/* Viewport card. Spans the full width in both modes
+                            now (the old left column moved into the floating
+                            "Files" sidebar below, browser only). IN_VSCODE:
+                            full-bleed — flex-1 min-h-0 flex flex-col carries
+                            the height chain down to the viewport;
+                            border/rounded/padding dropped since there's no
+                            surrounding page chrome to frame. Browser:
+                            `absolute inset-0` fills the stage above;
+                            status/error move to floating banners below
+                            instead of living inside this card (see
+                            status/error gating just below). */}
+                        <div className={IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'}>
+                            {IN_VSCODE && status && (
                                 <div className="text-sm text-gray-400 mb-3">{status}</div>
                             )}
-                            {error && (
+                            {IN_VSCODE && error && (
                                 <div className="bg-red-950/40 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-3 mb-3 break-words">
                                     {error}
                                 </div>
                             )}
-                            {/* VS Code: flex-1 min-h-0 so this box actually
+                            {/* IN_VSCODE: flex-1 min-h-0 so this box actually
                                 receives the card's remaining height instead
-                                of sizing off its (auto-height) canvas child;
-                                rounded-lg dropped for edge-to-edge fill; the
-                                18rem floor is a browser-only affordance. */}
-                            <div ref={viewportRef} className={`relative overflow-hidden bg-gray-900 ${IN_VSCODE ? 'flex-1 min-h-0' : 'rounded-lg'}`} style={IN_VSCODE ? undefined : { minHeight: '18rem' }}>
+                                of sizing off its (auto-height) canvas child
+                                — unchanged. Browser: `absolute inset-0`
+                                fills the (now full-bleed) viewport card
+                                directly; the old browser-only min-height
+                                floor is gone along with the page-flow
+                                layout that needed it. */}
+                            <div ref={viewportRef} className={`overflow-hidden bg-gray-900 ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
                                 <LoadingOverlay
                                     show={busy}
                                     label={status}
@@ -673,7 +606,7 @@
                                                     title="Load a curated official MaterialX example"
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
-                                                    <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                                                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
                                                 </button>
                                                 )}
                                                 {/* Export Shader Code: not VS Code-gated (unlike
@@ -716,35 +649,152 @@
                                 <canvas
                                     ref={canvasRef}
                                     className="w-full block cursor-grab active:cursor-grabbing"
-                                    // VS Code: canvas always fills its
-                                    // (now flex-1) container, same as
-                                    // fullscreen does in the browser.
-                                    style={{ height: (isFullscreen || IN_VSCODE) ? '100%' : '28rem' }}
+                                    // Always fills its container: VS Code and
+                                    // fullscreen already resolved to 100% here;
+                                    // the browser default is now full-bleed too
+                                    // (`absolute inset-0` viewport container
+                                    // above), so the old fixed-height,
+                                    // non-fullscreen floor no longer applies.
+                                    style={{ height: '100%' }}
                                     tabIndex={-1}
                                 />
                             </div>
-                            {/* Mentions page-wide file drop (doesn't apply under VS
-                                Code) and would steal bottom height from the
-                                full-bleed viewport there. */}
-                            {!IN_VSCODE && (
-                            <div className="text-xs text-gray-500 mt-2">
-                                Drag orbits, wheel/pinch zooms. Files can be dropped anywhere on the
-                                page. Textures are matched by relative path; unresolved images fall
-                                back to a UV checker.
-                            </div>
-                            )}
                         </div>
                     </div>
+
+                    {/* Floating status/error banners (browser only) — status/error
+                        used to live inside the viewport card; now that the card is
+                        full-bleed (`absolute inset-0`), they float above it instead,
+                        same idea as the graph editor's error banners. error sits at
+                        top-12 (below status's top-2) so the two don't overlap when
+                        both are shown at once. */}
+                    {!IN_VSCODE && status && (
+                        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg">{status}</div>
+                    )}
+                    {!IN_VSCODE && error && (
+                        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
+                    )}
+
+                    {/* Floating left "Files" sidebar (browser only): hard-swap
+                        collapse mirroring the graph editor's param panel
+                        (paramsOpen — js/graph-app.jsx :5328/:5613), just anchored
+                        top-2/bottom-2/left-2 instead of the graph's right-side
+                        placement. Holds everything the old left column used to
+                        (drop zone, pickers, document/material selects, texture
+                        bind report), with the old page-intro paragraph and
+                        bottom-tip text merged into one description block at the
+                        top. When open it may cover the HUD's left edge at narrow
+                        widths (sidebar z-30 > HUD's z-10) — collapse it to reach
+                        the HUD underneath. */}
+                    {!IN_VSCODE && (sidebarOpen ? (
+                        <div className="absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden">
+                            <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
+                                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Files</span>
+                                <button
+                                    onClick={() => setSidebarOpen(false)}
+                                    title="Collapse the files panel"
+                                    className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
+                                >{'\u00AB'}</button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
+                                <div className="text-xs text-gray-500">
+                                    Drag &amp; drop a <code>.mtlx</code> document anywhere on this page — alone, with its
+                                    textures (loose files or a subfolder), or as a <code>.zip</code> — and render it
+                                    with the same engine as the node previews. Drag orbits, wheel/pinch zooms.
+                                    Textures are matched by relative path; unresolved images fall back to a UV checker.
+                                </div>
+
+                                <div
+                                    className={`rounded-lg border-2 border-dashed p-4 text-center transition-colors ${
+                                        dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'
+                                    }`}
+                                >
+                                    <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-2 text-gray-400" />
+                                    <div className="text-sm text-gray-300 font-medium">Drop .mtlx / textures / folder / .zip anywhere on the page</div>
+                                    <div className="text-xs text-gray-500 mt-2">or</div>
+                                    <div className="flex items-center justify-center gap-2 mt-2 flex-wrap">
+                                        <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
+                                            Choose files
+                                            <input type="file" multiple className="hidden" onChange={onPickFiles} />
+                                        </label>
+                                        <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
+                                            Choose folder
+                                            <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {fileCount > 0 && (
+                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs text-gray-400">
+                                        <span className="text-gray-200 font-semibold">{fileCount}</span> file{fileCount === 1 ? '' : 's'} loaded
+                                        ({mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'})
+                                    </div>
+                                )}
+
+                                {mtlxPaths.length > 1 && (
+                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Document</div>
+                                        <select
+                                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
+                                            value={chosenMtlx || ''}
+                                            onChange={(e) => { setChosenMtlx(e.target.value); loadDocument(e.target.value); }}
+                                        >
+                                            {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
+                                            {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {/* Geometry selection lives in the viewport overlay;
+                                    this panel only hosts the material picker now. */}
+                                {renderables.length > 1 && (
+                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3">
+                                        <div>
+                                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Material</div>
+                                            <select
+                                                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
+                                                value={chosenMat}
+                                                onChange={(e) => setChosenMat(Number(e.target.value))}
+                                            >
+                                                {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {texReport && (texReport.bound.length > 0 || texReport.missing.length > 0) && (
+                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2">
+                                        <div className="font-semibold text-gray-400 uppercase tracking-wider">Textures</div>
+                                        {texReport.bound.map((b, i) => (
+                                            <div key={'b' + i} className="text-green-300/90 font-mono break-all">{'\u2713'} {b}</div>
+                                        ))}
+                                        {texReport.missing.map((m, i) => (
+                                            <div key={'m' + i} className="text-amber-300/90 font-mono break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">{'\u26A0'} {m}</div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <button
+                            onClick={() => setSidebarOpen(true)}
+                            title="Expand the files panel"
+                            className="absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                        >
+                            {'\u00BB'}
+                            <span className="max-w-[8rem] truncate">Files</span>
+                        </button>
+                    ))}
 
                     {/* Presets dialog ("Presets" overlay button) and Export
                         Shader Code dialog ("Export Shader Code" overlay
                         button). Both use the `fixed` overlay variant (not
-                        DialogFrame's `absolute` default): this #root spans a
-                        scrollable page, so an `absolute inset-0` backdrop
-                        would only cover the panel's own scrolled-past
-                        bounds instead of the whole viewport (mirrors the
-                        graph editor's dialogs, whose #root IS the relative
-                        full-bleed stage those default to). */}
+                        DialogFrame's `absolute` default): kept deliberately so the
+                        backdrop covers the entire window, including the shared
+                        header/footer outside #root — the old rationale ("this #root
+                        spans a scrollable page") is gone now that the browser stage
+                        is `absolute inset-0` full-bleed, but `fixed` still does the
+                        right thing here (mirrors the graph editor's dialogs). */}
                     <PresetsDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} onPick={loadPreset}
                         busy={presetsBusy} busyPath={presetsBusyPath}
                         overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70" />
