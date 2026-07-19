@@ -1,70 +1,17 @@
 // js/graph/dialogs.jsx — the graph view's modal dialogs: the keyboard
-// shortcuts reference, the in-tab docs viewer, the raw-XML viewer, and the
-// validation results popup. Split out of js/graph-app.jsx (pure move, no
-// behavior change) as part of the graph view's file split. Loaded after
-// js/shared/mtlx-ui.jsx (consumes its useEscapeToClose window global) in
-// the graph view's babelScripts manifest (see js/shell.jsx's
-// VIEW_DEPS.graph). Like every other lazy-loaded file in this app, this
-// file has NO top-level import/export — it self-exports via a single
-// Object.assign(window, {}) at the bottom.
-
-        // Shared chrome for all six dialogs below: a full-viewport backdrop
-        // (mousedown outside the panel closes it, unless
-        // `backdropCloseDisabled`), a centered panel, and a header bar with
-        // a title and a × close button (optionally preceded by
-        // `headerRight` extras — XmlDialog's Copy button, DocsDialog's
-        // open-in-new-tab link). Each dialog keeps its OWN useEscapeToClose
-        // call rather than the frame owning it — the `when` condition
-        // differs per dialog (e.g. ExportDialog/PresetsDialog additionally
-        // gate it on `!busy`), so the frame has no single answer for when a
-        // given dialog should stop listening for Esc.
-        // `keepMounted` (DocsDialog only): instead of unmounting while
-        // closed, the backdrop stays in the DOM with a `hidden` class
-        // toggled on it instead — keeps the embedded docs App warm across
-        // close/reopen. Every other dialog unmounts on close via its own
-        // `if (!open) return null` guard before ever reaching this
-        // component; this component's own `open` check is a harmless
-        // second guard for KeybindsHelp and DocsDialog, which don't
-        // pre-check it themselves (KeybindsHelp has no `open` prop at all —
-        // it's mounted/unmounted by its caller instead — so it always
-        // passes `open={true}` here).
-        // `closeDisabled`/`backdropCloseDisabled` (Export/Presets only):
-        // while a caller-supplied async action is in flight (`busy`), both
-        // the × button and backdrop-click-to-close are disabled so the
-        // dialog can't be dismissed mid-request. Left undefined by every
-        // other dialog, which reproduces their close button's ORIGINAL
-        // markup exactly (no `disabled` attribute, no `disabled:opacity-40`
-        // class — that class is only appended when a dialog actually wires
-        // up `closeDisabled`).
-        const DialogFrame = ({
-            open, title, titleClassName, panelClassName, onClose, children,
-            headerRight, closeDisabled, backdropCloseDisabled = false,
-            keepMounted = false,
-        }) => {
-            if (!open && !keepMounted) return null;
-            return (
-                <div
-                    className={'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70' + (keepMounted && !open ? ' hidden' : '')}
-                    onMouseDown={backdropCloseDisabled ? undefined : onClose}
-                >
-                    <div className={panelClassName} onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                            <span className={titleClassName || 'text-[13px] font-bold text-gray-100'}>{title}</span>
-                            <div className="flex items-center gap-2">
-                                {headerRight}
-                                <button
-                                    onClick={onClose}
-                                    disabled={closeDisabled}
-                                    title="Close"
-                                    className={'text-gray-400 hover:text-gray-200 leading-none text-lg px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
-                                >{'×'}</button>
-                            </div>
-                        </div>
-                        {children}
-                    </div>
-                </div>
-            );
-        };
+// shortcuts reference, the in-tab docs viewer, the raw-XML viewer, the
+// validation results popup, and the export dialog. Split out of
+// js/graph-app.jsx (pure move, no behavior change) as part of the graph
+// view's file split. The shared DialogFrame chrome these dialogs all sit
+// in, plus the curated-example picker dialog and its backing data/fetch
+// helper, now live in js/shared/mtlx-ui.jsx instead — shared with the
+// material viewer, which has its own example picker and shader-export
+// dialogs. Loaded after js/shared/mtlx-ui.jsx (consumes its
+// DialogFrame/useEscapeToClose window globals) in the graph view's
+// babelScripts manifest (see js/shell.jsx's VIEW_DEPS.graph). Like every
+// other lazy-loaded file in this app, this file has NO top-level
+// import/export — it self-exports via a single Object.assign(window, {})
+// at the bottom.
 
         // Every keyboard shortcut and mouse interaction currently live in
         // the editor — kept as one list so it can't silently drift from
@@ -457,90 +404,4 @@
             );
         }
 
-        // Curated MaterialX example documents (item F3.2's "Presets"
-        // toolbar button), resolved through window.MtlxAssets
-        // (js/mtlx-assets.js) at the SAME base the app already uses for its
-        // default startup document (js/graph/model.jsx's DEFAULT_GRAPH_URL)
-        // — so a preset pick behaves exactly like that first-load fetch,
-        // just chosen by the user instead of hardcoded, and (in a future
-        // offline/packaged build) resolves against the local vendor mirror
-        // instead of GitHub with zero further code changes — see
-        // mtlx-assets.js's header comment. Every path below was verified to
-        // exist at the pinned spec tag (HTTP 200 via GitHub's contents API
-        // and a direct raw.githubusercontent.com request) before being
-        // added; candidates that 404'd (e.g. StandardSurface's plain
-        // "standard_surface_brass_tiled.mtlx" — only the "_look_" variant
-        // exists at this tag; OpenPbr's "open_pbr_glass_tinted.mtlx" and
-        // "open_pbr_anisotropy.mtlx" — no such files at this tag) were
-        // dropped rather than guessed at.
-        const MTLX_PRESETS_BASE = window.MtlxAssets.repoUrl('resources/Materials/Examples/');
-        const MTLX_PRESETS = [
-            { label: 'Marble (solid)', desc: 'Noise-driven solid marble veining', path: 'StandardSurface/standard_surface_marble_solid.mtlx' },
-            { label: 'Jade', desc: 'Translucent jade stone with subsurface scattering', path: 'StandardSurface/standard_surface_jade.mtlx' },
-            { label: 'Gold', desc: 'Polished gold metal', path: 'StandardSurface/standard_surface_gold.mtlx' },
-            { label: 'Plastic', desc: 'Glossy colored plastic', path: 'StandardSurface/standard_surface_plastic.mtlx' },
-            { label: 'Copper', desc: 'Brushed copper metal', path: 'StandardSurface/standard_surface_copper.mtlx' },
-            { label: 'Car paint', desc: 'Multi-layer automotive car paint', path: 'StandardSurface/standard_surface_carpaint.mtlx' },
-            { label: 'Chess set', desc: 'Full chess set scene with several materials', path: 'StandardSurface/standard_surface_chess_set.mtlx' },
-            { label: 'Brass (tiled look)', desc: 'Tiled brass surface via a shared material look', path: 'StandardSurface/standard_surface_look_brass_tiled.mtlx' },
-            { label: 'Wood (tiled)', desc: 'Tiled wood grain surface', path: 'StandardSurface/standard_surface_wood_tiled.mtlx' },
-            { label: 'Velvet', desc: 'Sheen-driven velvet fabric', path: 'StandardSurface/standard_surface_velvet.mtlx' },
-            { label: 'Chrome', desc: 'Mirror-like chrome metal', path: 'StandardSurface/standard_surface_chrome.mtlx' },
-            { label: 'Glass', desc: 'Clear refractive glass', path: 'StandardSurface/standard_surface_glass.mtlx' },
-            { label: 'OpenPBR default', desc: 'The OpenPBR surface shader at its defaults', path: 'OpenPbr/open_pbr_default.mtlx' },
-            { label: 'OpenPBR car paint', desc: 'Multi-layer automotive car paint (OpenPBR)', path: 'OpenPbr/open_pbr_carpaint.mtlx' },
-            { label: 'OpenPBR honey', desc: 'Translucent honey with subsurface scattering (OpenPBR)', path: 'OpenPbr/open_pbr_honey.mtlx' },
-            { label: 'OpenPBR velvet', desc: 'Sheen-driven velvet fabric (OpenPBR)', path: 'OpenPbr/open_pbr_velvet.mtlx' },
-            { label: 'OpenPBR pearl', desc: 'Iridescent pearl surface (OpenPBR)', path: 'OpenPbr/open_pbr_pearl.mtlx' },
-            { label: 'OpenPBR soap bubble', desc: 'Thin-film iridescence on a soap bubble (OpenPBR)', path: 'OpenPbr/open_pbr_soapbubble.mtlx' },
-        ];
-
-        // Presets dialog (toolbar "Presets" button): a scrollable curated
-        // list of official MaterialX example documents. Clicking a row
-        // hands the preset straight to the caller (`onPick`) — this
-        // component owns no fetching itself, matching ExportDialog's
-        // "caller does the async work" split. `busy` (driven by the
-        // caller while it fetches) disables every row and shows a spinner
-        // on whichever one triggered it (`busyPath`) so the user gets
-        // feedback without the dialog needing its own network code. Chrome
-        // comes from the shared DialogFrame (see above).
-        function PresetsDialog({ open, onClose, onPick, busy, busyPath }) {
-            useEscapeToClose(onClose, open && !busy);
-            if (!open) return null;
-            return (
-                <DialogFrame
-                    open={open}
-                    title="Presets"
-                    onClose={onClose}
-                    closeDisabled={busy}
-                    backdropCloseDisabled={busy}
-                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
-                >
-                    <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
-                        {MTLX_PRESETS.map((preset) => {
-                            const rowBusy = busy && busyPath === preset.path;
-                            return (
-                                <button
-                                    key={preset.path}
-                                    onClick={() => onPick(preset)}
-                                    disabled={busy}
-                                    title={preset.path}
-                                    className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
-                                        + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-700/70 cursor-pointer')}
-                                >
-                                    <span className="min-w-0">
-                                        <span className="block text-gray-100 font-medium truncate">{preset.label}</span>
-                                        <span className="block text-gray-400 text-[11px] truncate">{preset.desc}</span>
-                                    </span>
-                                    {rowBusy && (
-                                        <span className="shrink-0 w-3.5 h-3.5 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
-                                    )}
-                                </button>
-                            );
-                        })}
-                    </div>
-                </DialogFrame>
-            );
-        }
-
-Object.assign(window, { KeybindsHelp, DocsDialog, XmlDialog, ValidateDialog, ExportDialog, PresetsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE });
+Object.assign(window, { KeybindsHelp, DocsDialog, XmlDialog, ValidateDialog, ExportDialog });

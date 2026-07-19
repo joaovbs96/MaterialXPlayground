@@ -35,6 +35,578 @@ const useEscapeToClose = (onClose, when) => {
     }, [when]);
 };
 
+// Shared chrome for the app's modal dialogs: a full-viewport backdrop
+// (mousedown outside the panel closes it, unless
+// `backdropCloseDisabled`), a centered panel, and a header bar with
+// a title and a × close button (optionally preceded by
+// `headerRight` extras — XmlDialog's Copy button, DocsDialog's
+// open-in-new-tab link). Each dialog keeps its OWN useEscapeToClose
+// call rather than the frame owning it — the `when` condition
+// differs per dialog (e.g. ExportDialog/PresetsDialog additionally
+// gate it on `!busy`), so the frame has no single answer for when a
+// given dialog should stop listening for Esc.
+// `overlayClassName` (default: the graph/docs dialogs' full-panel
+// backdrop, `absolute inset-0 z-50 flex items-center justify-center
+// bg-gray-950/70`) lets a caller swap in a different backdrop class —
+// the material viewer passes a `fixed inset-0 ...` variant instead,
+// since its #root spans a scrollable page rather than a fixed-size
+// panel, so an `absolute` backdrop would only cover the panel's own
+// scrolled-past bounds instead of the whole viewport. The
+// keepMounted/hidden suffix logic below is unchanged either way.
+// `keepMounted` (DocsDialog only): instead of unmounting while
+// closed, the backdrop stays in the DOM with a `hidden` class
+// toggled on it instead — keeps the embedded docs App warm across
+// close/reopen. Every other dialog unmounts on close via its own
+// `if (!open) return null` guard before ever reaching this
+// component; this component's own `open` check is a harmless
+// second guard for KeybindsHelp and DocsDialog, which don't
+// pre-check it themselves (KeybindsHelp has no `open` prop at all —
+// it's mounted/unmounted by its caller instead — so it always
+// passes `open={true}` here).
+// `closeDisabled`/`backdropCloseDisabled` (Export/Presets only):
+// while a caller-supplied async action is in flight (`busy`), both
+// the × button and backdrop-click-to-close are disabled so the
+// dialog can't be dismissed mid-request. Left undefined by every
+// other dialog, which reproduces their close button's ORIGINAL
+// markup exactly (no `disabled` attribute, no `disabled:opacity-40`
+// class — that class is only appended when a dialog actually wires
+// up `closeDisabled`).
+const DialogFrame = ({
+    open, title, titleClassName, panelClassName, onClose, children,
+    headerRight, closeDisabled, backdropCloseDisabled = false,
+    keepMounted = false,
+    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70',
+}) => {
+    if (!open && !keepMounted) return null;
+    return (
+        <div
+            className={overlayClassName + (keepMounted && !open ? ' hidden' : '')}
+            onMouseDown={backdropCloseDisabled ? undefined : onClose}
+        >
+            <div className={panelClassName} onMouseDown={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                    <span className={titleClassName || 'text-[13px] font-bold text-gray-100'}>{title}</span>
+                    <div className="flex items-center gap-2">
+                        {headerRight}
+                        <button
+                            onClick={onClose}
+                            disabled={closeDisabled}
+                            title="Close"
+                            className={'text-gray-400 hover:text-gray-200 leading-none text-lg px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
+                        >{'×'}</button>
+                    </div>
+                </div>
+                {children}
+            </div>
+        </div>
+    );
+};
+
+// Curated MaterialX example documents (item F3.2's "Presets"
+// toolbar button), resolved through window.MtlxAssets
+// (js/mtlx-assets.js) at the SAME base the app already uses for its
+// default startup document (js/graph/model.jsx's DEFAULT_GRAPH_URL)
+// — so a preset pick behaves exactly like that first-load fetch,
+// just chosen by the user instead of hardcoded, and (in a future
+// offline/packaged build) resolves against the local vendor mirror
+// instead of GitHub with zero further code changes — see
+// mtlx-assets.js's header comment. Every path below was verified to
+// exist at the pinned spec tag (HTTP 200 via GitHub's contents API
+// and a direct raw.githubusercontent.com request) before being
+// added; candidates that 404'd (e.g. StandardSurface's plain
+// "standard_surface_brass_tiled.mtlx" — only the "_look_" variant
+// exists at this tag; OpenPbr's "open_pbr_glass_tinted.mtlx" and
+// "open_pbr_anisotropy.mtlx" — no such files at this tag) were
+// dropped rather than guessed at.
+const MTLX_PRESETS_BASE = window.MtlxAssets.repoUrl('resources/Materials/Examples/');
+const MTLX_PRESETS = [
+    { label: 'Marble (solid)', desc: 'Noise-driven solid marble veining', path: 'StandardSurface/standard_surface_marble_solid.mtlx' },
+    { label: 'Jade', desc: 'Translucent jade stone with subsurface scattering', path: 'StandardSurface/standard_surface_jade.mtlx' },
+    { label: 'Gold', desc: 'Polished gold metal', path: 'StandardSurface/standard_surface_gold.mtlx' },
+    { label: 'Plastic', desc: 'Glossy colored plastic', path: 'StandardSurface/standard_surface_plastic.mtlx' },
+    { label: 'Copper', desc: 'Brushed copper metal', path: 'StandardSurface/standard_surface_copper.mtlx' },
+    { label: 'Car paint', desc: 'Multi-layer automotive car paint', path: 'StandardSurface/standard_surface_carpaint.mtlx' },
+    { label: 'Chess set', desc: 'Full chess set scene with several materials', path: 'StandardSurface/standard_surface_chess_set.mtlx' },
+    { label: 'Brass (tiled look)', desc: 'Tiled brass surface via a shared material look', path: 'StandardSurface/standard_surface_look_brass_tiled.mtlx' },
+    { label: 'Wood (tiled)', desc: 'Tiled wood grain surface', path: 'StandardSurface/standard_surface_wood_tiled.mtlx' },
+    { label: 'Velvet', desc: 'Sheen-driven velvet fabric', path: 'StandardSurface/standard_surface_velvet.mtlx' },
+    { label: 'Chrome', desc: 'Mirror-like chrome metal', path: 'StandardSurface/standard_surface_chrome.mtlx' },
+    { label: 'Glass', desc: 'Clear refractive glass', path: 'StandardSurface/standard_surface_glass.mtlx' },
+    { label: 'OpenPBR default', desc: 'The OpenPBR surface shader at its defaults', path: 'OpenPbr/open_pbr_default.mtlx' },
+    { label: 'OpenPBR car paint', desc: 'Multi-layer automotive car paint (OpenPBR)', path: 'OpenPbr/open_pbr_carpaint.mtlx' },
+    { label: 'OpenPBR honey', desc: 'Translucent honey with subsurface scattering (OpenPBR)', path: 'OpenPbr/open_pbr_honey.mtlx' },
+    { label: 'OpenPBR velvet', desc: 'Sheen-driven velvet fabric (OpenPBR)', path: 'OpenPbr/open_pbr_velvet.mtlx' },
+    { label: 'OpenPBR pearl', desc: 'Iridescent pearl surface (OpenPBR)', path: 'OpenPbr/open_pbr_pearl.mtlx' },
+    { label: 'OpenPBR soap bubble', desc: 'Thin-film iridescence on a soap bubble (OpenPBR)', path: 'OpenPbr/open_pbr_soapbubble.mtlx' },
+];
+
+// Filename refs authored in a preset doc, resolved against any
+// <materialx fileprefix="..."> (document-wide) and/or
+// <nodegraph fileprefix="..."> (scoped to that nodegraph's own body)
+// ancestor per MaterialX's inheritable-attribute semantics (see
+// fetchPresetFiles below). Splits the raw xml into "scopes" (each
+// nodegraph's body, plus everything outside any nodegraph) so each
+// <input type="filename"> tag picks up the right accumulated prefix;
+// a two-pass tag scan within each scope.
+const extractFilenameRefs = (xml) => {
+    const rootAttrs = (/<materialx\b([^>]*)>/.exec(xml) || [])[1] || '';
+    const rootPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(rootAttrs) || [])[1] || '';
+    const scopes = [];
+    let cursor = 0;
+    const NG = /<nodegraph\b([^>]*)>([\s\S]*?)<\/nodegraph>/g;
+    let ngm;
+    while ((ngm = NG.exec(xml)) !== null) {
+        scopes.push({ text: xml.slice(cursor, ngm.index), prefix: rootPrefix });
+        const ngPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(ngm[1]) || [])[1] || '';
+        scopes.push({ text: ngm[2], prefix: rootPrefix + ngPrefix });
+        cursor = ngm.index + ngm[0].length;
+    }
+    scopes.push({ text: xml.slice(cursor), prefix: rootPrefix });
+    const refs = [];
+    for (const scope of scopes) {
+        const tags = scope.text.match(/<input\b[^>]*>/g) || [];
+        for (const tag of tags) {
+            if (!/\btype\s*=\s*"filename"/.test(tag)) continue;
+            const m = /\bvalue\s*=\s*"([^"]*)"/.exec(tag);
+            const raw = m && m[1];
+            if (!raw) continue;
+            refs.push(scope.prefix + raw);
+        }
+    }
+    return refs;
+};
+
+// Curated-preset crawl (backs the "Presets" toolbar button, item
+// F3.2): fetch a preset's root document from MTLX_PRESETS_BASE +
+// preset.path, then breadth-first crawl any sibling documents/
+// textures it pulls in, returning a relPath -> Blob map ready to
+// hand to a caller's ingest() the same way a drag-dropped .zip
+// would be. A plain single-doc fetch misses two things exercised by
+// the official MaterialX example set:
+//  (1) xi:include: "look" files (e.g. "Brass (tiled look)") pull in a
+//      separate sibling .mtlx for the actual material — resolveIncludes
+//      (js/mtlx-engine.js:535) inlines those from the returned map, but
+//      only if that sibling doc was actually fetched into it.
+//  (2) filename refs that escape the preset's own directory via literal
+//      "../" segments in the authored value AND/OR an inheritable
+//      `fileprefix="..."` attribute (MaterialX spec: set on an ancestor
+//      element — the document root or a <nodegraph> — and prepended,
+//      plain string concatenation, to every descendant filename input's
+//      raw `value`). E.g. "Wood (tiled)"'s <nodegraph
+//      fileprefix="../../../Images/"> makes value="wood_color.jpg"
+//      resolve to "../../../Images/wood_color.jpg", which lands outside
+//      the preset's own directory (resources/Images/, a sibling of
+//      resources/Materials/) — a plain dir-relative fetch 404s on it.
+//
+// `visited` (resolved doc URLs) + `queue` seed with the preset doc; every
+// fetched doc is (a) scanned for xi:include hrefs, resolved against THAT
+// doc's own URL and enqueued for its own scan, and (b) scanned for
+// fileprefix-resolved filename refs (extractFilenameRefs above), fetched
+// relative to THAT doc's own URL. `visited.size` is capped at MAX_DOCS:
+// these examples nest at most one include deep in practice, so this is
+// purely a guard against a malformed/circular include chain spinning
+// forever, not an expected limit. Texture fetches stay best-effort (warn
+// + skip on failure — a skipped ref just shows the UV checker like any
+// unresolved texture); only the ROOT document's fetch failure is fatal
+// (thrown, for the caller to catch).
+//
+// A SAFETY GUARD only ever fetches URLs under the active mode's
+// resources/ root (window.MtlxAssets.resourcesRoot(), recomputed on
+// every call so it stays correct if the active mode changes between
+// calls, not hardcoded a second time); refs that are absolute URLs
+// (scheme://) or resolve outside that root are skipped.
+//
+// Blobs for included docs are keyed the same way mtlx-engine.js's
+// resolveIncludes composes its own lookup when it later runs
+// (fromDir-of-the-including-key + '/' + href — see resolveIncludes,
+// js/mtlx-engine.js:547). Blobs for textures are keyed by the
+// fileprefix-resolved ref string (e.g. "../../../Images/wood_color.jpg")
+// — findFileForRef (js/mtlx-engine.js:517) matches an exact normalized
+// path first, then a unique path-suffix, then a unique basename, so this
+// key resolves correctly whether the WASM binding reports that resolved
+// path or the bare authored filename as the input's value at bind time
+// (bindDroppedTextures, js/mtlx-engine.js:659).
+//
+// Returns { map, rootKey }: `map` is the relPath -> Blob crawl result,
+// `rootKey` is the root document's own key in that map (its base name)
+// — callers pass it straight to their ingest()'s explicit-root-doc
+// param, since ingest()'s "auto-pick when exactly one .mtlx is in the
+// map" heuristic would otherwise also see the included docs' .mtlx keys
+// and stop to ask the user which one to load.
+const fetchPresetFiles = async (preset) => {
+    const resourcesRoot = window.MtlxAssets.resourcesRoot();
+    const isSafePresetUrl = (url) => url.indexOf(resourcesRoot) === 0;
+    const isSchemeOrRootedRef = (ref) =>
+        /^[a-z][a-z0-9+.\-]*:\/\//i.test(ref) || ref.startsWith('/');
+
+    const docUrl = MTLX_PRESETS_BASE + preset.path;
+    const baseName = preset.path.split('/').pop();
+    const map = {};
+    const seenRefs = new Set();
+    const textureFetches = [];
+    const MAX_DOCS = 12; // guard only — see comment above
+    const visited = new Set([docUrl]);
+    const queue = [{ url: docUrl, key: baseName }];
+    while (queue.length) {
+        const { url, key } = queue.shift();
+        let xml;
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
+            xml = await res.text();
+        } catch (e) {
+            if (key === baseName) throw e; // the root doc must load
+            console.warn('preset include fetch failed (skipped):', url, e);
+            continue;
+        }
+        map[key] = new Blob([xml], { type: 'application/xml' });
+
+        // (a) xi:include siblings — same attribute-order/quote tolerant
+        // href extraction as resolveIncludes (js/mtlx-engine.js:540),
+        // resolved against THIS doc's own URL.
+        const INC = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/g;
+        let incM;
+        while ((incM = INC.exec(xml)) !== null) {
+            const href = incM[1] || incM[2];
+            if (!href || isSchemeOrRootedRef(href)) continue;
+            let incUrl;
+            try { incUrl = new URL(href, url).href; } catch (e) { continue; }
+            if (!isSafePresetUrl(incUrl)) continue;
+            if (visited.has(incUrl) || visited.size >= MAX_DOCS) continue;
+            visited.add(incUrl);
+            const dirKey = key.indexOf('/') >= 0 ? key.slice(0, key.lastIndexOf('/')) : '';
+            const incKey = dirKey ? dirKey + '/' + href : href;
+            queue.push({ url: incUrl, key: incKey });
+        }
+
+        // (b) filename refs, fileprefix-resolved, fetched relative to
+        // THIS doc's own URL — best-effort, doesn't block the queue.
+        for (const ref of extractFilenameRefs(xml)) {
+            if (isSchemeOrRootedRef(ref) || seenRefs.has(ref)) continue;
+            seenRefs.add(ref);
+            let texUrl;
+            try { texUrl = new URL(ref, url).href; } catch (e) { continue; }
+            if (!isSafePresetUrl(texUrl)) continue;
+            textureFetches.push((async () => {
+                try {
+                    const r = await fetch(texUrl);
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    map[ref] = await r.blob();
+                } catch (texErr) {
+                    console.warn('preset texture fetch failed (falls back to the checker):', ref, texErr);
+                }
+            })());
+        }
+    }
+    await Promise.all(textureFetches);
+
+    return { map, rootKey: baseName };
+};
+
+// Presets dialog (toolbar "Presets" button): a scrollable curated
+// list of official MaterialX example documents. Clicking a row
+// hands the preset straight to the caller (`onPick`) — this
+// component owns no fetching itself, matching ExportDialog's
+// "caller does the async work" split. `busy` (driven by the
+// caller while it fetches) disables every row and shows a spinner
+// on whichever one triggered it (`busyPath`) so the user gets
+// feedback without the dialog needing its own network code. Chrome
+// comes from the shared DialogFrame (see above); `overlayClassName`
+// is passed straight through to it (undefined for graph callers,
+// which keeps DialogFrame's own default).
+function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName }) {
+    useEscapeToClose(onClose, open && !busy);
+    if (!open) return null;
+    return (
+        <DialogFrame
+            open={open}
+            title="Presets"
+            onClose={onClose}
+            closeDisabled={busy}
+            backdropCloseDisabled={busy}
+            overlayClassName={overlayClassName}
+            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+        >
+            <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
+                {MTLX_PRESETS.map((preset) => {
+                    const rowBusy = busy && busyPath === preset.path;
+                    return (
+                        <button
+                            key={preset.path}
+                            onClick={() => onPick(preset)}
+                            disabled={busy}
+                            title={preset.path}
+                            className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
+                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-700/70 cursor-pointer')}
+                        >
+                            <span className="min-w-0">
+                                <span className="block text-gray-100 font-medium truncate">{preset.label}</span>
+                                <span className="block text-gray-400 text-[11px] truncate">{preset.desc}</span>
+                            </span>
+                            {rowBusy && (
+                                <span className="shrink-0 w-3.5 h-3.5 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
+                            )}
+                        </button>
+                    );
+                })}
+            </div>
+        </DialogFrame>
+    );
+}
+
+// Copy arbitrary text to the clipboard, with the same two-tier fallback
+// XmlDialog's copyXml used before this extraction: try
+// navigator.clipboard.writeText first (needs a secure context; some
+// browsers also reject it outside a "fresh" user gesture), and on
+// absence/failure fall back to a throwaway <textarea> +
+// document.execCommand('copy'). Returns whether the copy succeeded, so
+// callers can drive their own "Copied" state off it (ShaderExportDialog
+// below) — this helper owns no UI state itself. XmlDialog keeps its own
+// inline copy (unchanged) rather than being refactored onto this.
+const copyTextToClipboard = async (text) => {
+    let ok = false;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            ok = true;
+        }
+    } catch (e) { ok = false; }
+    if (!ok) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+        } catch (e) { ok = false; }
+    }
+    return ok;
+};
+
+// Shader source export dialog (docs/viewer preview's "Export Shader
+// Code" affordance): generates and displays the GLSL/OSL/MDL (etc.)
+// source MaterialX's shader generators produce for a renderable
+// material, lets the user flip between codegen targets and (when a
+// document has more than one) between materials, and offers a Copy/
+// Download of whichever stage is currently showing. This component
+// owns none of the actual codegen — `generate({ renderable, label,
+// targetKey }) => Promise<{ stages }>` is supplied by the caller,
+// which closes over the engine's generateTargetSources and whatever
+// renderable-node bookkeeping its own view already has (mirrors
+// ExportDialog/PresetsDialog's "caller does the async work" split).
+// `stages` is `[{ id: 'vertex'|'pixel', label, code }]` — a target
+// may produce one stage (e.g. a combined OSL/MDL shader) or several
+// (vertex+pixel GLSL); the codegen target list itself comes from the
+// engine global EXPORT_TARGETS (`{ key, label, className, isHw,
+// ext }[]`).
+//
+// Reruns `generate` whenever the open dialog's target or material
+// selection changes (the effect below, keyed on [open, targetKey,
+// matIndex]); `runRef` is a monotonic counter so a slow/stale
+// generate() call that resolves after the user has already switched
+// targets can't clobber the newer result — its `.then`/`.catch` only
+// applies if `runRef.current` still matches the id it captured before
+// calling out. Errors are never swallowed: a rejected generate()
+// always renders inline (no toast, no silent fallback) so a codegen
+// failure for one target doesn't look like a blank/broken dialog.
+// Closing mid-generate is allowed for the same reason — the stale
+// result the in-flight call eventually produces is simply discarded.
+function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, generate, overlayClassName }) {
+    const [targetKey, setTargetKey] = React.useState(() => (EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
+    const [matIndex, setMatIndex] = React.useState(0);
+    const [busy, setBusy] = React.useState(false);
+    const [error, setError] = React.useState(null);
+    const [stages, setStages] = React.useState(null);
+    const [stageIdx, setStageIdx] = React.useState(0);
+    const [copied, setCopied] = React.useState(false);
+    const copyTimerRef = React.useRef(null);
+    const runRef = React.useRef(0);
+
+    useEscapeToClose(onClose, open);
+
+    React.useEffect(() => () => {
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    }, []);
+
+    // Reset to a clean slate every time the dialog (re)opens — mirrors
+    // ExportDialog's wasOpen-gated reset effect, just simpler (this
+    // dialog has no unsaved input to preserve across a stray re-render).
+    React.useEffect(() => {
+        if (!open) return;
+        setTargetKey((EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
+        setMatIndex(Math.max(0, Math.min(initialIndex, renderables.length - 1)));
+        setStages(null);
+        setError(null);
+        setCopied(false);
+        setStageIdx(0);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    // (Re)generate whenever the open dialog's target or material
+    // selection changes. See the header comment above for the
+    // runRef/error-handling contract.
+    React.useEffect(() => {
+        if (!open || !renderables.length) return;
+        const r = renderables[matIndex];
+        if (!r) return;
+        const id = ++runRef.current;
+        setBusy(true);
+        setError(null);
+        generate({ renderable: r.node, label: r.name, targetKey })
+            .then((result) => {
+                if (runRef.current !== id) return;
+                setStages(result.stages);
+                setStageIdx(0);
+                setBusy(false);
+            })
+            .catch((e) => {
+                if (runRef.current !== id) return;
+                setStages(null);
+                setError(String((e && e.message) || e));
+                setBusy(false);
+            });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, targetKey, matIndex]);
+
+    if (!open) return null;
+
+    const handleCopy = async () => {
+        if (!stages) return;
+        const ok = await copyTextToClipboard(stages[stageIdx].code);
+        if (!ok) return;
+        setCopied(true);
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
+    };
+
+    const handleDownload = async () => {
+        if (!stages) return;
+        const target = EXPORT_TARGETS.find((t) => t.key === targetKey);
+        const matName = (renderables[matIndex] && renderables[matIndex].name) || 'material';
+        const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
+        if (stages.length === 1) {
+            downloadBlob(new Blob([stages[0].code], { type: 'text/plain' }), base + (target.ext[stages[0].id] || '.txt'));
+            return;
+        }
+        if (!window.JSZip) {
+            setError('Export failed: JSZip failed to load from the CDN.');
+            return;
+        }
+        const zip = new JSZip();
+        stages.forEach((st) => zip.file(base + (target.ext[st.id] || '.txt'), st.code));
+        let blob;
+        try {
+            blob = await zip.generateAsync({ type: 'blob' });
+        } catch (e) {
+            setError('Export failed: ' + String((e && e.message) || e));
+            return;
+        }
+        downloadBlob(blob, base + '.zip');
+    };
+
+    return (
+        <DialogFrame
+            open={open}
+            title="Export Shader Code"
+            onClose={onClose}
+            overlayClassName={overlayClassName}
+            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+            headerRight={
+                <React.Fragment>
+                    <button
+                        onClick={handleCopy}
+                        disabled={busy || !!error || !stages}
+                        title="Copy the current stage's code to the clipboard"
+                        className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 '
+                            + (copied
+                                ? 'bg-green-600/70 border-green-500 text-white'
+                                : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                    >
+                        <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
+                        <span>{copied ? 'Copied' : 'Copy'}</span>
+                    </button>
+                    <button
+                        onClick={handleDownload}
+                        disabled={busy || !!error || !stages}
+                        title="Download the current export"
+                        className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                    >
+                        <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
+                        <span>Download</span>
+                    </button>
+                </React.Fragment>
+            }
+        >
+            {!renderables.length ? (
+                <div className="px-4 py-3 text-[12px] text-gray-400">
+                    The document contains no renderable material.
+                </div>
+            ) : (
+                <React.Fragment>
+                    <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
+                        <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                            <span>Target</span>
+                            <select
+                                value={targetKey}
+                                onChange={(e) => setTargetKey(e.target.value)}
+                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
+                            >
+                                {EXPORT_TARGETS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                            </select>
+                        </label>
+                        {renderables.length > 1 && (
+                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                                <span>Material</span>
+                                <select
+                                    value={matIndex}
+                                    onChange={(e) => setMatIndex(Number(e.target.value))}
+                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
+                                >
+                                    {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
+                                </select>
+                            </label>
+                        )}
+                    </div>
+                    {stages && stages.length > 1 && (
+                        <div className="px-4 pb-2 flex items-center gap-1.5">
+                            {stages.map((st, i) => (
+                                <button
+                                    key={st.id}
+                                    onClick={() => setStageIdx(i)}
+                                    className={'h-6 text-[11px] px-2 rounded border transition-colors '
+                                        + (i === stageIdx
+                                            ? 'bg-blue-600/80 border-blue-500 text-white'
+                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                >
+                                    {st.label}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {error ? (
+                        <div className="px-4 py-3">
+                            <div className="bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-[12px]">
+                                {error}
+                            </div>
+                        </div>
+                    ) : busy ? (
+                        <div className="text-gray-400 animate-pulse px-4 py-3 text-[12px]">{'Generating…'}</div>
+                    ) : stages ? (
+                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre">
+                            {stages[stageIdx].code}
+                        </pre>
+                    ) : null}
+                </React.Fragment>
+            )}
+        </DialogFrame>
+    );
+}
+
 // Fullscreen state + toggle for a viewport container. Wraps the engine's
 // watchFullscreen/toggleFullscreen globals (js/mtlx-engine.js): the
 // container div (not the canvas) goes fullscreen, so overlaid viewport
@@ -961,4 +1533,6 @@ Object.assign(window, {
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, PreviewErrorBoundary,
+    DialogFrame, PresetsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    fetchPresetFiles, copyTextToClipboard, ShaderExportDialog,
 });

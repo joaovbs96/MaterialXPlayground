@@ -56,48 +56,10 @@
             else doc.importLibrary(stdlib);
 
             // Renderables: material nodes' surfaceshader inputs first, then
-            // bare surfaceshader nodes as a fallback. Scans getNodes() by
-            // TYPE rather than relying on getMaterialNodes(), which isn't
-            // bound in every JS build.
-            const renderables = [];
-            const seen = new Set();
-            const pushShader = (displayName, shaderNode) => {
-                if (!shaderNode) return;
-                let nm = displayName;
-                try { nm = displayName || shaderNode.getName(); } catch (e) { /* keep */ }
-                if (seen.has(nm)) return;
-                seen.add(nm);
-                renderables.push({ name: nm, node: shaderNode });
-            };
-            const typeOf = (n) => { try { return String(n.getType()); } catch (e) { return ''; } };
-            const nameOf = (n) => { try { return n.getName(); } catch (e) { return null; } };
-            // The shader a material node points at: prefer the binding's own
-            // connection resolution, fall back to the nodename lookup.
-            const connectedShader = (matNode) => {
-                try {
-                    const inp = matNode.getInput && matNode.getInput('surfaceshader');
-                    if (!inp) return null;
-                    if (typeof inp.getConnectedNode === 'function') {
-                        const n = inp.getConnectedNode();
-                        if (n) return n;
-                    }
-                    const nm = inp.getNodeName ? inp.getNodeName() : null;
-                    return nm ? doc.getNode(nm) : null;
-                } catch (e) { return null; }
-            };
-            let allNodes = [];
-            try { allNodes = vecToArray(doc.getNodes ? doc.getNodes() : null); } catch (e) { allNodes = []; }
-            if (!allNodes.length) {
-                try { allNodes = vecToArray(doc.getMaterialNodes ? doc.getMaterialNodes() : null); } catch (e) { /* none */ }
-            }
-            for (const n of allNodes) {
-                if (typeOf(n) === 'material') pushShader(nameOf(n), connectedShader(n));
-            }
-            if (!renderables.length) {
-                for (const n of allNodes) {
-                    if (typeOf(n) === 'surfaceshader') pushShader(nameOf(n), n);
-                }
-            }
+            // bare surfaceshader nodes as a fallback (see listDocRenderables,
+            // js/mtlx-engine.js, for the getMaterialNodes-not-always-bound
+            // caveat this scan works around).
+            const renderables = listDocRenderables(doc);
             return { mx, gen, genContext, lightData, doc, renderables };
         };
 
@@ -137,6 +99,16 @@
             const [error, setError] = React.useState(null);
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
+            // Presets dialog ("Presets" overlay button): a curated list of
+            // official MaterialX example documents (MTLX_PRESETS in
+            // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks WHICH preset
+            // is fetching so the dialog can spin just that row while every
+            // row is disabled — mirrors js/graph-app.jsx's identical state.
+            const [presetsOpen, setPresetsOpen] = React.useState(false);
+            const [presetsBusy, setPresetsBusy] = React.useState(false);
+            const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+            // Shader export dialog ("Export Shader Code" overlay button).
+            const [shaderExportOpen, setShaderExportOpen] = React.useState(false);
             // True from "parsing a document" until the render view is live (or
             // failed) — drives the loading bar in the viewport. Covers first
             // load AND every material/geometry regeneration.
@@ -203,7 +175,30 @@
                 openInGraphEditor({ xml, name, files });
             };
 
-            const ingest = async (map) => {
+            // Presets overlay button: fetch a curated official example
+            // .mtlx (fetchPresetFiles, js/shared/mtlx-ui.jsx) and hand it to
+            // ingest() much like a drag-drop. Unlike js/graph-app.jsx's
+            // loadPreset, there's no confirmReplace guard here — the viewer
+            // has no unsaved-edits concept, and a session replace is
+            // already unconditional (see ingest()'s SESSION SEMANTICS
+            // comment below).
+            const loadPreset = async (preset) => {
+                setPresetsBusy(true);
+                setPresetsBusyPath(preset.path);
+                setError(null);
+                try {
+                    const { map, rootKey } = await fetchPresetFiles(preset);
+                    await ingestRef.current(map, rootKey);
+                    setPresetsOpen(false);
+                } catch (e) {
+                    setError('Could not load preset: ' + String(e && e.message || e));
+                } finally {
+                    setPresetsBusy(false);
+                    setPresetsBusyPath(null);
+                }
+            };
+
+            const ingest = async (map, rootKey) => {
                 setError(null);
                 try {
                     await expandZips(map);
@@ -242,7 +237,11 @@
                 if (droppedMtlx.length) {
                     // One .mtlx → load it directly, no dropdown. Several in the
                     // SAME drop → the dropdown (mtlxPaths.length > 1) appears.
-                    const pick = mtlx.length === 1 ? mtlx[0] : null;
+                    // A caller-supplied rootKey (e.g. loadPreset, below) wins
+                    // over the "exactly one .mtlx in the map" heuristic when
+                    // present, since a preset's own crawl may have pulled in
+                    // sibling .mtlx documents via xi:include alongside it.
+                    const pick = (rootKey && mtlx.indexOf(rootKey) !== -1) ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
                     if (pick) loadDocument(pick, merged);
                     else setStatus('This drop contains several .mtlx files — pick one below.');
@@ -641,18 +640,57 @@
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}
                                         trailingChildren={
-                                            // Graph and viewer are always in sync in the
-                                            // extension (one opened .mtlx file), so this
-                                            // cross-view handoff doesn't apply under VS Code.
-                                            !IN_VSCODE && (
-                                            <button
-                                                onClick={sendToEditor}
-                                                title="Open this material in the node graph editor"
-                                                className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                            >
-                                                <MtlxIcon name="share" className="w-3.5 h-3.5" />
-                                            </button>
-                                            )
+                                            <React.Fragment>
+                                                {/* Graph and viewer are always in sync in the
+                                                    extension (one opened .mtlx file), so this
+                                                    cross-view handoff doesn't apply under VS Code. */}
+                                                {!IN_VSCODE && (
+                                                <button
+                                                    onClick={sendToEditor}
+                                                    title="Open this material in the node graph editor"
+                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                >
+                                                    <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                                </button>
+                                                )}
+                                                {/* Presets: browser-only, multi-document
+                                                    affordance — the VS Code preview is bound to
+                                                    the open file (same rationale as the graph
+                                                    editor's Presets gate). Exits fullscreen
+                                                    first: PresetsDialog mounts at the app root,
+                                                    outside the fullscreened viewport container
+                                                    (viewportRef), so it would be invisible under
+                                                    native fullscreen (which only renders the
+                                                    fullscreened element's own subtree) or hidden
+                                                    behind it under the CSS-maximize fallback
+                                                    (which pins that subtree at a z-index above
+                                                    this dialog's own) — see useFullscreen and
+                                                    toggleFullscreen's header comment, both in
+                                                    js/shared/mtlx-ui.jsx / js/mtlx-engine.js. */}
+                                                {!IN_VSCODE && (
+                                                <button
+                                                    onClick={() => { if (isFullscreen) onToggleFullscreen(); setPresetsOpen(true); }}
+                                                    title="Load a curated official MaterialX example"
+                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                >
+                                                    <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                                                </button>
+                                                )}
+                                                {/* Export Shader Code: not VS Code-gated (unlike
+                                                    Presets/Send-to-Editor above) — generating the
+                                                    open document's shader source applies just as
+                                                    well to the single file the extension has
+                                                    opened. Same fullscreen-exit rationale as the
+                                                    Presets button above. */}
+                                                <button
+                                                    onClick={() => { if (isFullscreen) onToggleFullscreen(); setShaderExportOpen(true); }}
+                                                    title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
+                                                    disabled={!renderables.length}
+                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
+                                                >
+                                                    <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                                </button>
+                                            </React.Fragment>
                                         }
                                     >
                                         {/* Geometry lives here permanently; the material
@@ -697,6 +735,26 @@
                             )}
                         </div>
                     </div>
+
+                    {/* Presets dialog ("Presets" overlay button) and Export
+                        Shader Code dialog ("Export Shader Code" overlay
+                        button). Both use the `fixed` overlay variant (not
+                        DialogFrame's `absolute` default): this #root spans a
+                        scrollable page, so an `absolute inset-0` backdrop
+                        would only cover the panel's own scrolled-past
+                        bounds instead of the whole viewport (mirrors the
+                        graph editor's dialogs, whose #root IS the relative
+                        full-bleed stage those default to). */}
+                    <PresetsDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} onPick={loadPreset}
+                        busy={presetsBusy} busyPath={presetsBusyPath}
+                        overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70" />
+                    {shaderExportOpen && loadedRef.current && (
+                        <ShaderExportDialog open={true} onClose={() => setShaderExportOpen(false)}
+                            renderables={renderables} initialIndex={chosenMat}
+                            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+                            generate={({ renderable, label, targetKey }) =>
+                                generateTargetSources({ mx: loadedRef.current.mx, renderable, label, targetKey })} />
+                    )}
                 </div>
             );
         }

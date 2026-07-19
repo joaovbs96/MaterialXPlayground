@@ -236,12 +236,18 @@
             const [exportDialog, setExportDialog] = React.useState(null);
             // Presets dialog (toolbar "Presets" button, item F3.2): a
             // curated list of official MaterialX example documents (see
-            // MTLX_PRESETS in js/graph/dialogs.jsx). `presetsBusyPath`
+            // MTLX_PRESETS in js/shared/mtlx-ui.jsx). `presetsBusyPath`
             // tracks WHICH preset is fetching so the dialog can spin just
             // that row while every row is disabled.
             const [presetsOpen, setPresetsOpen] = React.useState(false);
             const [presetsBusy, setPresetsBusy] = React.useState(false);
             const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+            // Shader export dialog ("Shader Code" toolbar button): holds
+            // { renderables } computed once when the dialog is opened
+            // (openShaderExport below), or null while closed — same
+            // "computed once by the caller, not on every render" contract
+            // as exportDialog/xmlDialogXml above.
+            const [shaderExport, setShaderExport] = React.useState(null);
             // Freezes the preview panel to a specific node regardless of
             // what gets selected afterward (item 10's pin toggle) — same
             // { scope, id } shape as previewSel, reset alongside it.
@@ -1951,127 +1957,21 @@
             };
 
             // Toolbar "Presets" button (item F3.2): fetch a curated
-            // official example .mtlx (js/graph/dialogs.jsx's MTLX_PRESETS)
-            // and hand it to ingest() much like a drag-drop — the same
-            // fetch->Blob->ingestRef.current(map) pipeline the default
-            // startup document uses above, extended into a small
-            // breadth-first crawl (see loadPreset below) since a preset
-            // may pull in sibling documents and textures of its own.
-            // Gated behind the same confirmReplace unsaved-changes confirm
-            // as every other document-replacing action (guardedIngest, the
-            // document-picker <select>'s onChange) since a preset always
-            // introduces a new .mtlx. `presetsOpen` is deliberately left
-            // open through the fetch (busy=true disables/spins its rows)
-            // so a failed fetch's setError leaves the dialog up for
-            // another pick, rather than punting the user back to a bare
-            // canvas.
-            //
-            // Two things a plain single-doc fetch misses, both exercised
-            // by the official MaterialX example set:
-            //  (1) xi:include: "look" files (e.g. "Brass (tiled look)")
-            //      pull in a separate sibling .mtlx for the actual
-            //      material — resolveIncludes (js/mtlx-engine.js:535,
-            //      via loadDocument's readMtlxText above) inlines those
-            //      from the SAME dropped-file map this preset flow builds,
-            //      but only if that sibling doc was actually fetched into it.
-            //  (2) filename refs that escape the preset's own directory
-            //      via literal "../" segments in the authored value AND/OR
-            //      an inheritable `fileprefix="..."` attribute (MaterialX
-            //      spec: set on an ancestor element — the document root or
-            //      a <nodegraph> — and prepended, plain string
-            //      concatenation, to every descendant filename input's raw
-            //      `value`). E.g. "Wood (tiled)"'s <nodegraph
-            //      fileprefix="../../../Images/"> makes
-            //      value="wood_color.jpg" resolve to
-            //      "../../../Images/wood_color.jpg", which lands outside
-            //      the preset's own directory (resources/Images/, a
-            //      sibling of resources/Materials/) — a plain
-            //      dir-relative fetch 404s on it.
-            //
-            // Below: `visited` (resolved doc URLs) + `queue` seed with the
-            // preset doc; every fetched doc is (a) scanned for xi:include
-            // hrefs, resolved against THAT doc's own URL and enqueued for
-            // its own scan, and (b) scanned for fileprefix-resolved
-            // filename refs (extractFilenameRefs below), fetched relative
-            // to THAT doc's own URL. `visited.size` is capped at
-            // MAX_DOCS: these examples nest at most one include deep in
-            // practice, so this is purely a guard against a
-            // malformed/circular include chain spinning forever, not an
-            // expected limit. Texture fetches stay best-effort (warn +
-            // skip on failure — a skipped ref just shows the UV checker
-            // like any unresolved texture). A SAFETY GUARD only ever
-            // fetches URLs under the active mode's resources/ root
-            // (window.MtlxAssets.resourcesRoot(), not hardcoded a second
-            // time); refs that are absolute URLs (scheme://) or resolve
-            // outside that root are skipped.
-            //
-            // Blobs for included docs are keyed the same way
-            // mtlx-engine.js's resolveIncludes composes its own lookup
-            // when it later runs (fromDir-of-the-including-key + '/' +
-            // href — see resolveIncludes, js/mtlx-engine.js:547).
-            // Blobs for textures are keyed by the fileprefix-resolved ref
-            // string (e.g. "../../../Images/wood_color.jpg") — findFileForRef
-            // (js/mtlx-engine.js:517) matches an exact normalized path
-            // first, then a unique path-suffix, then a unique basename, so
-            // this key resolves correctly whether the WASM binding reports
-            // that resolved path or the bare authored filename as the
-            // input's value at bind time (bindDroppedTextures,
-            // js/mtlx-engine.js:659).
-            //
-            // Finally: ingestRef.current(map, baseName) passes the root
-            // doc's key explicitly, because ingest()'s default
-            // "auto-pick only when exactly one .mtlx is in the map"
-            // heuristic (js/graph-app.jsx, ingest() above) would otherwise
-            // see the included docs' .mtlx keys too and stop to ask the
-            // user which one to load — wrong for a preset, which always
-            // knows its own root doc.
-            // window.MtlxAssets.resourcesRoot() (js/mtlx-assets.js) returns
-            // the resources/ root for whichever mode (local vendor mirror
-            // vs. GitHub) is active this session — using it here instead of
-            // string-slicing it back out of MTLX_PRESETS_BASE keeps this
-            // guard correct in both modes without re-deriving the same
-            // value two different ways.
-            const MTLX_RESOURCES_ROOT = window.MtlxAssets.resourcesRoot();
-            const isSafePresetUrl = (url) => url.indexOf(MTLX_RESOURCES_ROOT) === 0;
-            const isSchemeOrRootedRef = (ref) =>
-                /^[a-z][a-z0-9+.\-]*:\/\//i.test(ref) || ref.startsWith('/');
-            // Filename refs authored in a preset doc, resolved against any
-            // <materialx fileprefix="..."> (document-wide) and/or
-            // <nodegraph fileprefix="..."> (scoped to that nodegraph's
-            // own body) ancestor per MaterialX's inheritable-attribute
-            // semantics — see the comment above. Splits the raw xml into
-            // "scopes" (each nodegraph's body, plus everything outside any
-            // nodegraph) so each <input type="filename"> tag picks up the
-            // right accumulated prefix; a two-pass tag scan within each
-            // scope, same shape as the original single-doc version of
-            // this function.
-            const extractFilenameRefs = (xml) => {
-                const rootAttrs = (/<materialx\b([^>]*)>/.exec(xml) || [])[1] || '';
-                const rootPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(rootAttrs) || [])[1] || '';
-                const scopes = [];
-                let cursor = 0;
-                const NG = /<nodegraph\b([^>]*)>([\s\S]*?)<\/nodegraph>/g;
-                let ngm;
-                while ((ngm = NG.exec(xml)) !== null) {
-                    scopes.push({ text: xml.slice(cursor, ngm.index), prefix: rootPrefix });
-                    const ngPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(ngm[1]) || [])[1] || '';
-                    scopes.push({ text: ngm[2], prefix: rootPrefix + ngPrefix });
-                    cursor = ngm.index + ngm[0].length;
-                }
-                scopes.push({ text: xml.slice(cursor), prefix: rootPrefix });
-                const refs = [];
-                for (const scope of scopes) {
-                    const tags = scope.text.match(/<input\b[^>]*>/g) || [];
-                    for (const tag of tags) {
-                        if (!/\btype\s*=\s*"filename"/.test(tag)) continue;
-                        const m = /\bvalue\s*=\s*"([^"]*)"/.exec(tag);
-                        const raw = m && m[1];
-                        if (!raw) continue;
-                        refs.push(scope.prefix + raw);
-                    }
-                }
-                return refs;
-            };
+            // official example .mtlx and hand it to ingest() much like a
+            // drag-drop. The crawl that resolves a preset's xi:includes
+            // and fileprefix-scoped filename refs into a { relPath: Blob }
+            // map now lives in fetchPresetFiles (js/shared/mtlx-ui.jsx) —
+            // this wrapper just gates it behind the same confirmReplace
+            // unsaved-changes confirm as every other document-replacing
+            // action (guardedIngest, the document-picker <select>'s
+            // onChange) since a preset always introduces a new .mtlx,
+            // drives the dialog's busy/busyPath state through the fetch
+            // (`presetsOpen` deliberately stays open through it, so a
+            // failed fetch's setError leaves the dialog up for another
+            // pick), and hands the result to ingestRef.current with the
+            // crawl's own explicit root-doc key — see fetchPresetFiles'
+            // header comment for why that beats ingest()'s "auto-pick
+            // when exactly one .mtlx is in the map" heuristic here.
             const loadPreset = (preset) => {
                 confirmReplace(true, () => {
                     (async () => {
@@ -2079,71 +1979,8 @@
                         setPresetsBusyPath(preset.path);
                         setError(null);
                         try {
-                            const docUrl = MTLX_PRESETS_BASE + preset.path;
-                            const baseName = preset.path.split('/').pop();
-                            const map = {};
-                            const seenRefs = new Set();
-                            const textureFetches = [];
-                            const MAX_DOCS = 12; // guard only — see comment above
-                            const visited = new Set([docUrl]);
-                            const queue = [{ url: docUrl, key: baseName }];
-                            while (queue.length) {
-                                const { url, key } = queue.shift();
-                                let xml;
-                                try {
-                                    const res = await fetch(url);
-                                    if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
-                                    xml = await res.text();
-                                } catch (e) {
-                                    if (key === baseName) throw e; // the root doc must load
-                                    console.warn('preset include fetch failed (skipped):', url, e);
-                                    continue;
-                                }
-                                map[key] = new Blob([xml], { type: 'application/xml' });
-
-                                // (a) xi:include siblings — same
-                                // attribute-order/quote tolerant href
-                                // extraction as resolveIncludes
-                                // (js/mtlx-engine.js:540), resolved against
-                                // THIS doc's own URL.
-                                const INC = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/g;
-                                let incM;
-                                while ((incM = INC.exec(xml)) !== null) {
-                                    const href = incM[1] || incM[2];
-                                    if (!href || isSchemeOrRootedRef(href)) continue;
-                                    let incUrl;
-                                    try { incUrl = new URL(href, url).href; } catch (e) { continue; }
-                                    if (!isSafePresetUrl(incUrl)) continue;
-                                    if (visited.has(incUrl) || visited.size >= MAX_DOCS) continue;
-                                    visited.add(incUrl);
-                                    const dirKey = key.indexOf('/') >= 0 ? key.slice(0, key.lastIndexOf('/')) : '';
-                                    const incKey = dirKey ? dirKey + '/' + href : href;
-                                    queue.push({ url: incUrl, key: incKey });
-                                }
-
-                                // (b) filename refs, fileprefix-resolved,
-                                // fetched relative to THIS doc's own URL —
-                                // best-effort, doesn't block the queue.
-                                for (const ref of extractFilenameRefs(xml)) {
-                                    if (isSchemeOrRootedRef(ref) || seenRefs.has(ref)) continue;
-                                    seenRefs.add(ref);
-                                    let texUrl;
-                                    try { texUrl = new URL(ref, url).href; } catch (e) { continue; }
-                                    if (!isSafePresetUrl(texUrl)) continue;
-                                    textureFetches.push((async () => {
-                                        try {
-                                            const r = await fetch(texUrl);
-                                            if (!r.ok) throw new Error('HTTP ' + r.status);
-                                            map[ref] = await r.blob();
-                                        } catch (texErr) {
-                                            console.warn('preset texture fetch failed (falls back to the checker):', ref, texErr);
-                                        }
-                                    })());
-                                }
-                            }
-                            await Promise.all(textureFetches);
-
-                            ingestRef.current(map, baseName);
+                            const { map, rootKey } = await fetchPresetFiles(preset);
+                            ingestRef.current(map, rootKey);
                             setPresetsOpen(false);
                         } catch (e) {
                             setError('Could not load preset: ' + String(e && e.message || e));
@@ -2161,6 +1998,27 @@
             const openExportDialog = () => {
                 if (!parsed) return;
                 setExportDialog({ defaultName: defaultExportBase(), textures: scanExportTextures() });
+            };
+            // Toolbar "Shader Code" button: lists the document's renderable
+            // materials/shaders and opens ShaderExportDialog (js/shared/
+            // mtlx-ui.jsx) over them. The mxExclusive wrap is deliberate:
+            // graph previews mutate the live doc with transient __pv_*
+            // wrappers strictly inside their own mxExclusive holds, so
+            // enumerating renderables inside a hold can never observe them.
+            const openShaderExport = async () => {
+                if (!parsed) return;
+                let rs = [];
+                try {
+                    rs = await mxExclusive(() => listDocRenderables(parsed.doc));
+                } catch (e) {
+                    setError('Export Shader Code failed: ' + String(e && e.message || e));
+                    return;
+                }
+                if (!rs.length) {
+                    setError('Export Shader Code: the document contains no renderable material (no surfacematerial or surfaceshader node).');
+                    return;
+                }
+                setShaderExport({ renderables: rs });
             };
             // Export dialog's onExport — routes to the .mtlx or .zip
             // writer per the user's format choice, through the same
@@ -5010,6 +4868,18 @@
                         busyPath={presetsBusyPath}
                     />
 
+                    {/* Shader Code export dialog ("Shader Code" button). */}
+                    {shaderExport && (
+                        <ShaderExportDialog
+                            open={true}
+                            onClose={() => setShaderExport(null)}
+                            renderables={shaderExport.renderables}
+                            initialIndex={0}
+                            generate={({ renderable, label, targetKey }) =>
+                                generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                        />
+                    )}
+
                     {/* Unsaved-changes dialog: gates Import / drag-drop of a
                         new .mtlx / switching documents while dirty. See
                         confirmReplace. */}
@@ -5180,6 +5050,16 @@
                                 >
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                                     <span>Export</span>
+                                </button>
+                            )}
+                            {parsed && (
+                                <button
+                                    onClick={openShaderExport}
+                                    title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
+                                    className="h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                >
+                                    <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                    <span>Shader Code</span>
                                 </button>
                             )}
                             <button

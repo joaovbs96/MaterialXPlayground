@@ -666,6 +666,73 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
     return stripped;
 };
 
+// Doc-level renderable scan: given a MaterialX document, returns
+// [{ name, node }] — one entry per renderable surface (a material
+// node's bound surfaceshader, or a bare surfaceshader node as a
+// fallback when the document defines no material nodes at all). Ported
+// from loadMtlxDocument's renderable scan in js/viewer-app.jsx so it
+// can be SHARED rather than duplicated: callers today are the viewer's
+// document load (js/viewer-app.jsx) and both apps' shader-export
+// dialogs. Scans doc.getNodes() by TYPE rather than relying on
+// getMaterialNodes(), which isn't bound in every JS build (same caveat
+// as loadMtlxDocument).
+//
+// Callers passing a LIVE graph doc (as opposed to one freshly parsed
+// from XML) must invoke this from inside mxExclusive — it walks wasm
+// document state and does no locking of its own.
+const listDocRenderables = (doc) => {
+    const renderables = [];
+    const seen = new Set();
+    // Defensive skip of transient __pv_* wrapper nodes. The graph
+    // preview pipeline creates/destroys these entirely inside its own
+    // mxExclusive hold (see prewarmPreviewTarget and the buildRenderable
+    // cleanup it calls), so none should ever be visible to a caller of
+    // this function — this check is belt-and-suspenders against a
+    // caller that somehow races that hold.
+    const isPvName = (nm) => typeof nm === 'string' && nm.indexOf('__pv_') === 0;
+    const pushShader = (displayName, shaderNode) => {
+        if (!shaderNode) return;
+        let nm = displayName;
+        try { nm = displayName || shaderNode.getName(); } catch (e) { /* keep */ }
+        if (seen.has(nm)) return;
+        let shaderName = null;
+        try { shaderName = shaderNode.getName(); } catch (e) { /* leave null, treated as not __pv_ */ }
+        if (isPvName(nm) || isPvName(shaderName)) return;
+        seen.add(nm);
+        renderables.push({ name: nm, node: shaderNode });
+    };
+    const typeOf = (n) => { try { return String(n.getType()); } catch (e) { return ''; } };
+    const nameOf = (n) => { try { return n.getName(); } catch (e) { return null; } };
+    // The shader a material node points at: prefer the binding's own
+    // connection resolution, fall back to the nodename lookup.
+    const connectedShader = (matNode) => {
+        try {
+            const inp = matNode.getInput && matNode.getInput('surfaceshader');
+            if (!inp) return null;
+            if (typeof inp.getConnectedNode === 'function') {
+                const n = inp.getConnectedNode();
+                if (n) return n;
+            }
+            const nm = inp.getNodeName ? inp.getNodeName() : null;
+            return nm ? doc.getNode(nm) : null;
+        } catch (e) { return null; }
+    };
+    let allNodes = [];
+    try { allNodes = vecToArray(doc.getNodes ? doc.getNodes() : null); } catch (e) { allNodes = []; }
+    if (!allNodes.length) {
+        try { allNodes = vecToArray(doc.getMaterialNodes ? doc.getMaterialNodes() : null); } catch (e) { /* none */ }
+    }
+    for (const n of allNodes) {
+        if (typeOf(n) === 'material') pushShader(nameOf(n), connectedShader(n));
+    }
+    if (!renderables.length) {
+        for (const n of allNodes) {
+            if (typeOf(n) === 'surfaceshader') pushShader(nameOf(n), n);
+        }
+    }
+    return renderables;
+};
+
 // Resolves on the next paint — callers awaiting this yield to the
 // browser instead of blocking it, letting a queued DOM/state update
 // actually paint before continuing.
@@ -2369,6 +2436,170 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
 // operation. Neither internal caller runs inside an existing
 // mxExclusive callback, so this cannot nest/deadlock.
 const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
+
+// ------------------------------------------------------------------
+// Shader EXPORT — as opposed to PREVIEW above: generates the canonical
+// (non-browser-adapted) shader source for a renderable in one of
+// MaterialX's other hardware/non-hardware target languages, for the
+// "Export shader" dialogs. Deliberately separate from
+// generatePreviewSources* above: export contexts bind NO light rig and
+// reuse NOTHING from the module-scope ESSL preview generator/context —
+// each target gets its own generator + GenContext (created lazily,
+// cached below). Exported code is the canonical material shader as
+// MaterialX itself would emit it: it keeps its own #version, gets no
+// ACES/sRGB display encode, and has no direct-light rig wired in. It
+// will intentionally differ from the on-screen preview shader,
+// INCLUDING for the 'essl' target, which shares a target language with
+// the preview but none of its generation options.
+// ------------------------------------------------------------------
+
+// One row per selectable export target. `className` is the embind
+// class name of that target's ShaderGenerator — all 8 are registered
+// in JsMaterialXGenShader.wasm, but only Essl's .create() has ever
+// actually been exercised by this repo before this addition, so every
+// access below is guarded (see getExportGen). `isHw` selects the
+// hardware-generator option path (hwTransparency) and whether a
+// 'vertex' stage is expected at all — the non-hardware languages (OSL,
+// MDL) only ever emit a single stage. `ext` is the file-extension
+// convention per stage, for export-dialog download filenames.
+const EXPORT_TARGETS = [
+    { key: 'essl',   label: 'GLSL ES (WebGL 2)',           className: 'EsslShaderGenerator',  isHw: true,  ext: { vertex: '.vert', pixel: '.frag' } },
+    { key: 'glsl',   label: 'GLSL (desktop OpenGL)',       className: 'GlslShaderGenerator',  isHw: true,  ext: { vertex: '.vert', pixel: '.frag' } },
+    { key: 'vkglsl', label: 'GLSL (Vulkan)',               className: 'VkShaderGenerator',    isHw: true,  ext: { vertex: '.vert', pixel: '.frag' } },
+    { key: 'wgsl',   label: 'WGSL (WebGPU)',               className: 'WgslShaderGenerator',  isHw: true,  ext: { vertex: '.vert.wgsl',  pixel: '.frag.wgsl' } },
+    { key: 'msl',    label: 'MSL (Metal)',                 className: 'MslShaderGenerator',   isHw: true,  ext: { vertex: '.vert.metal', pixel: '.frag.metal' } },
+    { key: 'slang',  label: 'Slang',                       className: 'SlangShaderGenerator', isHw: true,  ext: { vertex: '.vert.slang', pixel: '.frag.slang' } },
+    { key: 'osl',    label: 'OSL (Open Shading Language)', className: 'OslShaderGenerator',   isHw: false, ext: { pixel: '.osl' } },
+    { key: 'mdl',    label: 'MDL (NVIDIA)',                className: 'MdlShaderGenerator',   isHw: false, ext: { pixel: '.mdl' } },
+];
+
+// Per-target { gen, ctx } cache. Building a GenContext and loading the
+// standard libraries against it isn't free (same cost as the
+// module-scope ESSL setup in getMxEnv above) — each target pays that
+// cost once, lazily, on first use, rather than all 8 paying it upfront
+// at wasm-load time. Failed targets are deliberately left OUT of the
+// cache (see getExportGen) so a build that's missing e.g. MDL doesn't
+// permanently poison retries for it.
+const EXPORT_GEN_CACHE = new Map();
+
+// Resolve (lazily create + cache) the { gen, ctx } pair for one export
+// target. NOTE what this deliberately does NOT do: it does not bind
+// any light rig, and its GenContext is not the module-scope preview
+// genContext and not derived from it in any way — export contexts
+// start from MaterialX's own defaults. That's the point (see the
+// file-level comment above): exported code is the canonical material
+// shader, not a browser-preview adaptation, so it will legitimately
+// look different from the ESSL the preview pipeline generates even
+// though the 'essl' target shares its target language.
+const getExportGen = (mx, target) => {
+    const cached = EXPORT_GEN_CACHE.get(target.key);
+    if (cached) return cached;
+
+    const Cls = mx[target.className];
+    if (!Cls || typeof Cls.create !== 'function') {
+        throw new Error(target.label + ' is not available in this MaterialX build (' + target.className + ').');
+    }
+    const gen = Cls.create();
+    const ctx = new mx.GenContext(gen);
+    // loadStandardLibraries's job here is registering this target's
+    // source-code search path on `ctx` (see the identical note in
+    // getMxEnv above) — the stdlib DOCUMENT it returns is discarded;
+    // every document passed into generateTargetSources* already carries
+    // the shared stdlib as its own data library (see loadMtlxDocument).
+    mx.loadStandardLibraries(ctx);
+
+    // Cache ONLY once every step above has succeeded — a target that
+    // throws (missing class, libraries fail to load) stays retryable on
+    // the next call instead of being permanently marked unavailable.
+    const entry = { gen, ctx };
+    EXPORT_GEN_CACHE.set(target.key, entry);
+    return entry;
+};
+
+// Unlocked worker for shader EXPORT — see generateTargetSources below
+// for the public, mxExclusive-serialized entry point. NEVER call this
+// directly from outside an existing mxExclusive callback.
+//
+// Args: { mx, renderable, label, targetKey }. Returns { stages }, a
+// non-empty array of { id, label, code } entries — 'vertex'/'Vertex'
+// and/or 'pixel'/'Pixel' (the latter labeled 'Shader' for non-hardware
+// targets, which only ever produce a single stage). Throws Error with
+// a decoded MaterialX message (see mxErr) on any failure, including
+// the case where generation itself succeeds but every stage comes back
+// empty.
+//
+// Deliberately does NOT apply stripVersion / patchUnlitLightingRefs /
+// encodeDisplay — those three are browser-PREVIEW transforms (strip
+// the #version line three.js's WebGL2 context injects its own copy of;
+// rewrite unlit-material lighting references so the preview's light
+// rig doesn't warn; inject ACES+sRGB display encoding), specific to
+// feeding the ESSL preview shader into three.js. Exported code is
+// MaterialX's canonical, untouched output.
+const generateTargetSourcesUnlocked = ({ mx, renderable, label, targetKey }) => {
+    const target = EXPORT_TARGETS.find((t) => t.key === targetKey);
+    if (!target) throw new Error('Unknown export target: ' + targetKey);
+
+    let gen, ctx;
+    try {
+        ({ gen, ctx } = getExportGen(mx, target));
+    } catch (e) {
+        throw new Error('Could not initialize the ' + target.label + ' generator: ' + mxErr(mx, e));
+    }
+
+    try {
+        if (mx.ShaderInterfaceType) {
+            ctx.getOptions().shaderInterfaceType = mx.ShaderInterfaceType.SHADER_INTERFACE_COMPLETE;
+        }
+    } catch (e) { /* default interface */ }
+
+    if (target.isHw) {
+        try {
+            if (typeof mx.isTransparentSurface === 'function') {
+                ctx.getOptions().hwTransparency = mx.isTransparentSurface(renderable, gen.getTarget());
+            }
+        } catch (e) { /* keep previous value */ }
+    }
+
+    let mxShader;
+    try {
+        mxShader = gen.generate('Shader', renderable, ctx);
+    } catch (genErr) {
+        throw new Error('Shader generation (' + target.label + ') failed for "' + label + '": ' + mxErr(mx, genErr));
+    }
+
+    // No stage-enumeration API exists — same fallback as the preview
+    // path above (see generatePreviewSourcesUnlocked): some JS builds
+    // don't expose the mx.Stage enum object, but getSourceCode accepts
+    // the underlying "vertex"/"pixel" string constants directly.
+    const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
+    const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
+    const read = (st) => {
+        let code = null;
+        try { code = mxShader.getSourceCode(st); } catch (e) { return null; }
+        return (code && code.trim()) ? code : null;
+    };
+
+    const stages = [];
+    const vertexCode = read(VERTEX_STAGE);
+    if (vertexCode) stages.push({ id: 'vertex', label: 'Vertex', code: vertexCode });
+    const pixelCode = read(PIXEL_STAGE);
+    if (pixelCode) stages.push({ id: 'pixel', label: target.isHw ? 'Pixel' : 'Shader', code: pixelCode });
+
+    if (!stages.length) {
+        throw new Error(target.label + ' generation produced no source code for "' + label + '".');
+    }
+    return { stages };
+};
+
+// Public entry point for shader EXPORT — serializes
+// generateTargetSourcesUnlocked against the shared wasm heap (see
+// mxExclusive at the top of this file). NEVER call this from inside an
+// existing mxExclusive callback — same deadlock convention as
+// generatePreviewSources/generatePreviewSourcesUnlocked above:
+// mxExclusive queues callbacks strictly in call order, so a callback
+// that awaits THIS function's return (which itself needs a fresh turn
+// of that same queue) would wait on work that can only run after it.
+const generateTargetSources = (args) => mxExclusive(() => generateTargetSourcesUnlocked(args));
 
 // ------------------------------------------------------------------
 // applyIntrospectedUniformDefaults — upload MaterialX's introspected
@@ -4377,6 +4608,7 @@ Object.assign(window, {
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
+    listDocRenderables,
     normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     collectMxUniforms, mxValueToThreeUniform,
@@ -4387,6 +4619,7 @@ Object.assign(window, {
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
     createMtlxRenderView, tryRefreshRenderView, prewarmPreviewTarget,
+    EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
     MtlxIcon, MTLX_ICON_PATHS,
 });
