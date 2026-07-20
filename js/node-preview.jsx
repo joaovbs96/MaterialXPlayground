@@ -53,6 +53,8 @@
             // render as a slim text row INSTEAD of the viewport box.
             const [notice, setNotice] = React.useState(null);
             const [loading, setLoading] = React.useState(true);
+            const loadingRef = React.useRef(true);
+            loadingRef.current = loading;
             // [{ uniform, label, type, def, min, max, enumNames, enumValues }]
             const [params, setParams] = React.useState([]);
             const [values, setValues] = React.useState({});
@@ -140,6 +142,7 @@
                 }
             };
             const onParamChange = (p, v) => {
+                if (loadingRef.current) return;
                 if (p.readonly) return;
                 valuesRef.current = Object.assign({}, valuesRef.current, { [p.uniform]: v });
                 setValues((prev) => Object.assign({}, prev, { [p.uniform]: v }));
@@ -158,6 +161,7 @@
             // '(nodedef default)' removes the override so the nodedef's own
             // colorspace applies again.
             const onColorspacePick = (p, cs) => {
+                if (loadingRef.current) return;
                 valuesRef.current = Object.assign({}, valuesRef.current, { ['cs::' + p.input]: cs || undefined });
                 setValues((prev) => Object.assign({}, prev, { ['cs::' + p.input]: cs || undefined }));
                 overridesNodeRef.current = identKey;
@@ -170,6 +174,7 @@
             };
             // Load a user image into a filename sampler uniform (live).
             const onFilePick = (p, file) => {
+                if (loadingRef.current) return;
                 if (!file) return;
                 const url = URL.createObjectURL(file);
                 new THREE.TextureLoader().load(url, (tex) => {
@@ -342,18 +347,19 @@
                     setLoading(true);
                     setError(null);
                     setNotice(null);
-                    setParams([]);
-                    setValues({});
-                    uniformsRef.current = null;
-                    // Same node re-initializing (geometry switch or string/
-                    // colorspace regen)? Then the user's edits are preserved and
-                    // re-applied below; only a NODE change wipes them.
+                    // Same node re-initializing (geometry switch or string/colorspace
+                    // regen)? Keep the panel populated (rendered disabled while loading)
+                    // and preserve the user's edits; only a NODE change clears the panel
+                    // so the pre-compile pass below can re-fill it from the new node.
                     const sameNode = prevNodeRef.current === identKey;
                     prevNodeRef.current = identKey;
                     if (!sameNode) {
                         valuesRef.current = {};
                         pickedTexRef.current = {};
+                        setParams([]);
+                        setValues({});
                     }
+                    uniformsRef.current = null;
 
                     // Held outside the try so the outer catch can decode
                     // Emscripten numeric exceptions thrown by ANY mx call
@@ -786,6 +792,140 @@
                             canvas = canvasRef.current;
                             if (!canvas || !mounted) return;
                         }
+
+                        // Pre-compile parameter pass: buildView() below can take hundreds of ms.
+                        // Enumerate the incoming node's nodedef inputs NOW and show the panel
+                        // immediately, rendered DISABLED (loading gate on the params body +
+                        // loadingRef guards on the edit handlers), so it no longer vanishes while
+                        // the shader compiles. The authoritative Island-B pass further down
+                        // replaces these with resolved live/uniform values and re-enables the
+                        // controls. Skipped for a same-node re-init, where the panel already
+                        // shows the correct params and the user's preserved edits.
+                        if (!sameNode) {
+                            const preferTypePre = kind === 'color' ? (multiOutput ? null : outType)
+                                : (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'));
+                            let preParams = [];
+                            try {
+                                preParams = await window.mxExclusive(() => {
+                                    const attrOf = (inp, a) => { try { const s = inp.getAttribute(a); return s || null; } catch (e) { return null; } };
+                                    const firstNum = (...cands) => {
+                                        for (const c of cands) { if (c == null) continue; const n = parseFloat(c); if (!isNaN(n)) return n; }
+                                        return null;
+                                    };
+                                    const NCOMP = { vector2: 2, vector3: 3, color3: 3, vector4: 4, color4: 4 };
+                                    const parseDefault = (type, s) => {
+                                        if (s == null || s === '') return undefined;
+                                        if (type === 'float') { const n = parseFloat(s); return isNaN(n) ? undefined : n; }
+                                        if (type === 'integer') { const n = parseInt(s, 10); return isNaN(n) ? undefined : n; }
+                                        if (type === 'boolean') return /^true$/i.test(s.trim());
+                                        if (type === 'string' || type === 'filename') return s;
+                                        if (NCOMP[type]) {
+                                            const parts = s.split(',').map((x) => parseFloat(x.trim()));
+                                            if (parts.length !== NCOMP[type] || parts.some(isNaN)) return undefined;
+                                            return parts;
+                                        }
+                                        return undefined;
+                                    };
+                                    const LIVE_TYPES = ['float', 'integer', 'boolean', 'vector2', 'vector3', 'vector4', 'color3', 'color4', 'filename'];
+                                    // Type-aware fallback so color/vector controls (renderControl does
+                                    // cur.slice/cur.map) always receive an array even when the nodedef
+                                    // default is absent/unparseable.
+                                    const zeroFor = (type) => {
+                                        switch (type) {
+                                            case 'float': case 'integer': return 0;
+                                            case 'boolean': return false;
+                                            case 'vector2': return [0, 0];
+                                            case 'color3': case 'vector3': return [0, 0, 0];
+                                            case 'color4': return [0, 0, 0, 1];
+                                            case 'vector4': return [0, 0, 0, 0];
+                                            default: return 0;
+                                        }
+                                    };
+                                    // Editable-STYLE descriptor from nodedef metadata only (no uniforms
+                                    // yet). Same widget shapes as buildInputParam so the disabled panel
+                                    // matches the post-compile panel; numeric/vector/color/bool/filename
+                                    // are shown editable-disabled (NOT the read-only span fallback) so
+                                    // they look identical once enabled.
+                                    const buildPendingParam = (inp) => {
+                                        const inputName = inp.getName();
+                                        const type = inp.getType();
+                                        const label = attrOf(inp, 'uiname') || inputName;
+                                        const uifolder = attrOf(inp, 'uifolder');
+                                        let valueStr = null;
+                                        try { valueStr = inp.getValueString ? inp.getValueString() : null; } catch (e) { /* none */ }
+                                        const enumAttr = attrOf(inp, 'enum');
+                                        const enumValsAttr = attrOf(inp, 'enumvalues');
+                                        if (type === 'string') {
+                                            const options = enumAttr ? enumAttr.split(',').map((e2) => e2.trim()).filter(Boolean) : null;
+                                            const def = (valueStr != null ? valueStr : (options && options[0])) || '';
+                                            return { uniform: 'in::' + inputName, input: inputName, label, type: 'string',
+                                                def, options, regen: true, live: false, uifolder };
+                                        }
+                                        if (type === 'filename') {
+                                            return { uniform: 'in::' + inputName, input: inputName, label, type: 'filename', def: null,
+                                                colorspace: attrOf(inp, 'colorspace'), live: false, uifolder };
+                                        }
+                                        if (LIVE_TYPES.indexOf(type) === -1) {
+                                            return { uniform: 'in::' + inputName, input: inputName, label, type,
+                                                def: '(connection)', readonly: true, live: false, uifolder };
+                                        }
+                                        let enumNames = null, enumValues = null;
+                                        if (enumAttr && (type === 'integer' || type === 'float')) {
+                                            enumNames = enumAttr.split(',').map((e2) => e2.trim()).filter(Boolean);
+                                            if (enumValsAttr) enumValues = enumValsAttr.split(',').map((e2) => parseFloat(e2));
+                                        }
+                                        let min = firstNum(attrOf(inp, 'uisoftmin'), attrOf(inp, 'uimin'));
+                                        let max = firstNum(attrOf(inp, 'uisoftmax'), attrOf(inp, 'uimax'));
+                                        let def = parseDefault(type, valueStr);
+                                        if (def === undefined) def = zeroFor(type);
+                                        if (type === 'float' || type === 'integer') {
+                                            if (min == null) min = Math.min(0, def);
+                                            if (max == null) max = Math.max(1, Math.abs(def) * 2);
+                                            if (max <= min) max = min + 1;
+                                        }
+                                        return { uniform: 'in::' + inputName, input: inputName, label, type, def, min, max,
+                                            enumNames, enumValues, live: false, uifolder };
+                                    };
+                                    const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
+                                    defsAll.sort((a, b) => {
+                                        if (preferredDef) {
+                                            const ad = (a.getName && a.getName() === preferredDef) ? 0 : 1;
+                                            const bd = (b.getName && b.getName() === preferredDef) ? 0 : 1;
+                                            if (ad !== bd) return ad - bd;
+                                        }
+                                        const am = (a.getType && a.getType() === preferTypePre) ? 0 : 1;
+                                        const bm = (b.getType && b.getType() === preferTypePre) ? 0 : 1;
+                                        return am - bm;
+                                    });
+                                    const out = [];
+                                    const seenInput = new Set();
+                                    for (const def of defsAll) {
+                                        const inputs = vecToArray(def.getActiveInputs ? def.getActiveInputs()
+                                            : (def.getInputs ? def.getInputs() : null));
+                                        for (const inp of inputs) {
+                                            const nm = inp.getName();
+                                            if (seenInput.has(nm)) continue;
+                                            const p = buildPendingParam(inp);
+                                            if (p) { seenInput.add(nm); out.push(p); }
+                                        }
+                                    }
+                                    return out;
+                                });
+                            } catch (prePassErr) {
+                                // Best-effort: the authoritative post-compile pass still runs.
+                                console.warn('MaterialX docs: pre-compile parameter enumeration failed -', prePassErr);
+                            }
+                            if (mounted && preParams.length) {
+                                setParams(preParams);
+                                const preVals = {};
+                                for (const p of preParams) {
+                                    if (p.readonly || p.type === 'filename') continue;
+                                    preVals[p.uniform] = Array.isArray(p.def) ? p.def.slice() : p.def;
+                                }
+                                setValues(preVals);
+                            }
+                        }
+
                         const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
                             label: nodeName,
@@ -1456,30 +1596,33 @@
                                 <div className="flex items-center gap-1.5">
                                     <button
                                         onClick={onExportMtlx}
+                                        disabled={loading}
                                         title="Download this node with the current values as a .mtlx document"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                     >
                                         <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                                     </button>
                                     {!IN_VSCODE && (
                                     <button
                                         onClick={sendToEditor}
+                                        disabled={loading}
                                         title="Open this node in the node graph editor"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                     >
                                         <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                     </button>
                                     )}
                                     <button
                                         onClick={onResetDefaults}
+                                        disabled={loading}
                                         title="Reset to default"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                     >
                                         <MtlxIcon name="restore" className="w-3.5 h-3.5" />
                                     </button>
                                 </div>
                             </div>
-                            <div className="overflow-y-auto p-3 space-y-3 flex-1 custom-scrollbar">
+                            <div className={'overflow-y-auto p-3 space-y-3 flex-1 custom-scrollbar' + (loading ? ' pointer-events-none opacity-50 select-none' : '')}>
                                 {paramGroups.ungrouped.map((p) => (
                                     // Key includes nodeName: different nodes often
                                     // expose SAME-named inputs (image/hextiledimage

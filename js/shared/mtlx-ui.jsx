@@ -326,7 +326,7 @@ const fetchPresetFiles = async (preset) => {
 function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName }) {
     useEscapeToClose(onClose, open && !busy);
     if (!open) return null;
-    return (
+    const frame = (
         <DialogFrame
             open={open}
             title="Presets"
@@ -361,15 +361,39 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
             </div>
         </DialogFrame>
     );
+    // Render inside the fullscreen/maximized viewport element when one is
+    // active (a fixed overlay elsewhere in the tree is invisible under
+    // native fullscreen, and sits behind the CSS-maximize fallback's
+    // pinned element); otherwise render inline exactly as before.
+    const fsEl = fullscreenElement();
+    return fsEl ? ReactDOM.createPortal(frame, fsEl) : frame;
 }
 
-// Settings dialog (the cogwheel button in ViewportControls' strip below —
+// Portal target for the app's anchored popovers (EnvDialog, ColorSwatch,
+// SettingsDialog): the natively-fullscreened element when one is active,
+// else document.body. Native fullscreen only top-layers the fullscreened
+// element's own subtree, so a popover portaled to document.body renders
+// underneath it (invisible); portaling into document.fullscreenElement
+// keeps it on the top layer. document.fullscreenElement is null in the
+// non-fullscreen and CSS-maximize fallback paths, so this stays
+// document.body there -- no change to those paths.
+const fullscreenPortalRoot = () => (document.fullscreenElement || document.body);
+
+// Approx SettingsDialog popover footprint (px) for the edge-clamp/flip
+// math below -- mirrors ENV_DIALOG_W/H. Height is a safe over-estimate;
+// the cog sits at the top of the strip so the flip branch effectively
+// never fires.
+const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 180;
+
+// Settings popover (the cogwheel button in ViewportControls' strip below):
 // present in all three apps, since docs/viewer/graph all render
-// ViewportControls, so mounting the dialog there needs zero per-app
-// wiring). Body is a small list of settings rows so more can land here
-// later without restructuring the dialog itself; today there is exactly
-// one row (Force Transparency).
-function SettingsDialog({ open, onClose, overlayClassName }) {
+// ViewportControls, so mounting it there needs zero per-app wiring.
+// Anchored just below the cog and edge-clamped to the viewport, mirroring
+// EnvDialog (portaled to the fullscreen root, closes on Escape + outside
+// pointerdown). Body is a small list of settings rows so more can land
+// here later without restructuring; today there is exactly one row
+// (Force Transparency).
+function SettingsDialog({ anchorRef, open, onClose }) {
     useEscapeToClose(onClose, open);
     // Re-read from the engine's persisted value every time the dialog
     // opens (not just once on mount) — window.setForceTransparency is the
@@ -379,14 +403,45 @@ function SettingsDialog({ open, onClose, overlayClassName }) {
     React.useEffect(() => {
         if (open) setForceT(!!(window.getForceTransparency && window.getForceTransparency()));
     }, [open]);
+    const popRef = React.useRef(null);
+    const [pos, setPos] = React.useState(null);
+
+    // Right-align to the cog and clamp both axes to the viewport, then
+    // flip above if it would overflow the bottom -- identical math to
+    // EnvDialog's default branch (the cog lives in the same right-edge
+    // strip as the env button). No placement="left" variant: Settings
+    // just opens below the button on every page.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const rect = (anchorRef && anchorRef.current) ? anchorRef.current.getBoundingClientRect() : null;
+        if (rect) {
+            const left = Math.max(8, Math.min(rect.right - SETTINGS_DIALOG_W, window.innerWidth - SETTINGS_DIALOG_W - 8));
+            const flip = rect.bottom + SETTINGS_DIALOG_H > window.innerHeight;
+            setPos(flip
+                ? { left, bottom: window.innerHeight - rect.top + 4 }
+                : { left, top: rect.bottom + 4 });
+        }
+        return undefined;
+    }, [open]);
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (popRef.current && popRef.current.contains(e.target)) return;
+            if (anchorRef && anchorRef.current && anchorRef.current.contains(e.target)) return;
+            onClose();
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
     if (!open) return null;
-    return (
-        <DialogFrame
-            open={open}
-            title="Settings"
-            onClose={onClose}
-            overlayClassName={overlayClassName}
-            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] overflow-hidden flex flex-col"
+    return ReactDOM.createPortal(
+        <div
+            ref={popRef}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={Object.assign({ position: 'fixed', zIndex: 9999, width: SETTINGS_DIALOG_W }, pos || {})}
+            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
         >
             <div className="px-3 py-3 space-y-3 text-[12px]">
                 {/* Settings rows go here — one block per setting, so
@@ -417,7 +472,8 @@ function SettingsDialog({ open, onClose, overlayClassName }) {
                     </div>
                 </div>
             </div>
-        </DialogFrame>
+        </div>,
+        fullscreenPortalRoot()
     );
 }
 
@@ -576,7 +632,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
         downloadBlob(blob, base + '.zip');
     };
 
-    return (
+    const frame = (
         <DialogFrame
             open={open}
             title="Export Shader Code"
@@ -672,6 +728,8 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             )}
         </DialogFrame>
     );
+    const fsEl = fullscreenElement();
+    return fsEl ? ReactDOM.createPortal(frame, fsEl) : frame;
 }
 
 // Fullscreen state + toggle for a viewport container. Wraps the engine's
@@ -800,6 +858,12 @@ const usePersistedGeom = (defaultGeom) => {
 // that need to collect `files` first (viewer-app's non-.mtlx dropped
 // files) do that at the call site and pass the result in.
 const openInGraphEditor = ({ xml, name, files }) => {
+    // Leaving this view for another tab: drop out of any active fullscreen
+    // (native or the CSS-maximize fallback) so the destination view is
+    // interactive. The shell keeps the old view mounted (just CSS-hidden),
+    // so fullscreen on the now-hidden viewport container would otherwise
+    // persist until the user hits Esc.
+    if (fullscreenElement()) toggleFullscreen();
     window.__mtlxPendingImport = { xml, name, files: files || null };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
@@ -824,6 +888,12 @@ const looseFilesFrom = (fileMap) => {
 // js/viewer-app.jsx's 'mtlx-view-document' listener expects it, fire that
 // event, then hash-route over to the viewer.
 const openInViewer = ({ xml, name, files }) => {
+    // Leaving this view for another tab: drop out of any active fullscreen
+    // (native or the CSS-maximize fallback) so the destination view is
+    // interactive. The shell keeps the old view mounted (just CSS-hidden),
+    // so fullscreen on the now-hidden viewport container would otherwise
+    // persist until the user hits Esc.
+    if (fullscreenElement()) toggleFullscreen();
     window.__mtlxPendingViewerImport = { xml, name, files: files || null };
     window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: window.__mtlxPendingViewerImport }));
     window.location.hash = '#!viewer';
@@ -1092,7 +1162,7 @@ const EnvDialog = ({
                 <div className="text-red-400">{importError}</div>
             )}
         </div>,
-        document.body
+        fullscreenPortalRoot()
     );
 };
 
@@ -1136,6 +1206,7 @@ const ViewportControls = ({
     // approximates the PANEL's left edge — used by EnvDialog's placement="left"
     // branch to clear the whole panel instead of just the env button.
     const panelEdgeRef = React.useRef(null);
+    const settingsBtnRef = React.useRef(null);
     const [envOpen, setEnvOpen] = React.useState(false);
     const [envRotation, setEnvRotation] = React.useState(0);   // degrees, 0-360
     const [envExposure, setEnvExposure] = React.useState(1.0);
@@ -1279,9 +1350,10 @@ const ViewportControls = ({
         </button>
         {trailingChildren}
         <button
-            onClick={() => { if (isFullscreen) onToggleFullscreen(); setSettingsOpen(true); }}
+            ref={settingsBtnRef}
+            onClick={() => setSettingsOpen((o) => !o)}
             title="Settings"
-            className={buttonClassName(false)}
+            className={buttonClassName(settingsOpen)}
         >
             <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
         </button>
@@ -1293,18 +1365,15 @@ const ViewportControls = ({
             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
         </button>
     </div>
-    {/* Mounted as a sibling of the strip (not inside it) with a `fixed`
-        overlay — ViewportControls renders inside scrolling pages in the
-        docs/viewer apps, so an `absolute` backdrop (DialogFrame's
-        default) would only cover the panel's own scrolled-past bounds
-        instead of the whole viewport. Same rationale as the viewer's
-        Presets/Export dialogs (see their header comments). No
-        fullscreen-subtree concerns here since the button above already
-        exits fullscreen before opening this. */}
+    {/* Anchored settings popover (portaled to the fullscreen root, like
+        EnvDialog) rather than a full-screen modal, so it opens in place
+        just below the cog and stays visible in native fullscreen without
+        exiting it. Mounted as a sibling of the strip; the portal makes
+        its DOM position in the tree irrelevant. */}
     <SettingsDialog
+        anchorRef={settingsBtnRef}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
     />
     </React.Fragment>
     );
@@ -1614,7 +1683,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
                 className={swatchCls}
                 style={{ background: rgbToHex(rgb) }}
             />
-            {popover && ReactDOM.createPortal(popover, document.body)}
+            {popover && ReactDOM.createPortal(popover, fullscreenPortalRoot())}
         </React.Fragment>
     );
 };

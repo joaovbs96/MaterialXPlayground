@@ -530,7 +530,7 @@
                             instead of living inside this card (see
                             status/error gating just below). */}
                         <div className={IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'}>
-                            {IN_VSCODE && status && (
+                            {IN_VSCODE && status && !busy && (
                                 <div className="text-sm text-gray-400 mb-3">{status}</div>
                             )}
                             {IN_VSCODE && error && (
@@ -598,22 +598,17 @@
                                                 </button>
                                                 )}
                                                 {/* Presets: browser-only, multi-document
-                                                    affordance — the VS Code preview is bound to
-                                                    the open file (same rationale as the graph
-                                                    editor's Presets gate). Exits fullscreen
-                                                    first: PresetsDialog mounts at the app root,
-                                                    outside the fullscreened viewport container
-                                                    (viewportRef), so it would be invisible under
-                                                    native fullscreen (which only renders the
-                                                    fullscreened element's own subtree) or hidden
-                                                    behind it under the CSS-maximize fallback
-                                                    (which pins that subtree at a z-index above
-                                                    this dialog's own) — see useFullscreen and
-                                                    toggleFullscreen's header comment, both in
-                                                    js/shared/mtlx-ui.jsx / js/mtlx-engine.js. */}
+                                                    affordance -- the VS Code preview is bound
+                                                    to the open file (same rationale as the
+                                                    graph editor's Presets gate). The dialog
+                                                    portals into the fullscreen/maximized
+                                                    element when active (see PresetsDialog /
+                                                    fullscreenElement in js/shared/mtlx-ui.jsx),
+                                                    so it stays visible in fullscreen without
+                                                    exiting it. */}
                                                 {!IN_VSCODE && (
                                                 <button
-                                                    onClick={() => { if (isFullscreen) onToggleFullscreen(); setPresetsOpen(true); }}
+                                                    onClick={() => setPresetsOpen(true)}
                                                     title="Load a curated official MaterialX example"
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
@@ -621,13 +616,13 @@
                                                 </button>
                                                 )}
                                                 {/* Export Shader Code: not VS Code-gated (unlike
-                                                    Presets/Send-to-Editor above) — generating the
-                                                    open document's shader source applies just as
-                                                    well to the single file the extension has
-                                                    opened. Same fullscreen-exit rationale as the
-                                                    Presets button above. */}
+                                                    Presets/Send-to-Editor above) -- generating
+                                                    the open document's shader source applies to
+                                                    the single file the extension opened. Portals
+                                                    into the fullscreen/maximized element when
+                                                    active, so it no longer exits fullscreen. */}
                                                 <button
-                                                    onClick={() => { if (isFullscreen) onToggleFullscreen(); setShaderExportOpen(true); }}
+                                                    onClick={() => setShaderExportOpen(true)}
                                                     title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
                                                     disabled={!renderables.length}
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
@@ -679,7 +674,7 @@
                         same idea as the graph editor's error banners. error sits at
                         top-12 (below status's top-2) so the two don't overlap when
                         both are shown at once. */}
-                    {!IN_VSCODE && status && (
+                    {!IN_VSCODE && status && !busy && (
                         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg">{status}</div>
                     )}
                     {!IN_VSCODE && error && (

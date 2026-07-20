@@ -1407,7 +1407,7 @@
                 if (!targetNodes.length || targetNodes.some((n) => !n.width || !n.height)) return false;
                 const rect = host.getBoundingClientRect();
                 if (!rect.width || !rect.height) return false;
-                const sidebarWidth = (parsedRef.current && paramsOpenRef.current) ? 304 : 15; // mirrors the MiniMap's own occlusion constant
+                const sidebarWidth = (parsedRef.current && paramsOpenRef.current) ? 320 : 15; // mirrors the MiniMap's own occlusion constant
                 const visibleWidth = Math.max(50, rect.width - sidebarWidth);
                 const bounds = getBounds(targetNodes);
                 const padding = (opts && typeof opts.padding === 'number') ? opts.padding : 0.15;
@@ -4889,11 +4889,11 @@
                                 nodeStrokeColor="#111827"
                                 maskColor="rgba(17, 24, 39, 0.75)"
                                 // Sit to the LEFT of the preview panel (right-2
-                                // + w-72 = 296px) while it's open; slide back
+                                // + w-[19rem] = 312px) while it's open; slide back
                                 // to the corner when it collapses to a chip.
                                 style={{
                                     background: '#1f2937',
-                                    marginRight: (parsed && paramsOpen) ? 304 : 15,
+                                    marginRight: (parsed && paramsOpen) ? 320 : 15,
                                     transition: 'margin-right 200ms ease',
                                 }}
                             />
@@ -5086,6 +5086,7 @@
                             </button>
                             )}
                             {parsed && (
+                                <div className="flex items-center gap-1.5">
                                 <button
                                     onClick={openExportDialog}
                                     title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
@@ -5094,8 +5095,6 @@
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                                     <span>Export</span>
                                 </button>
-                            )}
-                            {parsed && (
                                 <button
                                     onClick={openShaderExport}
                                     title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
@@ -5104,7 +5103,9 @@
                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
                                     <span>Shader Code</span>
                                 </button>
+                                </div>
                             )}
+                            <div className="flex items-center gap-1.5">
                             <button
                                 onClick={undoDoc}
                                 title="Undo (Ctrl+Z)"
@@ -5121,6 +5122,7 @@
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
                                 <span>Redo</span>
                             </button>
+                            </div>
                         </div>
                         {/* Breadcrumb: document \u25B8 scope, with the scope
                             dropdown right underneath it. */}
@@ -5146,27 +5148,6 @@
                                 >
                                     <option value="">(document root)</option>
                                     {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
-                                </select>
-                                {/* Document-level colorspace (item 6): the
-                                    fallback for every input that doesn't
-                                    author its own — same styling/blur
-                                    convention as the scope select above. */}
-                                <select
-                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-                                    title="Document colorspace — the fallback for inputs without an explicit colorspace"
-                                    value={docColorspace}
-                                    onChange={(e) => {
-                                        const v = e.target.value;
-                                        setDocColorspace(v);
-                                        if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
-                                        else mxRemoveAttr(parsed.doc, 'colorspace');
-                                        setDocRev((r) => r + 1);
-                                        markDirty();
-                                        e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */
-                                    }}
-                                >
-                                    <option value="">(doc colorspace)</option>
-                                    {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
                                 </select>
                             </>
                         )}
@@ -5326,7 +5307,7 @@
                         connected inputs are read-only since their value
                         comes from the wire. */}
                     {parsed && (paramsOpen ? (
-                        <div className="absolute top-12 bottom-2 right-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono">
+                        <div className="absolute top-12 bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono">
                             {/* The preview target on a shaderball — the same
                                 render pipeline as the docs page. Square, and
                                 framed to fill. Re-renders on every committed
@@ -5347,10 +5328,28 @@
                                     </button>
                                 }
                                 trailingChildren={
-                                    // Graph and viewer are always in sync in the extension
-                                    // (one opened .mtlx file), so this cross-view handoff
-                                    // doesn't apply under VS Code.
-                                    !IN_VSCODE && (
+                                    <>
+                                    <select
+                                        className="h-6 text-[11px] px-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono max-w-[7rem] truncate"
+                                        title="Document colorspace -- fallback for inputs without an explicit colorspace"
+                                        value={docColorspace}
+                                        onChange={(e) => {
+                                            const v = e.target.value;
+                                            setDocColorspace(v);
+                                            if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
+                                            else mxRemoveAttr(parsed.doc, 'colorspace');
+                                            setDocRev((r) => r + 1);
+                                            markDirty();
+                                            e.target.blur();
+                                        }}
+                                    >
+                                        <option value="">(doc colorspace)</option>
+                                        {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
+                                    </select>
+                                    {/* Graph and viewer are always in sync in the extension
+                                        (one opened .mtlx file), so this cross-view handoff
+                                        doesn't apply under VS Code. */}
+                                    {!IN_VSCODE && (
                                     <button
                                         onClick={sendToViewer}
                                         title="Open in Material Viewer"
@@ -5358,7 +5357,8 @@
                                     >
                                         <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                     </button>
-                                    )
+                                    )}
+                                    </>
                                 }
                             />
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
