@@ -104,7 +104,7 @@
             // the render view and re-read fresh at creation time so they
             // survive a geometry/string/colorspace regen. Shared with
             // viewer-app.jsx / graph/preview.jsx.
-            const [geom, pickGeom] = usePersistedGeom('sphere');
+            const [geom, pickGeom] = usePersistedGeom('shaderball-scene');
             const {
                 rotating, toggleRotating,
                 envBg, toggleEnvBg,

@@ -1101,8 +1101,8 @@ const EnvDialog = ({
 // changed, only how they're displayed). Falls back to the raw value for
 // anything not listed here.
 const GEOM_LABELS = {
-    'shaderball': 'Shader ball',
-    'shaderball-scene': 'Shader ball scene',
+    'shaderball': 'Shaderball',
+    'shaderball-scene': 'Shaderball w/ Backdrop',
     'sphere': 'Sphere',
     'cube': 'Cube',
 };

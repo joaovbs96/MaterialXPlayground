@@ -94,7 +94,7 @@
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [renderables, setRenderables] = React.useState([]);
             const [chosenMat, setChosenMat] = React.useState(0);
-            const [geom, setGeom] = React.useState('shaderball');
+            const [geom, setGeom] = React.useState('shaderball-scene');
             const [status, setStatus] = React.useState('Drop a .mtlx (optionally with textures / a folder / a .zip) to begin.');
             const [error, setError] = React.useState(null);
             const [texReport, setTexReport] = React.useState(null);
