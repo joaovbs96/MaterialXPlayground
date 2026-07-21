@@ -1,0 +1,480 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Tutorials and guides for the MaterialX Playground.">
+      
+      
+      
+      
+        <link rel="prev" href="index.html">
+      
+      
+        <link rel="next" href="your-first-node-graph.html">
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.20">
+    
+    
+      
+        <title>Getting started - MaterialX Playground — Learn</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.e53b48f4.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="assets/extra.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  <script>
+    window.__MTLX_LEARN__ = true;
+    window.__MTLX_APP_ROOT__ = "./../";   /* per-page path back to the SPA root */
+  </script>
+
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#getting-started" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+  <div id="site-header"></div>
+  <script src="assets/vendored/vendor/tailwind/tailwind-play.min.js"></script>
+  <script>tailwind.config = { corePlugins: { preflight: false } };</script>
+  <script src="assets/vendored/js/site-header.js"></script>
+
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="index.html" title="MaterialX Playground — Learn" class="md-nav__button md-logo" aria-label="MaterialX Playground — Learn" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    MaterialX Playground — Learn
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="getting-started.html" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-three-views" class="md-nav__link">
+    <span class="md-ellipsis">
+      The three views
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The three views">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#node-library-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Node Library &amp; Documentation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#material-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Material Viewer
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#node-graph-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      Node Graph Editor
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#try-it-a-minimal-material" class="md-nav__link">
+    <span class="md-ellipsis">
+      Try it: a minimal material
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="your-first-node-graph.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Your first node graph
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-three-views" class="md-nav__link">
+    <span class="md-ellipsis">
+      The three views
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The three views">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#node-library-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Node Library &amp; Documentation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#material-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Material Viewer
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#node-graph-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      Node Graph Editor
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#try-it-a-minimal-material" class="md-nav__link">
+    <span class="md-ellipsis">
+      Try it: a minimal material
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="getting-started">Getting started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
+<p>The playground has three main views, all reachable from the tabs in the
+header. This page is a quick tour of each, plus a minimal <code>.mtlx</code> file you
+can paste straight into the viewer to try things out.</p>
+<h2 id="the-three-views">The three views<a class="headerlink" href="#the-three-views" title="Permanent link">&para;</a></h2>
+<h3 id="node-library-documentation">Node Library &amp; Documentation<a class="headerlink" href="#node-library-documentation" title="Permanent link">&para;</a></h3>
+<p>Browse every standard MaterialX node: per-signature docs, port tables,
+live 3D previews, an implementation-target matrix, and shareable
+permalinks. Every node has a stable URL of the form <code>#/&lt;library&gt;/&lt;group&gt;/&lt;name&gt;</code> —
+for example, the <code>add</code> node in the <code>math</code> group of the standard library is
+<a href="../#/stdlib/math/add" target="_blank"><code>#/stdlib/math/add</code></a>. Bookmark or
+share these links directly.</p>
+<p><a href="../#!docs" target="_blank">Open the Node Library →</a></p>
+<h3 id="material-viewer">Material Viewer<a class="headerlink" href="#material-viewer" title="Permanent link">&para;</a></h3>
+<p>Load an existing <code>.mtlx</code> document (drag-and-drop, file picker, or paste
+XML) and preview it with real-time rendering, including environment
+lighting and camera controls.</p>
+<p><a href="../#!viewer" target="_blank">Open the Material Viewer →</a></p>
+<h3 id="node-graph-editor">Node Graph Editor<a class="headerlink" href="#node-graph-editor" title="Permanent link">&para;</a></h3>
+<p>Visually build MaterialX graphs: drag nodes from the palette, wire ports
+together, nest nodegraphs, and get a live 3D preview as you go, alongside
+validation and XML view/export. This is where
+<a href="your-first-node-graph.html">Your first node graph</a> picks up.</p>
+<p><a href="../#!graph" target="_blank">Open the Node Graph Editor →</a></p>
+<h2 id="try-it-a-minimal-material">Try it: a minimal material<a class="headerlink" href="#try-it-a-minimal-material" title="Permanent link">&para;</a></h2>
+<p>Copy the document below and paste it into the Material Viewer (or save it
+as a <code>.mtlx</code> file and load it) to see a simple red <code>standard_surface</code>
+material:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="cp">&lt;?xml version=&quot;1.0&quot;?&gt;</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">&lt;materialx</span><span class="w"> </span><span class="na">version=</span><span class="s">&quot;1.39&quot;</span><span class="w"> </span><span class="na">colorspace=</span><span class="s">&quot;lin_rec709&quot;</span><span class="nt">&gt;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&lt;standard_surface</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;SR_red&quot;</span><span class="w"> </span><span class="na">type=</span><span class="s">&quot;surfaceshader&quot;</span><span class="nt">&gt;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;input</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;base&quot;</span><span class="w"> </span><span class="na">type=</span><span class="s">&quot;float&quot;</span><span class="w"> </span><span class="na">value=</span><span class="s">&quot;1.0&quot;</span><span class="w"> </span><span class="nt">/&gt;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&lt;input</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;base_color&quot;</span><span class="w"> </span><span class="na">type=</span><span class="s">&quot;color3&quot;</span><span class="w"> </span><span class="na">value=</span><span class="s">&quot;0.8, 0.1, 0.1&quot;</span><span class="w"> </span><span class="nt">/&gt;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">&lt;/standard_surface&gt;</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">&lt;surfacematerial</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;M_red&quot;</span><span class="w"> </span><span class="na">type=</span><span class="s">&quot;material&quot;</span><span class="nt">&gt;</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">&lt;input</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;surfaceshader&quot;</span><span class="w"> </span><span class="na">type=</span><span class="s">&quot;surfaceshader&quot;</span><span class="w"> </span><span class="na">nodename=</span><span class="s">&quot;SR_red&quot;</span><span class="w"> </span><span class="nt">/&gt;</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">&lt;/surfacematerial&gt;</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="nt">&lt;/materialx&gt;</span>
+</code></pre></div>
+<details class="details">
+<summary>What's happening in this document?</summary>
+<ul>
+<li><code>standard_surface</code> is MaterialX's standard physically-based shader
+  node — <code>base</code>/<code>base_color</code> control the diffuse response.</li>
+<li><code>surfacematerial</code> wraps a shader node so it can be assigned to
+  geometry; the viewer renders it on its default preview mesh.</li>
+<li>Look up either node's full port list on the
+  <a href="../#!docs" target="_blank">Node Library</a> — e.g.
+  <a href="../#/pbrlib/shader/standard_surface" target="_blank"><code>#/pbrlib/shader/standard_surface</code></a>.</li>
+</ul>
+</details>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>Once it loads, open the same document in the
+<a href="../#!graph" target="_blank">Node Graph Editor</a> to see it as a graph —
+the Viewer and Graph Editor share the same underlying document, so you
+can switch between them at any time.</p>
+</div>
+<p>Next: <a href="your-first-node-graph.html">Your first node graph</a> builds this same
+kind of material step by step, from scratch, in the graph editor.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div id="site-footer"></div>
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.sections", "navigation.top", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>

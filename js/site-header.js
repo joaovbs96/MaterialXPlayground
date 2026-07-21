@@ -12,9 +12,12 @@
     'use strict';
 
     // True in every real context: the old standalone pages (material-viewer,
-    // node-graph) are gone, so this script only ever loads inside the shell
-    // (index.html, or the VS Code webview via window.__MTLX_VSCODE__).
-    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__;
+    // node-graph) are gone, so this loads only inside the shell (index.html,
+    // VS Code, or Electron) — or a vendored tutorials-src page (IS_TUTORIALS).
+    var IS_TUTORIALS = !!window.__MTLX_TUTORIALS__;
+    var APP_ROOT = window.__MTLX_APP_ROOT__ || '../';
+    var TUTORIALS_URL = 'tutorials/';
+    var IS_SHELL = !IS_TUTORIALS && (/(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__ || !!window.__MTLX_ELECTRON__);
 
     // The site name. Change it here and it changes everywhere
     // (header, and — via window.SITE_TITLE — anything React renders).
@@ -186,7 +189,7 @@
         { id: 'learn', label: 'Learn', group: true, icon: ICON_NAV_LEARN, items: [
             { id: 'whatIsMaterialx', label: 'What is MaterialX?', shellHref: '#!what-is-materialx', icon: '<span class="mtlx-menu-logo" aria-hidden="true"></span>' },
             { id: 'gallery', label: 'Material Gallery', shellHref: '#!gallery', icon: ICON_NAV_GALLERY },
-            { id: 'tutorials', label: 'Tutorials', icon: ICON_NAV_LEARN, status: 'soon' },
+            { id: 'tutorials', label: 'Tutorials', icon: ICON_NAV_LEARN, href: 'tutorials/' },
         ] },
         { id: 'integrate', label: 'Integrate', group: true, icon: ICON_NAV_INTEGRATE, items: [
             { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER, badge: 'Experimental' },
@@ -228,8 +231,17 @@
 
     // NAV carries no pathname `match` anymore: the standalone-page
     // branch is gone, so the active tab always comes from the current
-    // hash (see IS_SHELL's own comment).
-    var activeId = shellActiveId(window.location.hash || '');
+    // hash — except a tutorials-src page, which has none (see IS_SHELL).
+    var activeId = IS_TUTORIALS ? 'tutorials' : shellActiveId(window.location.hash || '');
+
+    // Resolves a NAV item's actual href: most items are shellHref-only (a
+    // hash route); 'tutorials' carries a real `href` instead. On a
+    // tutorials-src page both need the APP_ROOT prefix back to the SPA.
+    function hrefFor(item) {
+        if (item.href) return IS_TUTORIALS ? (APP_ROOT + item.href) : item.href;
+        return IS_TUTORIALS ? (APP_ROOT + item.shellHref) : item.shellHref;
+    }
+    var brandHref = IS_TUTORIALS ? (APP_ROOT + '#!home') : (IS_SHELL ? '#!home' : 'index.html');
 
     // VS Code nav filtering: the webview always drops Home (no landing
     // page) and the Learn/Integrate dropdowns (browser-only surfaces). The
@@ -263,7 +275,7 @@
                 badge + ICON_EXTERNAL_LINK +
                 '</a>';
         }
-        return '<a role="menuitem" tabindex="-1" href="' + item.shellHref + '"' +
+        return '<a role="menuitem" tabindex="-1" href="' + hrefFor(item) + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="mtlx-menu-item' + (active ? ' is-active' : '') + '">' +
@@ -292,7 +304,7 @@
                 badge + ICON_EXTERNAL_LINK +
                 '</a>';
         }
-        return '<a href="' + item.shellHref + '"' +
+        return '<a href="' + hrefFor(item) + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="mtlx-tab-mobile' + (active ? ' is-active' : '') + '">' +
@@ -321,7 +333,7 @@
             '</div>';
         }
         var active = item.id === activeId;
-        var href = item.shellHref; // shellHref-only, see NAV's own comment above
+        var href = hrefFor(item); // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
@@ -338,7 +350,7 @@
                 item.items.map(renderMobileItem).join('');
         }
         var active = item.id === activeId;
-        var href = item.shellHref; // shellHref-only, see NAV's own comment above
+        var href = hrefFor(item); // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
@@ -359,7 +371,7 @@
                 // home view (#!home). Under VS Code there's no home to
                 // link to, so it renders as a <span> instead of an <a>.
                 '<' + (window.__MTLX_VSCODE__ ? 'span' : 'a') +
-                    (window.__MTLX_VSCODE__ ? '' : ' href="' + (IS_SHELL ? '#!home' : 'index.html') + '"') +
+                    (window.__MTLX_VSCODE__ ? '' : ' href="' + brandHref + '"') +
                     ' class="mtlx-brand" title="' + SITE_TITLE + '">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="mtlx-brand-icon">' +
                         LOGO_PATHS +

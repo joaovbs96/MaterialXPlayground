@@ -1,0 +1,2 @@
+# pin to the version actually installed
+mkdocs-material==9.6.20

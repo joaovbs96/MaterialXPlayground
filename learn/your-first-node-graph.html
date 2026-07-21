@@ -1,0 +1,521 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Tutorials and guides for the MaterialX Playground.">
+      
+      
+      
+      
+        <link rel="prev" href="getting-started.html">
+      
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.20">
+    
+    
+      
+        <title>Your first node graph - MaterialX Playground — Learn</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.e53b48f4.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="assets/extra.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  <script>
+    window.__MTLX_LEARN__ = true;
+    window.__MTLX_APP_ROOT__ = "./../";   /* per-page path back to the SPA root */
+  </script>
+
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#your-first-node-graph" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+  <div id="site-header"></div>
+  <script src="assets/vendored/vendor/tailwind/tailwind-play.min.js"></script>
+  <script>tailwind.config = { corePlugins: { preflight: false } };</script>
+  <script src="assets/vendored/js/site-header.js"></script>
+
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="index.html" title="MaterialX Playground — Learn" class="md-nav__button md-logo" aria-label="MaterialX Playground — Learn" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    MaterialX Playground — Learn
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="getting-started.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Your first node graph
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="your-first-node-graph.html" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Your first node graph
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-open-the-node-graph-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Open the Node Graph Editor
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-add-a-standard_surface-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Add a standard_surface node
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-set-the-base-color-to-red" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Set the base color to red
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-add-a-surfacematerial-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Add a surfacematerial node
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-check-the-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Check the result
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-save-your-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Save your work
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Next steps
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-open-the-node-graph-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Open the Node Graph Editor
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-add-a-standard_surface-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Add a standard_surface node
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-set-the-base-color-to-red" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Set the base color to red
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-add-a-surfacematerial-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Add a surfacematerial node
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-check-the-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Check the result
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-save-your-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Save your work
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Next steps
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<!--
+  Screenshot placeholders: the `![...]` images below reference
+  assets/img/*.jpg, which do not exist yet (only assets/img/.gitkeep is
+  committed, to keep the directory in git). Drop the real PNG/JPG
+  screenshots described by each alt text into learn-src/docs/assets/img/
+  with the matching filename before/after publishing — this file is left
+  wired up to them (correct paths, correct alt text) so no markdown edits
+  should be needed once the images exist.
+-->
+
+<h1 id="your-first-node-graph">Your first node graph<a class="headerlink" href="#your-first-node-graph" title="Permanent link">&para;</a></h1>
+<p>This walkthrough builds a simple red material from scratch in the
+<a href="../#!graph" target="_blank">Node Graph Editor</a> — the same material as
+the minimal example in <a href="getting-started.html">Getting started</a>, but
+constructed by hand so you get a feel for the editor itself.</p>
+<h2 id="1-open-the-node-graph-editor">1. Open the Node Graph Editor<a class="headerlink" href="#1-open-the-node-graph-editor" title="Permanent link">&para;</a></h2>
+<p>Open the <a href="../#!graph" target="_blank">Node Graph Editor</a> with a blank
+document (use "New" if you already have something loaded).</p>
+<p><img alt="Empty node graph editor with the node palette open" src="assets/img/new-graph.jpg" /></p>
+<h2 id="2-add-a-standard_surface-node">2. Add a <code>standard_surface</code> node<a class="headerlink" href="#2-add-a-standard_surface-node" title="Permanent link">&para;</a></h2>
+<p>Open the node palette and search for <code>standard_surface</code>. Drag it onto the
+canvas — this is the shader node that defines the material's surface
+response (base color, roughness, metalness, and so on).</p>
+<p><img alt="Dragging standard_surface from the palette onto the canvas" src="assets/img/add-standard-surface.jpg" /></p>
+<h2 id="3-set-the-base-color-to-red">3. Set the base color to red<a class="headerlink" href="#3-set-the-base-color-to-red" title="Permanent link">&para;</a></h2>
+<p>Select the <code>standard_surface</code> node and open its inputs panel. Set:</p>
+<ul>
+<li><code>base</code> to <code>1.0</code></li>
+<li><code>base_color</code> to <code>(0.8, 0.1, 0.1)</code></li>
+</ul>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Author (node graph)</label><label for="__tabbed_1_2">Looks (rendered result)</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Edit the <code>base_color</code> input directly on the <code>standard_surface</code> node —
+click the color swatch and pick a red, or type the RGB values.</p>
+<p><img alt="standard_surface node with base_color set to red" src="assets/img/set-base-color.jpg" /></p>
+</div>
+<div class="tabbed-block">
+<p>The live 3D preview updates immediately as you edit the input — no
+separate "render" step.</p>
+<p><img alt="3D preview showing a red-shaded sphere" src="assets/img/preview-red.jpg" /></p>
+</div>
+</div>
+</div>
+<h2 id="4-add-a-surfacematerial-node">4. Add a <code>surfacematerial</code> node<a class="headerlink" href="#4-add-a-surfacematerial-node" title="Permanent link">&para;</a></h2>
+<p>Search the palette for <code>surfacematerial</code> and drag it onto the canvas.
+Connect the <code>standard_surface</code> node's output to the <code>surfacematerial</code>
+node's <code>surfaceshader</code> input by dragging from one port to the other.</p>
+<p><img alt="Connecting standard_surface's output to surfacematerial's input" src="assets/img/connect-material.jpg" /></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code>surfacematerial</code> is what makes the shader assignable to geometry —
+without it, the graph defines a shader but not a renderable material.
+This mirrors the <code>standard_surface</code> + <code>surfacematerial</code> pair in the
+<a href="getting-started.html#try-it-a-minimal-material">minimal <code>.mtlx</code> example</a>.</p>
+</div>
+<h2 id="5-check-the-result">5. Check the result<a class="headerlink" href="#5-check-the-result" title="Permanent link">&para;</a></h2>
+<p>With <code>surfacematerial</code> connected, the preview panel renders your red
+material on the default preview mesh.</p>
+<p><img alt="Final graph: standard_surface connected to surfacematerial, red preview" src="assets/img/final-graph.jpg" /></p>
+<details class="details">
+<summary>Want to see the underlying XML?</summary>
+<p>Use the Document view (XML view/export) in the graph editor's toolbar
+to see the exact <code>.mtlx</code> markup your graph produced — it should look
+very close to the hand-written example in
+<a href="getting-started.html#try-it-a-minimal-material">Getting started</a>.</p>
+</details>
+<h2 id="6-save-your-work">6. Save your work<a class="headerlink" href="#6-save-your-work" title="Permanent link">&para;</a></h2>
+<p>Export or save the document from the graph editor's toolbar to get a
+<code>.mtlx</code> file you can reopen later, load in the
+<a href="../#!viewer" target="_blank">Material Viewer</a>, or share.</p>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Browse the <a href="../#!docs" target="_blank">Node Library</a> for other shader
+  and pattern nodes to try (texture lookups, noise, math operations, ...).</li>
+<li>Try nesting a sub-graph as its own <code>nodegraph</code> for reusable pieces.</li>
+<li>Explore the implementation-target matrix on any node's documentation
+  page to see which renderers support it.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div id="site-footer"></div>
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.sections", "navigation.top", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block extrahead %}
+  <script>
+    window.__MTLX_LEARN__ = true;
+    window.__MTLX_APP_ROOT__ = "{{ base_url }}/../";   /* per-page path back to the SPA root */
+  </script>
+{% endblock %}
+{% block header %}
+  <div id="site-header"></div>
+  <script src="{{ 'assets/vendored/vendor/tailwind/tailwind-play.min.js' | url }}"></script>
+  <script>tailwind.config = { corePlugins: { preflight: false } };</script>
+  <script src="{{ 'assets/vendored/js/site-header.js' | url }}"></script>
+{% endblock %}
+{% block footer %}
+  <div id="site-footer"></div>
+{% endblock %}
