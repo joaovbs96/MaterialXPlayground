@@ -84,14 +84,13 @@ html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16p
    inactive = gray, hover = lighter gray, active = blue text + blue underline.
    The site blue/gray tokens come from the vendored site-tokens.css. */
 
-/* Wrap a code tab set (labels header + code body) in a rounded, gray-600
-   bordered panel. gray-600 is Material's existing label/body separator color
+/* Wrap EVERY tab set (labels header + body) in a rounded, gray-600 bordered
+   panel. gray-600 is Material's existing label/body separator color
    (--md-default-fg-color--lightest, the box-shadow under .tabbed-labels), so
    the outer border and the inner divider match. Panel bg = code bg so the
-   header strip and body read as one surface and the code block's corners
-   blend into the clipped rounding. Scoped with :has(.highlight) so prose/image
-   tab sets (e.g. the "Author/Looks" tabs) are left untouched. */
-.md-typeset .tabbed-set:has(.highlight) {
+   header strip and body read as one surface; for code sets the code block's
+   corners blend into the clipped rounding. */
+.md-typeset .tabbed-set {
   border: .075rem solid var(--site-gray-600);
   border-radius: .2rem;
   overflow: hidden;
@@ -100,9 +99,24 @@ html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16p
 
 /* Keep the label strip inside the panel — Material lets it bleed by -.8rem at
    narrow widths, which the panel's overflow:hidden would otherwise clip. */
-.md-typeset .tabbed-set:has(.highlight) > .tabbed-labels {
+.md-typeset .tabbed-set > .tabbed-labels {
   margin-left: 0;
   margin-right: 0;
+}
+
+/* Code / JS-runner tab sets fill their body edge-to-edge (the code block and
+   run footer bring their own padding). Prose/image tab sets have no fenced
+   .highlight (e.g. the "Author/Looks" tabs), so give their content inner
+   padding to keep text and images off the panel border, and zero the first/
+   last child margins so the padding stays tight. */
+.md-typeset .tabbed-set:not(:has(.highlight)) .tabbed-block {
+  padding: .6rem .8rem;
+}
+.md-typeset .tabbed-set:not(:has(.highlight)) .tabbed-block > :first-child {
+  margin-top: 0;
+}
+.md-typeset .tabbed-set:not(:has(.highlight)) .tabbed-block > :last-child {
+  margin-bottom: 0;
 }
 
 /* Inactive tab label: the header's inactive nav-tab gray. */
