@@ -583,6 +583,8 @@
                                         onScreenshot={takeScreenshot}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}
+                                        showLabels={true}
+                                        labelsClass={(!IN_VSCODE && sidebarOpen) ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'}
                                         trailingChildren={
                                             <React.Fragment>
                                                 {/* Graph and viewer are always in sync in the
@@ -595,6 +597,7 @@
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                                                    <span className="ml-1.5 whitespace-nowrap">Send to Graph</span>
                                                 </button>
                                                 )}
                                                 {/* Presets: browser-only, multi-document
@@ -613,6 +616,7 @@
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
                                                     <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                                                    <span className="ml-1.5 whitespace-nowrap">Presets</span>
                                                 </button>
                                                 )}
                                                 {/* Export Shader Code: not VS Code-gated (unlike
@@ -628,6 +632,7 @@
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
                                                 >
                                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                                    <span className="ml-1.5 whitespace-nowrap">Shader Code</span>
                                                 </button>
                                             </React.Fragment>
                                         }

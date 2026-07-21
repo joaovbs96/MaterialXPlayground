@@ -5245,7 +5245,7 @@
                                     : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                         >
                             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-                            <span>Maximize</span>
+                            <span>{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
                         </button>
                         <button
                             onClick={() => setHelpOpen(true)}
@@ -5327,7 +5327,7 @@
                                         <MtlxIcon name={pinnedTarget ? 'pin-filled' : 'pin'} className="w-3.5 h-3.5" />
                                     </button>
                                 }
-                                trailingChildren={
+                                trailingChildren={(labeled) => (
                                     <>
                                     <select
                                         className="h-6 text-[11px] px-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono max-w-[7rem] truncate"
@@ -5356,10 +5356,11 @@
                                         className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
                                     >
                                         <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                                        {labeled && <span className="ml-1.5 whitespace-nowrap">Send to Viewer</span>}
                                     </button>
                                     )}
                                     </>
-                                }
+                                )}
                             />
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
                                 {/* Top Row: Color dot, Name, and Collapse button */}
