@@ -1,4 +1,4 @@
-# MaterialX Playground — Learn
+# MaterialX Playground — Tutorials
 
 Welcome to the tutorials and guides for the **MaterialX Playground** — an
 interactive, open-source, in-browser playground to browse the standard

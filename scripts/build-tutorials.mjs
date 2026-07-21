@@ -1,27 +1,28 @@
 #!/usr/bin/env node
-// scripts/build-learn.mjs
+// scripts/build-tutorials.mjs
 //
-// Builds the "Learn" MkDocs subsite (learn-src/) into the committed
-// `/learn/` output, served at /learn/ alongside the SPA.
+// Builds the "Tutorials" MkDocs subsite (tutorials-src/) into the committed
+// `/tutorials/` output, served at /tutorials/ alongside the SPA.
 //
 // Two steps:
-//   1. Copy the shared header script + vendored Tailwind Play build into
-//      learn-src/docs/assets/vendored/ (gitignored — regenerated every
-//      build) so learn-src/overrides/main.html can reference them via
+//   1. Copy the shared header script + its plain-CSS stylesheets (design
+//      tokens + component styles — no Tailwind dependency) into
+//      tutorials-src/docs/assets/vendored/ (gitignored — regenerated every
+//      build) so tutorials-src/overrides/main.html can reference them via
 //      relative `url` paths instead of reaching back out of docs_dir at
 //      build time. This mirrors scripts/vendor.mjs's copy-then-verify
-//      approach, just for the two assets the Learn header needs.
-//   2. Run `mkdocs build -f learn-src/mkdocs.yml --clean`, which writes to
-//      `../learn` relative to learn-src/ (see site_dir in mkdocs.yml) —
-//      i.e. the repo's committed `/learn/` directory.
+//      approach, just for the assets the Tutorials header needs.
+//   2. Run `mkdocs build -f tutorials-src/mkdocs.yml --clean`, which writes to
+//      `../tutorials` relative to tutorials-src/ (see site_dir in mkdocs.yml) —
+//      i.e. the repo's committed `/tutorials/` directory.
 //
 // Requires Python + mkdocs-material installed separately (not an npm
 // dependency):
-//   python -m pip install -r learn-src/requirements.txt
+//   python -m pip install -r tutorials-src/requirements.txt
 //
 // Usage:
-//   npm run build:learn              copy the shared assets, then build.
-//   node scripts/build-learn.mjs --check
+//   npm run build:tutorials          copy the shared assets, then build.
+//   node scripts/build-tutorials.mjs --check
 //                                     verify the vendored copies match
 //                                     their source, without copying or
 //                                     building. Non-zero exit on drift.
@@ -39,23 +40,28 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-const LEARN_SRC = path.join(REPO_ROOT, "learn-src");
-const VENDORED_ROOT = path.join(LEARN_SRC, "docs", "assets", "vendored");
+const TUTORIALS_SRC = path.join(REPO_ROOT, "tutorials-src");
+const VENDORED_ROOT = path.join(TUTORIALS_SRC, "docs", "assets", "vendored");
 
 const CHECK_MODE = process.argv.includes("--check");
 
-// Source -> vendored-copy pairs, mirroring what learn-src/overrides/main.html
-// references via the `url` filter (assets/vendored/js/site-header.js and
-// assets/vendored/vendor/tailwind/tailwind-play.min.js). Single source of
-// truth for both the copy and --check code paths, so they can't drift.
+// Source -> vendored-copy pairs, mirroring what tutorials-src/overrides/main.html
+// references via the `url` filter (assets/vendored/js/site-header.js,
+// assets/vendored/js/site-tokens.css, assets/vendored/js/site-header.css).
+// Single source of truth for both the copy and --check code paths, so they
+// can't drift.
 const COPIES = [
   {
     src: path.join(REPO_ROOT, "js", "site-header.js"),
     dest: path.join(VENDORED_ROOT, "js", "site-header.js"),
   },
   {
-    src: path.join(REPO_ROOT, "vendor", "tailwind", "tailwind-play.min.js"),
-    dest: path.join(VENDORED_ROOT, "vendor", "tailwind", "tailwind-play.min.js"),
+    src: path.join(REPO_ROOT, "js", "site-tokens.css"),
+    dest: path.join(VENDORED_ROOT, "js", "site-tokens.css"),
+  },
+  {
+    src: path.join(REPO_ROOT, "js", "site-header.css"),
+    dest: path.join(VENDORED_ROOT, "js", "site-header.css"),
   },
 ];
 
@@ -92,23 +98,23 @@ async function runCheck() {
       continue;
     }
     if (!existsSync(dest)) {
-      problems.push(`  - vendored copy missing: ${path.relative(REPO_ROOT, dest)} (run \`npm run build:learn\`)`);
+      problems.push(`  - vendored copy missing: ${path.relative(REPO_ROOT, dest)} (run \`npm run build:tutorials\`)`);
       continue;
     }
     const [srcData, destData] = await Promise.all([readFile(src), readFile(dest)]);
     if (!srcData.equals(destData)) {
-      problems.push(`  - ${path.relative(REPO_ROOT, dest)} is stale (differs from ${path.relative(REPO_ROOT, src)}) — re-run \`npm run build:learn\``);
+      problems.push(`  - ${path.relative(REPO_ROOT, dest)} is stale (differs from ${path.relative(REPO_ROOT, src)}) — re-run \`npm run build:tutorials\``);
     }
   }
   if (problems.length > 0) {
-    fail(["error: learn-src/docs/assets/vendored/ is out of sync (--check failed):", ...problems].join("\n"));
+    fail(["error: tutorials-src/docs/assets/vendored/ is out of sync (--check failed):", ...problems].join("\n"));
   }
-  log(`OK — learn-src/docs/assets/vendored/ matches its source(s) (${COPIES.length} file(s)).`);
+  log(`OK — tutorials-src/docs/assets/vendored/ matches its source(s) (${COPIES.length} file(s)).`);
 }
 
 function runMkdocsBuild() {
-  log("running: mkdocs build -f learn-src/mkdocs.yml --clean");
-  const result = spawnSync("mkdocs", ["build", "-f", "learn-src/mkdocs.yml", "--clean"], {
+  log("running: mkdocs build -f tutorials-src/mkdocs.yml --clean");
+  const result = spawnSync("mkdocs", ["build", "-f", "tutorials-src/mkdocs.yml", "--clean"], {
     cwd: REPO_ROOT,
     stdio: "inherit",
     shell: true,
@@ -117,7 +123,7 @@ function runMkdocsBuild() {
     fail(
       [
         `error: failed to run mkdocs — ${result.error.message}`,
-        "Is mkdocs-material installed? Run: python -m pip install -r learn-src/requirements.txt",
+        "Is mkdocs-material installed? Run: python -m pip install -r tutorials-src/requirements.txt",
       ].join("\n")
     );
   }
@@ -132,5 +138,5 @@ if (CHECK_MODE) {
   await copyAll();
   runMkdocsBuild();
   log("");
-  log("Learn subsite built to /learn/. Regenerate any time with `npm run build:learn`.");
+  log("Tutorials subsite built to /tutorials/. Regenerate any time with `npm run build:tutorials`.");
 }

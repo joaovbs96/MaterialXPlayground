@@ -18,7 +18,7 @@
     
     
       
-        <title>MaterialX Playground — Learn</title>
+        <title>MaterialX Playground — Tutorials</title>
       
     
     
@@ -48,9 +48,16 @@
     
     
   <script>
-    window.__MTLX_LEARN__ = true;
+    window.__MTLX_TUTORIALS__ = true;
     window.__MTLX_APP_ROOT__ = "//../";   /* per-page path back to the SPA root */
   </script>
+  <!-- Shared design tokens + the shared header/footer's own self-contained
+       stylesheet (scoped reset included) — no Tailwind involved. Tokens
+       first: site-header.css's var(--site-*) references resolve fine
+       either order (custom properties resolve at computed-value time),
+       but loading tokens first matches source order in the main SPA. -->
+  <link rel="stylesheet" href="/assets/vendored/js/site-tokens.css">
+  <link rel="stylesheet" href="/assets/vendored/js/site-header.css">
 
   </head>
   
@@ -74,9 +81,9 @@
     </div>
     
     
+  <!-- Styled entirely by the vendored plain CSS above (js/site-tokens.css +
+       js/site-header.css) — no Tailwind on tutorials pages at all. -->
   <div id="site-header"></div>
-  <script src="/assets/vendored/vendor/tailwind/tailwind-play.min.js"></script>
-  <script>tailwind.config = { corePlugins: { preflight: false } };</script>
   <script src="/assets/vendored/js/site-header.js"></script>
 
     <div class="md-container" data-md-component="container">
@@ -100,13 +107,13 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="/index.html" title="MaterialX Playground — Learn" class="md-nav__button md-logo" aria-label="MaterialX Playground — Learn" data-md-component="logo">
+    <a href="/index.html" title="MaterialX Playground — Tutorials" class="md-nav__button md-logo" aria-label="MaterialX Playground — Tutorials" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
 
     </a>
-    MaterialX Playground — Learn
+    MaterialX Playground — Tutorials
   </label>
   
   <ul class="md-nav__list" data-md-scrollfix>

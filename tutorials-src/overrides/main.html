@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block extrahead %}
+  <script>
+    window.__MTLX_TUTORIALS__ = true;
+    window.__MTLX_APP_ROOT__ = "{{ base_url }}/../";   /* per-page path back to the SPA root */
+  </script>
+  <!-- Shared design tokens + the shared header/footer's own self-contained
+       stylesheet (scoped reset included) — no Tailwind involved. Tokens
+       first: site-header.css's var(--site-*) references resolve fine
+       either order (custom properties resolve at computed-value time),
+       but loading tokens first matches source order in the main SPA. -->
+  <link rel="stylesheet" href="{{ 'assets/vendored/js/site-tokens.css' | url }}">
+  <link rel="stylesheet" href="{{ 'assets/vendored/js/site-header.css' | url }}">
+{% endblock %}
+{% block header %}
+  <!-- Styled entirely by the vendored plain CSS above (js/site-tokens.css +
+       js/site-header.css) — no Tailwind on tutorials pages at all. -->
+  <div id="site-header"></div>
+  <script src="{{ 'assets/vendored/js/site-header.js' | url }}"></script>
+{% endblock %}
+{% block footer %}
+  <div id="site-footer"></div>
+{% endblock %}

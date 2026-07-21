@@ -1,0 +1,78 @@
+/* extra.css — recolors Material's slate scheme to the site's own dark
+   palette (gray-900/800/700/... + blue-500/400/300), so the Tutorials
+   subsite reads as part of the same app rather than a bolted-on doc
+   generator. Values are pulled from the shared design tokens (vendored
+   js/site-tokens.css, loaded via <link> in overrides/main.html's
+   extrahead block, before this stylesheet) — that file is the single
+   source of truth for the palette; keep var() references here instead of
+   re-hardcoding hex. Verify these CSS custom-property names against the
+   installed mkdocs-material version (tutorials-src/requirements.txt) on
+   upgrade. */
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 222;
+  --md-default-bg-color: var(--site-gray-900);
+  --md-default-bg-color--light: var(--site-gray-800);
+  --md-default-bg-color--lighter: var(--site-gray-700);
+  --md-default-bg-color--lightest: var(--site-gray-600);
+  --md-default-fg-color: var(--site-gray-100);
+  --md-default-fg-color--light: var(--site-gray-300);
+  --md-default-fg-color--lighter: var(--site-gray-400);
+  --md-default-fg-color--lightest: var(--site-gray-600);
+  --md-primary-fg-color: var(--site-blue-500);
+  --md-primary-fg-color--light: var(--site-blue-400);
+  --md-primary-fg-color--dark: var(--site-blue-600);
+  --md-primary-bg-color: var(--site-gray-100);
+  --md-accent-fg-color: var(--site-blue-300);
+  --md-typeset-a-color: var(--site-blue-400);
+  --md-code-bg-color: var(--site-gray-800);
+  --md-code-fg-color: var(--site-gray-200);
+  --md-header-height: var(--site-header-height);
+}
+
+body, .md-typeset { font-family: var(--site-font-sans); }
+.md-typeset code, .md-typeset pre > code, .md-typeset kbd { font-family: var(--site-font-mono); }
+.md-typeset table:not([class]), .md-typeset table:not([class]) th, .md-typeset table:not([class]) td { border-color: var(--site-gray-700); }
+.md-typeset hr { border-color: var(--site-gray-800); }
+
+/* Headings: material's h1 is light-weight (300) and dimmed; the site's
+   headings are bold and near-white (font-bold text-gray-100). */
+.md-typeset h1, .md-typeset h2, .md-typeset h3, .md-typeset h4, .md-typeset h5, .md-typeset h6 {
+  font-weight: 700;
+  color: var(--site-gray-100);
+}
+
+/* Scrollbars: keep Material's own thin (4px) hover-reveal scrollbars,
+   already recolored by the palette vars above. Do NOT reimpose the
+   site's 8px .custom-scrollbar look here: with the scrollwrap's
+   `scrollbar-gutter: stable` an 8px gutter squeezes the nav until it
+   overflows horizontally, whose 8px-tall horizontal scrollbar then eats
+   exactly enough height to force a vertical scrollbar on sidebars whose
+   content actually fits (phantom scrollbars on both sidebars). */
+
+/* Even so, Material's sidebars are always 8px "scrollable": at >=60em it
+   gives .md-nav margin-bottom:-.4rem to cancel .md-nav__list's .4rem
+   bottom padding in the box height — but negative margins don't shrink
+   scrollable overflow, so a sidebar whose content fits still reports an
+   8px overflow and reveals a phantom scrollbar thumb on hover. Zero the
+   top-level nav's negative margin so the scrollwrap grows to its true
+   content height; the list keeps its padding as scroll-end breathing
+   room when the nav genuinely overflows. */
+.md-sidebar__scrollwrap > .md-sidebar__inner > .md-nav { margin-bottom: 0; }
+
+/* Keep the docs layout clear of the sticky shared header: material's own
+   sidebar sticky offset is 2.4rem (48-60px) and would tuck under it;
+   anchor jumps likewise need scroll padding. .md-sidebar--primary (higher
+   specificity) still sets top:0 for the mobile drawer, unaffected. The
+   header/footer's own layout, sizing and preflight-equivalent reset now
+   live entirely in the vendored js/site-header.css (self-contained,
+   Tailwind-free) — nothing here needs to emulate it anymore. */
+.md-sidebar { top: var(--site-header-height); }
+
+/* Pin the root at 125% (20px) at every viewport, defeating material's
+   137.5%/150% escalation at >=100em/>=125em — without this, .md-typeset's
+   .8rem body text renders 17.6-19.2px on wide screens instead of the main
+   site's fixed 16px. (The shared header/footer is immune either way — it
+   uses px, not rem, see js/site-header.css.) scroll-padding-top is header
+   height plus a little breathing room above anchor targets. */
+html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16px); }

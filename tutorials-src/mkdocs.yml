@@ -1,7 +1,7 @@
-site_name: MaterialX Playground — Learn
+site_name: MaterialX Playground — Tutorials
 site_description: Tutorials and guides for the MaterialX Playground.
 docs_dir: docs
-site_dir: ../learn
+site_dir: ../tutorials
 use_directory_urls: false
 theme:
   name: material
@@ -11,7 +11,7 @@ theme:
     scheme: slate                 # dark; recolored in extra.css
   features: [navigation.sections, navigation.top, toc.follow, content.code.copy, search.suggest, search.highlight]
   # NOT navigation.tabs (shared header carries nav); NOT navigation.instant
-  # (its XHR swap won't reliably re-run the injected header/Tailwind scripts).
+  # (its XHR swap won't reliably re-run the injected header script).
 extra_css: [assets/extra.css]
 extra_javascript: []              # header scripts injected by main.html for exact order/position
 markdown_extensions:

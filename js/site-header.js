@@ -333,7 +333,7 @@
             '</div>';
         }
         var active = item.id === activeId;
-        var href = hrefFor(item); // shellHref-only, see NAV's own comment above
+        var href = hrefFor(item); // see hrefFor's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
@@ -350,7 +350,7 @@
                 item.items.map(renderMobileItem).join('');
         }
         var active = item.id === activeId;
-        var href = hrefFor(item); // shellHref-only, see NAV's own comment above
+        var href = hrefFor(item); // see hrefFor's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +

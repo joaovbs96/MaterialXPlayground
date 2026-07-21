@@ -2,7 +2,7 @@
   Screenshot placeholders: the `![...]` images below reference
   assets/img/*.jpg, which do not exist yet (only assets/img/.gitkeep is
   committed, to keep the directory in git). Drop the real PNG/JPG
-  screenshots described by each alt text into learn-src/docs/assets/img/
+  screenshots described by each alt text into tutorials-src/docs/assets/img/
   with the matching filename before/after publishing — this file is left
   wired up to them (correct paths, correct alt text) so no markdown edits
   should be needed once the images exist.
