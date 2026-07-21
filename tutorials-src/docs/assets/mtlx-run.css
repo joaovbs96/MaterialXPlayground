@@ -1,0 +1,90 @@
+/* mtlx-run.css — footer UI for the runnable JavaScript binding tab. Sits
+   flush inside the code panel (see extra.css .tabbed-set:has(.highlight)).
+   Play=green / Stop=red use Tailwind green/red hexes (no green/red tokens) — a
+   shared token palette (site-tokens.css) has no green/red. */
+
+.mtlx-run {
+  font-size: .7rem;
+}
+
+/* Controls row — compact; a top border divides it from the code above. */
+.mtlx-run__bar {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .3rem .55rem;
+  border-top: .075rem solid var(--site-gray-600);
+}
+
+/* Run/Stop: icon-only, green (play) / red (stop). */
+/* Tip-box style: a vibrant border over a muted, same-hue tinted fill (mirrors
+   the admonition look and the active code tab). Green = play, red = stop.
+   One-off hexes (Tailwind green-500/400, red-500/400) — no green/red tokens. */
+.mtlx-run__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: .075rem solid #22c55e;                            /* vibrant green border */
+  border-radius: .2rem;
+  background: color-mix(in srgb, #22c55e 14%, transparent); /* muted green fill */
+  color: #4ade80;                                           /* green icon */
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s, color .15s;
+}
+.mtlx-run__btn:hover { background: color-mix(in srgb, #22c55e 24%, transparent); }
+.mtlx-run__btn.is-running {                                 /* red — stop */
+  border-color: #ef4444;
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+  color: #f87171;
+}
+.mtlx-run__btn.is-running:hover { background: color-mix(in srgb, #ef4444 24%, transparent); }
+.mtlx-run__btn svg { width: .9rem; height: .9rem; fill: currentColor; }
+
+/* Logs toggle — text + chevron, muted like an inactive header tab. */
+.mtlx-run__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .2rem;
+  background: none;
+  border: 0;
+  color: var(--site-gray-400);
+  font: inherit;
+  cursor: pointer;
+}
+.mtlx-run__toggle:hover { color: var(--site-gray-200); }
+.mtlx-run__toggle svg {
+  width: .8rem;
+  height: .8rem;
+  fill: currentColor;
+  transition: transform .15s;
+}
+.mtlx-run__toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+
+/* Logs row — full-bleed: flush to the panel's left/right/bottom edges, with a
+   top border separating it from the controls row. */
+.mtlx-run__log {
+  border-top: .075rem solid var(--site-gray-600);
+}
+.mtlx-run__log[hidden] { display: none; }
+.mtlx-run__log pre {
+  margin: 0;
+  max-height: 16rem;
+  overflow: auto;
+  padding: .6rem .7rem;
+  background: var(--site-gray-900);
+  font-family: var(--site-font-mono);
+  font-size: .68rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--site-gray-200);
+}
+.mtlx-run__log pre:empty::before {
+  content: "No output yet.";
+  color: var(--site-gray-500);
+}

@@ -62,6 +62,28 @@ material:
       [Node Library](../#!docs){ target=_blank } — e.g.
       [`#/pbrlib/shader/standard_surface`](../#/pbrlib/shader/standard_surface){ target=_blank }.
 
+### Or build it in code
+
+The same document can be constructed with any MaterialX language binding:
+
+=== "C++"
+
+    ```cpp
+    --8<-- "red_material.cpp"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "red_material.py"
+    ```
+
+=== "JavaScript"
+
+    ```js
+    --8<-- "red_material.js"
+    ```
+
 !!! tip
     Once it loads, open the same document in the
     [Node Graph Editor](../#!graph){ target=_blank } to see it as a graph —

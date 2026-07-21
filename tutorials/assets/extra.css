@@ -76,3 +76,67 @@ body, .md-typeset { font-family: var(--site-font-sans); }
    uses px, not rem, see js/site-header.css.) scroll-padding-top is header
    height plus a little breathing room above anchor targets. */
 html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16px); }
+
+/* --- Content / language tabs (pymdownx.tabbed, alternate_style) -----------
+   Present the code tabs as one bordered, slightly-rounded panel (echoing the
+   admonition/"tip" box: .2rem radius + a thin border), and style the tab
+   labels like the shared header's nav tabs (js/site-header.css .mtlx-tab*):
+   inactive = gray, hover = lighter gray, active = blue text + blue underline.
+   The site blue/gray tokens come from the vendored site-tokens.css. */
+
+/* Wrap a code tab set (labels header + code body) in a rounded, gray-600
+   bordered panel. gray-600 is Material's existing label/body separator color
+   (--md-default-fg-color--lightest, the box-shadow under .tabbed-labels), so
+   the outer border and the inner divider match. Panel bg = code bg so the
+   header strip and body read as one surface and the code block's corners
+   blend into the clipped rounding. Scoped with :has(.highlight) so prose/image
+   tab sets (e.g. the "Author/Looks" tabs) are left untouched. */
+.md-typeset .tabbed-set:has(.highlight) {
+  border: .075rem solid var(--site-gray-600);
+  border-radius: .2rem;
+  overflow: hidden;
+  background-color: var(--md-code-bg-color);
+}
+
+/* Keep the label strip inside the panel — Material lets it bleed by -.8rem at
+   narrow widths, which the panel's overflow:hidden would otherwise clip. */
+.md-typeset .tabbed-set:has(.highlight) > .tabbed-labels {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Inactive tab label: the header's inactive nav-tab gray. */
+.md-typeset .tabbed-labels > label {
+  color: var(--site-gray-400);
+}
+
+/* Hover affordance on inactive tabs, echoing .mtlx-tab:hover. */
+.md-typeset .tabbed-labels > label:hover {
+  color: var(--site-gray-200);
+  border-bottom-color: var(--site-gray-600);
+}
+
+/* Recolor Material's animated bottom indicator to the site blue so it agrees
+   with the active label's static blue underline below (and animates nicely
+   when content.tabs.link switches the language page-wide). */
+.md-typeset .tabbed-labels::before {
+  background-color: var(--site-blue-500);
+}
+
+/* Selected tab: blue text + blue bottom border + a subtle blue tint (echoes
+   the header's .mtlx-tab.is-active). Enumerate the checked-input -> matching-
+   label pairs (the pattern Material ships internally); 10 covers any set. */
+.md-typeset .tabbed-set > input:nth-child(1):checked ~ .tabbed-labels > label:nth-child(1),
+.md-typeset .tabbed-set > input:nth-child(2):checked ~ .tabbed-labels > label:nth-child(2),
+.md-typeset .tabbed-set > input:nth-child(3):checked ~ .tabbed-labels > label:nth-child(3),
+.md-typeset .tabbed-set > input:nth-child(4):checked ~ .tabbed-labels > label:nth-child(4),
+.md-typeset .tabbed-set > input:nth-child(5):checked ~ .tabbed-labels > label:nth-child(5),
+.md-typeset .tabbed-set > input:nth-child(6):checked ~ .tabbed-labels > label:nth-child(6),
+.md-typeset .tabbed-set > input:nth-child(7):checked ~ .tabbed-labels > label:nth-child(7),
+.md-typeset .tabbed-set > input:nth-child(8):checked ~ .tabbed-labels > label:nth-child(8),
+.md-typeset .tabbed-set > input:nth-child(9):checked ~ .tabbed-labels > label:nth-child(9),
+.md-typeset .tabbed-set > input:nth-child(10):checked ~ .tabbed-labels > label:nth-child(10) {
+  color: var(--site-blue-300);
+  border-bottom-color: var(--site-blue-500);
+  background-color: color-mix(in srgb, var(--site-blue-500) 10%, transparent);
+}
