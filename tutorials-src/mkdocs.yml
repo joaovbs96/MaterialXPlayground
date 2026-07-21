@@ -6,6 +6,7 @@ use_directory_urls: false
 theme:
   name: material
   custom_dir: overrides
+  favicon: ../favicon.ico         # use the root SPA's favicon.ico (one dir up), not Material's default
   font: false                     # match the site's system sans stack
   palette:
     scheme: slate                 # dark; recolored in extra.css
