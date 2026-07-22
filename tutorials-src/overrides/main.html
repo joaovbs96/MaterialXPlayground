@@ -5,18 +5,45 @@
     window.__MTLX_APP_ROOT__ = "{{ base_url }}/../";   /* per-page path back to the SPA root */
   </script>
   <!-- Shared design tokens + the shared header/footer's own self-contained
-       stylesheet (scoped reset included) — no Tailwind involved. Tokens
-       first: site-header.css's var(--site-*) references resolve fine
-       either order (custom properties resolve at computed-value time),
-       but loading tokens first matches source order in the main SPA. -->
+       stylesheet (scoped reset included) — no Tailwind involved. Tokens first. -->
   <link rel="stylesheet" href="{{ 'assets/vendored/js/site-tokens.css' | url }}">
   <link rel="stylesheet" href="{{ 'assets/vendored/js/site-header.css' | url }}">
+  <!-- Full tutorial nav (sections -> pages, with per-page active flags) as JSON,
+       consumed by assets/mtlx-nav-mobile.js to build the multi-level collapsible
+       mobile menu. Emitted here rather than DOM-scraped so it is complete
+       regardless of the sidebar's lifted/collapsed CSS state. -->
+  <script>
+  window.__MTLX_TUT_NAV__ = [{% for item in nav %}{% if item.title %}
+    {"title": {{ item.title | tojson }}, "url": {% if item.url %}{{ item.url | url | tojson }}{% else %}null{% endif %}, "active": {{ (item.active or false) | tojson }}, "children": [{% if item.children %}{% for c in item.children %}{"title": {{ c.title | tojson }}, "url": {% if c.url %}{{ c.url | url | tojson }}{% else %}null{% endif %}, "active": {{ (c.active or false) | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}]}{% if not loop.last %},{% endif %}{% endif %}{% endfor %}
+  ];
+  </script>
 {% endblock %}
 {% block header %}
-  <!-- Styled entirely by the vendored plain CSS above (js/site-tokens.css +
-       js/site-header.css) — no Tailwind on tutorials pages at all. -->
+  <!-- Styled entirely by the vendored plain CSS above — no Tailwind here. -->
   <div id="site-header"></div>
   <script src="{{ 'assets/vendored/js/site-header.js' | url }}"></script>
+{% endblock %}
+{% block content %}
+  {# Breadcrumbs: the page's parent section(s), then the page itself. Section
+     crumbs link to the section's first page (sections have no page of their own). #}
+  {% if page and page.parent %}
+  <nav class="mtlx-breadcrumbs" aria-label="Breadcrumb">
+    {% if page.parent.parent %}<span class="mtlx-crumb">{{ page.parent.parent.title }}</span><span class="mtlx-crumb-sep">/</span>{% endif %}
+    {% set first_child = (page.parent.children | first) if page.parent.children else none %}
+    {% if first_child and first_child.url %}<a class="mtlx-crumb" href="{{ first_child.url | url }}">{{ page.parent.title }}</a>{% else %}<span class="mtlx-crumb">{{ page.parent.title }}</span>{% endif %}
+    <span class="mtlx-crumb-sep">/</span>
+    <span class="mtlx-crumb mtlx-crumb--current">{{ page.title }}</span>
+  </nav>
+  {% endif %}
+  {{ super() }}
+  {# Previous / next topic navigation (follows the flattened nav order, so it
+     rolls from the last page of a section into the first of the next). #}
+  {% if page and (page.previous_page or page.next_page) %}
+  <nav class="mtlx-pagenav" aria-label="Topic navigation">
+    {% if page.previous_page %}<a class="mtlx-pagenav__link mtlx-pagenav__prev" href="{{ page.previous_page.url | url }}"><span class="mtlx-pagenav__dir">&#8592; Previous topic</span><span class="mtlx-pagenav__title">{{ page.previous_page.title }}</span></a>{% else %}<span class="mtlx-pagenav__spacer"></span>{% endif %}
+    {% if page.next_page %}<a class="mtlx-pagenav__link mtlx-pagenav__next" href="{{ page.next_page.url | url }}"><span class="mtlx-pagenav__dir">Next topic &#8594;</span><span class="mtlx-pagenav__title">{{ page.next_page.title }}</span></a>{% else %}<span class="mtlx-pagenav__spacer"></span>{% endif %}
+  </nav>
+  {% endif %}
 {% endblock %}
 {% block footer %}
   <div id="site-footer"></div>

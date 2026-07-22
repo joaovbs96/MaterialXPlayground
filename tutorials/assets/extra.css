@@ -154,3 +154,269 @@ html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16p
   border-bottom-color: var(--site-blue-500);
   background-color: color-mix(in srgb, var(--site-blue-500) 10%, transparent);
 }
+
+/* --- Secondary section tabs (navigation.tabs) ------------------------------
+   navigation.tabs turns the top-level nav sections into a horizontal strip and,
+   just as importantly, collapses the primary sidebar down to only the ACTIVE
+   section's pages — the fix for the long, all-expanded rail that
+   navigation.sections produced on its own. The strip is rendered by base.html's
+   `{% block tabs %}` (right after the header, inside .md-container); overrides/
+   main.html only replaces `{% block header %}`, so the strip is emitted intact.
+
+   Material's default .md-tabs is a solid primary-blue bar that scrolls away.
+   Here it's restyled as a quiet dark strip pinned directly beneath the shared
+   header, echoing that header's own nav tabs (js/site-header.css .mtlx-tab*):
+   gray -> hover lighter -> active blue text + blue underline. Material shows it
+   only at >=76.25em (below that the nav folds into the drawer), so the sidebar
+   and scroll-padding bumps further down are scoped to that same breakpoint. */
+
+:root { --site-tabs-height: 1.7rem; }   /* 34px at this page's 125% root */
+
+.md-tabs {
+  position: sticky;
+  top: var(--site-header-height);        /* pin directly under the 56px shared header */
+  z-index: 3;                            /* Material's own value; below header (z 40) */
+  height: var(--site-tabs-height);
+  display: flex;                         /* flex row: align-items:stretch gives the grid
+                                            a real height (no percentage-height chain) */
+  align-items: stretch;
+  color: var(--site-gray-400);
+  background-color: var(--site-gray-900);
+  border-bottom: 1px solid var(--site-gray-800);
+  overflow: hidden;
+  line-height: 1;                        /* drop Material's 1.3 */
+}
+
+/* The strip's visibility tracks the shared header's own 768px hamburger
+   breakpoint, NOT Material's 1220px default: while the header shows its full
+   desktop nav (>=768px) the strip rides beneath it (and anchor scroll-padding
+   clears it); once the header collapses to its hamburger (<768px) the strip is
+   hidden and the tutorial sections fold into the mobile menu instead (see
+   assets/mtlx-nav-mobile.js + the .mtlx-subnav rules below). Keep the shown
+   state as `flex` (not `block`) so the centering layout below holds. */
+@media screen and (max-width: 47.999em) {
+  .md-tabs { display: none; }
+}
+@media screen and (min-width: 48em) {
+  .md-tabs { display: flex; }
+  html { scroll-padding-top: calc(var(--site-header-height) + var(--site-tabs-height) + 16px); }
+}
+
+/* The grid fills the strip's height (align-items:stretch above) and seats the
+   content-height tab list at the BOTTOM, so the active tab's underline is flush
+   with the strip's bottom edge (a normal tab-bar look) instead of floating above
+   it. No percentage-height chain. Same max-width + inset as .mtlx-header-bar, so
+   the first tab sits under the brand. */
+.md-tabs > .md-grid {
+  display: flex;
+  align-items: flex-end;                 /* seat the list at the strip bottom */
+  flex: 1 1 auto;
+  min-width: 0;                          /* let the list scroll instead of forcing overflow */
+  max-width: var(--site-max-width);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Reset Material's own tab metrics (item is 2.4rem tall; link has margin-top:
+   .8rem and a fade/slide-in transform) so the flex centering above governs the
+   layout and each tab is only as tall as its label — underline hugging. */
+.md-tabs__list {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.md-tabs__item {
+  display: flex;
+  align-items: center;
+  height: auto;                          /* was 2.4rem */
+  margin: 0;
+  padding: 0;                            /* was .6rem sides */
+}
+.md-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  height: auto;
+  margin: 0;                             /* was margin-top: .8rem */
+  padding: 0 .8rem;                      /* 16px inset, matches the header's nav tabs */
+  line-height: 1.5;
+  font-size: .7rem;                      /* ~14px, matches the header's nav tabs */
+  font-weight: 500;
+  opacity: 1;                            /* cancel Material's fade + slide-in */
+  transform: none;
+  color: var(--site-gray-400);
+  border-bottom: 2px solid transparent;
+  transition: color .15s cubic-bezier(.4, 0, .2, 1),
+    border-color .15s cubic-bezier(.4, 0, .2, 1),
+    background-color .15s cubic-bezier(.4, 0, .2, 1);
+}
+.md-tabs__link:hover {
+  color: var(--site-gray-200);
+  border-bottom-color: var(--site-gray-600);
+}
+.md-tabs__item--active .md-tabs__link {
+  color: var(--site-blue-300);
+  border-bottom-color: var(--site-blue-500);
+  opacity: 1;
+}
+
+/* The sticky SIDEBAR offset only applies at >=76.25em, where the sidebars are
+   sticky rather than an off-canvas drawer. (The strip shows, and the >=48em
+   scroll-padding clears it, at every width down to 768px.) */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar { top: calc(var(--site-header-height) + var(--site-tabs-height)); }
+}
+
+/* --- Tutorial nav folded into the shared header's mobile menu --------------
+   Below 768px the .md-tabs strip is hidden (above); assets/mtlx-nav-mobile.js
+   instead builds a multi-level collapsible tree inside #mtlx-mobile-menu from
+   window.__MTLX_TUT_NAV__ (emitted by overrides/main.html): the Tutorials entry
+   -> each section (collapsible) -> its pages, so every page stays reachable from
+   the hamburger. By default the Tutorials group is open and only the current
+   section is expanded. These elements live inside #site-header, whose zero-
+   specificity :where() reset (site-header.css) these real classes override. px
+   units (like the rest of the mobile menu), immune to this page's 125% root. */
+.mtlx-subnav-head { display: flex; align-items: stretch; }
+.mtlx-subnav-head > .mtlx-tab-mobile { flex: 1 1 auto; }
+.mtlx-subnav-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  color: var(--site-gray-400);
+  transition: color .15s, background-color .15s;
+}
+.mtlx-subnav-toggle:hover { color: var(--site-gray-200); background-color: rgba(31, 41, 55, .4); }
+.mtlx-subnav-toggle svg { width: 18px; height: 18px; transition: transform .15s ease; }
+.mtlx-subnav-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+
+.mtlx-subnav[hidden], .mtlx-sec-pages[hidden] { display: none; }
+
+/* Section rows (level 2): a toggle that reveals the section's pages. */
+.mtlx-sec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px 10px 30px;          /* indented one level under "Tutorials" */
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--site-gray-300);
+  transition: color .15s, background-color .15s;
+}
+.mtlx-sec-toggle:hover { color: var(--site-gray-100); background-color: rgba(31, 41, 55, .4); }
+.mtlx-sec-toggle.is-active { color: var(--site-blue-300); }
+.mtlx-sec-title { flex: 1 1 auto; }
+.mtlx-sec-toggle svg {
+  flex: 0 0 auto; width: 16px; height: 16px;
+  color: var(--site-gray-500); transition: transform .15s ease;
+}
+.mtlx-sec-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+
+/* Page links (level 3): deepest indent. */
+.mtlx-subnav-link {
+  display: block;
+  padding: 9px 16px 9px 44px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--site-gray-400);
+  border-left: 3px solid transparent;
+  transition: color .15s, background-color .15s, border-color .15s;
+}
+.mtlx-subnav-link:hover { color: var(--site-gray-200); background-color: rgba(31, 41, 55, .4); }
+.mtlx-subnav-link.is-active {
+  color: var(--site-blue-300);
+  border-left-color: var(--site-blue-500);
+  background-color: rgba(31, 41, 55, .6);
+}
+
+/* --- Make the shared header actually stick ---------------------------------
+   .mtlx-header is `position: sticky; top: 0`, but its mount (#site-header) is
+   only as tall as the header itself, so the header could only "stick" within
+   those 56px and then scrolled away on long pages. display:contents drops the
+   mount's own box so the header's containing block becomes <body> (a tall flex
+   column spanning all content) — now it sticks the whole way, like .md-tabs
+   already does (whose containing block, .md-container, spans the content). */
+#site-header { display: contents; }
+
+/* --- Back-to-top button ----------------------------------------------------
+   Custom, bottom-right, shown once the page is scrolled down (assets/
+   mtlx-backtotop.js). Replaces Material's top-centered navigation.top button
+   (removed from mkdocs.yml features). px-free: rem here is 20px (125% root). */
+.mtlx-totop {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 30;                           /* above content; header (40) never overlaps here */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  border: 1px solid var(--site-gray-600);
+  background-color: var(--site-gray-800);
+  color: var(--site-gray-200);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+  transition: background-color .15s, color .15s, opacity .15s;
+}
+.mtlx-totop:hover { background-color: var(--site-gray-700); color: var(--site-gray-100); }
+.mtlx-totop svg { width: 1.05rem; height: 1.05rem; }
+.mtlx-totop[hidden] { display: none; }   /* our display:inline-flex would otherwise beat [hidden] */
+
+/* --- Breadcrumbs (overrides/main.html, top of every article) ---------------
+   Rendered inside .md-typeset, so these rules override the typeset defaults. */
+.md-typeset .mtlx-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  margin: 0 0 .9rem;
+  font-size: .7rem;
+  line-height: 1.4;
+}
+.md-typeset .mtlx-breadcrumbs .mtlx-crumb { color: var(--site-gray-400); }
+.md-typeset .mtlx-breadcrumbs a.mtlx-crumb { color: var(--site-blue-400); text-decoration: none; }
+.md-typeset .mtlx-breadcrumbs a.mtlx-crumb:hover { color: var(--site-blue-300); text-decoration: underline; }
+.md-typeset .mtlx-breadcrumbs .mtlx-crumb--current { color: var(--site-gray-300); font-weight: 500; }
+.md-typeset .mtlx-breadcrumbs .mtlx-crumb-sep { color: var(--site-gray-600); }
+
+/* --- Previous / next topic navigation (overrides/main.html, end of article) - */
+.md-typeset .mtlx-pagenav {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: .075rem solid var(--site-gray-700);
+}
+.md-typeset .mtlx-pagenav__link {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  max-width: 48%;
+  padding: .5rem .8rem;
+  border: .075rem solid var(--site-gray-600);
+  border-radius: .2rem;
+  text-decoration: none;
+  transition: border-color .15s, background-color .15s;
+}
+.md-typeset .mtlx-pagenav__link:hover {
+  border-color: var(--site-blue-500);
+  background-color: color-mix(in srgb, var(--site-blue-500) 8%, transparent);
+}
+.md-typeset .mtlx-pagenav__next { margin-left: auto; text-align: right; }
+.md-typeset .mtlx-pagenav__dir { font-size: .62rem; color: var(--site-gray-400); }
+.md-typeset .mtlx-pagenav__title { font-size: .75rem; font-weight: 600; color: var(--site-blue-300); }
+.md-typeset .mtlx-pagenav__spacer { flex: 0 1 auto; }

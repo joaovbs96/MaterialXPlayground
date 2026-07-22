@@ -1,10 +1,10 @@
-# Getting started
+# Tour the Playground
 
 The playground has three main views, all reachable from the tabs in the
 header. This page is a quick tour of each, plus a minimal `.mtlx` file you
 can paste straight into the viewer to try things out.
 
-## The three views
+## The Three Views
 
 ### Node Library & Documentation
 
@@ -34,7 +34,7 @@ validation and XML view/export. This is where
 
 [Open the Node Graph Editor →](../#!graph){ target=_blank }
 
-## Try it: a minimal material
+## Try It: A Minimal Material
 
 Copy the document below and paste it into the Material Viewer (or save it
 as a `.mtlx` file and load it) to see a simple red `standard_surface`
@@ -53,7 +53,7 @@ material:
 </materialx>
 ```
 
-??? details "What's happening in this document?"
+??? details "What's Happening in This Document?"
     - `standard_surface` is MaterialX's standard physically-based shader
       node — `base`/`base_color` control the diffuse response.
     - `surfacematerial` wraps a shader node so it can be assigned to
@@ -62,7 +62,7 @@ material:
       [Node Library](../#!docs){ target=_blank } — e.g.
       [`#/pbrlib/shader/standard_surface`](../#/pbrlib/shader/standard_surface){ target=_blank }.
 
-### Or build it in code
+### Or Build It in Code
 
 The same document can be constructed with any MaterialX language binding:
 

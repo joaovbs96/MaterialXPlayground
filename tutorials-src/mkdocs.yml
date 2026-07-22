@@ -10,11 +10,18 @@ theme:
   font: false                     # match the site's system sans stack
   palette:
     scheme: slate                 # dark; recolored in extra.css
-  features: [navigation.sections, navigation.top, toc.follow, content.code.copy, content.tabs.link, search.suggest, search.highlight]
-  # NOT navigation.tabs (shared header carries nav); NOT navigation.instant
-  # (its XHR swap won't reliably re-run the injected header script).
+  features: [navigation.tabs, navigation.sections, toc.follow, content.code.copy, content.tabs.link, search.suggest, search.highlight]
+  # NOT navigation.top: its back-to-top button is top-centered; we ship a custom
+  # bottom-right one instead (assets/mtlx-backtotop.js + .mtlx-totop in extra.css).
+  # navigation.tabs: top-level sections become a secondary nav strip below the
+  # shared header (rendered by base.html's `{% block tabs %}`, which main.html
+  # leaves intact — only `{% block header %}` is overridden) AND collapse the
+  # primary sidebar to just the ACTIVE section's pages. Styled dark + sticky in
+  # extra.css. NOT navigation.tabs.sticky (that path renders the strip inside
+  # `{% block header %}`, which we override). NOT navigation.instant (its XHR
+  # swap won't reliably re-run the injected header script).
 extra_css: [assets/extra.css, assets/mtlx-run.css]
-extra_javascript: [assets/mtlx-run.js]   # runnable-JS footer; header scripts still injected by main.html
+extra_javascript: [assets/mtlx-run.js, assets/mtlx-nav-mobile.js, assets/mtlx-backtotop.js]   # runnable-JS footer + mobile section-nav fold-in + back-to-top; header scripts still injected by main.html
 markdown_extensions:
   - admonition
   - attr_list
@@ -29,6 +36,55 @@ markdown_extensions:
   - pymdownx.tasklist: { custom_checkbox: true }
 plugins: [search]
 nav:
-  - Home: index.md
-  - Getting started: getting-started.md
-  - Your first node graph: your-first-node-graph.md
+  - Getting Started:
+    - Home: index.md
+    - What Is MaterialX?: what-is-materialx.md
+    - Where Do I Start?: where-to-start.md
+    - Tour the Playground: getting-started.md
+    - FAQ: faq.md
+  - Foundations:
+    - Your First Node Graph: your-first-node-graph.md
+    - Anatomy of a .mtlx File: foundations/anatomy-of-mtlx.md
+    - The Standard Node Library: foundations/node-library-tour.md
+    - standard_surface vs OpenPBR: foundations/standard-surface-vs-openpbr.md
+    - Color Management: foundations/color-management.md
+    - Glossary & Cheat-Sheet: foundations/glossary.md
+  - For Artists:
+    - For Artists: personas/for-artists.md
+    - Previewing Materials: personas/previewing.md
+    - Editing Materials: personas/editing.md
+  - For Developers:
+    - Language Bindings: personas/bindings.md
+    - Authoring With the API: personas/programmer-authoring.md
+    - Rendering .mtlx Files: personas/programmer-rendering.md
+    - Building From Source: advanced/building-from-source.md
+  - In Your DCC:
+    - Houdini: dcc/houdini.md
+    - Maya: dcc/maya.md
+    - 3ds Max: dcc/3ds-max.md
+    - Blender: dcc/blender.md
+    - Substance 3D: dcc/substance-3d.md
+    - Omniverse: dcc/omniverse.md
+    - Katana: dcc/katana.md
+    - Nuke: dcc/nuke.md
+    - Unreal Engine: dcc/unreal.md
+  - Going Further:
+    - Texturing Workflows: intermediate/texturing-workflows.md
+    - Procedural Materials: intermediate/procedural-materials.md
+    - Transparency, Glass & Refraction: intermediate/transparency-and-glass.md
+    - Displacement: intermediate/displacement.md
+    - Looks, Variants & Assignment: intermediate/looks-and-variants.md
+    - Subgraphs & Custom Nodedefs: intermediate/subgraphs-and-nodedefs.md
+    - Debugging Materials: intermediate/debugging-materials.md
+    - Versioning & Upgrading: intermediate/versioning-and-upgrading.md
+  - Advanced:
+    - ShaderGen Deep Dive: advanced/shadergen-deep-dive.md
+    - Writing a Custom Node: advanced/custom-nodes.md
+    - OpenPBR Deep Dive: advanced/openpbr-deep-dive.md
+    - MaterialX and USD Interop: advanced/materialx-usd-interop.md
+    - Pipelines at Scale: advanced/pipeline-at-scale.md
+  - Recipes:
+    - Overview: recipes/index.md
+    - Car-Paint Material: recipes/car-paint.md
+    - Convert a Texture Set: recipes/convert-texture-set.md
+    - Houdini to Browser: recipes/houdini-to-browser.md
