@@ -7,13 +7,19 @@
   "private": true,
   "icon": "images/icon.png",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.85.0",
+    "node": ">=18"
   },
   "main": "vscode_extension/src/extension.js",
   "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXNodeDocs" },
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
-    "vendor:offline": "node scripts/vendor.mjs --with-materialx"
+    "vendor:offline": "node scripts/vendor.mjs --with-materialx",
+    "build": "node scripts/build.mjs",
+    "build:vendor": "node scripts/build.mjs vendor",
+    "build:nodelib": "node scripts/build.mjs nodelib",
+    "build:tutorials": "node scripts/build.mjs tutorials",
+    "check": "node scripts/build.mjs --check"
   },
   "devDependencies": {
     "react": "18.3.1",

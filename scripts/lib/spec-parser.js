@@ -1,13 +1,11 @@
-// spec-parser.js — in-browser port of spec_parser.py.
+// spec-parser.js — build-land port of spec_parser.py.
 //
-// Builds the node-documentation database ON THE FLY: fetches the MaterialX
+// Builds the node-documentation database: fetches/reads the MaterialX
 // specification markdown files (pinned tag below) through the shared
-// local-first resolver (window.MtlxAssets, js/mtlx-assets.js — GitHub
-// today, a vendored local mirror once a future offline build populates
-// vendor/materialx/), parses them with the same state machine as the
+// local-first resolver, parses them with the same state machine as the
 // Python script, and joins them against the nodedefs reported by the
-// MaterialX WASM runtime (getMxEnv from mtlx-engine.js). The result is
-// byte-for-byte the same JSON shape spec_parser.py wrote to nodes.json:
+// MaterialX WASM runtime. The result is byte-for-byte the same JSON shape
+// spec_parser.py wrote to nodes.json:
 //
 //   { library: { nodegroup: { nodename: {
 //       description, notes, section, references: [{key,text,url}],
@@ -15,19 +13,27 @@
 //   } } } }
 //
 // Self-contained plain script (no Babel/JSX/react): everything is inside
-// one IIFE and the public API is exported onto window.MtlxSpecParser.
-// The only external dependencies are window.getMxEnv (mtlx-engine.js) —
-// and only at buildNodeDatabase() call time — and window.MtlxAssets
-// (js/mtlx-assets.js, loaded before this script), used by RAW_BASE below;
-// parseMdDocs/cleanText/... are usable standalone. In remote mode this
-// requires network access to raw.githubusercontent.com (which sends
-// Access-Control-Allow-Origin: *); BLOB_BASE (human-facing links) always
-// points at github.com regardless of mode.
+// one IIFE and the public API is also exported onto window.MtlxSpecParser
+// when window exists. This module now lives in build-land
+// (scripts/lib/spec-parser.js) and is require()'d from
+// scripts/build-nodelib.mjs (a Node ESM script, via createRequire) to
+// build js/gen/nodelib.json at build time. The browser docs page
+// (js/docs-app.jsx) no longer loads this file at all — it fetches the
+// pregenerated JSON instead. The typeof window !== 'undefined' branches
+// below are kept compiling for defensiveness (standalone/extension-webview
+// contexts) but are dead code at runtime now that nothing loads this file
+// as a <script>. parseMdDocs/cleanText/... remain usable standalone either
+// way. In remote mode this requires network access to
+// raw.githubusercontent.com (which sends Access-Control-Allow-Origin: *);
+// BLOB_BASE (human-facing links) always points at github.com regardless
+// of mode.
 //
-// Usage:
-//   <script src="js/spec-parser.js"></script>
-//   ...
-//   MtlxSpecParser.buildNodeDatabase().then((db) => { ...same as nodes.json... });
+// Usage (Node, from an ESM build script):
+//   import { createRequire } from 'node:module';
+//   const require = createRequire(import.meta.url);
+//   const MtlxSpecParser = require('./lib/spec-parser.js');
+//   MtlxSpecParser.SPEC_TAG = meta.tag; // from js/gen/mtlx-version.json — REQUIRED before any use
+//   const db = await MtlxSpecParser.buildNodeDatabase({ mx, stdlib });
 
 (function () {
     'use strict';
@@ -37,23 +43,38 @@
     // for BOTH the raw-file fetches and every resolved link / spec_url,
     // so docs, deep links, and anchors always agree with each other.
     // ------------------------------------------------------------------
-    // Defaults from js/mtlx-assets.js's MTLX_TAG (the single source of
-    // truth) when available; the literal fallback covers standalone /
-    // extension-webview contexts where mtlx-assets.js hasn't run yet — see
-    // scripts/vendor.mjs's --check for the drift guard between the two.
-    const SPEC_TAG = (window.MtlxAssets && window.MtlxAssets.MTLX_TAG) || 'v1.39.5';
+    // No literal version fallback anywhere in this file (moved to
+    // build-land): the caller (scripts/build-nodelib.mjs, the only
+    // remaining caller) MUST set MtlxSpecParser.SPEC_TAG = meta.tag (from
+    // js/gen/mtlx-version.json, see scripts/lib/version.mjs) before any
+    // URL is built or spec file is read. `let`, not `const`: the module's
+    // own object-literal export below captures this value once at export
+    // time; every internal use reads MtlxSpecParser.SPEC_TAG (the exported
+    // object's property, reassignable after export — see the API section
+    // at the bottom), not this local binding.
+    let SPEC_TAG = null;
     const REPO = 'AcademySoftwareFoundation/MaterialX';
     const SPEC_DIR = 'documents/Specification/';
-    // Raw file content. Resolved through window.MtlxAssets (js/mtlx-assets.js,
-    // loaded before this script) instead of hardcoding
-    // raw.githubusercontent.com directly, so a future offline/packaged
-    // build (vendor/materialx/ populated) transparently serves these spec
-    // .md files from the local vendor mirror instead — see mtlx-assets.js's
-    // header comment for the local/remote contract. MtlxSpecParser.SPEC_TAG
-    // is passed through but ignored in local mode (single fixed snapshot).
-    const RAW_BASE = () => window.MtlxAssets.repoUrl(SPEC_DIR, MtlxSpecParser.SPEC_TAG);
+    const requireSpecTag = () => {
+        if (!MtlxSpecParser.SPEC_TAG) {
+            throw new Error('SPEC_TAG not set — assign from js/gen/mtlx-version.json before use');
+        }
+        return MtlxSpecParser.SPEC_TAG;
+    };
+    // Raw file content — BROWSER ONLY (unused at runtime now that the docs
+    // page consumes pregenerated js/gen/ JSON instead, but kept compiling
+    // for standalone/extension-webview contexts). Resolved through
+    // window.MtlxAssets (js/mtlx-assets.js, loaded before this script)
+    // instead of hardcoding raw.githubusercontent.com directly, so a
+    // future offline/packaged build (vendor/materialx/ populated)
+    // transparently serves these spec .md files from the local vendor
+    // mirror instead — see mtlx-assets.js's header comment for the
+    // local/remote contract. The NODE-side equivalent is readSpecDoc()
+    // below, which prefers a local vendor/materialx/ read over any
+    // network fetch.
+    const RAW_BASE = () => window.MtlxAssets.repoUrl(SPEC_DIR, requireSpecTag());
     // Human-facing pages (spec_url, resolved relative links).
-    const BLOB_BASE = () => `https://github.com/${REPO}/blob/${MtlxSpecParser.SPEC_TAG}/${SPEC_DIR}`;
+    const BLOB_BASE = () => `https://github.com/${REPO}/blob/${requireSpecTag()}/${SPEC_DIR}`;
 
     // Library -> spec markdown file. Sub-libraries ('bxdf/lama') fall back
     // to their base library's file (see docsForLibrary).
@@ -154,7 +175,7 @@
         const mathSpans = [];
         val = val.replace(MATH_RE, (m) => {
             mathSpans.push(m);
-            return '\uE000' + (mathSpans.length - 1) + '\uE001';
+            return '' + (mathSpans.length - 1) + '';
         });
 
         val = decodeEntities(val);                       // &lt;image> -> <image>
@@ -166,7 +187,7 @@
         val = val.replace(/`/g, '');
 
         mathSpans.forEach((span, i) => {
-            val = val.replace('\uE000' + i + '\uE001', () => span);
+            val = val.replace('' + i + '', () => span);
         });
 
         return val.trim();
@@ -513,19 +534,50 @@
 
     // Parse each distinct file exactly once, keyed BY FILE so same-named
     // nodes in different specs never collide. Cached per tag.
+    // Fetch/read ONE spec markdown file's raw text. Browser: unchanged
+    // fetch() through RAW_BASE(). Node (typeof window === 'undefined'):
+    // prefers a local read from vendor/materialx/documents/Specification/
+    // <filename> when vendor/materialx/manifest.json exists at the repo
+    // root (the offline vendor mirror scripts/vendor.mjs populates) — no
+    // network touched at all in that case. Falls back to a direct
+    // raw.githubusercontent.com fetch (Node >=18 has a global fetch) only
+    // when the vendor mirror isn't populated; this is the ONLY place in
+    // this file allowed to build that URL directly, since window.MtlxAssets
+    // doesn't exist outside a browser.
+    const readSpecDoc = (filename) => {
+        if (typeof window !== 'undefined') {
+            return fetch(RAW_BASE() + filename).then((r) => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.text();
+            });
+        }
+        const fs = require('fs');
+        const path = require('path');
+        const REPO_ROOT = path.resolve(__dirname, '..', '..');
+        const manifestPath = path.join(REPO_ROOT, 'vendor', 'materialx', 'manifest.json');
+        if (fs.existsSync(manifestPath)) {
+            const localPath = path.join(REPO_ROOT, 'vendor', 'materialx', 'documents', 'Specification', filename);
+            console.log(`spec docs: local vendor/materialx (${filename})`);
+            return fs.promises.readFile(localPath, 'utf8');
+        }
+        const tag = requireSpecTag();
+        const url = `https://raw.githubusercontent.com/${REPO}/${tag}/${SPEC_DIR}${filename}`;
+        console.log(`spec docs: remote fetch (${filename}@${tag})`);
+        return fetch(url).then((r) => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        });
+    };
+
     let specDocsPromise = null;
     let specDocsTag = null;
 
     const fetchSpecDocs = () => {
-        const tag = MtlxSpecParser.SPEC_TAG;
+        const tag = requireSpecTag();
         if (!specDocsPromise || specDocsTag !== tag) {
             specDocsTag = tag;
             specDocsPromise = Promise.all(SPEC_FILES.map((file) =>
-                fetch(RAW_BASE() + file)
-                    .then((r) => {
-                        if (!r.ok) throw new Error('HTTP ' + r.status);
-                        return r.text();
-                    })
+                readSpecDoc(file)
                     .then((text) => [file, parseMdDocs(text, file)])
                     .catch((err) => {
                         // Mirror the Python behavior for a missing file:
@@ -607,34 +659,24 @@
         return [];
     };
 
-    let databasePromise = null;
-    let databaseTag = null;
-
     /**
      * Build the full node database. Equivalent of spec_parser.py main(),
      * minus writing a file: resolves to the nodes.json object.
      *
-     * opts.mxEnv: optional { mx, stdlib } (e.g. an already-awaited
-     * getMxEnv() result); defaults to window.getMxEnv().
-     * Cached: repeated calls return the same promise (per SPEC_TAG).
+     * Node-only entry point now (the browser docs page consumes the
+     * pregenerated js/gen/ JSON instead — see js/docs-app.jsx): the caller
+     * (scripts/build-nodelib.mjs) instantiates the WASM env itself and
+     * passes it in as { mx, stdlib } — this function no longer reaches
+     * for window.getMxEnv() itself. Not cached: build-nodelib.mjs calls it
+     * exactly once per run.
      */
-    const buildNodeDatabase = (opts) => {
-        opts = opts || {};
-        const tag = MtlxSpecParser.SPEC_TAG;
-        if (databasePromise && databaseTag === tag && !opts.mxEnv) return databasePromise;
-
-        const envPromise = opts.mxEnv
-            ? Promise.resolve(opts.mxEnv)
-            : (typeof window !== 'undefined' && typeof window.getMxEnv === 'function'
-                ? window.getMxEnv()
-                : Promise.reject(new Error('spec-parser: getMxEnv is not available (load js/mtlx-engine.js first) and no mxEnv was passed')));
-
-        const promise = Promise.all([fetchSpecDocs(), envPromise])
-            .then(([parsedByFile, env]) => {
-                const stdlib = env.stdlib;
-                if (!stdlib || typeof stdlib.getNodeDefs !== 'function') {
-                    throw new Error('spec-parser: stdlib.getNodeDefs is not bound in this MaterialX build');
-                }
+    const buildNodeDatabase = ({ mx, stdlib } = {}) => {
+        if (!stdlib || typeof stdlib.getNodeDefs !== 'function') {
+            return Promise.reject(new Error('spec-parser: stdlib.getNodeDefs is not bound in this MaterialX build'));
+        }
+        const exclusive = (typeof window !== 'undefined' && window.mxExclusive) || ((fn) => fn());
+        return fetchSpecDocs()
+            .then((parsedByFile) => {
 
                 // The nodedef walk below both ALLOCATES (vector marshaling —
                 // stdlib.getNodeDefs() and friends — can grow the wasm heap)
@@ -648,7 +690,7 @@
                 // touches wasm, so it stays OUTSIDE the lock — only the walk
                 // itself (fully synchronous: no awaits in the callback
                 // below) goes through mxExclusive.
-                return window.mxExclusive(() => {
+                return exclusive(() => {
                     const nodeDatabase = {};
                     let unknownLibs = 0, total = 0;
 
@@ -700,16 +742,6 @@
                     return nodeDatabase;
                 });
             });
-
-        if (!opts.mxEnv) {
-            databasePromise = promise.catch((err) => {
-                databasePromise = null; // allow retry after transient failures
-                throw err;
-            });
-            databaseTag = tag;
-            return databasePromise;
-        }
-        return promise;
     };
 
     // ------------------------------------------------------------------

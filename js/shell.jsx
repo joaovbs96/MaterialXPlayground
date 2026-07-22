@@ -157,7 +157,6 @@ const VIEW_DEPS = {
         css: ['vendor/katex/katex.min.css'],
         scripts: [
             'vendor/katex/katex.min.js',
-            'js/spec-parser.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',

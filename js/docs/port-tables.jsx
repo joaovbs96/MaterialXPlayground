@@ -1,9 +1,13 @@
 // port-tables.jsx — port-table data helpers and renderers: normalizing
-// spec/nodedef port data into tables, grouping nodedefs by type signature
-// and version, deriving signature labels/preview types, and the
-// PortTable / NodeDefPortsTable components. Split out of doc-ui.jsx
-// (Phase 3) — pure move, no behavior change. PortTable uses MathText
-// (js/docs/rich-text.jsx, loaded before this file). Loaded as
+// spec port data into tables, deriving signature labels/preview types,
+// and the PortTable / NodeDefPortsTable components. The nodedef-walking
+// machinery that used to live here (defInputs/defOutputs/safeType,
+// nodeDefSigKey, groupDefVersions, dedupeDefsBySignature,
+// buildAutoTablesFromDefs) has moved to build-land
+// (scripts/lib/nodedef-extract.mjs, run by scripts/build-nodelib.mjs) —
+// this file now only renders data that arrives pre-computed in
+// js/gen/nodelib-index.json (see js/docs-app.jsx). PortTable uses
+// MathText (js/docs/rich-text.jsx, loaded before this file). Loaded as
 // text/babel; Babel executes each file in its own function scope, so the
 // public API is exported onto window at the bottom.
 
@@ -22,181 +26,6 @@
                 return [{ headers: ['port', ...Object.keys(firstRow)], ports: nodeInfo.ports }];
             }
             return [];
-        };
-
-        // def.getActiveInputs()/getActiveOutputs(), falling back to
-        // getInputs()/getOutputs() on older bindings that don't expose the
-        // Active variants — the vecToArray-wrapped pattern repeated at
-        // every nodedef-walking helper below.
-        const defInputs = (def) => vecToArray(def.getActiveInputs ? def.getActiveInputs()
-            : (def.getInputs ? def.getInputs() : null));
-        const defOutputs = (def) => vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
-            : (def.getOutputs ? def.getOutputs() : null));
-        // An input/output element's type, or '' if the wasm binding throws
-        // (e.g. a detached/invalid element) — used wherever a type is only
-        // needed for a display/signature string and a thrown exception
-        // shouldn't abort the whole computation.
-        const safeType = (el) => { try { return el.getType(); } catch (e) { return ''; } };
-
-        // A TYPE-SIGNATURE key for a WASM nodedef — the ordered input types
-        // plus the resolved output type, independent of version. Two
-        // nodedefs sharing this key are the SAME signature at different
-        // VERSIONS (standard_surface 1.0.1 / 1.0.0: identical ports, only
-        // defaults differ) — see dedupeDefsBySignature.
-        const nodeDefSigKey = (def) => {
-            const inTypes = defInputs(def).map(safeType).join(',');
-            let outType = '';
-            try { outType = def.getType(); } catch (e) { /* none */ }
-            const outs = defOutputs(def);
-            if (outs.length) outType = outs.map(safeType).join('+');
-            return outType + '|' + inTypes;
-        };
-
-        // Group a category's nodedefs into one entry per TYPE SIGNATURE, each
-        // carrying every VERSION of that signature — the docs-page analog of
-        // node-graph.html's groupSignatures/nodeDefInfo, needed because a
-        // DOCUMENTED node (standard_surface: spec port tables exist) never
-        // runs through dedupeDefsBySignature/buildAutoTablesFromDefs at all
-        // (those only fire for undocumented nodes), so its version data
-        // would otherwise never be read. Returns
-        // [{ key, type, inSummary, ambiguous, versions: [{ name, version,
-        // isDefaultVersion, defaults: {portName: valueString},
-        // inputTypes: {portName: type}, outputTypes: {portName: type} }] }],
-        // versions sorted default-first then by version string descending.
-        // `inSummary` (the default version's input types, deduped and
-        // joined) and `ambiguous` (true when another group shares this
-        // group's output type — e.g. fractal3d's float-amplitude variants)
-        // let a caller disambiguate same-output-type signatures in a
-        // dropdown label.
-        const groupDefVersions = (defs) => {
-            const byKey = {};
-            const order = [];
-            for (const def of defs) {
-                let key = null;
-                try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
-                if (!key) continue;
-                let outType = '';
-                try { outType = def.getType(); } catch (e) { /* none */ }
-                let version = '';
-                try { version = def.getVersionString() || ''; } catch (e) { /* none */ }
-                let isDefaultVersion = false;
-                try { isDefaultVersion = !!(def.getDefaultVersion && def.getDefaultVersion()); } catch (e) { /* none */ }
-                const defaults = {};
-                const inputTypes = {};
-                const inputs = defInputs(def);
-                for (const inp of inputs) {
-                    let nm = '', dv = '';
-                    try { nm = inp.getName(); } catch (e) { /* skip */ }
-                    if (!nm) continue;
-                    try { dv = (inp.getValueString && inp.getValueString()) || ''; } catch (e) { /* none */ }
-                    defaults[nm] = dv;
-                    try { inputTypes[nm] = inp.getType(); } catch (e) { /* none */ }
-                }
-                const outputTypes = {};
-                const outputs = defOutputs(def);
-                if (outputs.length) {
-                    for (const out of outputs) {
-                        let nm = '';
-                        try { nm = out.getName(); } catch (e) { /* skip */ }
-                        if (!nm) continue;
-                        try { outputTypes[nm] = out.getType(); } catch (e) { /* none */ }
-                    }
-                } else {
-                    outputTypes['out'] = outType;
-                }
-                if (!byKey[key]) { byKey[key] = { key, type: outType, versions: [] }; order.push(key); }
-                byKey[key].versions.push({
-                    name: def.getName ? def.getName() : '', version, isDefaultVersion,
-                    defaults, inputTypes, outputTypes,
-                });
-            }
-            const groups = order.map((key) => {
-                const g = byKey[key];
-                g.versions.sort((a, b) => {
-                    if (a.isDefaultVersion !== b.isDefaultVersion) return a.isDefaultVersion ? -1 : 1;
-                    return b.version.localeCompare(a.version, undefined, { numeric: true });
-                });
-                return g;
-            });
-            const typeCounts = {};
-            groups.forEach((g) => { typeCounts[g.type] = (typeCounts[g.type] || 0) + 1; });
-            groups.forEach((g) => {
-                g.ambiguous = typeCounts[g.type] > 1;
-                const defaultVersion = g.versions[0];
-                const seen = new Set();
-                const ordered = [];
-                if (defaultVersion) {
-                    Object.keys(defaultVersion.inputTypes).forEach((nm) => {
-                        const t = defaultVersion.inputTypes[nm];
-                        if (t && !seen.has(t)) { seen.add(t); ordered.push(t); }
-                    });
-                }
-                g.inSummary = ordered.join(', ');
-            });
-            return groups;
-        };
-
-        // Collapse version-duplicate nodedefs down to their DEFAULT version
-        // before building auto tables — one table per genuine SIGNATURE, not
-        // one per nodedef. Without this, a node like standard_surface (whose
-        // 1.0.1/1.0.0 nodedefs share every port, differing only in default
-        // values) would show two identical-looking "signatures" in the
-        // dropdown. A nodedef that can't be keyed (API unbound) always keeps
-        // its own entry, so degrade to the old one-table-per-nodedef
-        // behavior rather than dropping it.
-        const dedupeDefsBySignature = (defs) => {
-            const chosen = new Map(); // sigKey -> def (preferring the default version)
-            const order = []; // sigKey, or the def itself when unkeyable
-            for (const def of defs) {
-                let key = null;
-                try { key = nodeDefSigKey(def); } catch (e) { /* ignore */ }
-                if (!key) { order.push(def); continue; }
-                let isDefault = false;
-                try { isDefault = !!(def.getDefaultVersion && def.getDefaultVersion()); } catch (e) { /* none */ }
-                if (!chosen.has(key)) { chosen.set(key, def); order.push(key); }
-                else if (isDefault) { chosen.set(key, def); }
-            }
-            return order.map((item) => (typeof item === 'string' ? chosen.get(item) : item));
-        };
-
-        // Build port tables (same shape the viewer renders) directly from a
-        // node's MaterialX nodedefs, for nodes with NO spec documentation. One
-        // table per SIGNATURE (overload) — version-duplicate nodedefs are
-        // already collapsed by dedupeDefsBySignature before this runs; inputs
-        // first, then outputs. `vecToArray` normalizes the MaterialX
-        // vector<->array binding.
-        const buildAutoTablesFromDefs = (defs) => {
-            const tables = [];
-            for (const def of defs) {
-                const ports = {};
-                let anyEnum = false;
-                const inputs = defInputs(def);
-                for (const inp of inputs) {
-                    let dv = '', enumv = '';
-                    try { dv = (inp.getValueString && inp.getValueString()) || ''; } catch (e) { /* none */ }
-                    try { enumv = (inp.getAttribute && inp.getAttribute('enum')) || ''; } catch (e) { /* none */ }
-                    const row = { description: '', type: inp.getType(), default: dv };
-                    if (enumv) { row.accepted_values = enumv; anyEnum = true; }
-                    ports[inp.getName()] = row;
-                }
-                const outs = defOutputs(def);
-                if (outs.length === 0) {
-                    let t = 'output';
-                    try { t = def.getType(); } catch (e) { /* keep */ }
-                    ports['out'] = { description: 'Output', type: t, default: '' };
-                } else {
-                    for (const out of outs) {
-                        ports[out.getName()] = { description: 'Output', type: out.getType(), default: '' };
-                    }
-                }
-                if (Object.keys(ports).length) {
-                    const headers = anyEnum
-                        ? ['port', 'description', 'type', 'default', 'accepted_values']
-                        : ['port', 'description', 'type', 'default'];
-                    tables.push({ headers, ports });
-                }
-            }
-            return tables;
         };
 
         // A node counts as undocumented when it has no port tables, no
@@ -424,50 +253,12 @@
             );
         }
 
-        // Parse `uniform <type> <name>;` declarations out of generated GLSL so
-        // we can bind by the shader's ACTUAL names (which vary by MaterialX
-        const NodeDefPortsTable = ({ nodeName }) => {
-            const [rows, setRows] = React.useState(null); // null = loading
-            React.useEffect(() => {
-                let alive = true;
-                setRows(null);
-                getMxEnv().then(({ stdlib }) => {
-                    if (!alive) return undefined;
-                    // Serialized against the shared wasm heap (see
-                    // mxExclusive in js/mtlx-engine.js).
-                    return window.mxExclusive(() => {
-                        const byName = {};
-                        const order = [];
-                        const record = (el, kindLabel) => {
-                            const nm = el.getName();
-                            const key = kindLabel + ':' + nm;
-                            let ty = '';
-                            try { const t = el.getType && el.getType(); ty = (t && t.getName) ? t.getName() : String(t || ''); } catch (e) { ty = ''; }
-                            let val = '';
-                            try { val = (el.getValueString && el.getValueString()) || ''; } catch (e) { val = ''; }
-                            let en = '';
-                            try { en = (el.getAttribute && el.getAttribute('enum')) || ''; } catch (e) { en = ''; }
-                            if (!byName[key]) {
-                                byName[key] = { name: nm, kind: kindLabel, types: [], value: val, enums: en };
-                                order.push(key);
-                            }
-                            if (ty && byName[key].types.indexOf(ty) === -1) byName[key].types.push(ty);
-                        };
-                        try {
-                            for (const def of vecToArray(stdlib.getMatchingNodeDefs(nodeName))) {
-                                for (const inp of vecToArray(def.getInputs ? def.getInputs() : null)) record(inp, 'input');
-                                for (const out of vecToArray(def.getOutputs ? def.getOutputs() : null)) record(out, 'output');
-                            }
-                        } catch (e) { /* nodedef read is best-effort */ }
-                        return order.map((k) => byName[k]);
-                    });
-                }).then((rows) => { if (alive && rows !== undefined) setRows(rows); })
-                    .catch(() => { if (alive) setRows([]); });
-                return () => { alive = false; };
-            }, [nodeName]);
-            if (rows === null) {
-                return <div className="text-sm text-gray-500 italic">Reading ports from the nodedef…</div>;
-            }
+        // Rows: [{name, kind, types[], value, enums}], pregenerated by
+        // scripts/build-nodelib.mjs's buildDefPorts port
+        // (scripts/lib/nodedef-extract.mjs) from the union of every
+        // matching nodedef's inputs/outputs — no live WASM read.
+        const NodeDefPortsTable = ({ rows }) => {
+            rows = rows || [];
             if (!rows.length) {
                 return (
                     <div className="bg-gray-900 border border-gray-700 rounded p-4 text-sm text-gray-500 italic">
@@ -510,19 +301,18 @@
 
         // ---- public API ----
         // headerLabel, the column-layout consts (CANONICAL_ORDER etc.),
-        // the nodedef-walking helpers (defInputs, defOutputs, safeType),
         // and the signature-label helper cluster (SAME_AS_RE, resolveType,
         // isOutputPort, uniqTypeTokens, signatureLabel, SIG_CONCRETE_TOKEN,
         // SIG_PREVIEW_PREFERENCE, SIG_FAMILY_EXPANSIONS, expandSigToken)
         // have no consumers outside this file (checked repo-wide,
         // word-boundary grep) — kept as declarations (used internally by
         // PortTable/unionColumns/signaturePreviewType/pickTableForType) but
-        // omitted from the export list. nodeDefSigKey IS exported (new,
-        // relative to doc-ui.jsx's old export list) because impl-matrix.jsx
-        // now calls it cross-file from ImplTargetMatrix.
+        // omitted from the export list. The nodedef-walking helpers
+        // (defInputs, defOutputs, safeType, nodeDefSigKey, groupDefVersions,
+        // dedupeDefsBySignature, buildAutoTablesFromDefs) no longer live in
+        // this file at all — see scripts/lib/nodedef-extract.mjs.
         Object.assign(window, {
-            getPortTables, nodeDefSigKey, groupDefVersions, dedupeDefsBySignature,
-            buildAutoTablesFromDefs, isUndocumented,
+            getPortTables, isUndocumented,
             unionColumns, signaturePreviewType, pickTableForType, PortTable,
             NodeDefPortsTable,
         });

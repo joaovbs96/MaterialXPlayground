@@ -1,19 +1,31 @@
 // docs-app.jsx — the App component for the MaterialX node documentation
 // browser (index.html). Extracted verbatim from the page's inline
 // text/babel script (originally index.html lines 76-1103) — pure move,
-// no behavior change. Note: this file uses index.html's literal \uXXXX
-// escape-text convention (e.g. {'↗'}) in a few string literals —
-// same convention as node-graph.html; preserve exactly, do not normalize.
+// no behavior change from that extraction. Note: this file uses
+// index.html's literal \uXXXX escape-text convention (e.g. {'↗'}) in a
+// few string literals — same convention as node-graph.html; preserve
+// exactly, do not normalize.
 // Loaded as text/babel; Babel executes each file in its own function
-// scope. Depends on window globals published by js/spec-parser.js,
-// js/mtlx-engine.js, js/docs/doc-links.jsx, js/docs/rich-text.jsx,
-// js/docs/port-tables.jsx, js/docs/impl-matrix.jsx, js/docs/sidebar.jsx,
-// and js/node-preview.jsx, so this script tag must load AFTER all of
-// those. Reads window.__MTLX_EMBED (set synchronously by index.html's
-// early <head> script) for embed-mode behavior. The sidebar tree
-// (DocsSidebar) and Help modal (DocsHelpDialog) live in
-// js/docs/sidebar.jsx — App owns all their state/derived data and passes
-// it down as props (see the {jsonData && (...)} block below).
+// scope. Depends on window globals published by js/mtlx-engine.js,
+// js/docs/doc-links.jsx, js/docs/rich-text.jsx, js/docs/port-tables.jsx,
+// js/docs/impl-matrix.jsx, js/docs/sidebar.jsx, and js/node-preview.jsx,
+// so this script tag must load AFTER all of those. Reads
+// window.__MTLX_EMBED (set synchronously by index.html's early <head>
+// script) for embed-mode behavior. The sidebar tree (DocsSidebar) and
+// Help modal (DocsHelpDialog) live in js/docs/sidebar.jsx — App owns all
+// their state/derived data and passes it down as props (see the
+// {jsonData && (...)} block below).
+//
+// Node documentation data source: js/gen/nodelib.json (Layer 1 — the
+// spec-derived {lib:{group:{category:{...}}}} database, same shape the
+// old live in-browser spec parser produced) and js/gen/nodelib-index.json
+// (Layer 2 — per-category sigGroups/autoTables/defPorts/impl, plus
+// allTargets) are both pre-generated at BUILD TIME by
+// scripts/build-nodelib.mjs and committed to the repo — never
+// regenerated in the browser. Docs browsing is therefore fully
+// WASM-free; the MaterialX engine (js/mtlx-engine.js, getMxEnv) is only
+// ever loaded for 3D node previews (see the gated warm-up effect below,
+// near showPreviews).
 
         // Given nodeVersionGroups (see groupDefVersions, js/docs/port-
         // tables.jsx) and a parsed sig hint ({out, ins}, from a VS Code
@@ -180,18 +192,6 @@
                 }
             }, [selectedNode]);
             const [copied, setCopied] = React.useState(false);
-            // Auto-generated port tables (from the nodedef) for undocumented
-            // nodes: { name, status: 'loading'|'ready'|'unavailable', tables }.
-            const [autoDoc, setAutoDoc] = React.useState(null);
-            // Warm the MaterialX module so the version badge in the shared
-            // header resolves (the engine dispatches 'mtlx-version'; the
-            // header listens) and the first preview doesn't pay the WASM
-            // download. One-time load only — the resource cost the "3D
-            // previews" toggle guards is the per-node render loop, not this.
-            React.useEffect(() => {
-                getMxEnv().catch(() => {});
-            }, []);
-
             // Resolve doc links that point at a spec #node-... anchor to a
             // node in the loaded database (anchors and node names both get
             // separators stripped so hyphenated and squashed conventions both
@@ -387,88 +387,65 @@
                 }
             };
 
-            // For nodes with NO documentation, read the ports/types straight
-            // from the MaterialX nodedef (via the WASM API) and synthesize a
-            // table on the fly. Guarded so a stale fetch can't overwrite a
-            // newer selection.
+            // Load the pregenerated node documentation JSON (see
+            // scripts/build-nodelib.mjs): js/gen/nodelib.json is the
+            // Layer-1 spec-derived database (same shape applyData always
+            // expected); js/gen/nodelib-index.json is the Layer-2
+            // per-category metadata (sigGroups/autoTables/defPorts/impl,
+            // plus allTargets) consumed via the `genData` state below by
+            // the autoDoc/nodeVersionGroups memos and the
+            // ImplTargetMatrix/NodeDefPortsTable props further down. Both
+            // files are committed to the repo — there is no fallback: a
+            // failure here means a hosting/path problem, not a transient
+            // network hiccup, so the page shows the failed state.
+            const [autoLoad, setAutoLoad] = React.useState('loading'); // loading | done | failed
+            const [dataSource, setDataSource] = React.useState(null);
+            const [genData, setGenData] = React.useState(null);
             React.useEffect(() => {
-                if (!selectedNode || !isUndocumented(selectedNode.info)) {
-                    setAutoDoc(null);
-                    return undefined;
-                }
-                const name = selectedNode.name;
-                let alive = true;
-                setAutoDoc({ name, status: 'loading', tables: [] });
-                getMxEnv()
-                    .then(({ mx, stdlib }) => {
-                        if (!alive) return undefined;
-                        // Serialized against the shared wasm heap (see
-                        // mxExclusive in js/mtlx-engine.js).
-                        return window.mxExclusive(() => {
-                            const doc = mx.createDocument();
-                            // setDataLibrary REFERENCES the standard library
-                            // (nodedef matching, validation, and shadergen all
-                            // consult it) without making it part of the document —
-                            // so a plain writeToXmlString(doc) contains only OUR
-                            // nodes. importLibrary would bake megabytes of stdlib
-                            // into the doc, and the JS binding of XmlWriteOptions
-                            // exposes only writeXIncludeEnable (elementPredicate is
-                            // NOT bound), so there is no way to filter at write
-                            // time. Verified: all preview kinds generate and export
-                            // cleanly through the data library.
-                            if (typeof doc.setDataLibrary === 'function') {
-                                doc.setDataLibrary(stdlib);
-                            } else {
-                                // Ancient binding without setDataLibrary — exports
-                                // would include the library. Loud, not silent:
-                                console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
-                                doc.importLibrary(stdlib);
-                            }
-                            const defs = dedupeDefsBySignature(vecToArray(doc.getMatchingNodeDefs(name)));
-                            return buildAutoTablesFromDefs(defs);
-                        });
+                Promise.all([fetch('js/gen/nodelib.json'), fetch('js/gen/nodelib-index.json')])
+                    .then((rs) => Promise.all(rs.map((r) => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.json();
+                    })))
+                    .then(([db, index]) => {
+                        setGenData(index);
+                        applyData(db, `MaterialX ${index.meta.tag} specification (pregenerated)`);
+                        setAutoLoad('done');
                     })
-                    .then((tables) => {
-                        if (!alive || tables === undefined) return;
-                        setAutoDoc({ name, status: tables.length ? 'ready' : 'unavailable', tables });
-                    })
-                    .catch(() => { if (alive) setAutoDoc({ name, status: 'unavailable', tables: [] }); });
-                return () => { alive = false; };
-            }, [selectedNode]);
+                    .catch((err) => {
+                        console.warn('Pregenerated node library load failed', err);
+                        setAutoLoad('failed');
+                    });
+            }, []);
 
-            // VERSION metadata (standard_surface 1.0.1 default / 1.0.0, …),
-            // read from the live nodedefs for EVERY selection — documented
-            // or not. This is deliberately separate from the autoDoc effect
-            // above: that one only runs for undocumented nodes (its tables
-            // come from the spec instead), so a documented node's version
-            // data would otherwise never be read at all. Grouped the same
-            // way node-graph.html's groupSignatures does (see
-            // groupDefVersions), one entry per type signature.
-            const [nodeVersionGroups, setNodeVersionGroups] = React.useState(null);
-            React.useEffect(() => {
-                if (!selectedNode) { setNodeVersionGroups(null); return undefined; }
+            // Auto-generated port tables (for nodes with no spec
+            // documentation): read straight off genData, the pregenerated
+            // Layer-2 index (js/gen/nodelib-index.json) built by
+            // scripts/build-nodelib.mjs's buildAutoTablesFromDefs port
+            // (scripts/lib/nodedef-extract.mjs) — no live WASM read.
+            const autoDoc = React.useMemo(() => {
+                if (!selectedNode || !genData) return null;
                 const name = selectedNode.name;
-                let alive = true;
-                getMxEnv()
-                    .then(({ mx, stdlib }) => {
-                        if (!alive) return undefined;
-                        // Serialized against the shared wasm heap (see
-                        // mxExclusive in js/mtlx-engine.js).
-                        return window.mxExclusive(() => {
-                            const doc = mx.createDocument();
-                            if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
-                            else doc.importLibrary(stdlib);
-                            // Intentionally UNFILTERED across libraries: ambiguous categories
-                            // ('multiply' is stdlib math AND pbrlib BSDF/EDF/VDF) should list every
-                            // signature in the dropdown; the previewer itself notices the
-                            // un-compilable closure ones instead of hiding them here.
-                            return groupDefVersions(vecToArray(doc.getMatchingNodeDefs(name)));
-                        });
-                    })
-                    .then((groups) => { if (alive && groups !== undefined) setNodeVersionGroups(groups); })
-                    .catch(() => { if (alive) setNodeVersionGroups(null); });
-                return () => { alive = false; };
-            }, [selectedNode]);
+                const entry = genData.nodes[name];
+                const tables = (entry && entry.autoTables) || [];
+                return { name, status: tables.length ? 'ready' : 'unavailable', tables };
+            }, [selectedNode, genData]);
+
+            // VERSION metadata (standard_surface 1.0.1 default / 1.0.0, …)
+            // for EVERY selection — documented or not — read straight off
+            // genData.nodes[name].sigGroups, the pregenerated Layer-2 index
+            // built by scripts/build-nodelib.mjs's groupDefVersions port
+            // (scripts/lib/nodedef-extract.mjs). Intentionally UNFILTERED
+            // across libraries in that build step: ambiguous categories
+            // ('multiply' is stdlib math AND pbrlib BSDF/EDF/VDF) list every
+            // signature; the previewer itself notices the un-compilable
+            // closure ones instead of hiding them here. One entry per type
+            // signature, same grouping node-graph.html's groupSignatures uses.
+            const nodeVersionGroups = React.useMemo(() => {
+                if (!genData || !selectedNode) return null;
+                const entry = genData.nodes[selectedNode.name];
+                return (entry && entry.sigGroups) || null;
+            }, [selectedNode, genData]);
             // Consumes a pending sig hint (queued at the two hash-driven
             // selection sites above) exactly once nodeVersionGroups has
             // actually loaded for the CURRENTLY selected node — matching
@@ -493,28 +470,6 @@
             // group with its own default).
             const [versionIndex, setVersionIndex] = React.useState(0);
             React.useEffect(() => { setVersionIndex(0); }, [selectedNode, sigIndex]);
-
-            // Build the node database LIVE: fetch the spec markdown for the
-            // pinned tag straight from GitHub and parse it in-browser
-            // (spec-parser.js), joining against the nodedefs from the WASM.
-            // There is no local fallback: if GitHub is unreachable
-            // (offline/file://), the page shows the failed state.
-            const [autoLoad, setAutoLoad] = React.useState('loading'); // loading | done | failed
-            const [dataSource, setDataSource] = React.useState(null);
-            React.useEffect(() => {
-                const live = (window.MtlxSpecParser
-                    ? window.MtlxSpecParser.buildNodeDatabase()
-                    : Promise.reject(new Error('spec-parser.js not loaded')));
-                live
-                    .then(db => {
-                        applyData(db, `MaterialX ${window.MtlxSpecParser.SPEC_TAG} specification (parsed live)`);
-                        setAutoLoad('done');
-                    })
-                    .catch((err) => {
-                        console.warn('Live spec parse failed', err);
-                        setAutoLoad('failed');
-                    });
-            }, []);
 
             // (Manual upload removed: the page auto-loads the live spec only.)
 
@@ -548,6 +503,21 @@
                 try { localStorage.setItem('mtlx_show_previews', nv ? '1' : '0'); } catch (e) { /* best-effort */ }
                 return nv;
             });
+            // Warm the MaterialX module so the version badge in the shared
+            // header resolves (the engine dispatches 'mtlx-version'; the
+            // header listens) and the first 3D preview doesn't pay the WASM
+            // download. Docs BROWSING itself is fully WASM-free now (the
+            // node database and all its metadata come from the pregenerated
+            // js/gen/ JSON, loaded above) — the engine is only ever needed
+            // for 3D previews, so only warm it once previews are actually
+            // enabled (still gets the badge live-upgrade from whichever
+            // view first loads the engine, since 'mtlx-version' is a
+            // window-level event the shared header listens for regardless
+            // of which view triggered it).
+            React.useEffect(() => {
+                if (!showPreviews) return;
+                getMxEnv().catch(() => {});
+            }, [showPreviews]);
             // Embed mode: the graph editor posts visibility when its docs dialog
             // hides/shows this iframe — pause the 3D preview loop while hidden
             // (display:none does not stop the iframe's rAF). Deliberately NOT
@@ -656,8 +626,6 @@
             const autoReady = autoDoc && selectedNode && autoDoc.name === selectedNode.name
                 && autoDoc.status === 'ready';
             const isAutoTable = portTables.length === 0 && autoReady && autoDoc.tables.length > 0;
-            const autoLoading = autoDoc && selectedNode && autoDoc.name === selectedNode.name
-                && autoDoc.status === 'loading';
             const effectiveTables = portTables.length > 0 ? portTables
                 : (isAutoTable ? autoDoc.tables : []);
             // Signature selection: the dropdown is now driven by the live
@@ -735,13 +703,15 @@
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
-                            Parsing the MaterialX specification…
+                            Loading the node library…
                         </div>
                     )}
                     {autoLoad === 'failed' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-amber-700/60 text-sm text-gray-300">
-                            Could not fetch and parse the MaterialX specification from GitHub.
-                            Check your network connection and reload the page.
+                            Could not load the pregenerated node library data
+                            (js/gen/nodelib.json, js/gen/nodelib-index.json). Reload the
+                            page, or if you're building from source, run
+                            `npm run build:nodelib` to (re)generate them.
                         </div>
                     )}
 
@@ -917,6 +887,10 @@
                                         <ImplTargetMatrix
                                             nodeName={selectedNode.name}
                                             signature={selectedGroup ? selectedGroup.key : null}
+                                            implRows={genData && selectedNode
+                                                ? ((genData.nodes[selectedNode.name] && genData.nodes[selectedNode.name].impl) || [])
+                                                : null}
+                                            allTargets={genData ? genData.allTargets : []}
                                         />
 
                                         {/* Description: paragraphs before the first table */}
@@ -991,12 +965,8 @@
                                                         defaultsOverride={defaultsOverride} typesOverride={typesOverride} />
                                                 ))}
                                             </div>
-                                        ) : autoLoading ? (
-                                            <div className="bg-gray-900 border border-gray-700 rounded p-4 text-sm text-gray-500 italic">
-                                                Generating a port table from the node definition…
-                                            </div>
                                         ) : (
-                                            <NodeDefPortsTable nodeName={selectedNode.name} />
+                                            <NodeDefPortsTable rows={(genData && selectedNode && genData.nodes[selectedNode.name] && genData.nodes[selectedNode.name].defPorts) || []} />
                                         )}
 
                                         {/* Notes: prose after/between tables (sub-headings, equations, ...) */}

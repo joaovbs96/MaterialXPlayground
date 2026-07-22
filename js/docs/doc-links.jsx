@@ -124,13 +124,11 @@
         // (e.g. oren_nayar_diffuse_bsdf → #node-oren-nayar-diffuse-bsdf).
         // GitHub resolves those fragments to user-content-prefixed ids.
         const SPEC_BASE = 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/';
-        // Delegates to spec-parser.js's identical mapping (js/spec-parser.js's
-        // specFileForLibrary) when it's loaded, so the two copies can't drift;
-        // the inline fallback keeps this file working standalone.
+        // Library -> spec markdown file mapping. This is only ever a
+        // FALLBACK: specUrlForNode below prefers node.info.spec_url (which
+        // the pregenerated js/gen/nodelib.json always supplies) and only
+        // falls through to this derivation when that's missing.
         const specFileForLib = (lib) => {
-            if (window.MtlxSpecParser && window.MtlxSpecParser.specFileForLibrary) {
-                return window.MtlxSpecParser.specFileForLibrary(lib);
-            }
             const base = (lib || '').split('/')[0];
             if (base === 'pbrlib' || base === 'bxdf') return 'MaterialX.PBRSpec.md';
             if (base === 'nprlib') return 'MaterialX.NPRSpec.md';

@@ -1,5 +1,4 @@
 {
-  "generatedAt": "2026-07-17T21:43:44.765Z",
   "generatedBy": "scripts/vendor.mjs",
   "entries": [
     {
@@ -9,16 +8,34 @@
       "bytes": 3014882
     },
     {
+      "path": "babel/LICENSE.txt",
+      "source": "@babel/standalone@7.26.10",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
+      "bytes": 1106
+    },
+    {
       "path": "dagre/dagre.min.js",
       "source": "dagre@0.8.5",
       "sha256": "62eb9787ccfdbdf4148d4d99d31dbf9ee4770eafee81e637d759b52aac22cd51",
       "bytes": 283803
     },
     {
+      "path": "dagre/LICENSE.txt",
+      "source": "dagre@0.8.5",
+      "sha256": "6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015",
+      "bytes": 1062
+    },
+    {
       "path": "highlightjs/highlight.min.js",
       "source": "@highlightjs/cdn-assets@11.9.0",
       "sha256": "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846",
       "bytes": 121727
+    },
+    {
+      "path": "highlightjs/LICENSE.txt",
+      "source": "@highlightjs/cdn-assets@11.9.0",
+      "sha256": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490",
+      "bytes": 1514
     },
     {
       "path": "highlightjs/xml.min.js",
@@ -31,6 +48,12 @@
       "source": "jszip@3.10.1",
       "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
       "bytes": 97630
+    },
+    {
+      "path": "jszip/LICENSE.markdown",
+      "source": "jszip@3.10.1",
+      "sha256": "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4",
+      "bytes": 33753
     },
     {
       "path": "katex/fonts/KaTeX_AMS-Regular.woff2",
@@ -165,6 +188,18 @@
       "bytes": 275414
     },
     {
+      "path": "katex/LICENSE.txt",
+      "source": "katex@0.16.11",
+      "sha256": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3",
+      "bytes": 1107
+    },
+    {
+      "path": "react/LICENSE.txt",
+      "source": "react@18.3.1",
+      "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+      "bytes": 1086
+    },
+    {
       "path": "react/react-dom.production.min.js",
       "source": "react-dom@18.3.1",
       "sha256": "35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d",
@@ -183,10 +218,22 @@
       "bytes": 155188
     },
     {
+      "path": "reactflow/LICENSE.txt",
+      "source": "reactflow@11.11.4",
+      "sha256": "9f495bcaa7577b0aa3853402d6d7748987c754d3af9170a5bab1f325a90fc1ae",
+      "bytes": 1073
+    },
+    {
       "path": "reactflow/style.css",
       "source": "reactflow@11.11.4",
       "sha256": "8bb2def0f075030d4da2fc24570e12d0b8ddcb6cbc79566f8a5ff2c587a2b9b1",
       "bytes": 9214
+    },
+    {
+      "path": "tailwind/LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE",
+      "sha256": "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985",
+      "bytes": 1071
     },
     {
       "path": "tailwind/tailwind-play.min.js",
@@ -205,6 +252,12 @@
       "source": "three@0.128.0",
       "sha256": "5c15967ba830918a9caea6338712c994c354bccd4edc4569bde411c3ec06a3e6",
       "bytes": 96550
+    },
+    {
+      "path": "three/LICENSE.txt",
+      "source": "three@0.128.0",
+      "sha256": "7dddf7c5b8fd10ee654db8857d75d104b5557889aa5a91fc4ca545ea7c07062f",
+      "bytes": 1081
     },
     {
       "path": "three/OrbitControls.js",
