@@ -41,3 +41,9 @@
 # fresh Windows clone, and vendored .js/.css/font files must not risk it.
 vendor/** linguist-vendored
 vendor/** -text
+
+# js/gen/ holds build-generated artifacts (see
+# scripts/extract-mtlx-version.mjs) that are byte-compared by --check; force
+# LF so a Windows checkout's autocrlf setting can never make that comparison
+# (or a plain git diff) spuriously fail.
+js/gen/** text eol=lf

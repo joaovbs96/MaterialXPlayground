@@ -46,9 +46,10 @@
 //   - MTLX_TAG below pins the MaterialX repo tag/ref used for the file tree
 //     and raw-content downloads (documents/Specification/,
 //     resources/Materials/Examples/, resources/Images/). It MUST match
-//     MtlxSpecParser.SPEC_TAG in js/spec-parser.js — the resolver's remote
-//     mode fetches spec content at that tag, so a vendored snapshot at a
-//     different tag would silently diverge from what the web build serves.
+//     MtlxSpecParser.SPEC_TAG in scripts/lib/spec-parser.js — the resolver's
+//     remote mode fetches spec content at that tag, so a vendored snapshot
+//     at a different tag would silently diverge from what the web build
+//     serves.
 //   - One unauthenticated GitHub git-trees API call
 //     (repos/.../git/trees/<tag>?recursive=1) enumerates every blob in the
 //     tag with its path + git blob sha1; blobs under the three prefixes
@@ -75,10 +76,11 @@
 //     each other.
 
 import { readFile, writeFile, mkdir, rm, readdir, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readVersionMeta, checkStamps } from "./lib/version.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -93,10 +95,14 @@ const WITH_MATERIALX = process.argv.includes("--with-materialx");
 
 // ---------------------------------------------------------------------------
 // --with-materialx: pins the MaterialX repo tag used both for the git-trees
-// API enumeration and the raw-content downloads. MUST match
-// MtlxSpecParser.SPEC_TAG in js/spec-parser.js (see header comment above).
+// API enumeration and the raw-content downloads. Derived from the vendored
+// WASM build rather than hand-typed — js/gen/mtlx-version.json is written by
+// scripts/extract-mtlx-version.mjs (see scripts/lib/version.mjs), which
+// extracts the version directly from js/JsMaterialXGenShader.*, so this can
+// never silently disagree with the actual committed WASM files. MUST match
+// MtlxSpecParser.SPEC_TAG in scripts/lib/spec-parser.js (see header comment above).
 // ---------------------------------------------------------------------------
-const MTLX_TAG = "v1.39.5";
+const MTLX_TAG = (await readVersionMeta()).tag;
 const MTLX_REPO = "AcademySoftwareFoundation/MaterialX";
 const MTLX_TREE_API_URL = `https://api.github.com/repos/${MTLX_REPO}/git/trees/${MTLX_TAG}?recursive=1`;
 const MTLX_RAW_BASE = `https://raw.githubusercontent.com/${MTLX_REPO}/${MTLX_TAG}/`;
@@ -158,6 +164,25 @@ const COPIES = [
   // instead, which is not usable via a plain <script> tag).
   { pkg: "@highlightjs/cdn-assets", src: "highlight.min.js", dest: "highlightjs/highlight.min.js" },
   { pkg: "@highlightjs/cdn-assets", src: "languages/xml.min.js", dest: "highlightjs/xml.min.js" },
+
+  // ---------------------------------------------------------------------------
+  // License files: vendor/<pkg>/LICENSE* is committed alongside each library's
+  // vendored code, but cleanVendorExceptMaterialx() removes everything under
+  // vendor/ (other than materialx/) before copyAll() repopulates it. Without
+  // an explicit COPIES entry for each license, `npm run vendor` would delete
+  // these tracked files and never restore them — a reproducibility bug that
+  // breaks the CI gate requiring a clean rebuild to reproduce the committed
+  // tree byte-for-byte. (Tailwind has no npm source for its license — see the
+  // DOWNLOADS entry below instead.)
+  // ---------------------------------------------------------------------------
+  { pkg: "react", src: "LICENSE", dest: "react/LICENSE.txt" },
+  { pkg: "@babel/standalone", src: "LICENSE", dest: "babel/LICENSE.txt" },
+  { pkg: "three", src: "LICENSE", dest: "three/LICENSE.txt" },
+  { pkg: "katex", src: "LICENSE", dest: "katex/LICENSE.txt" },
+  { pkg: "jszip", src: "LICENSE.markdown", dest: "jszip/LICENSE.markdown" },
+  { pkg: "reactflow", src: "LICENSE", dest: "reactflow/LICENSE.txt" },
+  { pkg: "dagre", src: "LICENSE", dest: "dagre/LICENSE.txt" },
+  { pkg: "@highlightjs/cdn-assets", src: "LICENSE", dest: "highlightjs/LICENSE.txt" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -173,6 +198,15 @@ const DOWNLOADS = [
     url: "https://cdn.tailwindcss.com/3.4.17",
     dest: "tailwind/tailwind-play.min.js",
     sha256: "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15",
+  },
+  // Tailwind's LICENSE isn't published to npm (the JS above is a pinned
+  // direct download of the Play CDN build, not an npm package), so it's
+  // fetched directly from the tag on GitHub that matches the pinned Play CDN
+  // version above, and verified against a pinned sha256 the same way.
+  {
+    url: "https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE",
+    dest: "tailwind/LICENSE.txt",
+    sha256: "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985",
   },
 ];
 
@@ -398,8 +432,10 @@ function toPosix(p) {
 
 async function writeManifest(entries) {
   entries.sort((a, b) => a.path.localeCompare(b.path));
+  // No timestamp field here on purpose: runCheck never reads one, and a
+  // volatile generatedAt would make every `npm run vendor` re-run produce a
+  // spurious diff even when nothing about the vendored content changed.
   const manifest = {
-    generatedAt: new Date().toISOString(),
     generatedBy: "scripts/vendor.mjs",
     entries,
   };
@@ -498,7 +534,7 @@ async function downloadAllMaterialxBlobs(blobs) {
   return { results, errors };
 }
 
-async function runMaterialx() {
+export async function runMaterialx() {
   log("");
   log(`--with-materialx: vendoring MaterialX repo content @ ${MTLX_TAG} into vendor/materialx/ ...`);
 
@@ -549,7 +585,7 @@ async function runMaterialx() {
   log(`vendor/materialx/manifest.json written: ${files.length} file(s), ${totalBytes} bytes total.`);
 }
 
-async function runCollect() {
+export async function runCollect() {
   await validateSources();
   await cleanVendorExceptMaterialx();
 
@@ -566,47 +602,6 @@ async function runCollect() {
 }
 
 // ---------------------------------------------------------------------------
-// --check: MaterialX tag agreement. MTLX_TAG above is duplicated as a
-// literal fallback in a handful of browser/extension files that can't share
-// this ESM module at runtime (plain <script> tags loaded before any bundler
-// or module graph exists, and a separate VS Code extension source tree).
-// This reads each file as text and asserts its own tag literal still
-// matches MTLX_TAG, so bumping the tag here can't silently leave one of
-// those copies behind. Purely local text reads — no network access.
-// ---------------------------------------------------------------------------
-const TAG_AGREEMENT_FILES = [
-  { path: "js/mtlx-assets.js", re: /var DEFAULT_TAG\s*=\s*'([^']+)'/ },
-  { path: "js/spec-parser.js", re: /const SPEC_TAG\s*=[\s\S]*?\|\|\s*'([^']+)'/ },
-  { path: "js/site-header.js", re: /var MTLX_TAG\s*=[\s\S]*?\|\|\s*'([^']+)'/ },
-  { path: "vscode_extension/src/specDocs.js", re: /const SPEC_TAG\s*=\s*'([^']+)'/ },
-  { path: "README.md", re: /Built on the MaterialX (v[\d.]+) WebAssembly/ },
-];
-
-/** Read each file in TAG_AGREEMENT_FILES, extract its tag literal via the file's regex, and
- * report any that disagree with MTLX_TAG. Returns an array of problem strings (empty = all agree). */
-async function checkTagAgreement() {
-  const problems = [];
-  for (const { path: relPath, re } of TAG_AGREEMENT_FILES) {
-    const absPath = path.join(REPO_ROOT, relPath);
-    if (!existsSync(absPath)) {
-      problems.push(`  - ${relPath}: file not found (expected to check its MaterialX tag literal)`);
-      continue;
-    }
-    const text = await readFile(absPath, "utf8");
-    const match = text.match(re);
-    if (!match) {
-      problems.push(`  - ${relPath}: could not find a tag literal matching the expected pattern (${re}) — update TAG_AGREEMENT_FILES in scripts/vendor.mjs if this file's shape changed`);
-      continue;
-    }
-    const foundTag = match[1];
-    if (foundTag !== MTLX_TAG) {
-      problems.push(`  - ${relPath}: tag "${foundTag}" != MTLX_TAG "${MTLX_TAG}" (scripts/vendor.mjs)`);
-    }
-  }
-  return problems;
-}
-
-// ---------------------------------------------------------------------------
 // --check: verify vendor/ matches the COPIES/DOWNLOADS spec and the hashes
 // recorded in vendor-manifest.json, WITHOUT writing or downloading anything.
 // Four classes of drift are detected:
@@ -618,10 +613,11 @@ async function checkTagAgreement() {
 //      `npm run vendor` wasn't re-run — the committed vendor/ is now stale).
 //   For DOWNLOADS, the manifest's own sha256 must equal the pinned constant
 //   in the DOWNLOADS table (guards against a hand-edited manifest).
-//   4. MaterialX tag agreement (checkTagAgreement above) — every duplicated
-//      tag literal across the repo still matches MTLX_TAG.
+//   4. MaterialX version stamp agreement (checkStamps, scripts/lib/version.mjs)
+//      — every literal copy of the MaterialX tag across the repo still
+//      matches js/gen/mtlx-version.json (== MTLX_TAG above).
 // ---------------------------------------------------------------------------
-async function runCheck() {
+export async function runCheck() {
   if (!existsSync(MANIFEST_PATH)) {
     fail(`error: ${path.relative(REPO_ROOT, MANIFEST_PATH)} not found. Run \`npm run vendor\` first.`);
   }
@@ -723,25 +719,43 @@ async function runCheck() {
     log(`OK — vendor/materialx/ matches its manifest (${materialxChecked} file(s)).`);
   }
 
-  const tagProblems = await checkTagAgreement();
-  if (tagProblems.length > 0) {
+  const stampProblems = await checkStamps(await readVersionMeta());
+  if (stampProblems.length > 0) {
     fail(
       [
-        `error: MaterialX tag literals are out of sync with MTLX_TAG ("${MTLX_TAG}") in scripts/vendor.mjs:`,
-        ...tagProblems,
+        `error: MaterialX version literals are out of sync with MTLX_TAG ("${MTLX_TAG}"):`,
+        ...stampProblems.map((p) => `  - ${p}`),
         "",
-        "Update the disagreeing file(s) to match, or update MTLX_TAG here if this is an intentional re-vend.",
+        "Run `node scripts/extract-mtlx-version.mjs` to re-stamp.",
       ].join("\n")
     );
   }
-  log(`OK — MaterialX tag agrees across ${TAG_AGREEMENT_FILES.length} file(s) (${MTLX_TAG}).`);
+  log(`OK — MaterialX version stamps agree (${MTLX_TAG}).`);
 }
 
-if (CHECK_MODE) {
-  await runCheck();
-} else {
-  await runCollect();
-  if (WITH_MATERIALX) {
-    await runMaterialx();
+// ---------------------------------------------------------------------------
+// CLI entry point. runCollect/runCheck/runMaterialx are also exported so a
+// future build orchestrator can import and call them directly instead of
+// shelling out — only run them automatically here when this file is the
+// actual process entry point (`node scripts/vendor.mjs ...`), not when
+// something else `import`s it.
+// ---------------------------------------------------------------------------
+function isEntryModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryModule()) {
+  if (CHECK_MODE) {
+    await runCheck();
+  } else {
+    await runCollect();
+    if (WITH_MATERIALX) {
+      await runMaterialx();
+    }
   }
 }

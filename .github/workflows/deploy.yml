@@ -1,0 +1,113 @@
+# -----------------------------------------------------------------------------
+# Build, verify & deploy
+# -----------------------------------------------------------------------------
+# This is the single gate between a commit on `main` and what's live on
+# GitHub Pages. It guarantees:
+#
+#   - A broken or stale build never deploys. `npm run build` must reproduce
+#     the committed tree byte-for-byte (checked via `git diff` / `git status`
+#     against the freshly rebuilt tree), and `npm run check` (every
+#     deterministic drift check) must pass — both gates run *before* the
+#     Pages artifact is staged or uploaded.
+#   - Pull requests only get verification. The `build-verify` job runs for
+#     both push and pull_request events, but the Pages-artifact staging/
+#     upload steps and the `deploy` job are restricted to pushes on `main` —
+#     a PR can never deploy.
+#
+# Tutorials subsite (mkdocs): the Python/mkdocs setup steps below are gated
+# on `tutorials-src/mkdocs.yml` existing. That file lives on another branch
+# today, so those steps are inert (skipped) on `main` right now. The moment
+# that branch merges and the file appears, the steps auto-activate — no
+# edits needed here.
+#
+# ONE-TIME SETUP REQUIRED: this repo currently serves Pages from a branch.
+# For the `deploy` job below to actually take effect, a human needs to flip
+# Settings -> Pages -> Source to "GitHub Actions".
+# -----------------------------------------------------------------------------
+
+name: Build, verify & deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up Python (tutorials subsite)
+        if: hashFiles('tutorials-src/mkdocs.yml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tutorials-src/requirements.txt
+
+      - name: Install tutorials dependencies (mkdocs-material)
+        if: hashFiles('tutorials-src/mkdocs.yml') != ''
+        run: python -m pip install -r tutorials-src/requirements.txt
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify committed artifacts match a clean rebuild
+        run: |
+          git diff --exit-code || { echo "::error::Committed artifacts are stale — run 'npm run build' locally and commit the result."; exit 1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::Build produced files not in the commit — run 'npm run build' and commit."; git status --porcelain; exit 1; }
+
+      - name: Check
+        run: npm run check
+
+      - name: Stage Pages artifact
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p "$RUNNER_TEMP/site"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='tutorials-src' \
+            --exclude='scripts' \
+            ./ "$RUNNER_TEMP/site"/
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build-verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: "${{ steps.deployment.outputs.page_url }}"
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

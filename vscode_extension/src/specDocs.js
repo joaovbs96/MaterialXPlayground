@@ -44,7 +44,12 @@ const https = require('https');
 // remote raw-content fetch below (RAW_BASE) — one tag constant, two
 // consumers.
 const REPO = 'AcademySoftwareFoundation/MaterialX';
-const SPEC_TAG = 'v1.39.5';
+// Read from the generated js/gen/mtlx-version.json (extracted from the
+// vendored WASM by scripts/extract-mtlx-version.mjs) instead of a hand-typed
+// literal — see scripts/lib/version.mjs. That file is committed to the repo
+// and the VSIX ships js/gen/ (not excluded by .vscodeignore), so this works
+// both from source and from a packaged extension.
+const SPEC_TAG = require(path.join(__dirname, '..', '..', 'js', 'gen', 'mtlx-version.json')).tag;
 const SPEC_DIR = 'documents/Specification/';
 const BLOB_BASE = 'https://github.com/' + REPO + '/blob/' + SPEC_TAG + '/' + SPEC_DIR;
 
