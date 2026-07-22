@@ -9,22 +9,22 @@ This section is prose-and-screenshots documentation. For the interactive
 app itself — the Node Library, the Material Viewer, and the Node Graph
 Editor — use the tabs at the top of the page.
 
-!!! tip "Jump straight in"
+!!! tip "Jump Straight In"
     Prefer to learn by doing? Open the
     [Node Graph Editor](../#!graph){ target=_blank } or the
     [Material Viewer](../#!viewer){ target=_blank } directly and come back
     here whenever you get stuck.
 
-## What you'll find here
+## What You'll Find Here
 
-- **[Getting started](getting-started.md)** — a tour of the three views
+- **[Tour the Playground](getting-started.md)** — a tour of the three views
   (Node Library & Documentation, Material Viewer, Node Graph Editor) and
   how they fit together, plus a minimal `.mtlx` file to try in the viewer.
 - **[Your first node graph](your-first-node-graph.md)** — a step-by-step
   walkthrough that builds a simple red material from scratch in the graph
   editor.
 
-## How the playground is organized
+## How the Playground Is Organized
 
 The playground has three main views, all reachable from the header:
 

@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="index.html">
+        <link rel="prev" href="where-to-start.html">
       
       
-        <link rel="next" href="your-first-node-graph.html">
+        <link rel="next" href="faq.html">
       
       
       <link rel="icon" href="../favicon.ico">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Getting started - MaterialX Playground — Tutorials</title>
+        <title>Tour the Playground - MaterialX Playground — Tutorials</title>
       
     
     
@@ -58,12 +58,25 @@
     window.__MTLX_APP_ROOT__ = "./../";   /* per-page path back to the SPA root */
   </script>
   <!-- Shared design tokens + the shared header/footer's own self-contained
-       stylesheet (scoped reset included) — no Tailwind involved. Tokens
-       first: site-header.css's var(--site-*) references resolve fine
-       either order (custom properties resolve at computed-value time),
-       but loading tokens first matches source order in the main SPA. -->
+       stylesheet (scoped reset included) — no Tailwind involved. Tokens first. -->
   <link rel="stylesheet" href="assets/vendored/js/site-tokens.css">
   <link rel="stylesheet" href="assets/vendored/js/site-header.css">
+  <!-- Full tutorial nav (sections -> pages, with per-page active flags) as JSON,
+       consumed by assets/mtlx-nav-mobile.js to build the multi-level collapsible
+       mobile menu. Emitted here rather than DOM-scraped so it is complete
+       regardless of the sidebar's lifted/collapsed CSS state. -->
+  <script>
+  window.__MTLX_TUT_NAV__ = [
+    {"title": "Getting Started", "url": null, "active": true, "children": [{"title": "Home", "url": "index.html", "active": false}, {"title": "What Is MaterialX?", "url": "what-is-materialx.html", "active": false}, {"title": "Where Do I Start?", "url": "where-to-start.html", "active": false}, {"title": "Tour the Playground", "url": "getting-started.html", "active": true}, {"title": "FAQ", "url": "faq.html", "active": false}]},
+    {"title": "Foundations", "url": null, "active": false, "children": [{"title": "Your First Node Graph", "url": "your-first-node-graph.html", "active": false}, {"title": "Anatomy of a .mtlx File", "url": "foundations/anatomy-of-mtlx.html", "active": false}, {"title": "The Standard Node Library", "url": "foundations/node-library-tour.html", "active": false}, {"title": "standard_surface vs OpenPBR", "url": "foundations/standard-surface-vs-openpbr.html", "active": false}, {"title": "Color Management", "url": "foundations/color-management.html", "active": false}, {"title": "Glossary \u0026 Cheat-Sheet", "url": "foundations/glossary.html", "active": false}]},
+    {"title": "For Artists", "url": null, "active": false, "children": [{"title": "For Artists", "url": "personas/for-artists.html", "active": false}, {"title": "Previewing Materials", "url": "personas/previewing.html", "active": false}, {"title": "Editing Materials", "url": "personas/editing.html", "active": false}]},
+    {"title": "For Developers", "url": null, "active": false, "children": [{"title": "Language Bindings", "url": "personas/bindings.html", "active": false}, {"title": "Authoring With the API", "url": "personas/programmer-authoring.html", "active": false}, {"title": "Rendering .mtlx Files", "url": "personas/programmer-rendering.html", "active": false}, {"title": "Building From Source", "url": "advanced/building-from-source.html", "active": false}]},
+    {"title": "In Your DCC", "url": null, "active": false, "children": [{"title": "Houdini", "url": "dcc/houdini.html", "active": false}, {"title": "Maya", "url": "dcc/maya.html", "active": false}, {"title": "3ds Max", "url": "dcc/3ds-max.html", "active": false}, {"title": "Blender", "url": "dcc/blender.html", "active": false}, {"title": "Substance 3D", "url": "dcc/substance-3d.html", "active": false}, {"title": "Omniverse", "url": "dcc/omniverse.html", "active": false}, {"title": "Katana", "url": "dcc/katana.html", "active": false}, {"title": "Nuke", "url": "dcc/nuke.html", "active": false}, {"title": "Unreal Engine", "url": "dcc/unreal.html", "active": false}]},
+    {"title": "Going Further", "url": null, "active": false, "children": [{"title": "Texturing Workflows", "url": "intermediate/texturing-workflows.html", "active": false}, {"title": "Procedural Materials", "url": "intermediate/procedural-materials.html", "active": false}, {"title": "Transparency, Glass \u0026 Refraction", "url": "intermediate/transparency-and-glass.html", "active": false}, {"title": "Displacement", "url": "intermediate/displacement.html", "active": false}, {"title": "Looks, Variants \u0026 Assignment", "url": "intermediate/looks-and-variants.html", "active": false}, {"title": "Subgraphs \u0026 Custom Nodedefs", "url": "intermediate/subgraphs-and-nodedefs.html", "active": false}, {"title": "Debugging Materials", "url": "intermediate/debugging-materials.html", "active": false}, {"title": "Versioning \u0026 Upgrading", "url": "intermediate/versioning-and-upgrading.html", "active": false}]},
+    {"title": "Advanced", "url": null, "active": false, "children": [{"title": "ShaderGen Deep Dive", "url": "advanced/shadergen-deep-dive.html", "active": false}, {"title": "Writing a Custom Node", "url": "advanced/custom-nodes.html", "active": false}, {"title": "OpenPBR Deep Dive", "url": "advanced/openpbr-deep-dive.html", "active": false}, {"title": "MaterialX and USD Interop", "url": "advanced/materialx-usd-interop.html", "active": false}, {"title": "Pipelines at Scale", "url": "advanced/pipeline-at-scale.html", "active": false}]},
+    {"title": "Recipes", "url": null, "active": false, "children": [{"title": "Overview", "url": "recipes/index.html", "active": false}, {"title": "Car-Paint Material", "url": "recipes/car-paint.html", "active": false}, {"title": "Convert a Texture Set", "url": "recipes/convert-texture-set.html", "active": false}, {"title": "Houdini to Browser", "url": "recipes/houdini-to-browser.html", "active": false}]}
+  ];
+  </script>
 
   </head>
   
@@ -82,7 +95,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#getting-started" class="md-skip">
+        <a href="#tour-the-playground" class="md-skip">
           Skip to content
         </a>
       
@@ -92,8 +105,7 @@
     </div>
     
     
-  <!-- Styled entirely by the vendored plain CSS above (js/site-tokens.css +
-       js/site-header.css) — no Tailwind on tutorials pages at all. -->
+  <!-- Styled entirely by the vendored plain CSS above — no Tailwind here. -->
   <div id="site-header"></div>
   <script src="assets/vendored/js/site-header.js"></script>
 
@@ -101,6 +113,177 @@
       
       
         
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="index.html" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="your-first-node-graph.html" class="md-tabs__link">
+          
+  
+  
+  Foundations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="personas/for-artists.html" class="md-tabs__link">
+          
+  
+  
+  For Artists
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="personas/bindings.html" class="md-tabs__link">
+          
+  
+  
+  For Developers
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="dcc/houdini.html" class="md-tabs__link">
+          
+  
+  
+  In Your DCC
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="intermediate/texturing-workflows.html" class="md-tabs__link">
+          
+  
+  
+  Going Further
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="advanced/shadergen-deep-dive.html" class="md-tabs__link">
+          
+  
+  
+  Advanced
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="recipes/index.html" class="md-tabs__link">
+          
+  
+  
+  Recipes
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
           
         
       
@@ -115,10 +298,12 @@
                     
 
 
+  
 
-<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="index.html" title="MaterialX Playground — Tutorials" class="md-nav__button md-logo" aria-label="MaterialX Playground — Tutorials" data-md-component="logo">
+    <a href="." title="MaterialX Playground — Tutorials" class="md-nav__button md-logo" aria-label="MaterialX Playground — Tutorials" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -131,6 +316,54 @@
     
       
       
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting Started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
   
   
   
@@ -150,9 +383,56 @@
     </li>
   
 
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="what-is-materialx.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    What Is MaterialX?
     
-      
-      
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="where-to-start.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Where Do I Start?
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
   
   
     
@@ -172,7 +452,7 @@
   
   
   <span class="md-ellipsis">
-    Getting started
+    Tour the Playground
     
   </span>
   
@@ -185,7 +465,7 @@
   
   
   <span class="md-ellipsis">
-    Getting started
+    Tour the Playground
     
   </span>
   
@@ -210,11 +490,11 @@
         <li class="md-nav__item">
   <a href="#the-three-views" class="md-nav__link">
     <span class="md-ellipsis">
-      The three views
+      The Three Views
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The three views">
+    <nav class="md-nav" aria-label="The Three Views">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -252,17 +532,17 @@
         <li class="md-nav__item">
   <a href="#try-it-a-minimal-material" class="md-nav__link">
     <span class="md-ellipsis">
-      Try it: a minimal material
+      Try It: A Minimal Material
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Try it: a minimal material">
+    <nav class="md-nav" aria-label="Try It: A Minimal Material">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#or-build-it-in-code" class="md-nav__link">
     <span class="md-ellipsis">
-      Or build it in code
+      Or Build It in Code
     </span>
   </a>
   
@@ -280,9 +560,83 @@
     </li>
   
 
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="faq.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    FAQ
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
     
       
       
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Foundations
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Foundations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
   
   
   
@@ -293,12 +647,1194 @@
   
   
   <span class="md-ellipsis">
-    Your first node graph
+    Your First Node Graph
     
   </span>
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="foundations/anatomy-of-mtlx.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anatomy of a .mtlx File
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="foundations/node-library-tour.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    The Standard Node Library
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="foundations/standard-surface-vs-openpbr.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    standard_surface vs OpenPBR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="foundations/color-management.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Color Management
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="foundations/glossary.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Glossary & Cheat-Sheet
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    For Artists
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            For Artists
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="personas/for-artists.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    For Artists
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="personas/previewing.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Previewing Materials
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="personas/editing.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Editing Materials
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    For Developers
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            For Developers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="personas/bindings.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Language Bindings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="personas/programmer-authoring.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Authoring With the API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="personas/programmer-rendering.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Rendering .mtlx Files
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="advanced/building-from-source.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building From Source
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    In Your DCC
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            In Your DCC
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/houdini.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Houdini
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/maya.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Maya
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/3ds-max.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    3ds Max
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/blender.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Blender
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/substance-3d.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Substance 3D
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/omniverse.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Omniverse
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/katana.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Katana
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/nuke.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Nuke
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="dcc/unreal.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Unreal Engine
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Going Further
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Going Further
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/texturing-workflows.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Texturing Workflows
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/procedural-materials.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Procedural Materials
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/transparency-and-glass.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Transparency, Glass & Refraction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/displacement.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Displacement
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/looks-and-variants.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Looks, Variants & Assignment
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/subgraphs-and-nodedefs.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Subgraphs & Custom Nodedefs
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/debugging-materials.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Debugging Materials
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="intermediate/versioning-and-upgrading.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Versioning & Upgrading
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Advanced
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Advanced
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="advanced/shadergen-deep-dive.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ShaderGen Deep Dive
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="advanced/custom-nodes.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Writing a Custom Node
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="advanced/openpbr-deep-dive.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenPBR Deep Dive
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="advanced/materialx-usd-interop.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MaterialX and USD Interop
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="advanced/pipeline-at-scale.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pipelines at Scale
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Recipes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            Recipes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="recipes/index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="recipes/car-paint.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Car-Paint Material
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="recipes/convert-texture-set.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Convert a Texture Set
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="recipes/houdini-to-browser.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Houdini to Browser
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -332,11 +1868,11 @@
         <li class="md-nav__item">
   <a href="#the-three-views" class="md-nav__link">
     <span class="md-ellipsis">
-      The three views
+      The Three Views
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The three views">
+    <nav class="md-nav" aria-label="The Three Views">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -374,17 +1910,17 @@
         <li class="md-nav__item">
   <a href="#try-it-a-minimal-material" class="md-nav__link">
     <span class="md-ellipsis">
-      Try it: a minimal material
+      Try It: A Minimal Material
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Try it: a minimal material">
+    <nav class="md-nav" aria-label="Try It: A Minimal Material">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#or-build-it-in-code" class="md-nav__link">
     <span class="md-ellipsis">
-      Or build it in code
+      Or Build It in Code
     </span>
   </a>
   
@@ -407,15 +1943,26 @@
             <div class="md-content" data-md-component="content">
               <article class="md-content__inner md-typeset">
                 
+  
+  
+  <nav class="mtlx-breadcrumbs" aria-label="Breadcrumb">
+    
+    
+    <a class="mtlx-crumb" href="index.html">Getting Started</a>
+    <span class="mtlx-crumb-sep">/</span>
+    <span class="mtlx-crumb mtlx-crumb--current">Tour the Playground</span>
+  </nav>
+  
+  
                   
 
 
 
-<h1 id="getting-started">Getting started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
+<h1 id="tour-the-playground">Tour the Playground<a class="headerlink" href="#tour-the-playground" title="Permanent link">&para;</a></h1>
 <p>The playground has three main views, all reachable from the tabs in the
 header. This page is a quick tour of each, plus a minimal <code>.mtlx</code> file you
 can paste straight into the viewer to try things out.</p>
-<h2 id="the-three-views">The three views<a class="headerlink" href="#the-three-views" title="Permanent link">&para;</a></h2>
+<h2 id="the-three-views">The Three Views<a class="headerlink" href="#the-three-views" title="Permanent link">&para;</a></h2>
 <h3 id="node-library-documentation">Node Library &amp; Documentation<a class="headerlink" href="#node-library-documentation" title="Permanent link">&para;</a></h3>
 <p>Browse every standard MaterialX node: per-signature docs, port tables,
 live 3D previews, an implementation-target matrix, and shareable
@@ -435,7 +1982,7 @@ together, nest nodegraphs, and get a live 3D preview as you go, alongside
 validation and XML view/export. This is where
 <a href="your-first-node-graph.html">Your first node graph</a> picks up.</p>
 <p><a href="../#!graph" target="_blank">Open the Node Graph Editor →</a></p>
-<h2 id="try-it-a-minimal-material">Try it: a minimal material<a class="headerlink" href="#try-it-a-minimal-material" title="Permanent link">&para;</a></h2>
+<h2 id="try-it-a-minimal-material">Try It: A Minimal Material<a class="headerlink" href="#try-it-a-minimal-material" title="Permanent link">&para;</a></h2>
 <p>Copy the document below and paste it into the Material Viewer (or save it
 as a <code>.mtlx</code> file and load it) to see a simple red <code>standard_surface</code>
 material:</p>
@@ -451,7 +1998,7 @@ material:</p>
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="nt">&lt;/materialx&gt;</span>
 </code></pre></div>
 <details class="details">
-<summary>What's happening in this document?</summary>
+<summary>What's Happening in This Document?</summary>
 <ul>
 <li><code>standard_surface</code> is MaterialX's standard physically-based shader
   node — <code>base</code>/<code>base_color</code> control the diffuse response.</li>
@@ -462,7 +2009,7 @@ material:</p>
   <a href="../#/pbrlib/shader/standard_surface" target="_blank"><code>#/pbrlib/shader/standard_surface</code></a>.</li>
 </ul>
 </details>
-<h3 id="or-build-it-in-code">Or build it in code<a class="headerlink" href="#or-build-it-in-code" title="Permanent link">&para;</a></h3>
+<h3 id="or-build-it-in-code">Or Build It in Code<a class="headerlink" href="#or-build-it-in-code" title="Permanent link">&para;</a></h3>
 <p>The same document can be constructed with any MaterialX language binding:</p>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">C++</label><label for="__tabbed_1_2">Python</label><label for="__tabbed_1_3">JavaScript</label></div>
 <div class="tabbed-content">
@@ -539,6 +2086,14 @@ kind of material step by step, from scratch, in the graph editor.</p>
 
 
                 
+  
+  
+  <nav class="mtlx-pagenav" aria-label="Topic navigation">
+    <a class="mtlx-pagenav__link mtlx-pagenav__prev" href="where-to-start.html"><span class="mtlx-pagenav__dir">&#8592; Previous topic</span><span class="mtlx-pagenav__title">Where Do I Start?</span></a>
+    <a class="mtlx-pagenav__link mtlx-pagenav__next" href="faq.html"><span class="mtlx-pagenav__dir">Next topic &#8594;</span><span class="mtlx-pagenav__title">FAQ</span></a>
+  </nav>
+  
+
               </article>
             </div>
           
@@ -547,12 +2102,6 @@ kind of material step by step, from scratch, in the graph editor.</p>
 
 <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
         </div>
-        
-          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
-  Back to top
-</button>
         
       </main>
       
@@ -566,12 +2115,16 @@ kind of material step by step, from scratch, in the graph editor.</p>
     
     
       
-      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.sections", "navigation.top", "toc.follow", "content.code.copy", "content.tabs.link", "search.suggest", "search.highlight"], "search": "assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.tabs", "navigation.sections", "toc.follow", "content.code.copy", "content.tabs.link", "search.suggest", "search.highlight"], "search": "assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="assets/javascripts/bundle.f55a23d4.min.js"></script>
       
         <script src="assets/mtlx-run.js"></script>
+      
+        <script src="assets/mtlx-nav-mobile.js"></script>
+      
+        <script src="assets/mtlx-backtotop.js"></script>
       
     
   </body>
