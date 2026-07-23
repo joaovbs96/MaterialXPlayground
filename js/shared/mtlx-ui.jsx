@@ -1183,6 +1183,8 @@ const ViewportControls = ({
     showGeomSelect = true,
     rotating, onToggleRotating,
     showRotate = true,
+    showLabels = false,
+    labelsClass = 'flex-wrap justify-end max-w-[calc(100%-1rem)]',
     onCameraReset,
     envBg, onToggleEnvBg, envAvail = true,
     showBackgroundToggle = true,
@@ -1268,9 +1270,17 @@ const ViewportControls = ({
         // touches rotation/exposure/override, per spec).
     };
 
+    // When labels are shown the strip is much wider, so allow it to wrap to a
+    // second line (right-aligned) and cap its width to the viewport. Other
+    // consumers (graph/node previews) don't pass showLabels, so they keep the
+    // caller's containerClassName unchanged.
+    const stripClassName = showLabels
+        ? `${containerClassName} ${labelsClass}`
+        : containerClassName;
+
     return (
     <React.Fragment>
-    <div ref={panelEdgeRef} className={containerClassName}>
+    <div ref={panelEdgeRef} className={stripClassName}>
         {children}
         {showGeomSelect && (
             <select
@@ -1289,6 +1299,7 @@ const ViewportControls = ({
                 className={buttonClassName(rotating)}
             >
                 <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
+                {showLabels && <span className="ml-1.5 whitespace-nowrap">Rotate</span>}
             </button>
         )}
         {onCameraReset && (
@@ -1298,6 +1309,7 @@ const ViewportControls = ({
                 className={buttonClassName(false)}
             >
                 <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
+                {showLabels && <span className="ml-1.5 whitespace-nowrap">Reset Camera</span>}
             </button>
         )}
         {envAvail && (
@@ -1309,6 +1321,7 @@ const ViewportControls = ({
                     className={buttonClassName(envBg || envOpen)}
                 >
                     <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                    {showLabels && <span className="ml-1.5 whitespace-nowrap">Environment</span>}
                 </button>
                 {viewRef && (
                     <EnvDialog
@@ -1347,8 +1360,9 @@ const ViewportControls = ({
             className={buttonClassName(false)}
         >
             <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+            {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
         </button>
-        {trailingChildren}
+        {typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren}
         <button
             ref={settingsBtnRef}
             onClick={() => setSettingsOpen((o) => !o)}
@@ -1356,6 +1370,7 @@ const ViewportControls = ({
             className={buttonClassName(settingsOpen)}
         >
             <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
+            {showLabels && <span className="ml-1.5 whitespace-nowrap">Settings</span>}
         </button>
         <button
             onClick={onToggleFullscreen}
@@ -1363,6 +1378,7 @@ const ViewportControls = ({
             className={buttonClassName(false)}
         >
             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
+            {showLabels && <span className="ml-1.5 whitespace-nowrap">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>}
         </button>
     </div>
     {/* Anchored settings popover (portaled to the fullscreen root, like

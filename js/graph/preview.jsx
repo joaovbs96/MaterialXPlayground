@@ -820,12 +820,17 @@
                         isFullscreen={isFullscreen}
                         onToggleFullscreen={toggleFullscreenView}
                         trailingChildren={trailingChildren}
-                        // This panel is docked at the screen's right edge, so open
-                        // the env dialog toward the graph canvas (left) instead of
-                        // the default below/right placement, which would cover the
-                        // 3D preview itself.
-                        envDialogPlacement="left"
+                        // Docked: open the env dialog toward the graph canvas (left)
+                        // so it doesn't cover the 3D preview. Fullscreen: the panel
+                        // fills the screen, so open it in the default spot directly
+                        // under the Environment button instead.
+                        envDialogPlacement={isFullscreen ? undefined : "left"}
                         containerClassName="flex items-center justify-center gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
+                        // Show button text labels only in fullscreen (icon-only when
+                        // docked). labelsClass keeps the strip centered (its own
+                        // justify-center) and just allows wrapping — no right-align.
+                        showLabels={isFullscreen}
+                        labelsClass="flex-wrap"
                     />
                     <div
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
@@ -862,7 +867,7 @@
                         {/* Rendered last so it stacks above the loading/notice/
                             error overlays regardless of z-index ties (item 10's
                             pin toggle, passed in by the caller). */}
-                        {overlay}
+                        {!isFullscreen && overlay}
                     </div>
                 </div>
             );
