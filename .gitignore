@@ -9,4 +9,6 @@ vendor/materialx/
 tutorials-src/docs/assets/vendored/
 # English-only search: Material's lunr language packs are pruned post-build (scripts/build-tutorials.mjs); backstop so they never get re-tracked.
 tutorials/assets/javascripts/lunr/
+# mkdocs gzips the sitemap with the build time in the gzip header (nondeterministic bytes); pruned post-build (scripts/build-tutorials.mjs); backstop so it never gets re-tracked.
+tutorials/sitemap.xml.gz
 tutorial-ideas.md

@@ -47,3 +47,10 @@ vendor/** -text
 # LF so a Windows checkout's autocrlf setting can never make that comparison
 # (or a plain git diff) spuriously fail.
 js/gen/** text eol=lf
+
+# tutorials/ is committed mkdocs build output, byte-compared against a fresh
+# rebuild by CI. mkdocs writes LF on every platform; force LF here too so a
+# Windows checkout's autocrlf=true can't check these files out as CRLF and
+# then flag every page as phantom-modified after a local rebuild. text=auto
+# keeps git's binary detection for images/fonts under tutorials/assets/.
+tutorials/** text=auto eol=lf

@@ -45,6 +45,8 @@ const VENDORED_ROOT = path.join(TUTORIALS_SRC, "docs", "assets", "vendored");
 // Material's built-in search copies its full lunr language-pack tree into the
 // output on every build; this site's search is English-only, so it's unused.
 const LUNR_PACKS_DIR = path.join(REPO_ROOT, "tutorials", "assets", "javascripts", "lunr");
+// mkdocs also emits a gzipped copy of the sitemap alongside the plain one.
+const SITEMAP_GZ_PATH = path.join(REPO_ROOT, "tutorials", "sitemap.xml.gz");
 
 const CHECK_MODE = process.argv.includes("--check");
 
@@ -148,12 +150,25 @@ async function prunePacks() {
   log(`pruned ${path.relative(REPO_ROOT, LUNR_PACKS_DIR)} (English-only search)`);
 }
 
+// mkdocs gzips the sitemap and writes it alongside the plain sitemap.xml, but
+// the gzip header embeds the build time, so the compressed bytes differ on
+// every rebuild even when the underlying sitemap content is unchanged. That
+// nondeterminism would permanently trip CI's byte-identical gate against the
+// committed /tutorials/ tree. The plain sitemap.xml has no such header and
+// stays deterministic, so it remains; prune the .gz post-build (also
+// gitignored as a backstop) since crawlers don't need it.
+async function pruneSitemapGz() {
+  await rm(SITEMAP_GZ_PATH, { force: true });
+  log(`pruned ${path.relative(REPO_ROOT, SITEMAP_GZ_PATH)} (nondeterministic gzip header)`);
+}
+
 if (CHECK_MODE) {
   await runCheck();
 } else {
   await copyAll();
   runMkdocsBuild();
   await prunePacks();
+  await pruneSitemapGz();
   log("");
   log("Tutorials subsite built to /tutorials/. Regenerate any time with `npm run build:tutorials`.");
 }
