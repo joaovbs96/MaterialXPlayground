@@ -1,2 +1,5 @@
-# pin to the version actually installed
+# pin to the versions actually installed (mkdocs-material resolves to this
+# mkdocs release today; pin both so CI can never drift to a different mkdocs
+# than the one that produced the committed HTML)
 mkdocs-material==9.6.20
+mkdocs==1.6.1
