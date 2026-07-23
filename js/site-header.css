@@ -111,7 +111,7 @@
     flex-shrink: 0;
     color: var(--site-blue-400);
 }
-.mtlx-brand:hover {
+a.mtlx-brand:hover {
     color: var(--site-blue-300);
 }
 .mtlx-brand-icon {

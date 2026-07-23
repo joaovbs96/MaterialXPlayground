@@ -244,8 +244,8 @@
     var brandHref = IS_TUTORIALS ? (APP_ROOT + '#!home') : (IS_SHELL ? '#!home' : 'index.html');
 
     // VS Code nav filtering: the webview always drops Home (no landing
-    // page) and the Learn/Integrate dropdowns (browser-only surfaces). The
-    // custom editor also drops Docs; the standalone docs panel keeps only Docs.
+    // page) and the Learn/Integrate dropdowns (browser-only, including
+    // Tutorials). The custom editor also drops Docs; the docs panel shows only Docs.
     var navItems = window.__MTLX_VSCODE__
         ? NAV.filter(function (t) {
             if (t.group || t.id === 'home') return false;

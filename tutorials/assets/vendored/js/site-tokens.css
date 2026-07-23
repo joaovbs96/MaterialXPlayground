@@ -29,6 +29,9 @@
   --site-blue-500: #3b82f6;
   --site-blue-400: #60a5fa;
   --site-blue-300: #93c5fd;
+  --site-amber-300: #fcd34d;
+  --site-amber-200: #fde68a;
+  --site-amber-100: #fef3c7;
   --site-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   --site-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --site-header-height: 56px;
