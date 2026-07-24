@@ -1,0 +1,36 @@
+/* site-tokens.css — shared design tokens (Tailwind's default palette
+   values the site actually uses), exposed as CSS custom properties on
+   :root. Single source of truth consumed by:
+     - js/site-header.css (the shared header/footer, injected by
+       js/site-header.js on every surface: the SPA, the tutorials
+       subsite, and the VS Code webview)
+     - tutorials-src/docs/assets/extra.css (recolors mkdocs-material to
+       match)
+   Vendored into the tutorials build by scripts/build-tutorials.mjs,
+   which copies this file (byte-for-byte, same as site-header.js/.css)
+   into tutorials-src/docs/assets/vendored/ so the subsite never reaches
+   back out of its own docs_dir at build time.
+
+   Values below are plain hex/keyword literals, not computed from
+   anything else — keep them in lockstep with Tailwind's default palette
+   (the site's only source for these colors) by hand. */
+
+:root {
+  --site-gray-900: #111827;
+  --site-gray-800: #1f2937;
+  --site-gray-700: #374151;
+  --site-gray-600: #4b5563;
+  --site-gray-500: #6b7280;
+  --site-gray-400: #9ca3af;
+  --site-gray-300: #d1d5db;
+  --site-gray-200: #e5e7eb;
+  --site-gray-100: #f3f4f6;
+  --site-blue-600: #2563eb;
+  --site-blue-500: #3b82f6;
+  --site-blue-400: #60a5fa;
+  --site-blue-300: #93c5fd;
+  --site-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --site-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --site-header-height: 56px;
+  --site-max-width: 1600px;
+}

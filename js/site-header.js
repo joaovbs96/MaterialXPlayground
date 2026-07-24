@@ -102,63 +102,72 @@
     // since IS_SHELL is always true here — see IS_SHELL's own comment.)
     var activeId = shellActiveId(window.location.hash || '');
 
-    var tabBase = 'flex items-center px-3 sm:px-4 border-b-2 transition-colors text-sm font-medium whitespace-nowrap';
-    var tabOn = ' border-blue-500 text-blue-300';
-    var tabOff = ' border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600';
-
     // Inside the VS Code webview there's no landing page to navigate to —
     // the editor is bound to a single opened .mtlx file — so drop the Home
     // tab from both the desktop and mobile nav copies below. No-op (same
     // NAV array) in the plain browser.
     //
-    // Additionally, inside the STANDALONE docs panel specifically (window.
-    // __MTLX_DOCS_ONLY__, set by vscode_extension/media/bootstrap.js from
-    // webview.html's data-docs-only attribute — see editorProvider.js's
-    // buildHtml) also drop the Viewer and Graph tabs, keeping only Docs:
-    // that panel isn't backed by a .mtlx document at all (it's the
-    // document-less "MaterialX: Open Node Documentation" command), so the
-    // file-bound Viewer/Graph views have nothing to show there. The
-    // file-backed MaterialX Playground custom editor never sets
-    // __MTLX_DOCS_ONLY__, so it keeps every tab exactly as before.
+    // Inside the file-backed MaterialX Playground custom editor specifically
+    // (__MTLX_VSCODE__ set, __MTLX_DOCS_ONLY__ falsy) also drop the Docs tab:
+    // the Node Library there is just another documentation surface for the
+    // same content already reachable through the in-app docs links/dialogs,
+    // and duplicating a whole nav tab for it wastes space in the editor's
+    // narrow header. That leaves Viewer and Graph as the only tabs shown.
+    //
+    // Inside the STANDALONE docs panel instead (window.__MTLX_DOCS_ONLY__,
+    // set by vscode_extension/media/bootstrap.js from webview.html's
+    // data-docs-only attribute — see editorProvider.js's buildHtml) drop
+    // Viewer and Graph as well, keeping only Docs: that panel isn't backed
+    // by a .mtlx document at all (it's the document-less "MaterialX: Open
+    // Node Documentation" command), so the file-bound Viewer/Graph views
+    // have nothing to show there.
     var navItems = window.__MTLX_VSCODE__
         ? NAV.filter(function (t) {
             if (t.id === 'home') return false;
-            if (window.__MTLX_DOCS_ONLY__ && (t.id === 'viewer' || t.id === 'graph')) return false;
-            return true;
+            if (window.__MTLX_DOCS_ONLY__) {
+                return t.id === 'docs';
+            }
+            return t.id !== 'docs';
         })
         : NAV;
 
+    // Active/inactive styling now lives entirely in js/site-header.css
+    // (.mtlx-tab / .mtlx-tab-mobile, active state = the `is-active`
+    // modifier class) — this script only ever decides WHETHER a tab is
+    // active, never how that looks.
     var tabs = navItems.map(function (item) {
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
-            ' class="' + tabBase + (active ? tabOn : tabOff) + '">' +
+            ' class="mtlx-tab' + (active ? ' is-active' : '') + '">' +
             item.label + '</a>';
     }).join('');
 
     // Mobile dropdown panel's copies of the same nav links — stacked,
     // full-width tap targets, same active styling logic (border-left
-    // instead of border-bottom). Share `data-nav` with the desktop tabs so
-    // the hashchange re-styling below updates both copies at once.
-    var mobileTabBase = 'block px-4 py-3 border-l-4 transition-colors text-sm font-medium';
-    var mobileTabOn = ' border-blue-500 text-blue-300 bg-gray-800/60';
-    var mobileTabOff = ' border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/40';
-
+    // instead of border-bottom, see .mtlx-tab-mobile in site-header.css).
+    // Share `data-nav` with the desktop tabs so the hashchange re-styling
+    // below updates both copies at once.
     var mobileTabs = navItems.map(function (item) {
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
-            ' class="' + mobileTabBase + (active ? mobileTabOn : mobileTabOff) + '">' +
+            ' class="mtlx-tab-mobile' + (active ? ' is-active' : '') + '">' +
             item.label + '</a>';
     }).join('');
 
+    // Markup below is styled entirely by js/site-header.css (classes
+    // prefixed `mtlx-`) — no Tailwind utility classes, so it renders
+    // identically whether or not Tailwind Play happens to be loaded on
+    // the page. IDs, data attributes and aria attributes are unchanged
+    // from before this file's Tailwind -> plain-CSS refactor.
     var html =
-        '<header class="sticky top-0 z-40 border-b border-gray-800 bg-gray-900/95 backdrop-blur">' +
-            '<div id="mtlx-header-bar" class="max-w-[1600px] mx-auto px-3 sm:px-6 h-14 flex items-stretch gap-2 sm:gap-5">' +
+        '<header class="mtlx-header">' +
+            '<div id="mtlx-header-bar" class="mtlx-header-bar">' +
 
                 // Brand: logo mark + site title (links home). Inside the
                 // shell "home" means the docs view, not a page navigation.
@@ -167,52 +176,54 @@
                 // instead of an <a> — same classes, no navigation affordance.
                 '<' + (window.__MTLX_VSCODE__ ? 'span' : 'a') +
                     (window.__MTLX_VSCODE__ ? '' : ' href="' + (IS_SHELL ? '#!home' : 'index.html') + '"') +
-                    ' class="flex items-center gap-2 shrink-0 group" title="' + SITE_TITLE + '">' +
-                    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="icon icon-tabler icons-tabler-filled icon-tabler-inner-shadow-bottom-right w-6 h-6 text-blue-400 group-hover:text-blue-300 transition-colors">' +
+                    ' class="mtlx-brand" title="' + SITE_TITLE + '">' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="mtlx-brand-icon">' +
                         LOGO_PATHS +
                     '</svg>' +
-                    '<span class="font-bold text-blue-400 group-hover:text-blue-300 transition-colors whitespace-nowrap">' + SITE_TITLE + '</span>' +
+                    '<span class="mtlx-brand-title">' + SITE_TITLE + '</span>' +
                 '</' + (window.__MTLX_VSCODE__ ? 'span' : 'a') + '>' +
 
                 // Page tabs (desktop only \u2014 the long labels don't fit
                 // alongside the right-side links on narrow screens; the
                 // hamburger + mobile panel below covers mobile).
-                '<nav id="mtlx-nav-desktop" class="hidden md:flex items-stretch" aria-label="Site">' + tabs + '</nav>' +
+                '<nav id="mtlx-nav-desktop" class="mtlx-nav-desktop" aria-label="Site">' + tabs + '</nav>' +
 
                 // Right: MaterialX version badge (filled by the engine when the
                 // WASM loads), source, issues. Desktop only, see above.
-                // whitespace-nowrap on the container AND each child: without
-                // it, under width pressure the text wraps INSIDE the flex
-                // items (bar grows taller, not wider) instead of the items
-                // overflowing horizontally \u2014 and measure() below only checks
-                // scrollWidth > clientWidth, which wrapped-taller text never
-                // triggers. Single-line rigidity makes overflow horizontal,
-                // which is what measure() detects.
-                '<div id="mtlx-nav-right" class="ml-auto hidden md:flex items-center gap-1.5 sm:gap-2 whitespace-nowrap">' +
+                // CSS white-space:nowrap on the container AND each child
+                // (site-header.css): without it, under width pressure the
+                // text wraps INSIDE the flex items (bar grows taller, not
+                // wider) instead of the items overflowing horizontally \u2014
+                // and measure() below only checks scrollWidth > clientWidth,
+                // which wrapped-taller text never triggers. Single-line
+                // rigidity makes overflow horizontal, which is what
+                // measure() detects.
+                '<div id="mtlx-nav-right" class="mtlx-nav-right">' +
                     '<a id="mtlx-header-version" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
                         ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
-                        ' class="hidden sm:inline-block text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700 transition-colors whitespace-nowrap">' +
+                        ' class="mtlx-badge">' +
                         'MaterialX <span data-role="ver">\u2026</span>' +
                     '</a>' +
                     '<a href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer" title="View the source code on GitHub"' +
-                        ' class="text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors flex items-center gap-1.5 whitespace-nowrap">' +
-                        '<svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="currentColor" aria-hidden="true">' +
+                        ' class="mtlx-badge mtlx-badge-icon">' +
+                        '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>' +
                         '</svg>' +
-                        '<span class="hidden md:inline">Source</span>' +
+                        '<span class="mtlx-badge-label">Source</span>' +
                     '</a>' +
                     '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" title="Report a bug or request a feature"' +
-                        ' class="hidden md:inline-block text-xs px-2.5 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors whitespace-nowrap">' +
+                        ' class="mtlx-badge mtlx-badge-feedback">' +
                         'Feedback & Issues' +
                     '</a>' +
                 '</div>' +
 
                 // Hamburger: mobile only. Toggles #mtlx-mobile-menu below.
-                // self-center: the bar is items-stretch so a fixed-height
-                // (w-9 h-9) button can't stretch and top-aligns without it.
+                // .mtlx-nav-toggle sets align-self:center — the bar is
+                // display:flex/align-items:stretch, so a fixed-height (36px)
+                // button can't stretch and top-aligns without it.
                 '<button id="mtlx-nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false"' +
-                    ' class="md:hidden ml-auto flex items-center justify-center w-9 h-9 self-center rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors">' +
-                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6" aria-hidden="true">' +
+                    ' class="mtlx-nav-toggle">' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
                         '<line x1="4" y1="6" x2="20" y2="6" />' +
                         '<line x1="4" y1="12" x2="20" y2="12" />' +
                         '<line x1="4" y1="18" x2="20" y2="18" />' +
@@ -221,22 +232,23 @@
             '</div>' +
 
             // Mobile dropdown panel: everything reachable on desktop (nav +
-            // source/feedback/version) stacked full-width. Hidden by
-            // default; toggled by the hamburger, closed by hashchange or
-            // clicking a link inside it.
-            '<div id="mtlx-mobile-menu" class="hidden md:hidden border-t border-gray-800 bg-gray-900/95 backdrop-blur">' +
-                '<nav class="flex flex-col py-1" aria-label="Site (mobile)">' + mobileTabs + '</nav>' +
-                '<div class="flex flex-col border-t border-gray-800 py-1">' +
+            // source/feedback/version) stacked full-width. Closed
+            // (display:none) by default; toggled by the hamburger, closed
+            // by hashchange or clicking a link inside it (`is-open`
+            // handling below; matching rules in site-header.css).
+            '<div id="mtlx-mobile-menu" class="mtlx-mobile-menu">' +
+                '<nav class="mtlx-mobile-nav" aria-label="Site (mobile)">' + mobileTabs + '</nav>' +
+                '<div class="mtlx-mobile-links">' +
                     '<a id="mtlx-header-version-mobile" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800/40 transition-colors">' +
+                        ' class="mtlx-mobile-link">' +
                         'MaterialX <span data-role="ver">\u2026</span>' +
                     '</a>' +
                     '<a href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/40 transition-colors">' +
+                        ' class="mtlx-mobile-link">' +
                         'Source' +
                     '</a>' +
                     '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/40 transition-colors">' +
+                        ' class="mtlx-mobile-link">' +
                         'Feedback & Issues' +
                     '</a>' +
                 '</div>' +
@@ -255,18 +267,19 @@
     var mobileMenu = document.getElementById('mtlx-mobile-menu');
     var closeMobileMenu = function () {
         if (!mobileMenu || !navToggle) return;
-        mobileMenu.classList.add('hidden');
+        mobileMenu.classList.remove('is-open');
         mobileMenu.style.display = 'none';
         navToggle.setAttribute('aria-expanded', 'false');
     };
     if (navToggle && mobileMenu) {
         navToggle.addEventListener('click', function () {
-            var willOpen = mobileMenu.classList.contains('hidden');
-            mobileMenu.classList.toggle('hidden');
+            var willOpen = !mobileMenu.classList.contains('is-open');
+            mobileMenu.classList.toggle('is-open', willOpen);
             // The measured-collapse path below can force the hamburger
-            // visible at >=md widths (long nav labels overflowing), where
-            // the panel's own `md:hidden` class would keep it display:none
-            // even after `hidden` is removed — inline display must win.
+            // visible at >=768px widths (long nav labels overflowing),
+            // where site-header.css's own >=768px rule would keep the
+            // panel display:none even with `is-open` added — inline
+            // display must win.
             mobileMenu.style.display = willOpen ? 'block' : 'none';
             navToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
         });
@@ -281,8 +294,8 @@
 
     // ---- Measured collapse to hamburger ---------------------------------
     // The desktop nav, right-side links and hamburger all switch at a
-    // single fixed Tailwind `md:` breakpoint. That leaves a band of
-    // in-between widths where the tabs are technically under `md:` but
+    // single fixed 768px breakpoint (site-header.css). That leaves a band
+    // of in-between widths where the tabs are technically above 768px but
     // don't actually fit alongside the right-side links group, so their
     // labels wrap to two lines. Rather than guess a second breakpoint,
     // measure: force the full desktop layout visible, check whether the
@@ -291,8 +304,9 @@
     // synchronously within this one function call (one task), and
     // browsers only paint after a task finishes — so the "forced visible"
     // intermediate state is never actually painted, i.e. no flicker.
-    // Inline style.display wins over the md:flex/md:hidden Tailwind
-    // classes, which stay in the markup as the no-JS fallback.
+    // Inline style.display wins over site-header.css's own 768px
+    // display:flex/display:none rules, which stay in effect as the no-JS
+    // fallback.
     var headerBar = document.getElementById('mtlx-header-bar');
     var navDesktop = document.getElementById('mtlx-nav-desktop');
     var navRight = document.getElementById('mtlx-nav-right');
@@ -310,10 +324,11 @@
                 // Don't fight the mobile panel's own open/closed state —
                 // collapsing to hamburger shouldn't force the panel open.
             } else {
-                // Empty string restores the md: classes' own behavior, so
-                // genuinely narrow (sub-md) widths still collapse even
-                // though the measured bar "fits" (it fits BECAUSE the
-                // md:hidden/md:flex classes already hid/showed things).
+                // Empty string restores site-header.css's own 768px rules,
+                // so genuinely narrow (sub-768px) widths still collapse
+                // even though the measured bar "fits" (it fits BECAUSE the
+                // stylesheet's display:none/display:flex rules already
+                // hid/showed things).
                 navDesktop.style.display = '';
                 navRight.style.display = '';
                 navToggle.style.display = '';
@@ -338,11 +353,15 @@
     }
 
     // Shell only: the header is static innerHTML, so when the hash changes
-    // (view switch) re-apply the active/inactive classes on the nav anchors
-    // by hand instead of re-rendering the whole header. Each nav item now
-    // has TWO copies in the DOM (desktop tab + mobile panel link) sharing
-    // the same data-nav id, so every matching element is updated, styled
-    // according to which list (desktop vs. mobile) it belongs to.
+    // (view switch) re-apply the `is-active` modifier class on the nav
+    // anchors by hand instead of re-rendering the whole header. Each nav
+    // item now has TWO copies in the DOM (desktop tab + mobile panel link)
+    // sharing the same data-nav id, so every matching element is updated;
+    // unlike before, both copies use the same on/off toggle here since the
+    // desktop/mobile visual difference (border-bottom vs. border-left,
+    // etc.) is now entirely encoded in the .mtlx-tab / .mtlx-tab-mobile
+    // base class each element already carries, not in what this handler
+    // adds or removes.
     if (IS_SHELL) {
         window.addEventListener('hashchange', function () {
             var newActiveId = shellActiveId(window.location.hash || '');
@@ -351,11 +370,7 @@
                 var isActive = NAV[j].id === newActiveId;
                 for (var k = 0; k < els.length; k++) {
                     var el = els[k];
-                    var inMobile = !!(mobileMenu && mobileMenu.contains(el));
-                    var base = inMobile ? mobileTabBase : tabBase;
-                    var onCls = inMobile ? mobileTabOn : tabOn;
-                    var offCls = inMobile ? mobileTabOff : tabOff;
-                    el.className = base + (isActive ? onCls : offCls);
+                    el.classList.toggle('is-active', isActive);
                     if (isActive) {
                         el.setAttribute('aria-current', 'page');
                     } else {
@@ -393,11 +408,11 @@
     // <div id="site-footer"></div> after their content wrapper; if a page
     // forgets, the mount is created and appended to <body> as a fallback.
     var footerHtml =
-        '<footer class="shrink-0 border-t border-gray-800 bg-gray-900">' +
-            '<div class="max-w-[1600px] mx-auto px-3 sm:px-6 py-4 text-sm text-gray-400">' +
+        '<footer class="mtlx-footer">' +
+            '<div class="mtlx-footer-inner">' +
                 'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
                 'In the event of any discrepancies, the specification in the ' +
-                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="underline text-gray-200 hover:text-gray-100">official MaterialX repository</a> ' +
+                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
                 'remains the definitive source of truth.' +
             '</div>' +
         '</footer>';

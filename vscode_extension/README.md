@@ -252,7 +252,12 @@ editor.
   (the Viewer fills the tab instead, and its material picker moves to the
   viewport overlay), the Send-to-Viewer/Send-to-Editor buttons (both views
   are always in sync already — see "Viewer/Graph sync" below), and the
-  docs view's Copy-link and open-in-new-tab actions.
+  docs view's Copy-link and open-in-new-tab actions. The header nav itself
+  drops the Docs tab too, leaving only Viewer and Graph — node
+  documentation stays reachable through the graph editor's own
+  node-documentation dialog and hover links, or the separate
+  `MaterialX Playground: Open Node Library Documentation` command, rather
+  than through a nav tab duplicating that content in-line.
 - **Write-back is Node Graph Editor-only, and only on Ctrl+S.** The
   webview holds an in-memory copy of the document (plus any resolved
   includes/textures); nothing is saved back to the `.mtlx` file until you

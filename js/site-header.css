@@ -1,0 +1,384 @@
+/* site-header.css — complete, self-contained styling for the shared site
+   shell (header + footer) injected by js/site-header.js into
+   <div id="site-header"> / <div id="site-footer"> on every surface: the
+   SPA (index.html), the tutorials MkDocs subsite, and the VS Code
+   webview.
+
+   Must render IDENTICALLY on all three, with or without Tailwind present
+   — this stylesheet is Tailwind-free and token-driven (see
+   js/site-tokens.css, loaded before this file) on purpose. It is
+   vendored byte-for-byte into the tutorials build by
+   scripts/build-tutorials.mjs, the same way js/site-header.js already
+   is. Do not reintroduce a Tailwind/utility-class dependency here — that
+   was the entire point of this file existing.
+
+   Class scheme: semantic, `mtlx-`-prefixed classes, one per component
+   piece (see js/site-header.js, which builds the markup using exactly
+   these class names). A small mini-reset (scoped to #site-header /
+   #site-footer via zero-specificity :where()) stands in for the parts of
+   Tailwind's preflight the markup used to depend on, so real component
+   classes below always win regardless of source order. */
+
+:where(#site-header, #site-header *, #site-footer, #site-footer *) {
+    box-sizing: border-box;
+    margin: 0;
+    border: 0 solid var(--site-gray-200);
+}
+
+:where(#site-header, #site-footer) :where(button) {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+}
+
+:where(#site-header, #site-footer) :where(svg, img) {
+    display: block;
+    vertical-align: middle;
+}
+
+/* Link reset: no underline, inherit color. The footer's inline text link
+   (.mtlx-footer-link below) opts back into an underline via its own real
+   class, which — thanks to :where() contributing zero specificity here —
+   wins outright. */
+:where(#site-header, #site-footer) :where(a) {
+    color: inherit;
+    text-decoration: none;
+}
+
+/* Base typography: matches the SPA's own body font/smoothing so the
+   header/footer render identically inside mkdocs (which sets its own
+   body font-size/smoothing) and inside the VS Code webview. */
+.mtlx-header,
+.mtlx-footer {
+    font-family: var(--site-font-sans);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+}
+
+/* ---- Header ------------------------------------------------------- */
+
+.mtlx-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    border-bottom: 1px solid var(--site-gray-800);
+    background-color: rgba(17, 24, 39, 0.95); /* gray-900/95 */
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+}
+
+.mtlx-header-bar {
+    max-width: var(--site-max-width);
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 12px;
+    padding-right: 12px;
+    height: var(--site-header-height);
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+}
+@media (min-width: 640px) {
+    .mtlx-header-bar {
+        padding-left: 24px;
+        padding-right: 24px;
+        gap: 20px;
+    }
+}
+
+/* Brand: logo mark + site title. Color lives on the outer element
+   (anchor in the SPA/tutorials, a plain span under VS Code — same class
+   either way) and cascades to the icon/title via normal CSS
+   inheritance; each child declares its own `transition` so the
+   inherited color change still animates (replaces Tailwind's
+   group/group-hover pattern). */
+.mtlx-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    color: var(--site-blue-400);
+}
+.mtlx-brand:hover {
+    color: var(--site-blue-300);
+}
+.mtlx-brand-icon {
+    width: 24px;
+    height: 24px;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-brand-title {
+    font-weight: 700;
+    white-space: nowrap;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Desktop page tabs + right-side links: hidden below 768px (the
+   hamburger + mobile panel cover narrow widths instead). js's measure()
+   can also force these to an inline style.display at >=768px (labels
+   that don't actually fit alongside the right-side links) — plain
+   (non-!important) rules here are required so that inline override
+   keeps working untouched. */
+.mtlx-nav-desktop {
+    display: none;
+    align-items: stretch;
+}
+@media (min-width: 768px) {
+    .mtlx-nav-desktop {
+        display: flex;
+    }
+}
+
+.mtlx-tab {
+    display: flex;
+    align-items: center;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--site-gray-400);
+}
+@media (min-width: 640px) {
+    .mtlx-tab {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+}
+.mtlx-tab:hover {
+    color: var(--site-gray-200);
+    border-bottom-color: var(--site-gray-600);
+}
+.mtlx-tab.is-active {
+    border-bottom-color: var(--site-blue-500);
+    color: var(--site-blue-300);
+}
+
+.mtlx-nav-right {
+    display: none;
+    margin-left: auto;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+@media (min-width: 640px) {
+    .mtlx-nav-right {
+        gap: 8px;
+    }
+}
+@media (min-width: 768px) {
+    .mtlx-nav-right {
+        display: flex;
+    }
+}
+
+/* Pills: version / source / feedback links in the right-side cluster
+   (and their identical mobile-panel counterparts use .mtlx-mobile-link
+   instead, see below). */
+.mtlx-badge {
+    display: inline-block;
+    font-size: 12px;
+    line-height: 16px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--site-gray-600);
+    background-color: var(--site-gray-800);
+    color: var(--site-gray-200);
+    white-space: nowrap;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-badge:hover {
+    background-color: var(--site-gray-700);
+}
+/* Icon + text pill (the "Source" link): lays its svg + label out inline. */
+.mtlx-badge-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.mtlx-badge-icon svg {
+    width: 14px;
+    height: 14px;
+}
+/* Version pill: text-gray-300 (not the badge default gray-200) and
+   hidden below 640px. Targeted by id (already unique — js/site-header.js
+   uses it as a version-badge mount point) rather than a one-off class. */
+#mtlx-header-version {
+    display: none;
+    color: var(--site-gray-300);
+}
+@media (min-width: 640px) {
+    #mtlx-header-version {
+        display: inline-block;
+    }
+}
+/* "Source" label text: hidden below 768px (the icon alone still shows). */
+.mtlx-badge-label {
+    display: none;
+}
+@media (min-width: 768px) {
+    .mtlx-badge-label {
+        display: inline;
+    }
+}
+/* Feedback & Issues pill: hidden below 768px. */
+.mtlx-badge-feedback {
+    display: none;
+}
+@media (min-width: 768px) {
+    .mtlx-badge-feedback {
+        display: inline-block;
+    }
+}
+
+/* Hamburger: mobile only (measure() can also force this to an inline
+   style.display, same contract as the desktop nav/right cluster above). */
+.mtlx-nav-toggle {
+    display: flex;
+    margin-left: auto;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    align-self: center;
+    border-radius: 8px;
+    border: 1px solid var(--site-gray-600);
+    background-color: var(--site-gray-800);
+    color: var(--site-gray-200);
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-nav-toggle:hover {
+    background-color: var(--site-gray-700);
+}
+.mtlx-nav-toggle svg {
+    width: 24px;
+    height: 24px;
+}
+@media (min-width: 768px) {
+    .mtlx-nav-toggle {
+        display: none;
+    }
+}
+
+/* Mobile dropdown panel: closed (display:none) by default and always at
+   >=768px; open state is `.is-open`, added/removed by site-header.js
+   alongside an inline style.display it sets on every toggle (open =
+   'block', close = 'none') so the measured-collapse case — where the
+   hamburger (and this panel) can be forced usable even at >=768px — keeps
+   working: inline style always wins over both rules below. */
+.mtlx-mobile-menu {
+    display: none;
+    border-top: 1px solid var(--site-gray-800);
+    background-color: rgba(17, 24, 39, 0.95); /* gray-900/95 */
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+}
+.mtlx-mobile-menu.is-open {
+    display: block;
+}
+@media (min-width: 768px) {
+    .mtlx-mobile-menu.is-open {
+        display: none;
+    }
+}
+
+.mtlx-mobile-nav {
+    display: flex;
+    flex-direction: column;
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.mtlx-tab-mobile {
+    display: block;
+    padding: 12px 16px;
+    border-left: 4px solid transparent;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--site-gray-400);
+}
+.mtlx-tab-mobile:hover {
+    color: var(--site-gray-200);
+    background-color: rgba(31, 41, 55, 0.4); /* gray-800/40 */
+}
+.mtlx-tab-mobile.is-active {
+    border-left-color: var(--site-blue-500);
+    color: var(--site-blue-300);
+    background-color: rgba(31, 41, 55, 0.6); /* gray-800/60 */
+}
+
+.mtlx-mobile-links {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--site-gray-800);
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.mtlx-mobile-link {
+    display: block;
+    padding: 12px 16px;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--site-gray-200);
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-mobile-link:hover {
+    background-color: rgba(31, 41, 55, 0.4); /* gray-800/40 */
+}
+/* Mobile version link: text-gray-300 (not the default gray-200), same
+   reasoning as #mtlx-header-version above. */
+#mtlx-header-version-mobile {
+    color: var(--site-gray-300);
+}
+
+/* ---- Footer --------------------------------------------------------- */
+
+.mtlx-footer {
+    flex-shrink: 0;
+    border-top: 1px solid var(--site-gray-800);
+    background-color: var(--site-gray-900);
+}
+
+.mtlx-footer-inner {
+    max-width: var(--site-max-width);
+    margin-left: auto;
+    margin-right: auto;
+    padding: 16px 12px;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--site-gray-400);
+}
+@media (min-width: 640px) {
+    .mtlx-footer-inner {
+        padding: 16px 24px;
+    }
+}
+
+.mtlx-footer-link {
+    text-decoration: underline;
+    color: var(--site-gray-200);
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-footer-link:hover {
+    color: var(--site-gray-100);
+}

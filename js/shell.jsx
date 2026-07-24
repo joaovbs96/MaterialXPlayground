@@ -335,6 +335,15 @@ function Shell() {
         // sole DOM host is one #root div (class `flex-1 relative min-h-0`),
         // and every view's padded/max-width wrapper lives inside it,
         // constructed by renderView rather than authored in the HTML:
+        //   - home:   p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto
+        //             custom-scrollbar
+        //     -> HomeApp's content has no fixed height and can grow taller
+        //        than #root; md:min-h-0 lets this flex item shrink to
+        //        #root's definite height instead of overflowing it, and
+        //        md:overflow-y-auto scrolls the overflow internally (like
+        //        docs/viewer below) instead of painting over the footer
+        //        that follows #root. Below md the body page-scrolls
+        //        naturally (unchanged).
         //   - docs:   p-2 sm:p-6 flex-1 md:min-h-0
         //     -> App's own root div is `md:h-full md:flex md:flex-col
         //        md:min-h-0`, i.e. it needs a percentage-height chain so it
@@ -367,7 +376,7 @@ function Shell() {
         //        since its child is taken out of flow) box size is
         //        irrelevant to how NodeGraphApp paints.
         const wrapClass = {
-            home: 'p-2 sm:p-6 flex-1',
+            home: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             docs: EMBED ? 'p-2 flex-1 md:min-h-0' : 'p-2 sm:p-6 flex-1 md:min-h-0',
             // VS Code: full-bleed viewport, no page padding; min-h-0 lets
             // this flex item shrink to #root's height instead of growing
