@@ -454,7 +454,7 @@ async function fetchMaterialxTree() {
   log(`fetching MaterialX repo tree @ ${MTLX_TAG} (git-trees API) ...`);
   const res = await fetch(MTLX_TREE_API_URL, {
     headers: {
-      "User-Agent": "MaterialXNodeDocs-vendor-script",
+      "User-Agent": "MaterialXPlayground-vendor-script",
       Accept: "application/vnd.github+json",
     },
   });

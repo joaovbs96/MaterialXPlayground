@@ -11,7 +11,7 @@
     "node": ">=18"
   },
   "main": "vscode_extension/src/extension.js",
-  "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXNodeDocs" },
+  "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXPlayground" },
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "vendor:offline": "node scripts/vendor.mjs --with-materialx",
@@ -19,6 +19,7 @@
     "build:vendor": "node scripts/build.mjs vendor",
     "build:nodelib": "node scripts/build.mjs nodelib",
     "build:tutorials": "node scripts/build.mjs tutorials",
+    "build:webview": "node scripts/build.mjs webview",
     "check": "node scripts/build.mjs --check"
   },
   "devDependencies": {
@@ -27,7 +28,7 @@
     "@babel/standalone": "7.26.10",
     "three": "0.128.0",
     "three-147": "npm:three@0.147.0",
-    "katex": "0.16.11",
+    "katex": "0.16.47",
     "jszip": "3.10.1",
     "reactflow": "11.11.4",
     "dagre": "0.8.5",

@@ -46,7 +46,7 @@
     var MTLX_TAG = (window.MtlxAssets && window.MtlxAssets.MTLX_TAG) || 'v1.39.5';
 
     var LINKS = {
-        repo: 'https://github.com/joaovbs96/MaterialXNodeDocs',
+        repo: 'https://github.com/joaovbs96/MaterialXPlayground',
         spec: 'https://github.com/AcademySoftwareFoundation/MaterialX/tree/' + MTLX_TAG + '/documents/Specification',
         // The footer's "source of truth" link deliberately points at main,
         // not the pinned tag: it names the authority, not what we parse.

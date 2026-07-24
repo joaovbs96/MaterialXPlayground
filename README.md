@@ -160,7 +160,7 @@ All third-party JS/CSS libraries are vendored: `npm run vendor` installs pinned 
 
 ## Contributing
 
-Issues and pull requests are welcome. Please file bugs and feature requests via the [issue tracker](https://github.com/joaovbs96/MaterialXNodeDocs/issues).
+Issues and pull requests are welcome. Please file bugs and feature requests via the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues).
 
 ## License
 

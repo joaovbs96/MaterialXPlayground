@@ -226,7 +226,7 @@
                             <p className="text-gray-400">
                                 Something broken or missing? Report it on the{' '}
                                 <a
-                                    href={(window.SITE_LINKS && window.SITE_LINKS.issues) || 'https://github.com/joaovbs96/MaterialXNodeDocs/issues'}
+                                    href={(window.SITE_LINKS && window.SITE_LINKS.issues) || 'https://github.com/joaovbs96/MaterialXPlayground/issues'}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40"
