@@ -19,10 +19,6 @@
 # today, so those steps are inert (skipped) on `main` right now. The moment
 # that branch merges and the file appears, the steps auto-activate — no
 # edits needed here.
-#
-# ONE-TIME SETUP REQUIRED: this repo currently serves Pages from a branch.
-# For the `deploy` job below to actually take effect, a human needs to flip
-# Settings -> Pages -> Source to "GitHub Actions".
 # -----------------------------------------------------------------------------
 
 name: Build, verify & deploy

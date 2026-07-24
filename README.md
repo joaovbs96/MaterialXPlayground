@@ -105,7 +105,7 @@ The repo follows a **committed-artifact model**: every generated file is checked
 
 > The committed tree is always the complete, runnable artifact. `npm run build` regenerates all derived state byte-for-byte, and `npm run check` (also run in CI) fails if anything has drifted.
 
-`npm run build` runs `scripts/build.mjs`, which sequences four steps — each also available individually, and each with a read-only `--check` mode:
+`npm run build` runs `scripts/build.mjs`, which sequences five steps — each also available individually, and each with a read-only `--check` mode:
 
 **1. `version` (`scripts/extract-mtlx-version.mjs`)** — the MaterialX version is never hand-typed anywhere in this repo. This step instantiates the vendored WebAssembly module under Node, calls its `getVersionString()`, and writes the result to `js/gen/mtlx-version.json` (`{version, tag, versionIntegers}`). It then *stamps* the few places that need the value as a literal (the header badge fallback in `js/site-header.js`, `js/mtlx-assets.js`, and two lines of this README — which is why those version strings must not be edited by hand). Node-side consumers (`scripts/vendor.mjs`, the VS Code extension's `specDocs.js`) read the JSON directly. Swapping in a new WASM build and running `npm run build` propagates the new version everywhere; `--check` re-extracts from the WASM and fails on any disagreement.
 
@@ -120,6 +120,8 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 
 **4. `tutorials` (`scripts/build-tutorials.mjs`)** — builds the MkDocs-based tutorials subsite from `tutorials-src/` into the committed `/tutorials/` directory. This step activates automatically when `tutorials-src/mkdocs.yml` exists in the checkout and is skipped otherwise (the tutorials currently live on a separate branch; requires a pip-installed `mkdocs-material`, pinned in `tutorials-src/requirements.txt`).
 
+**5. `webview` (`scripts/build-webview.mjs`)** — regenerates `vscode_extension/media/webview.html` from `index.html`. The VS Code extension's webview needs the exact same `<head>`/`<body>` skeleton as the real site plus a handful of webview-only insertions (a Content-Security-Policy meta tag, a `<base>` tag, a bootstrap `<script>` tag, and a focus-outline CSS rule VS Code's Chromium needs but a real browser doesn't) — this step splices those fragments into a copy of `index.html` at two content-based anchors, so the mirror can never silently drift out of sync with the real site. `--check` fails on any byte difference from the committed file.
+
 **Verification and deployment.** `npm run check` runs every step's `--check` without writing anything. CI (`.github/workflows/deploy.yml`) runs on every push and pull request to `main`: it does a clean `npm ci && npm run build`, requires the rebuilt tree to be **byte-identical to the commit** (a stale committed artifact fails the run with instructions to rebuild), then runs `npm run check` — and only after all of that does a push to `main` deploy to GitHub Pages. A broken or stale build never deploys.
 
 **When to run what:**
@@ -131,6 +133,7 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 | The vendored WASM modules (`js/JsMaterialX*`) | `npm run build` (re-extracts the version, re-stamps, regenerates the nodelib data) |
 | `libraries/` or anything affecting node docs | `npm run build:nodelib` |
 | Tutorial content (`tutorials-src/`) | `npm run build:tutorials` |
+| `index.html` structure or webview-only fragments (`scripts/build-webview.mjs`) | `npm run build:webview` |
 | Not sure | `npm run build` then `npm run check` — it's all idempotent |
 
 ---

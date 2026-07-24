@@ -290,9 +290,11 @@ editor.
   above), the diagnostic collection + status bar (`src/validator.js`),
   and the hover provider (`src/hoverProvider.js`).
 - `src/editorProvider.js` builds the webview's HTML from
-  `media/webview.html` (a hand-maintained mirror of `../index.html`'s
-  `<head>`/`<body>`, kept in sync — see the comment at the top of that
-  file) and wires up the extension<->webview messaging + live reload.
+  `media/webview.html` (generated from `../index.html` by
+  `scripts/build-webview.mjs` — see the comment at the top of that file,
+  and [How this repo is built](../README.md#how-this-repo-is-built) in the
+  root README) and wires up the extension<->webview messaging + live
+  reload.
   Also backs the document-less docs panel singleton
   (`materialxPlayground.openDocs`), threading an arbitrary `location.hash`
   (`#!docs`, or `#/<category>` for a hover's deep link) through to a

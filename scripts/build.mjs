@@ -10,7 +10,7 @@
 //   node scripts/build.mjs                      = `node scripts/build.mjs all`
 //   node scripts/build.mjs [step] [--check] [--with-materialx]
 //
-//     step: all | version | stamp | vendor | nodelib | tutorials
+//     step: all | version | stamp | vendor | nodelib | tutorials | webview
 //           (default: all)
 //     --check          verify every step is up to date WITHOUT writing
 //                       anything; non-zero exit on any drift. Wired into
@@ -18,12 +18,14 @@
 //     --with-materialx only meaningful for the `vendor`/`all` steps — also
 //                       populates vendor/materialx/ (see scripts/vendor.mjs).
 //
-// Step order (for `all`): version -> vendor -> nodelib -> tutorials.
+// Step order (for `all`): version -> vendor -> nodelib -> tutorials -> webview.
 // version runs first because every other step derives from the
 // WASM-extracted MaterialX version: vendor's MTLX_TAG (--with-materialx)
 // and nodelib's spec-tag/version stamp both read js/gen/mtlx-version.json,
 // which the version step (re)generates. Running anything else first risks
-// building against a stale version file.
+// building against a stale version file. webview runs last: it derives
+// only from index.html (see scripts/build-webview.mjs), nothing downstream
+// depends on it.
 //
 // The `stamp` step (re-stamp every literal copy of the MaterialX tag across
 // the repo — see scripts/lib/version.mjs) is a step in its own right here
@@ -59,7 +61,7 @@ const CHECK_MODE = argv.includes("--check");
 const WITH_MATERIALX = argv.includes("--with-materialx");
 const STEP = argv.find((a) => !a.startsWith("--")) || "all";
 
-const VALID_STEPS = ["all", "version", "stamp", "vendor", "nodelib", "tutorials"];
+const VALID_STEPS = ["all", "version", "stamp", "vendor", "nodelib", "tutorials", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
   console.error(`error: unknown step "${STEP}" — expected one of: ${VALID_STEPS.join(", ")}`);
   process.exit(1);
@@ -157,6 +159,15 @@ async function runTutorialsStep() {
   runNodeScript("tutorials", BUILD_TUTORIALS_PATH, CHECK_MODE ? ["--check"] : []);
 }
 
+async function runWebviewStep() {
+  log(`webview: ${CHECK_MODE ? "verifying" : "generating"} vscode_extension/media/webview.html from index.html ...`);
+  runNodeScript(
+    "webview",
+    path.join(REPO_ROOT, "scripts", "build-webview.mjs"),
+    CHECK_MODE ? ["--check"] : []
+  );
+}
+
 async function main() {
   if (STEP === "all") {
     // version first — everything else derives from the WASM-extracted
@@ -168,6 +179,7 @@ async function main() {
     await runVendorStep();
     await runNodelibStep();
     await runTutorialsStep();
+    await runWebviewStep();
   } else if (STEP === "version") {
     await runVersionStep();
   } else if (STEP === "stamp") {
@@ -178,6 +190,8 @@ async function main() {
     await runNodelibStep();
   } else if (STEP === "tutorials") {
     await runTutorialsStep();
+  } else if (STEP === "webview") {
+    await runWebviewStep();
   }
 
   log(`${STEP}${CHECK_MODE ? " --check" : ""}: OK`);
