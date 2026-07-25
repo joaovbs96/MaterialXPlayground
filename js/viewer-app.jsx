@@ -501,8 +501,8 @@
                     {dragOver && (
                         <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
                             <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
-                                <div className="text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
-                                    {'\u2B07\uFE0F'} Drop to load
+                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                                    <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
                                 </div>
                             </div>
                         </div>
@@ -705,7 +705,7 @@
                                     onClick={() => setSidebarOpen(false)}
                                     title="Collapse the files panel"
                                     className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
-                                >{'\u00AB'}</button>
+                                ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                             </div>
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
                                 <div className="text-xs text-gray-500">
@@ -776,10 +776,14 @@
                                     <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2">
                                         <div className="font-semibold text-gray-400 uppercase tracking-wider">Textures</div>
                                         {texReport.bound.map((b, i) => (
-                                            <div key={'b' + i} className="text-green-300/90 font-mono break-all">{'\u2713'} {b}</div>
+                                            <div key={'b' + i} className="flex items-start gap-1 text-green-300/90 font-mono break-all">
+                                                <MtlxIcon name="check" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{b}</span>
+                                            </div>
                                         ))}
                                         {texReport.missing.map((m, i) => (
-                                            <div key={'m' + i} className="text-amber-300/90 font-mono break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">{'\u26A0'} {m}</div>
+                                            <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">
+                                                <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
+                                            </div>
                                         ))}
                                     </div>
                                 )}
@@ -794,7 +798,7 @@
                             title="Expand the files panel"
                             className="absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                         >
-                            {'\u00BB'}
+                            <MtlxIcon name="chevrons-right" className="w-4 h-4" />
                             <span className="max-w-[8rem] truncate">Files</span>
                         </button>
                     ))}

@@ -75,7 +75,7 @@
                                     title="Clear search"
                                     className="absolute right-2 top-[0.9rem] -translate-y-1/2 text-gray-500 hover:text-gray-200"
                                 >
-                                    ✕
+                                    <MtlxIcon name="x" className="w-3.5 h-3.5" />
                                 </button>
                             )}
                         </div>

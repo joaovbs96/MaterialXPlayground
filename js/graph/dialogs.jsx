@@ -119,7 +119,7 @@
                     panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
                     headerRight={!IN_VSCODE && (
                         <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
-                            className="text-gray-400 hover:text-gray-200 leading-none text-sm px-1">{'↗'}</a>
+                            className="text-gray-400 hover:text-gray-200 leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
                     )}
                 >
                     <div className="relative flex-1 min-h-0 overflow-y-auto">
@@ -255,11 +255,15 @@
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
                         {!status && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
                         {status && status.kind === 'valid' && (
-                            <div className="text-green-400 font-bold">{'✓ Document is valid'}</div>
+                            <div className="flex items-center gap-1.5 text-green-400 font-bold">
+                                <MtlxIcon name="check" className="w-4 h-4" /><span>Document is valid</span>
+                            </div>
                         )}
                         {status && status.kind === 'invalid' && (
                             <div>
-                                <div className="text-red-400 font-bold mb-2">{'✗ Validation failed'}</div>
+                                <div className="flex items-center gap-1.5 text-red-400 font-bold mb-2">
+                                    <MtlxIcon name="x" className="w-4 h-4" /><span>Validation failed</span>
+                                </div>
                                 {status.issues && status.issues.length > 0 && (
                                     <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
                                         {status.issues.map((s, i) => <li key={i}>{s}</li>)}

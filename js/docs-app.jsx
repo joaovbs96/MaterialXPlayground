@@ -818,18 +818,18 @@
                                                     // disabled instead.
                                                     <span
                                                         title="This node has no entry in the official specification documents"
-                                                        className="bg-gray-800 text-gray-600 text-xs px-2 py-1 rounded border border-gray-700 cursor-not-allowed select-none"
+                                                        className="inline-flex items-center gap-1 bg-gray-800 text-gray-600 text-xs px-2 py-1 rounded border border-gray-700 cursor-not-allowed select-none"
                                                     >
-                                                        Official spec {'\u2197'}
+                                                        Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </span>
                                                 ) : (
                                                     <a
                                                         href={specUrlForNode(selectedNode)}
                                                         target="_blank" rel="noopener noreferrer"
                                                         title="Open this node in the official MaterialX specification on GitHub"
-                                                        className="bg-gray-700 text-blue-300 hover:text-blue-200 text-xs px-2 py-1 rounded border border-gray-600 hover:border-blue-500/60 transition-colors"
+                                                        className="inline-flex items-center gap-1 bg-gray-700 text-blue-300 hover:text-blue-200 text-xs px-2 py-1 rounded border border-gray-600 hover:border-blue-500/60 transition-colors"
                                                     >
-                                                        Official spec {'\u2197'}
+                                                        Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </a>
                                                 )}
                                                 {/* Under VS Code the webview's origin makes a copied
@@ -907,7 +907,7 @@
                                             <div className="space-y-6">
                                                 {isAutoTable && (
                                                     <div className="bg-blue-950/40 border border-blue-800/60 text-blue-200/90 text-sm rounded-lg px-4 py-3 flex items-start gap-2">
-                                                        <span aria-hidden="true">{'\u2139\uFE0F'}</span>
+                                                        <MtlxIcon name="info-circle" className="w-4 h-4 shrink-0 mt-0.5" />
                                                         <span>
                                                             <span className="font-semibold text-blue-200">Auto-generated from the nodedef.</span>{' '}
                                                             This node has no specification documentation, so its ports,
@@ -1014,7 +1014,7 @@
                     /* Disclaimer: previews are experimental; the spec MD files
                        in the MaterialX repository are the source of truth. */
                     <div className="bg-amber-950/40 border border-amber-700/60 text-amber-300/90 text-sm rounded-lg px-4 py-3">
-                        <span className="font-semibold text-amber-300">{'\u26A0'} Experimental Preview:</span>{' '}
+                        <span className="font-semibold text-amber-300"><MtlxIcon name="alert-triangle" className="inline w-4 h-4 align-text-bottom mr-1" />Experimental Preview:</span>{' '}
                         The 3D node previews and parameter values shown here are under development and may not
                         match reference renders. For any bugs, please report them in the {' '}
                         <a

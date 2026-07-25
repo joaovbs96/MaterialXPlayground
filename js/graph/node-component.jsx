@@ -90,8 +90,8 @@
                                     onClick={openScope}
                                     onDoubleClick={openScope}
                                     title="Open this nodegraph"
-                                    className="ml-auto flex-none text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
-                                >open ⏎</button>
+                                    className="ml-auto flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
+                                >open <MtlxIcon name="corner-down-left" className="w-2.5 h-2.5" /></button>
                             )}
                         </div>
                         <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-gray-600 italic' : 'text-gray-500')}>

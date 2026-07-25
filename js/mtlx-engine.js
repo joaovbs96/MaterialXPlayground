@@ -4989,6 +4989,16 @@ const MTLX_ICON_PATHS = {
     'settings-cog': { filled: false, inner: '<path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" />' },
     'presets': { filled: false, inner: '<path d="M12 21a9 9 0 1 1 0 -18a9 9 0 0 1 0 18" /><path d="M18 12a6 6 0 0 1 -6 6" />' },
     'camera-reset': { filled: false, inner: '<path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M4 8v-2a2 2 0 0 1 2 -2h2" /><path d="M4 16v2a2 2 0 0 0 2 2h2" /><path d="M16 4h2a2 2 0 0 1 2 2v2" /><path d="M16 20h2a2 2 0 0 0 2 -2v-2" />' },
+    'alert-triangle': { filled: false, inner: '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0"/><path d="M12 16h.01"/>' },
+    'info-circle': { filled: false, inner: '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/><path d="M12 9h.01"/><path d="M11 12h1v4h1"/>' },
+    'external-link': { filled: false, inner: '<path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6"/><path d="M11 13l9 -9"/><path d="M15 4h5v5"/>' },
+    'corner-down-left': { filled: false, inner: '<path d="M18 6v6a3 3 0 0 1 -3 3h-10l4 -4m0 8l-4 -4"/>' },
+    'arrow-right': { filled: false, inner: '<path d="M5 12l14 0"/><path d="M13 18l6 -6"/><path d="M13 6l6 6"/>' },
+    'arrow-left': { filled: false, inner: '<path d="M5 12l14 0"/><path d="M5 12l6 6"/><path d="M5 12l6 -6"/>' },
+    'chevrons-left': { filled: false, inner: '<path d="M11 7l-5 5l5 5"/><path d="M17 7l-5 5l5 5"/>' },
+    'chevrons-right': { filled: false, inner: '<path d="M7 7l5 5l-5 5"/><path d="M13 7l5 5l-5 5"/>' },
+    minus: { filled: false, inner: '<path d="M5 12l14 0"/>' },
+    plus: { filled: false, inner: '<path d="M12 5l0 14"/><path d="M5 12l14 0"/>' },
 };
 
 // React component (plain createElement — this file stays JSX-free).

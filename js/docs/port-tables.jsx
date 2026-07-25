@@ -268,8 +268,9 @@
             }
             return (
                 <div>
-                    <div className="text-xs text-amber-400/80 bg-amber-950/30 border border-amber-800/40 rounded px-3 py-2 mb-3">
-                        {'\u26A0'} This table was generated automatically from the node's nodedef in the standard library — it is not part of the official specification documents.
+                    <div className="inline-flex items-start gap-1 text-xs text-amber-400/80 bg-amber-950/30 border border-amber-800/40 rounded px-3 py-2 mb-3">
+                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>This table was generated automatically from the node's nodedef in the standard library — it is not part of the official specification documents.</span>
                     </div>
                     <div className="overflow-x-auto bg-gray-900 border border-gray-700 rounded-lg">
                         <table className="w-full text-sm">

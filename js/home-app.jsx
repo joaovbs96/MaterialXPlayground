@@ -71,8 +71,8 @@ function HomeApp({ active } = {}) {
                             <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />
                             <div className="mt-3 text-lg font-semibold text-gray-100">{card.title}</div>
                             <p className="mt-1.5 text-sm text-gray-400 flex-1">{card.desc}</p>
-                            <div className="mt-4 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
-                                {'Open →'}
+                            <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
+                                Open <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
                             </div>
                         </div>
                     </a>

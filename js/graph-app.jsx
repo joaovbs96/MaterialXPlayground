@@ -4973,8 +4973,8 @@
                     {dragOver && (
                         <div className="absolute inset-0 z-40 pointer-events-none p-2 sm:p-4">
                             <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
-                                <div className="text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
-                                    {'\u2B07\uFE0F'} Drop to load
+                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                                    <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
                                 </div>
                             </div>
                         </div>
@@ -5137,7 +5137,7 @@
                                     }}>
                                         {parsed.label}
                                     </button>
-                                    {scope && <span className="text-gray-500"> {'\u25B8'} </span>}
+                                    {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
                                     {scope && <span className="text-blue-300">{scope}</span>}
                                 </div>
                                 <select
@@ -5433,11 +5433,11 @@
                                     <button
                                         onClick={() => setParamsOpen(false)}
                                         title="Collapse the preview panel"
-                                        className={'flex-none text-gray-400 hover:text-gray-200 px-1 leading-none text-sm'
+                                        className={'flex-none text-gray-400 hover:text-gray-200 px-1 leading-none'
                                             + (selectedIds.length <= 1 && displayNode
                                                 && ['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
                                                 && displayNode.data.category ? '' : ' ml-auto')}
-                                    >{'\u00BB'}</button>
+                                    ><MtlxIcon name="chevrons-right" className="w-4 h-4" /></button>
                                 </div>
 
                                 {nameEditing && nameIssue && (
@@ -5616,7 +5616,7 @@
                             title="Expand the preview panel"
                             className="absolute top-12 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                         >
-                            {'\u00AB'}
+                            <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                             <span className="font-mono max-w-[8rem] truncate">
                                 {displayNode ? displayNode.data.name : 'Preview'}
                             </span>
@@ -5676,12 +5676,12 @@
                                             className={'leading-none px-1 ' + (legendShowAll
                                                 ? 'text-blue-400 hover:text-blue-300'
                                                 : 'text-gray-400 hover:text-gray-200')}
-                                        >{'+'}</button>
+                                        ><MtlxIcon name="plus" className="w-3.5 h-3.5" /></button>
                                         <button
                                             onClick={() => setLegendOpen(false)}
                                             title="Minimize the legend"
                                             className="text-gray-400 hover:text-gray-200 leading-none px-1"
-                                        >{'\u2212'}</button>
+                                        ><MtlxIcon name="minus" className="w-3.5 h-3.5" /></button>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-48 overflow-y-auto custom-scrollbar">

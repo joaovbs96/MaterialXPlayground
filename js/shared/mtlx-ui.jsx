@@ -101,8 +101,8 @@ const DialogFrame = ({
                             onClick={onClose}
                             disabled={closeDisabled}
                             title="Close"
-                            className={'text-gray-400 hover:text-gray-200 leading-none text-lg px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
-                        >{'×'}</button>
+                            className={'text-gray-400 hover:text-gray-200 leading-none px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
+                        ><MtlxIcon name="x" className="w-4 h-4" /></button>
                     </div>
                 </div>
                 {children}
