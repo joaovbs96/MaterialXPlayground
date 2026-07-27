@@ -290,6 +290,30 @@ function runSanityChecks(db, index) {
     check(index.allTargets.includes(t), `index.allTargets is missing '${t}' (got: [${index.allTargets.join(", ")}])`);
   }
 
+  // Impl-file link data (Feature 1) — pin a few known-good resolved paths so
+  // a regression in nodedef-extract.mjs's repoPathFromSourceUri/
+  // resolveImplFile (or the ../-climbing logic) is caught here instead of
+  // silently shipping broken GitHub links.
+  const imageFloat = (index.nodes.image?.impl || []).find((r) => r.type === "float");
+  check(!!imageFloat, "index.nodes['image'] has no float-signature impl row");
+  if (imageFloat) {
+    check((imageFloat.files || {}).genosl === "libraries/stdlib/genosl/mx_image_float.osl",
+      `image (float) files.genosl is ${JSON.stringify((imageFloat.files || {}).genosl)}, expected 'libraries/stdlib/genosl/mx_image_float.osl'`);
+  }
+  const addFloat = (index.nodes.add?.impl || []).find((r) => r.type === "float");
+  check(!!addFloat, "index.nodes['add'] has no float-signature impl row");
+  if (addFloat) {
+    const files = addFloat.files || {};
+    check(!!files.essl && files.essl === files.genglsl,
+      `add (float) files.essl (${JSON.stringify(files.essl)}) does not equal files.genglsl (${JSON.stringify(files.genglsl)})`);
+  }
+  const tiledimageRow = (index.nodes.tiledimage?.impl || [])[0];
+  check(!!tiledimageRow && tiledimageRow.graphFile === "libraries/stdlib/stdlib_ng.mtlx",
+    `index.nodes['tiledimage'].impl[0].graphFile is ${JSON.stringify(tiledimageRow && tiledimageRow.graphFile)}, expected 'libraries/stdlib/stdlib_ng.mtlx'`);
+  const surfaceShaderRow = (index.nodes.standard_surface?.impl || [])[0];
+  check(!!surfaceShaderRow && surfaceShaderRow.graphFile === "libraries/bxdf/standard_surface.mtlx",
+    `index.nodes['standard_surface'].impl[0].graphFile is ${JSON.stringify(surfaceShaderRow && surfaceShaderRow.graphFile)}, expected 'libraries/bxdf/standard_surface.mtlx'`);
+
   return problems;
 }
 

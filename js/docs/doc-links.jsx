@@ -139,6 +139,15 @@
             return SPEC_BASE + specFileForLib(node.lib) + '#node-' + node.name.replace(/_/g, '-');
         };
 
+        // ---- Vendored-library implementation deep-links ----
+        // repoPath is one of js/gen/nodelib-index.json's impl-row `files[target]`
+        // / `graphFile` values — a repo-relative 'libraries/...' path already
+        // resolved (climbing any file="../..." relative reference) by
+        // scripts/lib/nodedef-extract.mjs's resolveImplFile at build time.
+        // Tag-pinned (window.SITE_LINKS.libBlobBase), unlike SPEC_BASE above,
+        // since the path was resolved against that exact vendored checkout.
+        const implFileUrl = (repoPath) => repoPath ? window.SITE_LINKS.libBlobBase + repoPath : null;
+
         // ---- public API ----
         // REPO_URL/SPEC_DOCS_URL/specFileForLib have no consumers outside
         // this file (checked repo-wide, word-boundary grep) — kept as
@@ -148,4 +157,5 @@
             ISSUES_URL,
             selToHash, hashToSel,
             specUrlForNode,
+            implFileUrl,
         });

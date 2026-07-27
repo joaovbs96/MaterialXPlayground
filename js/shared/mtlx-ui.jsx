@@ -44,6 +44,24 @@ const useEscapeToClose = (onClose, when) => {
     }, [when]);
 };
 
+// Whether the hosting pane is NARROWER than Tailwind's `md` breakpoint
+// (min-width: 768px — the same threshold js/site-header.css collapses the
+// site nav at). The graph/viewer panes fill the window in both the plain
+// browser and the VS Code webview, so a viewport media query IS the pane
+// width, and matchMedia 'change' fires on webview pane drags too.
+const useNarrowPane = () => {
+    const [narrow, setNarrow] = React.useState(
+        () => !window.matchMedia('(min-width: 768px)').matches);
+    React.useEffect(() => {
+        const mql = window.matchMedia('(min-width: 768px)');
+        const onChange = () => setNarrow(!mql.matches);
+        onChange();
+        mql.addEventListener('change', onChange);
+        return () => mql.removeEventListener('change', onChange);
+    }, []);
+    return narrow;
+};
+
 // Shared chrome for the app's modal dialogs: a full-viewport backdrop
 // (mousedown outside the panel closes it, unless
 // `backdropCloseDisabled`), a centered panel, and a header bar with
@@ -1727,7 +1745,7 @@ class PreviewErrorBoundary extends React.Component {
 Object.assign(window, {
     BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
     errMsg,
-    useEscapeToClose, useFullscreen, useViewToggle,
+    useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
     downloadSnapshot, downloadBlob, downloadXml,
     useViewportControls, usePersistedGeom,
     openInGraphEditor, openInViewer, looseFilesFrom,

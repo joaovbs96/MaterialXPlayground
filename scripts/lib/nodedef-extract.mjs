@@ -271,21 +271,61 @@ export const TARGET_INHERITANCE = { essl: 'genglsl', genmsl: 'genglsl', genslang
 // this module has no window/mtlx-engine.js to import from.
 const safe = (fn, fb) => { try { const v = fn(); return v == null ? fb : v; } catch (e) { return fb; } };
 
+// Repo-relative path ('libraries/...') from an element source URI —
+// modeled on scripts/lib/spec-parser.js's libraryFromSourceUri (which
+// returns only the library NAME; this returns the whole path). null
+// when there's no 'libraries' segment (defensive).
+const repoPathFromSourceUri = (uri) => {
+    if (!uri) return null;
+    const parts = String(uri).replace(/\\/g, '/').split('/');
+    const i = parts.indexOf('libraries');
+    return i === -1 ? null : parts.slice(i).join('/');
+};
+// file= is relative to the impl .mtlx's directory and may climb ('../
+// genglsl/mx_image_float.glsl'). No file= -> the containing .mtlx.
+const resolveImplFile = (implUri, fileAttr) => {
+    const implPath = repoPathFromSourceUri(implUri);
+    if (!implPath) return null;
+    if (!fileAttr) return implPath;
+    const segs = implPath.split('/').slice(0, -1);
+    for (const s of String(fileAttr).replace(/\\/g, '/').split('/')) {
+        if (!s || s === '.') continue;
+        if (s === '..') segs.pop(); else segs.push(s);
+    }
+    const out = segs.join('/');
+    return out.indexOf('libraries/') === 0 ? out : null; // never escape the mirror
+};
+
 // Ported from js/docs/impl-matrix.jsx's getImplIndex, as buildImplIndex
 // ({mx, stdlib}) — drops the promise/lock machinery (implIndexPromise,
 // mxExclusive) since this runs once synchronously in Node. Returns
-// nodedefName -> { targets: Set, inherited: Set, graph: bool }.
+// nodedefName -> { targets: Set, inherited: Set, graph: bool, files: {target:
+// repoPath}, graphFile: repoPath|null }. `files`/`graphFile` are repo-
+// relative paths ('libraries/...') to the actual source file backing each
+// implementation — see repoPathFromSourceUri/resolveImplFile above.
 export const buildImplIndex = ({ mx, stdlib } = {}) => {
     const impls = vecToArray(safe(() => stdlib.getImplementations(), []));
     const index = {};
     impls.forEach((impl) => {
         const nodedefName = safe(() => impl.getAttribute('nodedef'), null);
         if (!nodedefName) return;
-        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
+        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false, files: {}, graphFile: null };
+        const entry = index[nodedefName];
         const ngAttr = safe(() => impl.getAttribute('nodegraph'), '');
-        if (ngAttr) { index[nodedefName].graph = true; return; }
+        if (ngAttr) {
+            entry.graph = true;
+            const ng = safe(() => stdlib.getNodeGraph(ngAttr), null);
+            if (!entry.graphFile) entry.graphFile = repoPathFromSourceUri(safe(() => (ng || impl).getSourceUri(), ''));
+            return;
+        }
         const target = safe(() => impl.getAttribute('target'), null);
-        if (target) index[nodedefName].targets.add(target);
+        if (target) {
+            entry.targets.add(target);
+            const sourceUri = safe(() => impl.getSourceUri(), '');
+            const fileAttr = safe(() => impl.getAttribute('file'), '');
+            const resolved = resolveImplFile(sourceUri, fileAttr);
+            if (resolved != null && !entry.files[target]) entry.files[target] = resolved;
+        }
     });
     // A <nodegraph> can serve directly as a function implementation when it
     // carries a `nodedef` attribute itself (dominant pattern in stdlib).
@@ -293,8 +333,10 @@ export const buildImplIndex = ({ mx, stdlib } = {}) => {
     nodegraphs.forEach((g) => {
         const nodedefName = safe(() => g.getAttribute('nodedef'), null);
         if (!nodedefName) return;
-        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false };
-        index[nodedefName].graph = true;
+        if (!index[nodedefName]) index[nodedefName] = { targets: new Set(), inherited: new Set(), graph: false, files: {}, graphFile: null };
+        const entry = index[nodedefName];
+        entry.graph = true;
+        if (!entry.graphFile) entry.graphFile = repoPathFromSourceUri(safe(() => g.getSourceUri(), ''));
     });
     // Resolve target inheritance.
     Object.values(index).forEach((entry) => {
@@ -302,6 +344,7 @@ export const buildImplIndex = ({ mx, stdlib } = {}) => {
             if (entry.targets.has(parent) && !entry.targets.has(child)) {
                 entry.inherited.add(child);
             }
+            if (entry.files[parent] && !entry.files[child]) entry.files[child] = entry.files[parent];
         });
     });
     return index;
@@ -324,7 +367,7 @@ export const buildImplRows = (index, defs) => {
         let outType = '';
         try { outType = def.getType(); } catch (e) { /* none */ }
         if (!bySig[key]) {
-            bySig[key] = { key, type: outType, targets: new Set(), inherited: new Set(), graph: false };
+            bySig[key] = { key, type: outType, targets: new Set(), inherited: new Set(), graph: false, files: {}, graphFile: null };
             order.push(key);
         }
         const info = defName && index[defName];
@@ -332,10 +375,24 @@ export const buildImplRows = (index, defs) => {
             if (info.graph) bySig[key].graph = true;
             info.targets.forEach((t) => bySig[key].targets.add(t));
             info.inherited.forEach((t) => bySig[key].inherited.add(t));
+            // First-wins merges: multiple nodedef versions can share a sig
+            // key (nodeDefSigKey groups by signature, not by name), so keep
+            // whichever files/graphFile were captured first in document-load
+            // order rather than letting a later version overwrite them.
+            Object.entries(info.files).forEach(([t, p]) => { if (p && !bySig[key].files[t]) bySig[key].files[t] = p; });
+            if (info.graphFile && !bySig[key].graphFile) bySig[key].graphFile = info.graphFile;
         }
     });
     return order.map((key) => {
         const r = bySig[key];
-        return { key: r.key, type: r.type, targets: [...r.targets].sort(), inherited: [...r.inherited].sort(), graph: r.graph };
+        const row = { key: r.key, type: r.type, targets: [...r.targets].sort(), inherited: [...r.inherited].sort(), graph: r.graph };
+        const fileKeys = Object.keys(r.files).sort();
+        if (fileKeys.length) {
+            const files = {};
+            fileKeys.forEach((t) => { files[t] = r.files[t]; });
+            row.files = files;
+        }
+        if (r.graphFile) row.graphFile = r.graphFile;
+        return row;
     });
 };

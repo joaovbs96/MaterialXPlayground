@@ -31,9 +31,13 @@
         // props: { nodeName, signature, implRows, allTargets }. implRows is
         // the pregenerated per-signature array (scripts/build-nodelib.mjs's
         // buildImplRows, see js/docs-app.jsx's call site) — [{key, type,
-        // targets: [...sorted], inherited: [...sorted], graph}], one entry
-        // per TYPE SIGNATURE (same nodeDefSigKey grouping groupDefVersions
-        // uses). `signature` picks out just the row for the currently
+        // targets: [...sorted], inherited: [...sorted], graph, files?,
+        // graphFile?}], one entry per TYPE SIGNATURE (same nodeDefSigKey
+        // grouping groupDefVersions uses). `files`/`graphFile` (added for
+        // Feature 1's "open on GitHub" badge links) are repo-relative
+        // 'libraries/...' paths, omitted entirely when empty/absent —
+        // resolved through implFileUrl (js/docs/doc-links.jsx) before use
+        // below. `signature` picks out just the row for the currently
         // selected overload, falling back to showing every row (collapsed
         // when identical) if `signature` isn't provided or doesn't match
         // anything — same selection rule the old live version used, just
@@ -45,6 +49,10 @@
             const bySig = {};
             implRows.forEach((r) => { bySig[r.key] = r; });
 
+            // Deliberately ignores files/graphFile — two rows with the same
+            // target sets but different resolved source files (unlikely in
+            // practice, but not impossible) still collapse to one display
+            // row; only the visible ✓/✓*/– pattern needs to match.
             const sameImpl = (a, b) => a.graph === b.graph
                 && a.targets.length === b.targets.length
                 && a.targets.every((t) => b.targets.indexOf(t) !== -1)
@@ -74,13 +82,65 @@
                             {rows.map((row, i) => (
                                 <div key={row.key || i} className="flex items-center gap-1.5 flex-wrap">
                                     {row.graph ? (
-                                        <span className={badgeBase + ' border-blue-700/60 bg-blue-950/40 text-blue-300'}>
-                                            Graph (all targets)
-                                        </span>
+                                        // Feature 1: link to the backing nodegraph's .mtlx on GitHub
+                                        // when the pregenerated data has a resolved path for it;
+                                        // otherwise fall back to the old plain span (e.g. older
+                                        // nodelib-index.json without graphFile, or a graph impl
+                                        // whose source URI had no 'libraries' segment).
+                                        implFileUrl(row.graphFile) ? (
+                                            <a
+                                                href={implFileUrl(row.graphFile)}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                title={'Nodegraph implementation — view source: ' + row.graphFile}
+                                                aria-label="View nodegraph implementation source"
+                                                className={badgeBase + ' border-blue-700/60 bg-blue-950/40 text-blue-300'}
+                                            >
+                                                Graph (all targets)
+                                            </a>
+                                        ) : (
+                                            <span className={badgeBase + ' border-blue-700/60 bg-blue-950/40 text-blue-300'}>
+                                                Graph (all targets)
+                                            </span>
+                                        )
                                     ) : targets.length ? (
                                         targets.map((t) => {
                                             const explicit = row.targets.indexOf(t) !== -1;
                                             const inherited = !explicit && row.inherited.indexOf(t) !== -1;
+                                            // Explicit and inherited badges both link to a real source
+                                            // file (inherited targets bake to their GLSL parent's path
+                                            // at build time — see nodedef-extract.mjs's inheritance
+                                            // loop); '–' (no implementation at all) never links.
+                                            const path = (explicit || inherited) && row.files ? row.files[t] : null;
+                                            const href = implFileUrl(path);
+                                            const badgeClassName = badgeBase + (
+                                                explicit
+                                                    ? ' border-green-700/60 bg-green-950/30 text-green-400'
+                                                    : inherited
+                                                        ? ' border-green-800/40 border-dashed bg-green-950/10 text-green-600'
+                                                        : ' border-gray-700 bg-gray-900 text-gray-600'
+                                            );
+                                            const badgeChildren = (
+                                                <React.Fragment>{explicit ? '✓' : inherited ? '✓*' : '–'} {friendlyTargetLabel(t)}</React.Fragment>
+                                            );
+                                            if (href) {
+                                                const title = inherited
+                                                    ? 'Inherited from GLSL — no explicit implementation, but MaterialX falls back to the GLSL source at generation time. Source: ' + path
+                                                    : t + ' — view source: ' + path;
+                                                return (
+                                                    <a
+                                                        key={t}
+                                                        href={href}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        title={title}
+                                                        aria-label={'View ' + friendlyTargetLabel(t) + ' implementation source'}
+                                                        className={badgeClassName}
+                                                    >
+                                                        {badgeChildren}
+                                                    </a>
+                                                );
+                                            }
                                             return (
                                                 <span
                                                     key={t}
@@ -89,15 +149,9 @@
                                                             ? 'Inherited from GLSL — no explicit implementation, but MaterialX falls back to the GLSL source at generation time.'
                                                             : t
                                                     }
-                                                    className={badgeBase + (
-                                                        explicit
-                                                            ? ' border-green-700/60 bg-green-950/30 text-green-400'
-                                                            : inherited
-                                                                ? ' border-green-800/40 border-dashed bg-green-950/10 text-green-600'
-                                                                : ' border-gray-700 bg-gray-900 text-gray-600'
-                                                    )}
+                                                    className={badgeClassName}
                                                 >
-                                                    {explicit ? '✓' : inherited ? '✓*' : '–'} {friendlyTargetLabel(t)}
+                                                    {badgeChildren}
                                                 </span>
                                             );
                                         })

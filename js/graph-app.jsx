@@ -166,8 +166,13 @@
             // scope navigation) — rendered as its own LoadingOverlay
             // alongside scopeBusy's.
             const [actionBusy, setActionBusy] = React.useState(null);
+            // Compact-mode threshold (below Tailwind's `md` breakpoint):
+            // drives the HUD's label/chip hiding, panel auto-collapse, and
+            // minimap suppression. Declared here, ABOVE the panel-open
+            // states below, since their lazy initializers read it.
+            const narrow = useNarrowPane();
             // The type-color legend (bottom left) can be collapsed to a chip.
-            const [legendOpen, setLegendOpen] = React.useState(true);
+            const [legendOpen, setLegendOpen] = React.useState(!narrow);
             // Legend "+" toggle: show every known TYPE_COLORS entry, not just
             // the types present in the current scope.
             const [legendShowAll, setLegendShowAll] = React.useState(false);
@@ -188,7 +193,7 @@
             // The selected EDGE (single selection, mutually exclusive with
             // the node selection) — Delete disconnects it.
             const [selectedEdgeId, setSelectedEdgeId] = React.useState(null);
-            const [paramsOpen, setParamsOpen] = React.useState(true);
+            const [paramsOpen, setParamsOpen] = React.useState(!narrow);
             // The LAST node the preview showed — { scope, id } — so the
             // preview stays on it when the selection is cleared. Reset per
             // document.
@@ -323,6 +328,13 @@
             // sidebar state instead of the value from first render.
             const paramsOpenRef = React.useRef(paramsOpen);
             paramsOpenRef.current = paramsOpen;
+            // Same idiom, for the legend-open and narrow-pane states (read
+            // from the transition effect below and from smartFitView's
+            // stale-closure sidebar-reserve calc).
+            const legendOpenRef = React.useRef(legendOpen);
+            legendOpenRef.current = legendOpen;
+            const narrowRef = React.useRef(narrow);
+            narrowRef.current = narrow;
             // Lets this view's background work (WebGL render loop, global
             // keydown/drag-drop) pause while another view is visible in the
             // shell's multi-view layout, without unmounting (so undo
@@ -558,6 +570,29 @@
             React.useEffect(() => watchFullscreen(
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
             ), []);
+
+            // Compact-mode auto-collapse: crossing wide->narrow stashes
+            // whatever open/closed state the params panel and legend were
+            // in and force-collapses both to chips; crossing narrow->wide
+            // restores that stash. A manual re-open while still narrow
+            // sticks (it's not restashed until the NEXT wide->narrow
+            // crossing) — this is the "sticky until next crossing"
+            // behavior called out in the plan. prevNarrowRef starts at
+            // `narrow` itself so mount never counts as a crossing.
+            const prevNarrowRef = React.useRef(narrow);
+            const preNarrowOpenRef = React.useRef({ params: true, legend: true });
+            React.useEffect(() => {
+                const was = prevNarrowRef.current;
+                prevNarrowRef.current = narrow;
+                if (narrow === was) return;
+                if (narrow) {
+                    preNarrowOpenRef.current = { params: paramsOpenRef.current, legend: legendOpenRef.current };
+                    setParamsOpen(false); setLegendOpen(false);
+                } else {
+                    setParamsOpen(preNarrowOpenRef.current.params);
+                    setLegendOpen(preNarrowOpenRef.current.legend);
+                }
+            }, [narrow]);
 
             // Warm the MaterialX WASM on mount (also resolves the header's
             // version badge right away).
@@ -1407,7 +1442,11 @@
                 if (!targetNodes.length || targetNodes.some((n) => !n.width || !n.height)) return false;
                 const rect = host.getBoundingClientRect();
                 if (!rect.width || !rect.height) return false;
-                const sidebarWidth = (parsedRef.current && paramsOpenRef.current) ? 320 : 15; // mirrors the MiniMap's own occlusion constant
+                // Narrow-pane exception: an open params panel there is a
+                // transient overlay (see the minimap's own conditional a
+                // few hundred lines below), not a permanent occlusion —
+                // reserving 320 of a ~400px pane would floor visibleWidth.
+                const sidebarWidth = (parsedRef.current && paramsOpenRef.current && !narrowRef.current) ? 320 : 15; // mirrors the MiniMap's own occlusion constant
                 const visibleWidth = Math.max(50, rect.width - sidebarWidth);
                 const bounds = getBounds(targetNodes);
                 const padding = (opts && typeof opts.padding === 'number') ? opts.padding : 0.15;
@@ -4882,21 +4921,26 @@
                                 the TOP of the Types window instead of React
                                 Flow's own bottom-left <Controls> — see the
                                 Types window below, which renders them. */}
-                            <MiniMap
-                                pannable zoomable
-                                position="bottom-right"
-                                nodeColor={(n) => getNodeColor(n.data)}
-                                nodeStrokeColor="#111827"
-                                maskColor="rgba(17, 24, 39, 0.75)"
-                                // Sit to the LEFT of the preview panel (right-2
-                                // + w-[19rem] = 312px) while it's open; slide back
-                                // to the corner when it collapses to a chip.
-                                style={{
-                                    background: '#1f2937',
-                                    marginRight: (parsed && paramsOpen) ? 320 : 15,
-                                    transition: 'margin-right 200ms ease',
-                                }}
-                            />
+                            {/* Hidden below the compact-mode threshold — there's
+                                no room for it, and it would sit under the
+                                (now transient/overlay) params panel anyway. */}
+                            {!narrow && (
+                                <MiniMap
+                                    pannable zoomable
+                                    position="bottom-right"
+                                    nodeColor={(n) => getNodeColor(n.data)}
+                                    nodeStrokeColor="#111827"
+                                    maskColor="rgba(17, 24, 39, 0.75)"
+                                    // Sit to the LEFT of the preview panel (right-2
+                                    // + w-[19rem] = 312px) while it's open; slide back
+                                    // to the corner when it collapses to a chip.
+                                    style={{
+                                        background: '#1f2937',
+                                        marginRight: (parsed && paramsOpen && !narrow) ? 320 : 15,
+                                        transition: 'margin-right 200ms ease',
+                                    }}
+                                />
+                            )}
                         </ReactFlowComp>
                     </div>
 
@@ -5045,7 +5089,7 @@
                         Import, Export, Undo, Redo) stacked above the
                         breadcrumb (document \u25B8 scope) and its scope
                         dropdown, when a document is loaded. */}
-                    <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 max-w-[45%]">
+                    <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 max-w-[48%] md:max-w-[45%]">
                         <div className="flex items-center gap-1.5 flex-wrap">
                             {/* New/Import/Presets are browser-only, multi-
                                 document affordances — the VS Code editor is
@@ -5057,7 +5101,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
-                                <span>New Material</span>
+                                <span className="hidden md:inline">New Material</span>
                             </button>
                             )}
                             {!IN_VSCODE && (
@@ -5066,7 +5110,7 @@
                                 className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors cursor-pointer"
                             >
                                 <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
-                                <span>Import</span>
+                                <span className="hidden md:inline">Import</span>
                                 <input type="file" multiple className="hidden" onChange={onPickFiles} />
                             </label>
                             )}
@@ -5082,7 +5126,7 @@
                                     no longer shared with the unrelated env-map-background
                                     toggle in the preview panel (js/shared/mtlx-ui.jsx). */}
                                 <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                <span>Presets</span>
+                                <span className="hidden md:inline">Presets</span>
                             </button>
                             )}
                             {parsed && (
@@ -5093,7 +5137,7 @@
                                     className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
-                                    <span>Export</span>
+                                    <span className="hidden md:inline">Export</span>
                                 </button>
                                 <button
                                     onClick={openShaderExport}
@@ -5101,7 +5145,7 @@
                                     className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                    <span>Shader Code</span>
+                                    <span className="hidden md:inline">Shader Code</span>
                                 </button>
                                 </div>
                             )}
@@ -5112,7 +5156,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
-                                <span>Undo</span>
+                                <span className="hidden md:inline">Undo</span>
                             </button>
                             <button
                                 onClick={redoDoc}
@@ -5120,7 +5164,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
-                                <span>Redo</span>
+                                <span className="hidden md:inline">Redo</span>
                             </button>
                             </div>
                         </div>
@@ -5157,10 +5201,10 @@
                         view toggles, add-node, fullscreen. Import/Export
                         live in the top-left toolbar now, alongside New
                         Material and Undo/Redo. */}
-                    <div className="absolute top-2 right-2 z-30 flex items-center gap-1.5 flex-wrap justify-end max-w-[70%]">
+                    <div className="absolute top-2 right-2 z-30 flex items-center gap-1.5 flex-wrap justify-end max-w-[48%] md:max-w-[70%]">
                         {mtlxPaths.length > 1 && (
                             <select
-                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[14rem] truncate"
+                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[10rem] md:max-w-[14rem] truncate"
                                 title="Which .mtlx document to display"
                                 value={chosenMtlx || ''}
                                 onChange={(e) => {
@@ -5184,7 +5228,7 @@
                                         : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                             >
                                 <MtlxIcon name="code" className="w-3.5 h-3.5" />
-                                <span>Show All Inputs</span>
+                                <span className="hidden md:inline">Show All Inputs</span>
                             </button>
                         )}
                         {parsed && (
@@ -5194,8 +5238,8 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="share" className="w-3.5 h-3.5" />
-                                <span>Add Node</span>
-                                <span className="text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
+                                <span className="hidden md:inline">Add Node</span>
+                                <span className="hidden md:inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
                             </button>
                         )}
                         {parsed && (
@@ -5205,8 +5249,8 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
-                                <span>Auto Layout</span>
-                                <span className="text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
+                                <span className="hidden md:inline">Auto Layout</span>
+                                <span className="hidden md:inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
                             </button>
                         )}
                         {parsed && (
@@ -5216,7 +5260,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                <span>Document</span>
+                                <span className="hidden md:inline">Document</span>
                             </button>
                         )}
                         {parsed && (
@@ -5233,7 +5277,7 @@
                                 <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
                                     : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
                                     className="w-3.5 h-3.5" />
-                                <span>Validate</span>
+                                <span className="hidden md:inline">Validate</span>
                             </button>
                         )}
                         <button
@@ -5245,7 +5289,7 @@
                                     : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                         >
                             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-                            <span>{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
+                            <span className="hidden md:inline">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
                         </button>
                         <button
                             onClick={() => setHelpOpen(true)}
@@ -5307,7 +5351,7 @@
                         connected inputs are read-only since their value
                         comes from the wire. */}
                     {parsed && (paramsOpen ? (
-                        <div className="absolute top-12 bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono">
+                        <div className="absolute top-20 md:top-12 bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono">
                             {/* The preview target on a shaderball — the same
                                 render pipeline as the docs page. Square, and
                                 framed to fill. Re-renders on every committed
@@ -5614,10 +5658,10 @@
                         <button
                             onClick={() => setParamsOpen(true)}
                             title="Expand the preview panel"
-                            className="absolute top-12 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            className="absolute top-20 md:top-12 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                         >
                             <MtlxIcon name="chevrons-left" className="w-4 h-4" />
-                            <span className="font-mono max-w-[8rem] truncate">
+                            <span className="font-mono max-w-[5rem] md:max-w-[8rem] truncate">
                                 {displayNode ? displayNode.data.name : 'Preview'}
                             </span>
                         </button>

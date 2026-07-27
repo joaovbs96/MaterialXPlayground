@@ -56,6 +56,14 @@
         // Per-node spec markdown deep-link base, consumed by
         // js/docs/doc-links.jsx (specUrlForNode's derivation fallback).
         specBlobBase: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/',
+        // Vendored-library source deep-link base, pinned to the same tag as
+        // the vendored WASM build (MTLX_TAG above) — unlike specBlobBase,
+        // this one MUST track the tag: js/gen/nodelib-index.json's impl
+        // `files`/`graphFile` paths are resolved against that exact
+        // checkout, so a 'main'-branch link could 404 or point at a file
+        // that has since moved. Consumed by js/docs/doc-links.jsx's
+        // implFileUrl.
+        libBlobBase: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/' + MTLX_TAG + '/',
     };
     LINKS.issues = LINKS.repo + '/issues';
 
