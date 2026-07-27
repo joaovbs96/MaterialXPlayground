@@ -45,6 +45,13 @@
         // DEFAULT version's inputTypes satisfies EVERY hinted name->type
         // pair wins; if none do, fall back to the first candidate rather
         // than showing nothing.
+        // Stable empty fallbacks: an inline `[]`/`{}` literal is a new
+        // reference every render, which defeats React.memo on every
+        // consumer downstream (PortTable et al.) even when the "real"
+        // value hasn't changed. Module-level so identity never changes.
+        const EMPTY_TABLES = [];
+        const EMPTY_COLUMNS = [];
+
         const matchSigHintToGroups = (groups, hint) => {
             if (!groups || !groups.length || !hint || !hint.out) return -1;
 
@@ -236,20 +243,11 @@
                 };
             }, [jsonData]);
 
-            // KaTeX loads with `defer`; if React renders before it's ready,
-            // poll briefly and re-render once it arrives so math spans
-            // upgrade from raw text to rendered output.
-            const [, setKatexReady] = React.useState(!!window.katex);
-            React.useEffect(() => {
-                if (window.katex) return;
-                const timer = setInterval(() => {
-                    if (window.katex) {
-                        setKatexReady(true);
-                        clearInterval(timer);
-                    }
-                }, 200);
-                return () => clearInterval(timer);
-            }, []);
+            // KaTeX defer-load upgrade (raw text -> rendered math once
+            // window.katex arrives) is now handled by MathText itself via
+            // js/docs/rich-text.jsx's useKatexReady() — App no longer needs
+            // its own poll/state for this (removed; nothing else consumed
+            // the old setKatexReady, confirmed by grep).
 
             // State to keep track of which tree folders are open
             const [expandedLibs, setExpandedLibs] = React.useState({});
@@ -621,13 +619,22 @@
             // Chevron icons for the tree view now live in js/docs/sidebar.jsx
             // (moved with DocsSidebar, their only consumer).
 
-            const portTables = selectedNode ? getPortTables(selectedNode.info) : [];
+            // Memoized (not recomputed every render): portTables/columns/
+            // typesOverride/refs feed React.memo'd PortTable/MathText/
+            // RichBlocks as props — an inline recompute would hand them a
+            // fresh array/object identity every render (including every
+            // sidebar-search keystroke, which re-renders App but touches
+            // none of this node's underlying data) and defeat the memo.
+            const portTables = React.useMemo(
+                () => selectedNode ? getPortTables(selectedNode.info) : EMPTY_TABLES,
+                [selectedNode]
+            );
             // For undocumented nodes, fall back to the nodedef-generated tables.
             const autoReady = autoDoc && selectedNode && autoDoc.name === selectedNode.name
                 && autoDoc.status === 'ready';
             const isAutoTable = portTables.length === 0 && autoReady && autoDoc.tables.length > 0;
             const effectiveTables = portTables.length > 0 ? portTables
-                : (isAutoTable ? autoDoc.tables : []);
+                : (isAutoTable ? autoDoc.tables : EMPTY_TABLES);
             // Signature selection: the dropdown is now driven by the live
             // nodedef VERSION GROUPS (nodeVersionGroups), not by counting
             // markdown tables — a node like fractal3d has ELEVEN nodedefs
@@ -642,7 +649,10 @@
             // the full selection rules (documented multi-table narrowing,
             // undocumented auto-table pick, sigGroups/autoDoc.tables index
             // alignment).
-            const displayTables = resolveDisplayTables(portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables);
+            const displayTables = React.useMemo(
+                () => resolveDisplayTables(portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables),
+                [portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables]
+            );
             // Concrete type this signature previews as (null → auto-pick).
             // While nodeVersionGroups is still loading (async), fall back to
             // the markdown-table-derived heuristic so the preview isn't
@@ -661,8 +671,14 @@
             // type/default data must be projected onto them — otherwise a
             // dropdown pick that doesn't match the spec's authored signature
             // would show stale types/defaults.
-            const typesOverride = (sigCount > 1 && selectedVersion && portTables.length > 0)
-                ? { ...selectedVersion.inputTypes, ...selectedVersion.outputTypes } : null;
+            const typesOverride = React.useMemo(
+                () => (sigCount > 1 && selectedVersion && portTables.length > 0)
+                    ? { ...selectedVersion.inputTypes, ...selectedVersion.outputTypes } : null,
+                [sigCount, selectedVersion, portTables]
+            );
+            // Already a stable reference (selectedVersion.defaults, straight
+            // off the pregenerated data — no new object built here); no
+            // memo needed.
             const defaultsOverride = selectedVersion && (sigCount > 1 || !selectedVersion.isDefaultVersion)
                 ? selectedVersion.defaults : null;
             // Previewability decided HERE, where the selected signature's exact
@@ -670,12 +686,23 @@
             // above for the type-gating rules.
             const previewDisabled = resolvePreviewDisabled(selectedGroup, selectedVersion, selectedNode);
             // Column set for the displayed table(s).
-            const columns = displayTables.length > 0 ? unionColumns(displayTables) : [];
+            const columns = React.useMemo(
+                () => displayTables.length > 0 ? unionColumns(displayTables) : EMPTY_COLUMNS,
+                [displayTables]
+            );
             // Footnote references: map key -> {n, url, text}, numbered by
             // order of first appearance (the parser preserves that order).
             const references = (selectedNode && selectedNode.info.references) || [];
-            const refs = {};
-            references.forEach((r, i) => { refs[r.key] = { n: i + 1, url: r.url, text: r.text }; });
+            // Keyed on selectedNode, NOT references: references falls back
+            // to a fresh `[]` on every render when info.references is
+            // absent, so depending on it would defeat the memo (a "changed"
+            // dependency on every render) even though the underlying data
+            // for this node hasn't changed.
+            const refs = React.useMemo(() => {
+                const map = {};
+                references.forEach((r, i) => { map[r.key] = { n: i + 1, url: r.url, text: r.text }; });
+                return map;
+            }, [selectedNode]);
 
             return (
                 <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">

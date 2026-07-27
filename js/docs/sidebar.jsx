@@ -131,7 +131,7 @@
                                                                     <div
                                                                         key={nodeName}
                                                                         onClick={() => setSelectedNode({ lib, group, name: nodeName, info: nodeInfo })}
-                                                                        className={`cursor-pointer py-1 px-2 rounded font-mono text-xs ${isSelected ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200'}`}
+                                                                        className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${isSelected ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200'}`}
                                                                     >
                                                                         {nodeName}
                                                                     </div>

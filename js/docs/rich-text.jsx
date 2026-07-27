@@ -99,7 +99,73 @@
             return out;
         };
 
-        function MathText({ text, refs }) {
+        // ------------------------------------------------------------------
+        // KaTeX render cache: renderToString is synchronous and re-parses
+        // its input from scratch, and without memoization it re-runs for
+        // EVERY math span (description + notes + every port-table cell) on
+        // EVERY App render — including every sidebar-search keystroke — and
+        // scales with port count (why standard_surface's port-heavy tables
+        // are far slower to render than add's). Keys are the bounded set of
+        // distinct math spans shipped in the node library, not user input,
+        // so an unbounded cache is fine. Parse failures cache as null
+        // (never re-thrown) so a broken span fails once, not on every
+        // render; the raw text renders instead, same as before this cache
+        // existed. NEVER consult/populate this while window.katex is
+        // absent — callers must keep gating on it themselves.
+        // ------------------------------------------------------------------
+        const KATEX_CACHE = new Map();
+        const renderKatex = (src, displayMode) => {
+            const key = (displayMode ? 'D:' : 'I:') + src;
+            if (KATEX_CACHE.has(key)) return KATEX_CACHE.get(key);
+            let html = null;
+            try {
+                html = window.katex.renderToString(src, { displayMode, throwOnError: true });
+            } catch (err) {
+                html = null;
+            }
+            KATEX_CACHE.set(key, html);
+            return html;
+        };
+
+        // ------------------------------------------------------------------
+        // KaTeX loads with `defer`, so MathText can first render before
+        // window.katex exists (math spans show raw). useKatexReady() lets a
+        // component upgrade once it arrives — a single module-level poll
+        // starts lazily on first subscriber and stops itself the moment
+        // window.katex shows up, notifying every subscriber to re-render,
+        // instead of each mounted MathText running its own 200ms timer.
+        // ------------------------------------------------------------------
+        const katexSubs = new Set();
+        let katexPollTimer = null;
+        const startKatexPoll = () => {
+            if (katexPollTimer || window.katex) return;
+            katexPollTimer = setInterval(() => {
+                if (!window.katex) return;
+                clearInterval(katexPollTimer);
+                katexPollTimer = null;
+                katexSubs.forEach((fn) => fn());
+            }, 200);
+        };
+        function useKatexReady() {
+            const [ready, setReady] = React.useState(!!window.katex);
+            React.useEffect(() => {
+                if (ready) return undefined;
+                const onReady = () => setReady(true);
+                katexSubs.add(onReady);
+                startKatexPoll();
+                return () => { katexSubs.delete(onReady); };
+            }, [ready]);
+            return ready;
+        }
+
+        const MathText = React.memo(function MathText({ text, refs }) {
+            // Return value intentionally unused: subscribing here is what
+            // makes MathText re-render once KaTeX finishes loading, so a
+            // span that fell back to raw text on first paint upgrades to
+            // rendered output — without this, React.memo below (props
+            // unchanged) would skip that re-render and the raw text would
+            // stick forever.
+            useKatexReady();
             if (text == null || text === '') return null;
             const parts = String(text).split(RICH_SPLIT_RE);
             return (
@@ -141,21 +207,17 @@
                         const isInline = !isDisplay && part.length > 2 && part.startsWith('$') && part.endsWith('$');
                         if ((isDisplay || isInline) && window.katex) {
                             const src = isDisplay ? part.slice(2, -2) : part.slice(1, -1);
-                            try {
-                                const html = window.katex.renderToString(src, {
-                                    displayMode: isDisplay,
-                                    throwOnError: true,
-                                });
+                            const html = renderKatex(src, isDisplay);
+                            if (html != null) {
                                 return <span key={i} dangerouslySetInnerHTML={{ __html: html }} />;
-                            } catch (err) {
-                                return <span key={i}>{part}</span>;
                             }
+                            return <span key={i}>{part}</span>; // parse failure: raw text
                         }
                         return <span key={i}>{styleInline(part, i + '-')}</span>;
                     })}
                 </React.Fragment>
             );
-        }
+        });
 
         // Renders multi-paragraph prose (description / notes): paragraphs
         // are separated by \n\n; a paragraph starting with '#'s is a
@@ -163,7 +225,7 @@
         // "$$...$$" paragraph becomes a centered display equation.
         const SUBHEADING_RE = /^#{1,6}\s+(.*)$/;
 
-        function RichBlocks({ text, refs, className }) {
+        const RichBlocks = React.memo(function RichBlocks({ text, refs, className }) {
             if (!text) return null;
             return (
                 <div className={className}>
@@ -184,7 +246,7 @@
                     })}
                 </div>
             );
-        }
+        });
 
         // ---- public API ----
         // styleInlinePlain/styleInline/openDocLink have no consumers

@@ -582,10 +582,14 @@ const mxWriteValue = (inp, str, type) => {
 // {size(), get(i)} object depending on the binding; normalize to array.
 const vecToArray = (v) => {
     if (!v) return [];
-    if (Array.isArray(v)) return v;
+    if (Array.isArray(v)) return v;   // this vendored build marshals vectors as real JS arrays
     if (typeof v.size === 'function') {
         const out = [];
         for (let i = 0; i < v.size(); i++) out.push(v.get(i));
+        // embind-owned heap vector; materialized elements are independent
+        // shared_ptr handles, so free the wrapper. Audited: no caller
+        // retains the raw vector (js/ and scripts/ checked).
+        if (typeof v.delete === 'function') { try { v.delete(); } catch (e) { /* already freed */ } }
         return out;
     }
     return [];
@@ -1190,6 +1194,12 @@ const mxDataToPlainArray = (d) => {
 // Currently the only caller is generatePreviewSourcesUnlocked, which does
 // exactly that — do not add a new caller outside the lock without the same
 // treatment.
+//
+// Scoped OUT of the mxShader-delete WASM-lifetime pass above, deliberately:
+// the `st`/blockMap/value handles this function reads (getStage's ownership
+// is ambiguous in this binding, and the getData() views above must outlive
+// whatever handle produced them) are left for FinalizationRegistry
+// GC-reclaim rather than deleted eagerly here.
 const collectMxUniforms = (stage) => {
     mxWarnIfLocked('collectMxUniforms'); // exported doc-reading helper (per shader-gen, not per-frame) — see mxWarnIfLocked's header comment
     const out = [];
@@ -2502,12 +2512,16 @@ const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
 // HERE, while still inside the mxExclusive lock (see generatePreviewSources
 // below) — so every entry's `data` is fully detached, ordinary JS by the
 // time this function returns and the lock releases. mxShader itself is
-// never returned: neither caller needs it once introspection is done
-// here, and holding onto it past the lock would invite exactly the kind
-// of post-unlock wasm access this refactor removes. (mxShader IS a raw
-// pointer that survives heap growth on its own — see the mxExclusive
-// comment at the top of this file — but there's no remaining reason for
-// a caller to touch it, so it's kept out of the returned shape.)
+// never returned AND is now explicitly `.delete()`d before returning:
+// neither caller needs it once introspection is done here, and holding
+// onto it past the lock would invite exactly the kind of post-unlock wasm
+// access this refactor removes — deleting it here also closes the WASM
+// heap leak that used to accumulate one shader per generation (mxShader
+// IS a raw pointer that survives heap growth on its own — see the
+// mxExclusive comment at the top of this file — but there's no remaining
+// reason for a caller to touch it, so it's deleted and kept out of the
+// returned shape). The export path (generateTargetSourcesUnlocked below)
+// deletes its own mxShader the same way.
 // ------------------------------------------------------------------
 const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true }) => {
     // OFFICIAL PARITY: per-material generation options. Transparency
@@ -2650,6 +2664,15 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         if (st) introspected = introspected.concat(collectMxUniforms(st));
     }
     introspected = introspected.map(plainizeMxUniformData);
+
+    // Everything read above (vs, fs, introspected) is now detached plain
+    // JS — this is the last reference to mxShader, so free it here while
+    // still inside the mxExclusive lock. Guarded: a BindingError here must
+    // never fail an otherwise-successful generation. (Loop-local `st`
+    // stage handles read above are NOT deleted — getStage ownership is
+    // ambiguous in this binding; they're GC-reclaimed via
+    // FinalizationRegistry instead.)
+    try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
     return { vs, fs, introspected, transparent };
 };
@@ -2810,6 +2833,11 @@ const generateTargetSourcesUnlocked = ({ mx, renderable, label, targetKey }) => 
     if (vertexCode) stages.push({ id: 'vertex', label: 'Vertex', code: vertexCode });
     const pixelCode = read(PIXEL_STAGE);
     if (pixelCode) stages.push({ id: 'pixel', label: target.isHw ? 'Pixel' : 'Shader', code: pixelCode });
+
+    // Last reference to mxShader — free it here, before the length check,
+    // so the error path below frees it too. Guarded: see the identical
+    // delete in generatePreviewSourcesUnlocked above.
+    try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
     if (!stages.length) {
         throw new Error(target.label + ' generation produced no source code for "' + label + '".');

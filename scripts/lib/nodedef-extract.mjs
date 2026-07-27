@@ -33,6 +33,9 @@ export const vecToArray = (v) => {
     if (typeof v.size === 'function') {
         const out = [];
         for (let i = 0; i < v.size(); i++) out.push(v.get(i));
+        // Unlike js/mtlx-engine.js's copy, this one doesn't delete() the
+        // vector wrapper: this is a one-shot build-time script and the
+        // process exits right after, so any wasm-heap growth here is moot.
         return out;
     }
     return [];

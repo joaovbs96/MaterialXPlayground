@@ -17,6 +17,26 @@
         // THIS session, remember it and show a neutral notice next time
         // instead of re-running (and re-trapping) the doomed generation.
         const WASM_STACK_BLACKLIST = new Set();
+        // Frees a batch of embind MaterialX handles that make up one
+        // exportDocRef entry (created nodes + the renderable "instance" +
+        // the owning doc). Dedupe via Set: for the 'surface' preview kind
+        // `instance` IS `created[0]` (same handle, see the addNode call
+        // sites below) — deleting the same underlying object twice throws
+        // a BindingError, so identity-dedupe first rather than relying on
+        // each delete's own try/catch to paper over it. Order doesn't
+        // matter for correctness (child handles hold only weak links back
+        // to their parent doc — verified: a retained child survives
+        // doc.delete()) but children-before-doc reads naturally, so keep
+        // it. Every individual delete is its own try/catch: an
+        // already-deleted or wrong-type handle throws a clean, catchable
+        // BindingError in this build, never a memory fault — never let one
+        // bad handle in the batch stop the rest from being freed.
+        const deleteMxHandles = (handles) => {
+            const unique = new Set((handles || []).filter(Boolean));
+            for (const h of unique) {
+                try { h.delete(); } catch (e) { /* already deleted / not owned */ }
+            }
+        };
         const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable, active = true, embed = EMBED }) => {
             // Lets a future multi-view shell pause this preview's WebGL render
             // loop while its parent view is backgrounded, without unmounting.
@@ -464,7 +484,35 @@
                         };
 
                         const { doc, renderable, needsLighting, kind, outType, multiOutput } = await window.mxExclusive(() => {
+                        // Free the PREVIOUS exportDocRef entry (if any) under
+                        // the same lock, before allocating this run's doc —
+                        // belt to the effect-cleanup's suspenders below
+                        // (usually a no-op here since cleanup already nulled
+                        // the ref; this only matters if cleanup was skipped
+                        // or raced, e.g. same-node re-init reusing this
+                        // effect instance without an intervening unmount).
+                        const prevEd = exportDocRef.current;
+                        exportDocRef.current = null;
+                        if (prevEd) deleteMxHandles([prevEd.instance, ...(prevEd.created || []), prevEd.doc]);
+
                         const doc = mx.createDocument();
+                        // Hoisted out of the island body below so the
+                        // failed-build catch (see the try/catch wrapping the
+                        // rest of this island) can see and free whatever got
+                        // created before the throw — a partially built graph
+                        // must not leak just because generation later fails.
+                        let previewInstance = null;
+                        const createdNodes = [];
+                        // Wrap the rest of Island A: any throw between here and
+                        // the return below (bad convert wiring, an unpreviewable
+                        // type, a thrown nodedef-identity probe, ...) used to
+                        // leave doc/previewInstance/createdNodes allocated with
+                        // nothing referencing them — a leaked partial graph per
+                        // failed build. Free whatever was created so far and
+                        // rethrow unchanged (this is a failure-path cleanup,
+                        // not error handling: the caller's own try/catch below
+                        // still decides how to present the error to the user).
+                        try {
                         // setDataLibrary REFERENCES the standard library
                         // (nodedef matching, validation, and shadergen all
                         // consult it) without making it part of the document —
@@ -560,9 +608,10 @@
                         };
 
                         // The previewed node instance + every node we create,
-                        // kept for the doc-based .mtlx export.
-                        let previewInstance = null;
-                        const createdNodes = [];
+                        // kept for the doc-based .mtlx export. (Declared above,
+                        // right after doc creation — see the hoist comment
+                        // there — so the failed-build catch below can free
+                        // them too.)
                         // ensureTypedInput(doc, node, inputName, wantedType) now
                         // lives in js/mtlx-engine.js (loaded before this
                         // script) and is used here as a window global. This
@@ -587,6 +636,16 @@
                             mxRemoveAttr(inp, 'value');
                             return inp;
                         };
+                        // Scoped OUT of the WASM-lifetime cleanup, deliberately:
+                        // the Input handles ensureTypedInput/connectTypedInput
+                        // return (and every def/nodedef-input handle touched by
+                        // applyOverrides, the identity filter, and the
+                        // translationDef probe above) are per-element handles
+                        // covered by FinalizationRegistry auto-cleanup, same as
+                        // the rest of the doc's element tree — only the doc
+                        // itself (and the top-level instance/created-node
+                        // handles tracked via exportDocRef) are deleted
+                        // eagerly by this cleanup pass.
 
                         if (kind === 'surface') {
                             renderable = doc.addNode(nodeName, 'preview_surface', 'surfaceshader');
@@ -780,6 +839,23 @@
                         // — only plain-pointer/plain-JS values cross the lock
                         // boundary.
                         return { doc, renderable, needsLighting, kind, outType, multiOutput };
+                        } catch (islandErr) {
+                            // Behavior improvement over the old un-wrapped
+                            // island: previously a failed build here left the
+                            // OLD node's doc (from a prior successful run)
+                            // paired with the NEW node's exportMetaRef (set
+                            // above, before any of the code that can throw) —
+                            // Export could then emit a mismatched file mixing
+                            // the old graph with the new node's metadata. Now
+                            // exportDocRef is nulled on failure, so
+                            // buildExportXml's `!ed` guard (see its `if (!meta
+                            // || !ed || ...)` check above) makes Export a
+                            // no-op for a failed node instead of emitting
+                            // something wrong-looking with no error.
+                            exportDocRef.current = null;
+                            deleteMxHandles([previewInstance, ...createdNodes, doc]);
+                            throw islandErr;
+                        }
                         });
 
                         // --- Generation + rendering (shared engine pipeline) ---
@@ -952,6 +1028,14 @@
                             // the heap grew. Retry ONCE on the tell-tale error
                             // signatures, then fall through to the normal
                             // error handling below on a repeat failure.
+                            // (This retry path stays as-is — out of scope for
+                            // the WASM-lifetime cleanup above. But that
+                            // cleanup — mxShader/vector/export-doc deletes —
+                            // removes most of the heap pressure that drove
+                            // the heap to grow mid-flight in the first place,
+                            // so this race should now trigger far less often
+                            // in practice, even though the mitigation itself
+                            // is untouched.)
                             const msg = mxErr(mx, viewErr);
                             if (!mounted || !/memory access out of bounds|has no outputs/i.test(msg)) {
                                 throw viewErr;
@@ -1279,6 +1363,44 @@
                     mounted = false;
                     if (viewRef.current === viewHandle) viewRef.current = null;
                     if (viewHandle) viewHandle.dispose();
+                    // Free this run's export-doc entry through the SAME
+                    // mutex Island A and shader generation use, and read
+                    // exportDocRef.current INSIDE the queued callback (not
+                    // here, synchronously) — this is what makes the dispose
+                    // race-free without any extra bookkeeping:
+                    //   (a) React always runs a cleanup before the NEXT
+                    //       effect's body, so this queued callback is
+                    //       enqueued strictly before any mxExclusive work the
+                    //       next run's Island A can queue — it can never end
+                    //       up deleting the new doc.
+                    //   (b) if THIS run's Island A already queued its own
+                    //       mxExclusive callback before this cleanup fired,
+                    //       mxExclusive's queue is a synchronous FIFO, so
+                    //       this dispose runs AFTER it — by the time it runs,
+                    //       exportDocRef.current is whatever Island A set (or
+                    //       didn't, on the isMounted-bail paths below), and
+                    //       reading the ref at run time (not capturing it
+                    //       now) is what lets this same callback correctly
+                    //       cover both that case and (c).
+                    //   (c) if Island A never got to run at all (bailed
+                    //       before queuing, or this effect tore down before
+                    //       initViewer reached it), this callback finds
+                    //       whatever the previous entry was — Island A's own
+                    //       previous-entry free (see the top of its
+                    //       mxExclusive callback above) — or null, and is a
+                    //       no-op in the null case.
+                    // In-flight code elsewhere that still touches a doc this
+                    // callback deletes out from under it (the isMounted-bail
+                    // checks further down, or mid-flight unmount) hits a
+                    // caught BindingError, never a memory fault — see the
+                    // pre-pass catch and the engine's own generate try/catch
+                    // — contained, not fatal.
+                    window.mxExclusive(() => {
+                        const ed = exportDocRef.current;
+                        if (!ed) return;
+                        exportDocRef.current = null;
+                        deleteMxHandles([ed.instance, ...(ed.created || []), ed.doc]);
+                    });
                 };
             }, [identKey, enabled, geom, overrides]);
 
