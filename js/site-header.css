@@ -367,7 +367,9 @@
 }
 
 .mtlx-tab-mobile {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 10px; /* matches .mtlx-source-mobile's icon-to-text gap below */
     padding: 12px 16px;
     border-left: 4px solid transparent;
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
@@ -377,6 +379,19 @@
     line-height: 20px;
     font-weight: 500;
     color: var(--site-gray-400);
+}
+/* Nav icon: sized like .mtlx-source-fact's icons below (descendant
+   selector, no class on the <svg> itself — the icon markup is shared
+   verbatim with js/mtlx-engine.js's MTLX_ICON_PATHS, unclassed). 18px
+   (not the 20px octocat/wordmark rows use) keeps these glyphs visually
+   lighter than the GitHub/version rows, matching the home page cards'
+   own icon weight. currentColor (baked into the icon markup itself)
+   means color/active state below is the only thing that needs to change
+   for the icon to follow — no separate rule here. */
+.mtlx-tab-mobile svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
 }
 .mtlx-tab-mobile:hover {
     color: var(--site-gray-200);

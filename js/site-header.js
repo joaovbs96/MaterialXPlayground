@@ -113,6 +113,49 @@
     var ICON_OCTOCAT =
         '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>';
 
+    // Mobile-hamburger-only nav icons (the desktop tabs above stay
+    // text-only — no `icon` use on the `tabs` markup below). 'docs' /
+    // 'viewer' / 'graph' are copied verbatim from MTLX_ICON_PATHS in
+    // js/mtlx-engine.js ('file-code' / 'camera' / 'share') so the mobile
+    // glyphs match the home page's own feature-card icons
+    // (home-app.jsx's HOME_CARDS) exactly. 'home' has no registry entry
+    // (the home cards link AWAY from home, never to it), so it's the
+    // standard Tabler outline "home" glyph instead, normalized to this
+    // file's own inline-SVG convention like ICON_TAG/ICON_STAR/ICON_FORK
+    // above — same viewBox/stroke attributes, no width/height (sized by
+    // CSS via `.mtlx-tab-mobile svg`, same pattern as `.mtlx-source-fact
+    // svg`). 'camera' is MTLX_ICON_PATHS' one `filled: true` entry among
+    // these four, so unlike the others it's fill="currentColor" with no
+    // stroke attributes at all, mirroring how MtlxIcon renders filled
+    // icons (js/mtlx-engine.js's ICON_STYLE). currentColor on every icon
+    // means they automatically pick up `.mtlx-tab-mobile`'s current text
+    // color, active or not — no separate active-state icon styling needed.
+    var ICON_NAV_HOME =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M5 12l-2 0l9 -9l9 9l-2 0" />' +
+            '<path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />' +
+            '<path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />' +
+        '</svg>';
+    var ICON_NAV_DOCS =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M14 3v4a1 1 0 0 0 1 1h4" />' +
+            '<path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" />' +
+            '<path d="M10 13l-1 2l1 2" />' +
+            '<path d="M14 13l1 2l-1 2" />' +
+        '</svg>';
+    var ICON_NAV_VIEWER =
+        '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+            '<path d="M15 3a2 2 0 0 1 1.995 1.85l.005 .15a1 1 0 0 0 .883 .993l.117 .007h1a3 3 0 0 1 2.995 2.824l.005 .176v9a3 3 0 0 1 -2.824 2.995l-.176 .005h-14a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-9a3 3 0 0 1 2.824 -2.995l.176 -.005h1a1 1 0 0 0 1 -1a2 2 0 0 1 1.85 -1.995l.15 -.005h6zm-3 7a3 3 0 0 0 -2.985 2.698l-.011 .152l-.004 .15l.004 .15a3 3 0 1 0 2.996 -3.15z" />' +
+        '</svg>';
+    var ICON_NAV_GRAPH =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M3 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
+            '<path d="M15 6a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
+            '<path d="M15 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
+            '<path d="M8.7 10.7l6.6 -3.4" />' +
+            '<path d="M8.7 13.3l6.6 3.4" />' +
+        '</svg>';
+
     // Pages of the site, in nav order. shellHref-only (no plain `href` /
     // pathname `match` fields): this script only ever runs inside the
     // shell (see IS_SHELL above), and the standalone pages that used to
@@ -122,11 +165,13 @@
     // live behind hash routes: docs is the canonical "#!docs" (or any hash
     // that isn't a shell route, e.g. legacy "#/..." docs permalinks),
     // viewer is "#!viewer", graph is "#!graph".
+    // `icon` is consumed by the mobile hamburger panel ONLY (see mobileTabs
+    // below) — the desktop `tabs` markup below never reads it.
     var NAV = [
-        { id: 'home', label: 'Home', shellHref: '#!home' },
-        { id: 'docs', label: 'Node Library & Documentation', shellHref: '#!docs' },
-        { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer' },
-        { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph' },
+        { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME },
+        { id: 'docs', label: 'Node Library & Documentation', shellHref: '#!docs', icon: ICON_NAV_DOCS },
+        { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
+        { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
     ];
 
     // Given the current hash, which shell view is active? Shared with
@@ -199,7 +244,13 @@
     // full-width tap targets, same active styling logic (border-left
     // instead of border-bottom, see .mtlx-tab-mobile in site-header.css).
     // Share `data-nav` with the desktop tabs so the hashchange re-styling
-    // below updates both copies at once.
+    // below updates both copies at once. Unlike the desktop `tabs` above,
+    // each row also gets a leading icon (item.icon, mobile-only — see
+    // NAV's own comment) ahead of the label text; the label is wrapped in
+    // its own <span> so `.mtlx-tab-mobile`'s flex gap (site-header.css)
+    // only ever separates the icon from the text, never falls back to
+    // gap-around-a-bare-text-node behavior (same reasoning as the version
+    // pill's own single-flex-item wrapper above).
     var mobileTabs = navItems.map(function (item) {
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
@@ -207,7 +258,9 @@
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="mtlx-tab-mobile' + (active ? ' is-active' : '') + '">' +
-            item.label + '</a>';
+            item.icon +
+            '<span>' + item.label + '</span>' +
+            '</a>';
     }).join('');
 
     // Markup below is styled entirely by js/site-header.css (classes
@@ -253,15 +306,12 @@
                         ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
                         ' class="mtlx-badge">' +
                         '<img class="mtlx-badge-logo" src="images/materialx-logo.svg" alt="">' +
-                        // Text + version wrapped in ONE flex item: the pill's
-                        // column-gap (site-header.css) sits BETWEEN flex
-                        // items, so without this wrapper it would apply both
-                        // between logo/text AND between text/version \u2014 on
-                        // top of the trailing space already in "MaterialX ",
-                        // doubling the gap. Wrapping keeps the natural space
-                        // as ordinary inline content, so column-gap only
-                        // ever separates the logo from the text.
-                        '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
+                        // Just the version: the pill's column-gap
+                        // (site-header.css) sits BETWEEN flex items, so it
+                        // separates the logo from this span on its own \u2014
+                        // no wrapper needed now that there's no label text
+                        // to keep out of the gap.
+                        '<span data-role="ver">\u2026</span>' +
                     '</a>' +
                     // GitHub repo widget (mkdocs-material style): octocat +
                     // repo slug, with an async facts row (latest release /
@@ -315,10 +365,13 @@
                     '<a id="mtlx-header-version-mobile" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
                         ' class="mtlx-mobile-link mtlx-mobile-link-brand">' +
                         '<img class="mtlx-badge-logo-mobile" src="images/materialx-logo.svg" alt="">' +
-                        // Same single-flex-item wrapper as the desktop pill
-                        // above, so this row's gap:10px (site-header.css)
-                        // only separates the logo from the text, not the
-                        // text from the version span.
+                        // Unlike the desktop pill (which deliberately omits
+                        // the label, logo + version only), this row keeps
+                        // the "MaterialX" text. Both are wrapped in ONE
+                        // flex item: this row's gap:10px (site-header.css)
+                        // sits BETWEEN flex items, so without the wrapper
+                        // it would land between the label and the version
+                        // instead of the natural space already between them.
                         '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // Flat copy of the desktop GitHub widget \u2014 octocat +
