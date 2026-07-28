@@ -20,8 +20,13 @@ const BTN_PRIMARY = 'h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border
 // The graph editor's toolbar button (New/Import/Presets/Export/... and the
 // top-right cluster) — canonicalized on gap-1 (a couple of call sites used
 // gap-1.5 before this constant existed; the 2px difference wasn't visually
-// meaningful, so this is the one shape now).
-const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+// meaningful, so this is the one shape now). `whitespace-nowrap shrink-0`:
+// HUD toolbar button text must never wrap onto a second line under any
+// circumstance, and the top-right cluster's measured label-collapse (see
+// js/graph-app.jsx) depends on buttons NOT flex-shrinking — a shrinking
+// button would silently absorb pressure by squeezing/wrapping its own
+// label instead of the overflow being visible to the measurement routine.
+const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0';
 
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).

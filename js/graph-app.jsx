@@ -27,7 +27,7 @@
 
         const RF = window.ReactFlow;
         const ReactFlowComp = RF.ReactFlow || RF.default;
-        const { Background, MiniMap, Handle, Position, MarkerType } = RF;
+        const { Background, MiniMap, Panel, Handle, Position, MarkerType } = RF;
 
         // Port-picker popover (item 2): offered when a connection drag ends
         // on a NODE BODY instead of a precise handle (see onConnectEnd in
@@ -128,6 +128,42 @@
             );
         }
 
+        // Types (legend) tristate segmented control — minimize / default
+        // (types used in the current scope) / show-all, in that fixed left-
+        // to-right order, each button jumping straight to its own target
+        // state rather than toggling relative to the current one. Rendered
+        // identically in both the open card's header and the minimized pill
+        // (to the right of its color dots) so the same three affordances are
+        // always on screen no matter which state the legend is in.
+        // stopPropagation matters inside the pill, which is itself a
+        // clickable container (clicking it anywhere else restores default).
+        function LegendTriState({ legendOpen, legendShowAll, setLegendOpen, setLegendShowAll }) {
+            const state = !legendOpen ? 'min' : (legendShowAll ? 'all' : 'default');
+            const SEGMENTS = [
+                { key: 'min', icon: 'minus', title: 'Minimize the legend', apply: () => setLegendOpen(false) },
+                { key: 'default', icon: 'color-filter', title: 'Show types used in the current graph', apply: () => { setLegendOpen(true); setLegendShowAll(false); } },
+                { key: 'all', icon: 'plus', title: 'Show all known type colors', apply: () => { setLegendOpen(true); setLegendShowAll(true); } },
+            ];
+            return (
+                <div className="flex items-center -mr-1">
+                    {SEGMENTS.map((seg) => {
+                        const active = state === seg.key;
+                        return (
+                            <button
+                                key={seg.key}
+                                onClick={(e) => { e.stopPropagation(); seg.apply(); }}
+                                title={seg.title}
+                                aria-pressed={active}
+                                className={'rounded px-1 leading-none transition-colors ' + (active
+                                    ? 'bg-blue-600/70 text-white'
+                                    : 'text-gray-400 hover:text-gray-200')}
+                            ><MtlxIcon name={seg.icon} className="w-3.5 h-3.5" /></button>
+                        );
+                    })}
+                </div>
+            );
+        }
+
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
@@ -176,6 +212,11 @@
             // Legend "+" toggle: show every known TYPE_COLORS entry, not just
             // the types present in the current scope.
             const [legendShowAll, setLegendShowAll] = React.useState(false);
+            // MiniMap visibility toggle (bottom right). Plain ephemeral state,
+            // not stashed/restored across narrow-mode transitions like
+            // paramsOpen/legendOpen — narrow mode already hides the minimap
+            // outright (see `!narrow` below), so there's nothing to preserve.
+            const [minimapOpen, setMinimapOpen] = React.useState(true);
             // Node input display: 'authored' ("set") or 'all'. The global
             // mode seeds every rebuild; individual nodes toggle in place via
             // their corner +/− badge.
@@ -570,6 +611,158 @@
             React.useEffect(() => watchFullscreen(
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
             ), []);
+
+            // Top toolbar clusters (both top-left and top-right): measured
+            // 3-tier collapse. At intermediate widths the labeled buttons
+            // no longer all fit on one line. Required tier order, for
+            // BOTH clusters, strictly in this priority:
+            //   1. labels visible, single row (fits as-is)
+            //   2. icon-only, single row (labels no longer fit)
+            //   3. icon-only, WRAPPED (even icon-only doesn't fit — last
+            //      resort only; a cluster must never wrap while its
+            //      labels are still showing)
+            // Rather than guess breakpoints, measure — same idea as the
+            // header nav's measure() in js/site-header.js (~line 328):
+            // force the full layout, check whether it actually fits,
+            // commit to the next tier down if it doesn't, check again.
+            // Toggled via classList directly (not React state) so the
+            // decision can't itself trigger a re-render/measure loop.
+            //
+            // This only works because each cluster's measured element has
+            // a FIXED width (the top-right cluster div itself is `w-*`;
+            // the top-left cluster's outer div is `w-*` and its inner
+            // button row — the actual measured element — is a block-level
+            // child of it, so ITS clientWidth is that same fixed width).
+            // An absolutely-positioned element with just a `max-w-*` cap
+            // is shrink-to-fit, so its clientWidth always equals whatever
+            // content is currently rendered (scrollWidth === clientWidth
+            // always, overflow undetectable) and a ResizeObserver on it
+            // never fires when the surrounding pane is resized (the
+            // content-sized box doesn't itself change size). A fixed
+            // width makes clientWidth the real available space and makes
+            // the element resize (so the RO fires) whenever the pane
+            // does. Toolbar buttons must also not flex-shrink or wrap
+            // their own label text under pressure (see BTN_TOOLBAR in
+            // js/shared/mtlx-ui.jsx and the custom-class buttons below,
+            // all `whitespace-nowrap shrink-0`) — otherwise squeezing
+            // would be absorbed as internal text wrap/compression instead
+            // of visible, measurable row overflow.
+            //
+            // measureToolbarCluster() is the shared routine both clusters'
+            // effects call (below) on the same element they toggle
+            // classes on.
+            const measureToolbarCluster = (el) => {
+                if (!el) return;
+                // Start every pass from tier 1 (both classes off),
+                // regardless of the previous decision.
+                el.classList.remove('gtb-collapsed', 'gtb-wrap');
+                // Plain `el.scrollWidth > el.clientWidth` does NOT work
+                // here: these containers are `justify-content: flex-end`,
+                // so when content overflows a nowrap row it overflows
+                // toward the START (left) side, not the end. In LTR,
+                // scrollWidth only grows with END-side (right) overflow —
+                // start-side overflow is clipped off the scrollable area
+                // instead, so scrollWidth stays ≈ clientWidth and this
+                // would never detect the overflow. Fix: temporarily flip
+                // to `justify-content: flex-start` (so any overflow goes
+                // to the end side, where scrollWidth can see it) in
+                // addition to forcing a single row via `flex-wrap:
+                // nowrap`, take the reading(s), then restore both. This
+                // all happens synchronously within useLayoutEffect/the RO
+                // callback (one task, before paint), so the forced
+                // intermediate states are never actually painted — no
+                // flicker, same reasoning as site-header.js's measure().
+                const prevWrap = el.style.flexWrap;
+                const prevJustify = el.style.justifyContent;
+                el.style.flexWrap = 'nowrap';
+                el.style.justifyContent = 'flex-start';
+                // Tier 1 check: does the full labeled row fit as one line?
+                if (el.scrollWidth > el.clientWidth + 1) {
+                    // No — drop to tier 2 (icon-only) and re-measure the
+                    // now-narrower content against the same forced
+                    // nowrap/flex-start reading.
+                    el.classList.add('gtb-collapsed');
+                    if (el.scrollWidth > el.clientWidth + 1) {
+                        // Tier 2 still doesn't fit — only now (last
+                        // resort) allow wrapping into multiple rows.
+                        el.classList.add('gtb-wrap');
+                    }
+                }
+                el.style.flexWrap = prevWrap;
+                el.style.justifyContent = prevJustify;
+            };
+
+            // Top-left cluster: the fixed-width strip itself (see its
+            // JSX) is `flex-col`, so the element actually measured/
+            // toggled is its inner button row, ref'd here.
+            const topLeftRowRef = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const el = topLeftRowRef.current;
+                if (!el) return;
+                measureToolbarCluster(el);
+                // Covers pane resizes that change the strip's available
+                // width without a React re-render (see the shared comment
+                // above re: fixed width making the RO fire both ways).
+                const ro = new ResizeObserver(() => measureToolbarCluster(el));
+                ro.observe(el);
+                return () => ro.disconnect();
+                // Intentionally no deps: must re-run after every render
+                // (e.g. Export/Shader Code appearing once a doc loads
+                // changes the row's natural width), and the measurement
+                // work itself is microseconds.
+            });
+
+            // Top-right cluster: the container itself is the measured
+            // row (see its JSX). Its measured height/position also drives
+            // where the params panel / collapsed chip sit — see below.
+            const topRightClusterRef = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const el = topRightClusterRef.current;
+                if (!el) return;
+                const measureAndPosition = () => {
+                    measureToolbarCluster(el);
+                    // The params panel (expanded) and its collapsed chip
+                    // used to sit at a hardcoded top-20/top-12, which was
+                    // leftover compensation for a toolbar that could wrap
+                    // to two rows — with tiers 1/2 now guaranteed single-
+                    // row, that left a visible gap below the real (single-
+                    // row) toolbar. Instead, publish the toolbar's actual
+                    // bottom edge as a CSS var on the graph panel root
+                    // (panelRef is the offsetParent both this cluster and
+                    // the panel/chip are positioned against), so they
+                    // always sit snugly underneath — one row's worth
+                    // normally, taller only in tier 3 (wrapped). +6 keeps
+                    // the same gap the old fixed offsets left.
+                    if (panelRef.current) {
+                        panelRef.current.style.setProperty(
+                            '--gtb-offset',
+                            (el.offsetTop + el.offsetHeight + 6) + 'px'
+                        );
+                    }
+                };
+                measureAndPosition();
+                // Covers pane resizes (e.g. dragging the params panel
+                // wider, or the preview panel opening/closing) that
+                // change the cluster's available width without a React
+                // re-render. Because the container is a fixed-width
+                // strip rather than shrink-to-fit, resizing the pane
+                // actually resizes `el` itself, so this fires both ways —
+                // squeezing down collapses/wraps, growing back out
+                // restores labels/single-row and shrinks the offset back.
+                const ro = new ResizeObserver(measureAndPosition);
+                ro.observe(el);
+                return () => {
+                    ro.disconnect();
+                    // Don't leave a stale offset behind for whatever else
+                    // renders against panelRef next.
+                    if (panelRef.current) panelRef.current.style.removeProperty('--gtb-offset');
+                };
+                // Intentionally no deps: this must re-run after every
+                // render of the app (scope chip text length, Validate's
+                // status border, Fullscreen's label, etc. can all change
+                // the cluster's natural width), and the measurement work
+                // itself is microseconds.
+            });
 
             // Compact-mode auto-collapse: crossing wide->narrow stashes
             // whatever open/closed state the params panel and legend were
@@ -4408,14 +4601,8 @@
                 const s = new Set();
                 for (const n of flow.nodes) {
                     const d = n.data || {};
-                    
-                    // --- Add the node's primary category to the legend ---
-                    if (d.kind === 'nodegraph') s.add('nodegraph');
-                    else if (d.type) s.add(d.type);
-                    else s.add('node');
-                    // ----------------------------------------------------------
 
-                    // Existing port scanning
+                    // Scan every input/output port's type
                     for (const p of (d.inputs || [])) if (p.type) s.add(p.type);
                     for (const p of (d.outputs || [])) if (p.type) s.add(p.type);
                 }
@@ -4432,6 +4619,173 @@
                 return Array.from(s).sort((a, b) =>
                     a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
             }, [legendTypes, legendShowAll]);
+
+            // MiniMap / legend collision cascade (the MiniMap itself is
+            // md+ only — below that threshold it's hidden outright
+            // regardless of these booleans, same as before; the PILL,
+            // however, now renders in narrow mode too — disabled rather
+            // than hidden, see the pill's own comment below). Two
+            // independent geometric checks, both re-measured from the live
+            // DOM on every render/resize:
+            //
+            //   Stage 1 (minimapBlocked): the MiniMap is pinned bottom-
+            //   right at a fixed 200x150 (see its own style below), offset
+            //   from the pane's right edge by minimapMarginRight. Does
+            //   that box's left edge reach past whatever the legend is
+            //   CURRENTLY showing (open card or collapsed chip — either
+            //   way, legendBoxRef wraps both)? If so there's no room for
+            //   the real minimap at all — hide it and fall back to the
+            //   pill, overriding minimapOpen.
+            //
+            //   Stage 2 (legend auto-collapse): even once the minimap has
+            //   shrunk to its pill, would a FULLY OPEN legend card still
+            //   reach far enough right to collide with THAT? If crossing
+            //   into overlap, force the legend to its chip — but only on
+            //   the crossing (prevPillOverlapRef mirrors the prevNarrowRef
+            //   idiom above): a manual reopen while still in the blocked
+            //   range leaves the ref already `true`, so it's a no-op —
+            //   not fought — until geometry clears and then re-crosses.
+            //   Symmetric: the OPPOSITE crossing (overlap clearing) restores
+            //   the legend, but only if autoCollapsedLegendRef says GEOMETRY
+            //   (not the user) was the one that closed it — a legend the
+            //   user minimizes stays minimized even after room opens back
+            //   up. This matters because the pane's very first layout
+            //   frames often measure transiently narrow, before flexbox/
+            //   ResizeObserver settle — minimapBlocked flips true, the Map
+            //   pill appears, stage-2 crosses and auto-collapses the legend
+            //   — and without the symmetric restore, a legend closed during
+            //   that transient squeeze (or any other transient one, e.g. a
+            //   fullscreen transition) would stay closed forever once the
+            //   pane actually settles back to a width with room.
+            //   Uses the pill's OWN margin (pillMarginRightNow, computed
+            //   just below) rather than minimapMarginRight — the two
+            //   diverge whenever the params panel is collapsed to its
+            //   chip, since the pill then tucks left of THAT chip instead
+            //   of sitting flush in the corner the bare MiniMap would use.
+            //
+            // Shared by the MiniMap's own style, its corner minimize
+            // button, and this effect (all need the SAME value in the SAME
+            // render) — mirrors smartFitView's sidebarWidth constant above
+            // (same ternary, same 320/15 split).
+            const minimapMarginRight = (parsed && paramsOpen && !narrow) ? 320 : 15;
+            const legendBoxRef = React.useRef(null);
+            const pillRef = React.useRef(null);
+            // The collapsed params chip (bottom-2 right-2, see below) —
+            // its rendered width (the selected node's name varies) is what
+            // the pill's own margin has to clear now that both live in the
+            // same corner (item 3). Only meaningful while the chip is
+            // actually showing (!paramsOpen); null the rest of the time.
+            const paramsChipRef = React.useRef(null);
+            const prevPillOverlapRef = React.useRef(false);
+            // True only while the legend is minimized BECAUSE stage-2's
+            // geometry check closed it (not because the user clicked the
+            // minimize segment themselves) — see the symmetric-restore note
+            // above.
+            const autoCollapsedLegendRef = React.useRef(false);
+            const [minimapBlocked, setMinimapBlocked] = React.useState(false);
+            // The Map pill's own right-margin: 320 to clear the EXPANDED
+            // params panel (mirrors minimapMarginRight's own ternary
+            // exactly), or — panel collapsed to its chip — just far enough
+            // to clear THAT chip's live width plus a small gap, so the
+            // pill sits immediately to its left regardless of narrow (the
+            // chip renders in narrow mode too, forced there by the
+            // compact-mode auto-collapse effect above). Recomputed in the
+            // same measurement pass as minimapBlocked, just below.
+            const [pillMarginRight, setPillMarginRight] = React.useState(15);
+            React.useLayoutEffect(() => {
+                const host = panelRef.current;
+                if (!host) return;
+                const measure = () => {
+                    const paneRect = host.getBoundingClientRect();
+                    if (!paneRect.width) return;
+                    const GAP = 8; // small breathing room, not a flush touch
+
+                    // Stage 1: MiniMap's box vs. the legend AS CURRENTLY SHOWN.
+                    const legendRect = legendBoxRef.current ? legendBoxRef.current.getBoundingClientRect() : null;
+                    const legendRightEdge = legendRect ? (legendRect.right - paneRect.left) : 0;
+                    const minimapLeftEdge = paneRect.width - minimapMarginRight - 200 - GAP;
+                    const blocked = minimapLeftEdge < legendRightEdge + GAP;
+                    setMinimapBlocked((prev) => (prev === blocked ? prev : blocked));
+
+                    // The pill's own margin (item 3): mirror minimapMarginRight's
+                    // 320 while the params panel is expanded (same corner
+                    // reserve, just for the pill instead of the MiniMap);
+                    // otherwise clear the collapsed chip's live width —
+                    // right-2 (8px) + its measured width + GAP — so the two
+                    // sit with a small gap between them, both right-2
+                    // aligned like every other bottom-right control.
+                    const chipRect = (!paramsOpen && paramsChipRef.current)
+                        ? paramsChipRef.current.getBoundingClientRect() : null;
+                    const chipWidth = chipRect ? chipRect.width : 0;
+                    const pillMarginRightNow = (parsed && paramsOpen && !narrow)
+                        ? 320
+                        : (parsed ? (8 + chipWidth + GAP) : 15);
+                    setPillMarginRight((prev) => (prev === pillMarginRightNow ? prev : pillMarginRightNow));
+
+                    // Stage 2: the collapsed pill vs. a HYPOTHETICALLY OPEN
+                    // legend card. ALWAYS uses the card's known fixed
+                    // geometry (left-2 + w-80 = 8 + 320px) — NEVER the live
+                    // rect, even while the legend happens to be open right
+                    // now. The two crossings below (collapse / restore) must
+                    // share this one predicate: a live rect can differ from
+                    // the constant by a pixel or two (borders, subpixel
+                    // rounding, backdrop-blur), and that alone is enough for
+                    // "open legend measures as overlapping" and "closed
+                    // hypothetical measures as clear" to disagree at the
+                    // same pane width — collapse fires, restore fires,
+                    // collapse fires, ... an infinite setState loop inside
+                    // this no-deps effect (React error #185, hit in
+                    // production). One constant, shared by both directions,
+                    // can't disagree with itself.
+                    const legendOpenRightEdge = 8 + 320;
+                    const pillWidth = pillRef.current ? pillRef.current.getBoundingClientRect().width : 0;
+                    const pillLeftEdge = paneRect.width - pillMarginRightNow - pillWidth;
+                    const pillOverlap = !!pillRef.current && (pillLeftEdge < legendOpenRightEdge + GAP);
+                    // Comfortable clearance, not just "not overlapping" —
+                    // hysteresis so any residual jitter (a scrollbar
+                    // appearing, a fractional-pixel width) right at the
+                    // collapse threshold can't immediately re-trigger the
+                    // restore crossing below and oscillate.
+                    const pillClear = pillLeftEdge > legendOpenRightEdge + GAP + 16;
+
+                    // Collapse: transition-edge only, same idiom as
+                    // prevNarrowRef's stash effect further up (fires once,
+                    // on the crossing INTO overlap, not on every frame
+                    // that's still overlapping). Remembers that GEOMETRY
+                    // (not the user) closed the legend.
+                    //
+                    // Restore: level-triggered on autoCollapsedLegendRef
+                    // itself rather than another edge — the ref is already
+                    // a single-fire latch (true only until the restore
+                    // below clears it), so checking pillClear on every
+                    // frame is safe and simpler than tracking a second
+                    // "was it clear last frame" ref. A legend the user
+                    // minimizes themselves (ref already false) is never
+                    // reopened out from under them.
+                    if (pillOverlap && !prevPillOverlapRef.current && legendOpen) {
+                        setLegendOpen(false);
+                        autoCollapsedLegendRef.current = true;
+                    } else if (pillClear && autoCollapsedLegendRef.current) {
+                        setLegendOpen(true);
+                        autoCollapsedLegendRef.current = false;
+                    }
+                    prevPillOverlapRef.current = pillOverlap;
+                };
+                measure();
+                // Covers pane resizes (dragging the params panel, preview
+                // panel opening/closing, window resize) without a React
+                // re-render — same rationale as the toolbar clusters' own
+                // ResizeObservers above.
+                const ro = new ResizeObserver(measure);
+                ro.observe(host);
+                return () => ro.disconnect();
+                // Intentionally no deps: paramsOpen/legendOpen/narrow/
+                // minimapOpen are all render-triggering already (and
+                // minimapMarginRight/pillMarginRight derive from them), so
+                // this re-runs whenever any of them change — same "no deps,
+                // re-run every render, the math is microseconds" reasoning as the
+                // toolbar measurement effects above.
+            });
 
             const selectedNode = selectedId
                 ? flow.nodes.find((n) => n.id === selectedId) || null
@@ -4923,8 +5277,12 @@
                                 Types window below, which renders them. */}
                             {/* Hidden below the compact-mode threshold — there's
                                 no room for it, and it would sit under the
-                                (now transient/overlay) params panel anyway. */}
-                            {!narrow && (
+                                (now transient/overlay) params panel anyway.
+                                Also hidden (in favor of the pill further
+                                below) whenever minimapBlocked says there
+                                isn't room for it even in wide mode — see the
+                                geometry effect above. */}
+                            {!narrow && minimapOpen && !minimapBlocked && (
                                 <MiniMap
                                     pannable zoomable
                                     position="bottom-right"
@@ -4934,12 +5292,112 @@
                                     // Sit to the LEFT of the preview panel (right-2
                                     // + w-[19rem] = 312px) while it's open; slide back
                                     // to the corner when it collapses to a chip.
+                                    // Explicit width/height (RF's own defaults) turn
+                                    // this into a KNOWN box — the geometry effect
+                                    // above and the corner button just below both do
+                                    // fixed arithmetic against it instead of
+                                    // measuring the rendered SVG panel themselves.
                                     style={{
                                         background: '#1f2937',
-                                        marginRight: (parsed && paramsOpen && !narrow) ? 320 : 15,
+                                        width: 200,
+                                        height: 150,
+                                        marginRight: minimapMarginRight,
                                         transition: 'margin-right 200ms ease',
                                     }}
                                 />
+                            )}
+                            {/* Minimize button, pinned to the MiniMap's own
+                                top-right corner. <Panel> (same component RF's
+                                MiniMap wraps itself in) gives it the exact
+                                same position:absolute/z-index/margin plumbing
+                                as the MiniMap — we only override marginRight/
+                                marginBottom, precisely how the MiniMap's own
+                                style overrides marginRight above, so the two
+                                stay in lockstep with no separate positioning
+                                system to keep in sync.
+
+                                Visually-by-math (.react-flow__panel's default
+                                margin is 15px on every side — see vendor/
+                                reactflow/style.css — and "bottom right"
+                                positions via `bottom:0; right:0`, so a plain
+                                marginRight/marginBottom override IS the pixel
+                                offset from the pane's edges, same as the
+                                MiniMap's own marginRight above):
+                                  minimap right edge (from pane right) = minimapMarginRight
+                                  minimap top edge   (from pane bottom) = 15 + 150 = 165
+                                A 20px (w-5 h-5) button inset 4px from that
+                                corner therefore needs:
+                                  marginRight  = minimapMarginRight + 4
+                                  marginBottom = 165 - 4 - 20 = 141
+                                i.e. tucked 4px in from the minimap's right
+                                edge and 4px down from its top edge — a
+                                corner badge overlapping the box, not a
+                                floating button beside it. Rendered right
+                                after <MiniMap> (same z-index:5 from the
+                                shared .react-flow__panel class), so DOM
+                                order alone puts it on top. */}
+                            {!narrow && minimapOpen && !minimapBlocked && (
+                                <Panel
+                                    position="bottom-right"
+                                    style={{
+                                        marginRight: minimapMarginRight + 4,
+                                        marginBottom: 141, // 15 + 150 - 20 - 4, see comment above
+                                        transition: 'margin-right 200ms ease',
+                                    }}
+                                >
+                                    <button
+                                        onClick={() => setMinimapOpen(false)}
+                                        title="Minimize the minimap"
+                                        className="w-5 h-5 flex items-center justify-center rounded bg-gray-900/70 text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                    ><MtlxIcon name="minus" className="w-3 h-3" /></button>
+                                </Panel>
+                            )}
+                            {/* Collapsed pill: shown instead of the MiniMap
+                                whenever the MiniMap itself isn't visible —
+                                minimized (!minimapOpen), blocked for room
+                                (minimapBlocked), or narrow (no MiniMap at
+                                all below the compact-mode threshold). Never
+                                hidden outright: narrow used to gate this
+                                away entirely, which meant there was no way
+                                back to the minimap after widening past a
+                                stale minimapOpen=false — now it just stays
+                                put and DISABLED (dimmed, no-op, explanatory
+                                title) whenever expanding is actually
+                                impossible (narrow or minimapBlocked).
+                                Styled like the legend's own collapsed
+                                "Types" chip below. Sits immediately to the
+                                LEFT of whichever bottom-right control is
+                                showing right now — the collapsed params
+                                chip normally, or the expanded params panel
+                                (see pillMarginRight above, same "shared
+                                constant, same render" pattern as
+                                minimapMarginRight). marginBottom is pinned
+                                to 8 (Tailwind's bottom-2) rather than
+                                <Panel>'s own default 15, so the pill lines
+                                up with the Types window and the sidebar
+                                (item 2) instead of sitting 7px higher.
+                                pillRef feeds the geometry effect's stage-2
+                                (legend-collision) check above. */}
+                            {(narrow || !minimapOpen || minimapBlocked) && (
+                                <Panel
+                                    position="bottom-right"
+                                    style={{
+                                        marginRight: pillMarginRight,
+                                        marginBottom: 8,
+                                        transition: 'margin-right 200ms ease',
+                                    }}
+                                >
+                                    <button
+                                        ref={pillRef}
+                                        onClick={() => { if (!narrow && !minimapBlocked) setMinimapOpen(true); }}
+                                        disabled={narrow || minimapBlocked}
+                                        title={(narrow || minimapBlocked) ? 'Not enough room for the minimap' : 'Restore the minimap'}
+                                        className={BTN_TOOLBAR + ((narrow || minimapBlocked) ? ' opacity-50 cursor-not-allowed' : '')}
+                                    >
+                                        <MtlxIcon name="plus" className="w-3.5 h-3.5" />
+                                        <span className="ml-0.5">Map</span>
+                                    </button>
+                                </Panel>
                             )}
                         </ReactFlowComp>
                     </div>
@@ -5088,9 +5546,34 @@
                     {/* Top-left cluster: document/session toolbar (New,
                         Import, Export, Undo, Redo) stacked above the
                         breadcrumb (document \u25B8 scope) and its scope
-                        dropdown, when a document is loaded. */}
-                    <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 max-w-[48%] md:max-w-[45%]">
-                        <div className="flex items-center gap-1.5 flex-wrap">
+                        dropdown, when a document is loaded. Same measured
+                        3-tier collapse as the top-right cluster (see
+                        measureToolbarCluster / topLeftRowRef above): the
+                        FIXED width (`w-*`, not `max-w-*`) on THIS outer
+                        div is required so the inner button row's
+                        clientWidth is real available space rather than
+                        shrink-to-fit content width \u2014 see the shared
+                        comment above for why. `pointer-events-none` +
+                        `[&>*]:pointer-events-auto` keep the strip's empty
+                        space from stealing clicks meant for the canvas
+                        while leaving the button row/breadcrumb/scope
+                        select (its direct children) interactive. */}
+                    <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 w-[48%] md:w-[45%] pointer-events-none [&>*]:pointer-events-auto">
+                        {/* `w-full` here is load-bearing, not decorative:
+                            the parent is `flex-col items-start`, and
+                            `items-start` governs the cross axis (horizontal,
+                            for a column) sizing of this row \u2014 without
+                            `w-full` the row shrinks to its own content
+                            width (clientWidth === scrollWidth always, the
+                            same shrink-to-fit trap the fixed-width outer
+                            container was introduced to avoid, reintroduced
+                            one level down), so measureToolbarCluster's
+                            overflow check could never fire and the row
+                            would silently spill past the 45%/48% strip
+                            into the right cluster. `w-full` forces it to
+                            span the fixed-width parent, making its
+                            clientWidth the real available width. */}
+                        <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full">
                             {/* New/Import/Presets are browser-only, multi-
                                 document affordances — the VS Code editor is
                                 bound to the single opened .mtlx file. */}
@@ -5101,7 +5584,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">New Material</span>
+                                <span className="gtb-label">New Material</span>
                             </button>
                             )}
                             {!IN_VSCODE && (
@@ -5110,7 +5593,7 @@
                                 className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors cursor-pointer"
                             >
                                 <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Import</span>
+                                <span className="gtb-label">Import</span>
                                 <input type="file" multiple className="hidden" onChange={onPickFiles} />
                             </label>
                             )}
@@ -5126,7 +5609,7 @@
                                     no longer shared with the unrelated env-map-background
                                     toggle in the preview panel (js/shared/mtlx-ui.jsx). */}
                                 <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Presets</span>
+                                <span className="gtb-label">Presets</span>
                             </button>
                             )}
                             {parsed && (
@@ -5137,7 +5620,7 @@
                                     className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
-                                    <span className="hidden md:inline">Export</span>
+                                    <span className="gtb-label">Export</span>
                                 </button>
                                 <button
                                     onClick={openShaderExport}
@@ -5145,7 +5628,7 @@
                                     className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                    <span className="hidden md:inline">Shader Code</span>
+                                    <span className="gtb-label">Shader Code</span>
                                 </button>
                                 </div>
                             )}
@@ -5156,7 +5639,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Undo</span>
+                                <span className="gtb-label">Undo</span>
                             </button>
                             <button
                                 onClick={redoDoc}
@@ -5164,7 +5647,7 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Redo</span>
+                                <span className="gtb-label">Redo</span>
                             </button>
                             </div>
                         </div>
@@ -5200,11 +5683,38 @@
                     {/* Top-right cluster: document picker (when several),
                         view toggles, add-node, fullscreen. Import/Export
                         live in the top-left toolbar now, alongside New
-                        Material and Undo/Redo. */}
-                    <div className="absolute top-2 right-2 z-30 flex items-center gap-1.5 flex-wrap justify-end max-w-[48%] md:max-w-[70%]">
+                        Material and Undo/Redo. Labels in this cluster
+                        (`.gtb-label`) are hidden as a unit, and the row
+                        allowed to wrap as a last resort (`.gtb-wrap`),
+                        once the measured 3-tier collapse effect above
+                        (measureToolbarCluster via topRightClusterRef)
+                        decides tier 1/2 no longer fit — see the shared
+                        comment near that effect for the full tier order
+                        and why plain flex-wrap can't do this alone.
+
+                        FIXED width (`w-*`, not `max-w-*`): this container
+                        is absolutely positioned, so with only a max-width
+                        cap its size is shrink-to-fit — clientWidth just
+                        tracks whatever content currently renders, so it
+                        always equals scrollWidth and the overflow check in
+                        the measurement effect could never fire. A fixed
+                        percentage width makes clientWidth the actual
+                        available space, so squeezing the pane really does
+                        make content overflow it (detectable) and growing
+                        the pane really does resize this element (so the
+                        ResizeObserver below fires and labels come back).
+                        Because the strip now always spans that width over
+                        the canvas — including empty space to the left of
+                        its (right-aligned) content — `pointer-events-none`
+                        keeps that empty area from eating clicks meant for
+                        the canvas underneath, while `[&>*]:pointer-events-auto`
+                        restores interactivity to the actual buttons/select
+                        inside it. */}
+                    <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; }'}</style>
+                    <div ref={topRightClusterRef} className="absolute top-2 right-2 z-30 flex items-center gap-1.5 flex-nowrap justify-end w-[48%] md:w-[54%] pointer-events-none [&>*]:pointer-events-auto">
                         {mtlxPaths.length > 1 && (
                             <select
-                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[10rem] md:max-w-[14rem] truncate"
+                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[10rem] md:max-w-[14rem] truncate shrink-0 whitespace-nowrap"
                                 title="Which .mtlx document to display"
                                 value={chosenMtlx || ''}
                                 onChange={(e) => {
@@ -5222,13 +5732,13 @@
                                 title={globalPorts === 'all'
                                     ? 'Showing ALL inputs on every node — click to show only the set ones'
                                     : 'Showing only the SET inputs — click to show all inputs (defaults included) on every node'}
-                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
+                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
                                     + (globalPorts === 'all'
                                         ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
                                         : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                             >
                                 <MtlxIcon name="code" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Show All Inputs</span>
+                                <span className="gtb-label">Show All Inputs</span>
                             </button>
                         )}
                         {parsed && (
@@ -5238,8 +5748,8 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="share" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Add Node</span>
-                                <span className="hidden md:inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
+                                <span className="gtb-label">Add Node</span>
+                                <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
                             </button>
                         )}
                         {parsed && (
@@ -5249,8 +5759,8 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Auto Layout</span>
-                                <span className="hidden md:inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
+                                <span className="gtb-label">Auto Layout</span>
+                                <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
                             </button>
                         )}
                         {parsed && (
@@ -5260,14 +5770,14 @@
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Document</span>
+                                <span className="gtb-label">Document</span>
                             </button>
                         )}
                         {parsed && (
                             <button
                                 onClick={() => setValidateOpen(true)}
                                 title="Run the MaterialX library's document validation"
-                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors '
+                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
                                     + (validateStatus && validateStatus.kind === 'valid'
                                         ? 'border-green-500/60 text-green-300'
                                         : validateStatus && validateStatus.kind === 'invalid'
@@ -5277,19 +5787,19 @@
                                 <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
                                     : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
                                     className="w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Validate</span>
+                                <span className="gtb-label">Validate</span>
                             </button>
                         )}
                         <button
                             onClick={() => toggleFullscreen(panelRef.current)}
                             title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-                            className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors '
+                            className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
                                 + (isFullscreen
                                     ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
                                     : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                         >
                             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-                            <span className="hidden md:inline">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
+                            <span className="gtb-label">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
                         </button>
                         <button
                             onClick={() => setHelpOpen(true)}
@@ -5351,7 +5861,10 @@
                         connected inputs are read-only since their value
                         comes from the wire. */}
                     {parsed && (paramsOpen ? (
-                        <div className="absolute top-20 md:top-12 bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono">
+                        <div
+                            className="absolute bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono"
+                            style={{ top: 'var(--gtb-offset, 3rem)' }}
+                        >
                             {/* The preview target on a shaderball — the same
                                 render pipeline as the docs page. Square, and
                                 framed to fill. Re-renders on every committed
@@ -5655,10 +6168,19 @@
                             </div>
                         </div>
                     ) : (
+                        // Bottom-right corner now (item 3), same bottom-2
+                        // offset as the Types window and the expanded panel
+                        // above — no longer parked under the top toolbar
+                        // (--gtb-offset stays a THIS-panel-only, top-edge
+                        // concern; see the expanded branch above). paramsChipRef
+                        // feeds the geometry effect above, which measures this
+                        // chip's live width to position the Map pill just left
+                        // of it (pillMarginRight).
                         <button
+                            ref={paramsChipRef}
                             onClick={() => setParamsOpen(true)}
                             title="Expand the preview panel"
-                            className="absolute top-20 md:top-12 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            className="absolute bottom-2 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                         >
                             <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                             <span className="font-mono max-w-[5rem] md:max-w-[8rem] truncate">
@@ -5706,6 +6228,11 @@
                                 className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
                             ><MtlxIcon name="zoom-in-area" className="w-3.5 h-3.5" /></button>
                         </div>
+                        {/* Wrapped so the geometry effect above can measure
+                            legendBoxRef.getBoundingClientRect() regardless of
+                            which branch (open card or collapsed chip) is
+                            currently rendered inside it. */}
+                        <div ref={legendBoxRef}>
                         {legendOpen ? (
                             // w-80 (not w-60): the longest type name (displacementshader,
                             // ~133px at this legend's text-[11px] font-mono) doesn't fit
@@ -5713,20 +6240,12 @@
                             <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80">
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
-                                    <div className="flex items-center -mr-1">
-                                        <button
-                                            onClick={() => setLegendShowAll((v) => !v)}
-                                            title={legendShowAll ? 'Show only the types in the current graph' : 'Show all known type colors'}
-                                            className={'leading-none px-1 ' + (legendShowAll
-                                                ? 'text-blue-400 hover:text-blue-300'
-                                                : 'text-gray-400 hover:text-gray-200')}
-                                        ><MtlxIcon name="plus" className="w-3.5 h-3.5" /></button>
-                                        <button
-                                            onClick={() => setLegendOpen(false)}
-                                            title="Minimize the legend"
-                                            className="text-gray-400 hover:text-gray-200 leading-none px-1"
-                                        ><MtlxIcon name="minus" className="w-3.5 h-3.5" /></button>
-                                    </div>
+                                    <LegendTriState
+                                        legendOpen={legendOpen}
+                                        legendShowAll={legendShowAll}
+                                        setLegendOpen={setLegendOpen}
+                                        setLegendShowAll={setLegendShowAll}
+                                    />
                                 </div>
                                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-48 overflow-y-auto custom-scrollbar">
                                     {legendDisplayTypes.map((t) => {
@@ -5755,17 +6274,45 @@
                                 )}
                             </div>
                         ) : (
-                            <button
-                                onClick={() => setLegendOpen(true)}
+                            // Label first, dots after (item 5) — same bold
+                            // uppercase treatment as the open card's own
+                            // "Types" header just above, copied verbatim so
+                            // the chip reads as the same label, just
+                            // collapsed — followed by the same tristate
+                            // control as the open card, to the right of the
+                            // dots. A <div role="button"> rather than a real
+                            // <button>: it hosts the tristate's own buttons,
+                            // and nested <button>s are invalid HTML. Clicking
+                            // the container anywhere outside the segments
+                            // (which stopPropagation their own clicks)
+                            // restores the DEFAULT state; Enter/Space mirror
+                            // that for keyboard users.
+                            <div
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => { setLegendOpen(true); setLegendShowAll(false); }}
+                                onKeyDown={(e) => {
+                                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                                    e.preventDefault();
+                                    setLegendOpen(true);
+                                    setLegendShowAll(false);
+                                }}
                                 title="Show the type color legend"
-                                className={BTN_TOOLBAR}
+                                className={BTN_TOOLBAR + ' cursor-pointer'}
                             >
+                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
                                 {legendTypes.slice(0, 3).map((t) => (
                                     <span key={t} className="w-2 h-2 rounded-full" style={{ background: typeColor(t) }} />
                                 ))}
-                                <span className="ml-0.5">Types</span>
-                            </button>
+                                <LegendTriState
+                                    legendOpen={legendOpen}
+                                    legendShowAll={legendShowAll}
+                                    setLegendOpen={setLegendOpen}
+                                    setLegendShowAll={setLegendShowAll}
+                                />
+                            </div>
                         )}
+                        </div>
                     </div>
                 </div>
             );

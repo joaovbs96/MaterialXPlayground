@@ -99,9 +99,23 @@
             const [error, setError] = React.useState(null);
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
+            // Compact-mode threshold (below Tailwind's `md` breakpoint):
+            // drives the toolbar's label/icon-only switch and the Files
+            // sidebar auto-collapse below. Declared here, ABOVE sidebarOpen,
+            // since its lazy initializer reads it — mirrors js/graph-app.jsx's
+            // narrow/paramsOpen ordering.
+            const narrow = useNarrowPane();
             // Floating left "Files" sidebar (browser only) — ephemeral, mirroring
             // the graph editor's paramsOpen (not persisted across reloads).
-            const [sidebarOpen, setSidebarOpen] = React.useState(true);
+            const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
+            // Kept current every render so the transition effect below
+            // (crossing wide<->narrow) always sees the LATEST sidebar/narrow
+            // state instead of the value from first render — same idiom as
+            // js/graph-app.jsx's paramsOpenRef/narrowRef.
+            const sidebarOpenRef = React.useRef(sidebarOpen);
+            sidebarOpenRef.current = sidebarOpen;
+            const narrowRef = React.useRef(narrow);
+            narrowRef.current = narrow;
             // Presets dialog ("Presets" overlay button): a curated list of
             // official MaterialX example documents (MTLX_PRESETS in
             // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks WHICH preset
@@ -348,6 +362,28 @@
                 }
             }, [active]);
 
+            // Compact-mode auto-collapse: crossing wide->narrow stashes
+            // whatever open/closed state the Files sidebar was in and
+            // force-collapses it to a chip; crossing narrow->wide restores
+            // that stash. A manual re-open while still narrow sticks (it's
+            // not restashed until the NEXT wide->narrow crossing) — same
+            // "sticky until next crossing" behavior as js/graph-app.jsx's
+            // params/legend version. prevNarrowRef starts at `narrow`
+            // itself so mount never counts as a crossing.
+            const prevNarrowRef = React.useRef(narrow);
+            const preNarrowOpenRef = React.useRef(true);
+            React.useEffect(() => {
+                const was = prevNarrowRef.current;
+                prevNarrowRef.current = narrow;
+                if (narrow === was) return;
+                if (narrow) {
+                    preNarrowOpenRef.current = sidebarOpenRef.current;
+                    setSidebarOpen(false);
+                } else {
+                    setSidebarOpen(preNarrowOpenRef.current);
+                }
+            }, [narrow]);
+
             // Warm the MaterialX WASM + environment map on mount, instead of
             // paying for them on the first drop. Also resolves the version
             // badge in the shared header right away.
@@ -583,9 +619,9 @@
                                         onScreenshot={takeScreenshot}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}
-                                        showLabels={true}
+                                        showLabels={!narrow}
                                         labelsClass={(!IN_VSCODE && sidebarOpen) ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'}
-                                        trailingChildren={
+                                        trailingChildren={(labels) => (
                                             <React.Fragment>
                                                 {/* Graph and viewer are always in sync in the
                                                     extension (one opened .mtlx file), so this
@@ -597,7 +633,7 @@
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                                    <span className="ml-1.5 whitespace-nowrap">Send to Graph</span>
+                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Send to Graph</span>}
                                                 </button>
                                                 )}
                                                 {/* Presets: browser-only, multi-document
@@ -616,7 +652,7 @@
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                                                 >
                                                     <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                                    <span className="ml-1.5 whitespace-nowrap">Presets</span>
+                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Presets</span>}
                                                 </button>
                                                 )}
                                                 {/* Export Shader Code: not VS Code-gated (unlike
@@ -632,10 +668,10 @@
                                                     className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
                                                 >
                                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                                    <span className="ml-1.5 whitespace-nowrap">Shader Code</span>
+                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Shader Code</span>}
                                                 </button>
                                             </React.Fragment>
-                                        }
+                                        )}
                                     >
                                         {/* Geometry lives here permanently; the material
                                             picker surfaces only in fullscreen, where the
@@ -799,7 +835,7 @@
                             className="absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                         >
                             <MtlxIcon name="chevrons-right" className="w-4 h-4" />
-                            <span className="max-w-[8rem] truncate">Files</span>
+                            <span className="max-w-[5rem] md:max-w-[8rem] truncate">Files</span>
                         </button>
                     ))}
 
