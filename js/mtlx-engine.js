@@ -5028,6 +5028,7 @@ const MTLX_ICON_PATHS = {
     minus: { filled: false, inner: '<path d="M5 12l14 0"/>' },
     plus: { filled: false, inner: '<path d="M12 5l0 14"/><path d="M5 12l14 0"/>' },
     'color-filter': { filled: false, inner: '<path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79" /><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54" /><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0" />' },
+    help: { filled: false, inner: '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 17l0 .01" /><path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' },
 };
 
 // React component (plain createElement — this file stays JSX-free).

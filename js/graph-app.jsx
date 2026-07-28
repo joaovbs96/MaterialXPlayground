@@ -5121,10 +5121,6 @@
             // doesn't leak its state onto an unrelated node reusing a name.
             const [panelFoldersOpen, setPanelFoldersOpen] = React.useState({});
             React.useEffect(() => { setPanelFoldersOpen({}); }, [displayNode && displayNode.id]);
-            // Collapse/expand toggle for the static help-text footer below,
-            // default expanded so behavior is unchanged until the user
-            // clicks to collapse it.
-            const [helpTextOpen, setHelpTextOpen] = React.useState(true);
             // One ParamRow, shared by the ungrouped list and every folder
             // below so the markup doesn't drift between the two — only
             // called once displayNode is known truthy (both call sites are
@@ -5803,9 +5799,12 @@
                         </button>
                         <button
                             onClick={() => setHelpOpen(true)}
-                            title="Keyboard shortcuts & mouse interactions"
-                            className="w-7 h-7 flex-none flex items-center justify-center rounded-full border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 hover:text-gray-100 text-[12px] font-bold transition-colors"
-                        >?</button>
+                            title="Help & Keybinds"
+                            className={BTN_TOOLBAR}
+                        >
+                            <MtlxIcon name="help" className="w-3.5 h-3.5" />
+                            <span className="gtb-label">Help</span>
+                        </button>
                     </div>
 
                     {/* Keybinds reference popup. */}
@@ -6145,24 +6144,6 @@
                                 ] : (
                                     <div className="text-[11px] text-gray-500 py-2">
                                         Click a node to inspect and edit its parameters.
-                                    </div>
-                                )}
-                            </div>
-                            <div className="border-t border-gray-700">
-                                <button
-                                    type="button"
-                                    onClick={() => setHelpTextOpen((o) => !o)}
-                                    title={helpTextOpen ? 'Collapse help text' : 'Expand help text'}
-                                    className="w-full flex items-center gap-1.5 px-3 py-1 text-[10px] text-gray-500 hover:text-gray-300"
-                                >
-                                    <MtlxIcon name={helpTextOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3 h-3" />
-                                    <span>Help</span>
-                                </button>
-                                {helpTextOpen && (
-                                    <div className="px-3 pb-1.5 text-[10px] text-gray-500">
-                                        Edits write to the MaterialX document and re-render the preview.
-                                        Drag between ports to connect {'\u00B7'} drag an edge end off to
-                                        disconnect {'\u00B7'} Del removes the selection {'\u00B7'} F fits the view.
                                     </div>
                                 )}
                             </div>

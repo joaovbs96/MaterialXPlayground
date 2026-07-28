@@ -15,51 +15,110 @@
 
         // Every keyboard shortcut and mouse interaction currently live in
         // the editor — kept as one list so it can't silently drift from
-        // reality; update it alongside whatever handler it documents.
+        // reality; update it alongside whatever handler it documents. Each
+        // row's `group` ('mouse' or 'keyboard') picks which subheaded
+        // section of the popup below it renders in. `vscodeOnly` /
+        // `browserOnly` hide a row in the other host (checked against
+        // IN_VSCODE in KeybindsHelp below) — most rows carry neither and
+        // show in both.
         const KEYBINDS = [
-            { keys: 'Click', desc: 'Select a node — opens the parameter panel and the preview' },
-            { keys: 'Shift/Ctrl/Cmd + Click', desc: 'Toggle a node into/out of the current multi-selection' },
-            { keys: 'Drag (empty canvas)', desc: 'Box-select every node inside the marquee' },
-            { keys: 'Middle-drag', desc: 'Pan the canvas' },
-            { keys: 'Drag a node', desc: 'Move it' },
-            { keys: 'Drag between ports', desc: 'Connect an output to an input' },
-            { keys: 'Drag an edge end off', desc: 'Disconnect it' },
-            { keys: 'Double-click a nodegraph', desc: 'Open (enter) its scope' },
-            { keys: 'Delete', desc: 'Delete the selected node(s), or disconnect the selected edge' },
-            { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)' },
-            { keys: 'F', desc: 'Fit the whole graph in view' },
-            { keys: 'A', desc: 'Re-run the automatic layout once' },
-            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs)' },
-            { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)' },
-            { keys: 'Ctrl/Cmd + V', desc: 'Paste the copied node(s)' },
-            { keys: 'Ctrl/Cmd + G', desc: 'Encapsulate the selected nodes into a nodegraph' },
-            { keys: 'Ctrl/Cmd + Shift + G', desc: 'Ungroup the selected nodegraph (dissolve it, keeping connections)' },
-            { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit' },
-            { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo' },
-            { keys: 'Esc', desc: 'Close the add-node search, or exit full screen' },
-            { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page' },
+            // Mouse & gestures
+            { keys: 'Click', desc: 'Select a node — opens the parameter panel and the preview', group: 'mouse' },
+            { keys: 'Shift/Ctrl/Cmd + Click', desc: 'Toggle a node into/out of the current multi-selection', group: 'mouse' },
+            { keys: 'Click an edge', desc: 'Select it (Delete then disconnects it)', group: 'mouse' },
+            { keys: 'Click empty canvas', desc: 'Clear the selection', group: 'mouse' },
+            { keys: 'Drag (empty canvas)', desc: 'Box-select every node inside the marquee', group: 'mouse' },
+            { keys: 'Middle-drag', desc: 'Pan the canvas', group: 'mouse' },
+            { keys: 'Drag a node', desc: 'Move it', group: 'mouse' },
+            { keys: 'Drag between ports', desc: 'Connect an output to an input', group: 'mouse' },
+            { keys: 'Drag an edge end off', desc: 'Disconnect it', group: 'mouse' },
+            { keys: 'Double-click a port', desc: 'Open the add-node search filtered to compatible nodes and auto-wire the connection', group: 'mouse' },
+            { keys: 'Drag a wire to empty canvas', desc: 'Same filtered add-node search, placed at the drop point', group: 'mouse' },
+            { keys: 'Drag a wire onto a node', desc: 'Pick a compatible port on that node to connect to', group: 'mouse' },
+            { keys: 'Double-click a nodegraph', desc: 'Open (enter) its scope — or click its open ⏎ chip', group: 'mouse' },
+            { keys: '+ / − badge on a node', desc: "Show or hide that node's default-valued inputs", group: 'mouse' },
+            { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page', group: 'mouse', browserOnly: true },
+            // Keyboard
+            { keys: 'Delete', desc: 'Delete the selected node(s), or disconnect the selected edge', group: 'keyboard' },
+            { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)', group: 'keyboard' },
+            { keys: 'Esc', desc: 'Close the open search, picker, or dialog (browsers also exit full screen)', group: 'keyboard' },
+            { keys: 'F', desc: 'Fit the whole graph in view', group: 'keyboard' },
+            { keys: 'A', desc: 'Re-run the automatic layout once', group: 'keyboard' },
+            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs)', group: 'keyboard' },
+            { keys: '↑ ↓ / Enter', desc: 'Navigate / choose inside the add-node search and port pickers', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + V', desc: 'Paste the copied node(s)', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + G', desc: 'Encapsulate the selected nodes into a nodegraph (requires a multi-selection)', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + Shift + G', desc: 'Ungroup the selected nodegraph (dissolve it, keeping connections) (with a nodegraph selected)', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
         ];
 
         function KeybindsHelp({ onClose, active = true }) {
             // True when hosted inside the VS Code extension's webview (set by
-            // its bootstrap before any site script runs). Drops the
-            // "Drag & drop files" row below — the editor is bound to a single
-            // opened .mtlx file, so page-wide drag-drop is disabled there.
+            // its bootstrap before any site script runs). Gates both the
+            // help prose below (the Export paragraph reads differently
+            // there) and the KEYBINDS filter: `browserOnly` rows (drag &
+            // drop, disabled in the extension's single-file webview) drop
+            // out in VS Code, `vscodeOnly` rows (Ctrl/Cmd+S, meaningless in
+            // the browser build) drop out everywhere else.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
-            const keybinds = IN_VSCODE ? KEYBINDS.filter((k) => k.keys !== 'Drag & drop files') : KEYBINDS;
+            const keybinds = KEYBINDS.filter((k) => (!k.vscodeOnly || IN_VSCODE) && (!k.browserOnly || !IN_VSCODE));
+            const mouseKeybinds = keybinds.filter((k) => k.group === 'mouse');
+            const keyboardKeybinds = keybinds.filter((k) => k.group === 'keyboard');
             useEscapeToClose(onClose, active);
             return (
                 <DialogFrame
                     open={true}
-                    title="Keyboard shortcuts"
+                    title="Help & Keybinds"
                     titleClassName="text-sm font-bold text-gray-100"
                     onClose={onClose}
                     panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3">
+                        <div className="text-[11px] text-gray-300 leading-relaxed space-y-2">
+                            <p>
+                                Every edit — connecting ports, changing parameters, renaming,
+                                grouping — writes directly to the underlying MaterialX document
+                                and re-renders the 3D preview live. {IN_VSCODE ? (
+                                    "Edits are written back to the open .mtlx file through VS Code's normal save flow (Ctrl/Cmd+S)."
+                                ) : (
+                                    <React.Fragment>
+                                        Nothing leaves your browser: use <strong className="text-gray-100">Export</strong> to
+                                        download the result as <code>.mtlx</code> (or a <code>.zip</code> with textures).
+                                    </React.Fragment>
+                                )} Every document edit can be undone with Ctrl/Cmd+Z.
+                            </p>
+                            <p>
+                                Select a node to edit its parameters and preview it in the right
+                                panel. Double-click a nodegraph to step inside it; Backspace steps
+                                back out. The breadcrumb at the top-left always shows where you
+                                are in the document.
+                            </p>
+                            <p>
+                                The fastest way to build: drag a wire from any port and release it
+                                on empty canvas — the add-node search opens pre-filtered to
+                                compatible nodes and wires the connection for you.
+                            </p>
+                        </div>
+                        <div className="border-t border-gray-700 my-3" />
+                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Shortcuts & mouse</div>
                         <table className="w-full text-[11px] font-mono">
                             <tbody>
-                                {keybinds.map((k) => (
+                                <tr>
+                                    <td colSpan={2} className="pt-1 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Mouse & gestures</td>
+                                </tr>
+                                {mouseKeybinds.map((k) => (
+                                    <tr key={k.keys} className="align-top">
+                                        <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
+                                        <td className="py-1 text-gray-300">{k.desc}</td>
+                                    </tr>
+                                ))}
+                                <tr>
+                                    <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Keyboard</td>
+                                </tr>
+                                {keyboardKeybinds.map((k) => (
                                     <tr key={k.keys} className="align-top">
                                         <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
                                         <td className="py-1 text-gray-300">{k.desc}</td>
