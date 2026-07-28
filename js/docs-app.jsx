@@ -1036,23 +1036,6 @@
                             </div>
                         </div>
                     )}
-
-                    {!chromeless && (
-                    /* Disclaimer: previews are experimental; the spec MD files
-                       in the MaterialX repository are the source of truth. */
-                    <div className="bg-amber-950/40 border border-amber-700/60 text-amber-300/90 text-sm rounded-lg px-4 py-3">
-                        <span className="font-semibold text-amber-300"><MtlxIcon name="alert-triangle" className="inline w-4 h-4 align-text-bottom mr-1" />Experimental Preview:</span>{' '}
-                        The 3D node previews and parameter values shown here are under development and may not
-                        match reference renders. For any bugs, please report them in the {' '}
-                        <a
-                            href={ISSUES_URL}
-                            target="_blank" rel="noopener noreferrer"
-                            className="underline text-amber-200 hover:text-amber-100"
-                        >
-                            project repository.
-                        </a>{' '}
-                    </div>
-                    )}
                 </div>
             );
         }

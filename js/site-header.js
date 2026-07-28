@@ -67,6 +67,11 @@
     };
     LINKS.issues = LINKS.repo + '/issues';
 
+    // Repo slug ("owner/name"), derived from LINKS.repo rather than
+    // hardcoded — consumed by the GitHub repo widget markup below and by
+    // initSourceFacts' api.github.com calls.
+    var REPO_SLUG = LINKS.repo.replace(/^https?:\/\/github\.com\//, '');
+
     // Logo mark paths, shared verbatim with the React apps (home-app.jsx
     // renders them via dangerouslySetInnerHTML into its own <svg>) so the
     // brand mark can't drift between the plain-script header and React.
@@ -75,6 +80,38 @@
     var LOGO_PATHS =
         '<path d="M7.113213314864547,17.836439757602623 C3.962962545544091,14.629149767071237 4.00919965907034,9.475663485904064 7.216489095788643,6.325413260547549 C10.423779086320033,3.1751624912270877 15.577264823523263,3.221399050940242 18.72751559284372,6.428689041471628 C21.87776581820023,9.635978478189926 21.831529802451016,14.789464769206242 18.624239811919622,17.939715538526702 C15.416950375201322,21.08996576388322 10.26346354022106,21.04372919432092 7.113213314864547,17.836439757602623 C7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 ZM8.91732412511588,9.218661251949928 C9.232340172246467,9.539381057705786 9.747706415252441,9.544005421136866 10.068426774821386,9.228988830042336 C11.67202746503994,7.653906962497572 14.248858155804163,7.677026030285823 15.823940023348927,9.280626720504376 C16.138956614443458,9.601347080073324 16.654322867298575,9.605970345727371 16.975042673054432,9.290954298596784 C17.29576247881029,8.975938251466197 17.300386842241373,8.460572008460225 16.985370251146843,8.139851648891277 C14.780255745376962,5.894810793347922 11.172692558751647,5.86244409647454 8.92765170320829,8.067558602244421 C8.606931343639342,8.382575193338951 8.602308077985294,8.897941446194071 8.91732412511588,9.218661251949928 C8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 Z" fill="#ffffff" />' +
         '<path d="M12,2 C17.523000717163086,2 22,6.4770002365112305 22,12 C22,17.523000717163086 17.523000717163086,22 12,22 C6.4770002365112305,22 2,17.523000717163086 2,12 C2,6.4770002365112305 6.4770002365112305,2 12,2 C12,2 12,2 12,2 ZM18,11 C17.447715759277344,11 17,11.447714805603027 17,12 C17,14.76142406463623 14.76142406463623,17 12,17 C11.447714805603027,17 11,17.447715759277344 11,18 C11,18.552284240722656 11.447714805603027,19 12,19 C15.86599349975586,19 19,15.86599349975586 19,12 C19,11.447714805603027 18.552284240722656,11 18,11 C18,11 18,11 18,11 Z" fill="currentColor" />';
+
+    // Fact-row icons for the GitHub repo widget (tag / star / git-fork),
+    // Tabler outline icons (raw.githubusercontent.com/tabler/tabler-icons
+    // main/icons/outline/{tag,star,git-fork}.svg) normalized to this
+    // file's inline-SVG-string convention: shared viewBox/stroke
+    // attributes, no width/height (sized by CSS instead, same as the
+    // hamburger icon above).
+    var ICON_TAG =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M6.5 7.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+            '<path d="M3 6v5.172a2 2 0 0 0 .586 1.414l7.71 7.71a2.41 2.41 0 0 0 3.408 0l5.592 -5.592a2.41 2.41 0 0 0 0 -3.408l-7.71 -7.71a2 2 0 0 0 -1.414 -.586h-5.172a3 3 0 0 0 -3 3" />' +
+        '</svg>';
+    var ICON_STAR =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873l-6.158 -3.245" />' +
+        '</svg>';
+    var ICON_FORK =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M10 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />' +
+            '<path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />' +
+            '<path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />' +
+            '<path d="M7 8v2a2 2 0 0 0 2 2h6a2 2 0 0 0 2 -2v-2" />' +
+            '<path d="M12 12l0 4" />' +
+        '</svg>';
+
+    // GitHub "octocat" mark, shared verbatim between the desktop widget and
+    // the mobile hamburger's flat copy of it below (both wrap this same
+    // path in an identical `<svg class="mtlx-source-icon" ...>` shell) —
+    // same one-constant-per-icon convention as ICON_TAG/ICON_STAR/ICON_FORK
+    // above.
+    var ICON_OCTOCAT =
+        '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>';
 
     // Pages of the site, in nav order. shellHref-only (no plain `href` /
     // pathname `match` fields): this script only ever runs inside the
@@ -202,7 +239,7 @@
                 '<nav id="mtlx-nav-desktop" class="mtlx-nav-desktop" aria-label="Site">' + tabs + '</nav>' +
 
                 // Right: MaterialX version badge (filled by the engine when the
-                // WASM loads), source, issues. Desktop only, see above.
+                // WASM loads) + GitHub repo widget. Desktop only, see above.
                 // CSS white-space:nowrap on the container AND each child
                 // (site-header.css): without it, under width pressure the
                 // text wraps INSIDE the flex items (bar grows taller, not
@@ -217,16 +254,23 @@
                         ' class="mtlx-badge">' +
                         'MaterialX <span data-role="ver">\u2026</span>' +
                     '</a>' +
-                    '<a href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer" title="View the source code on GitHub"' +
-                        ' class="mtlx-badge mtlx-badge-icon">' +
-                        '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
-                            '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>' +
+                    // GitHub repo widget (mkdocs-material style): octocat +
+                    // repo slug, with an async facts row (latest release /
+                    // stars / forks) filled in by initSourceFacts() below
+                    // once api.github.com responds. Replaces the old
+                    // separate "Source" and issues-link pills; LINKS.issues
+                    // itself stays defined (still consumed by the docs
+                    // About dialog / the footer's Experimental paragraph
+                    // below).
+                    '<a id="mtlx-source-widget" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
+                        ' title="View the source code on GitHub" class="mtlx-source">' +
+                        '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+                            ICON_OCTOCAT +
                         '</svg>' +
-                        '<span class="mtlx-badge-label">Source</span>' +
-                    '</a>' +
-                    '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" title="Report a bug or request a feature"' +
-                        ' class="mtlx-badge mtlx-badge-feedback">' +
-                        'Feedback & Issues' +
+                        '<span class="mtlx-source-meta">' +
+                            '<span class="mtlx-source-repo">' + REPO_SLUG + '</span>' +
+                            '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
+                        '</span>' +
                     '</a>' +
                 '</div>' +
 
@@ -245,7 +289,7 @@
             '</div>' +
 
             // Mobile dropdown panel: everything reachable on desktop (nav +
-            // source/feedback/version) stacked full-width. Closed
+            // version/source) stacked full-width. Closed
             // (display:none) by default; toggled by the hamburger, closed
             // by hashchange or clicking a link inside it (`is-open`
             // handling below; matching rules in site-header.css).
@@ -256,13 +300,23 @@
                         ' class="mtlx-mobile-link">' +
                         'MaterialX <span data-role="ver">\u2026</span>' +
                     '</a>' +
-                    '<a href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="mtlx-mobile-link">' +
-                        'Source' +
-                    '</a>' +
-                    '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="mtlx-mobile-link">' +
-                        'Feedback & Issues' +
+                    // Flat copy of the desktop GitHub widget \u2014 octocat +
+                    // repo slug + async facts row \u2014 rather than a plain
+                    // "Source" text link, so the mobile panel surfaces the
+                    // same release/star/fork facts. No pill styling:
+                    // .mtlx-mobile-link already gives the flat row (padding,
+                    // hover bg); .mtlx-source-mobile below only adds the
+                    // icon+meta layout. initSourceFacts() below renders into
+                    // BOTH #mtlx-source-facts and #mtlx-source-facts-mobile.
+                    '<a id="mtlx-source-widget-mobile" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
+                        ' class="mtlx-mobile-link mtlx-source-mobile">' +
+                        '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+                            ICON_OCTOCAT +
+                        '</svg>' +
+                        '<span class="mtlx-source-meta">' +
+                            '<span class="mtlx-source-repo-mobile">' + REPO_SLUG + '</span>' +
+                            '<span id="mtlx-source-facts-mobile" class="mtlx-source-facts"></span>' +
+                        '</span>' +
                     '</a>' +
                 '</div>' +
             '</div>' +
@@ -296,8 +350,8 @@
             mobileMenu.style.display = willOpen ? 'block' : 'none';
             navToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
         });
-        // Any link inside the mobile panel (nav item or source/feedback/
-        // version link) closes the panel once activated.
+        // Any link inside the mobile panel (nav item or source/version
+        // link) closes the panel once activated.
         mobileMenu.addEventListener('click', function (e) {
             if (e.target && e.target.closest && e.target.closest('a')) {
                 closeMobileMenu();
@@ -320,6 +374,13 @@
     // Inline style.display wins over site-header.css's own 768px
     // display:flex/display:none rules, which stay in effect as the no-JS
     // fallback.
+    //
+    // scheduleMeasure is hoisted here (no-op until the block below
+    // reassigns it) so later code — the GitHub facts row rendering async
+    // and widening the right cluster, same gotcha as the version badge
+    // right below — can always ask for a re-measure without caring
+    // whether headerBar/navDesktop/navRight/navToggle actually resolved.
+    var scheduleMeasure = function () {};
     var headerBar = document.getElementById('mtlx-header-bar');
     var navDesktop = document.getElementById('mtlx-nav-desktop');
     var navRight = document.getElementById('mtlx-nav-right');
@@ -352,10 +413,14 @@
             }
         };
         measure();
-        window.addEventListener('resize', function () {
+        // rAF-debounced re-measure, reassigned onto the hoisted no-op
+        // above so other code (resize below, and initSourceFacts' render
+        // callback further down) can share one debounced entry point.
+        scheduleMeasure = function () {
             if (rafId) cancelAnimationFrame(rafId);
             rafId = requestAnimationFrame(measure);
-        });
+        };
+        window.addEventListener('resize', scheduleMeasure);
         // Web font metrics can still be settling after first paint —
         // re-measure once everything (including fonts) has fully loaded.
         window.addEventListener('load', measure);
@@ -364,6 +429,96 @@
         // overflowing.
         window.addEventListener('mtlx-version', measure);
     }
+
+    // ---- GitHub repo widget: async facts row -----------------------------
+    // mkdocs-material-style: the octocat + repo slug are already in the
+    // static markup above; this fills in a facts row (latest release tag /
+    // stars / forks) from the GitHub API and caches it in sessionStorage
+    // for the tab's lifetime, so a same-tab reload shows facts instantly
+    // with no network request. Best-effort throughout — same
+    // try/catch-around-storage house style as docs-app.jsx's
+    // mtlx_show_previews / mtlx-ui.jsx's mtlx_preview_geom — a failure
+    // here must never leave anything but a clean plain icon+name link.
+    (function initSourceFacts() {
+        // Two independent facts-row mounts now: the desktop widget and the
+        // mobile hamburger's flat copy of it (js/site-header.js markup
+        // above). Both get the same data, rendered as fresh spans into
+        // each — never moved/shared between the two containers, since a
+        // DOM node can only live in one place at a time.
+        var factsEls = [
+            document.getElementById('mtlx-source-facts'),
+            document.getElementById('mtlx-source-facts-mobile'),
+        ].filter(function (el) { return el; });
+        if (!factsEls.length) return;
+        // No CSP-friendly api.github.com access from the VS Code webview
+        // (vscode_extension/media/webview.html's connect-src doesn't
+        // allow it) — stay a plain link there. Embed mode never shows the
+        // header at all, but skip the fetch outright rather than rely
+        // solely on that CSS.
+        if (window.__MTLX_VSCODE__) return;
+        if (document.documentElement.classList.contains('embed-mode')) return;
+
+        var CACHE_KEY = 'mtlx_source_facts';
+
+        // mkdocs-material's own >999 formatter, verbatim: rounds to one
+        // decimal place unless doing so would land exactly on a whole
+        // thousand two digits in (e.g. 1999 -> "2.0k", not "2k").
+        function formatCount(n) {
+            if (n > 999) {
+                var t = +((n - 950) % 1000 > 99);
+                return ((n + 1e-6) / 1000).toFixed(t) + 'k';
+            }
+            return String(n);
+        }
+
+        function appendFact(parent, title, iconSvg, value) {
+            var span = document.createElement('span');
+            span.className = 'mtlx-source-fact';
+            span.title = title;
+            span.innerHTML = iconSvg; // fixed, hand-authored icon markup below — not user/API data
+            span.appendChild(document.createTextNode(value)); // API-derived value: text node, never innerHTML
+            parent.appendChild(span);
+        }
+
+        function render(facts) {
+            for (var i = 0; i < factsEls.length; i++) {
+                var parent = factsEls[i];
+                while (parent.firstChild) parent.removeChild(parent.firstChild);
+                if (facts.version) appendFact(parent, 'Latest release', ICON_TAG, facts.version);
+                if (typeof facts.stars === 'number') appendFact(parent, 'Stars', ICON_STAR, formatCount(facts.stars));
+                if (typeof facts.forks === 'number') appendFact(parent, 'Forks', ICON_FORK, formatCount(facts.forks));
+            }
+            // The facts row just changed the desktop right cluster's
+            // natural width — re-check whether the header bar still fits.
+            // (The mobile panel needs no such measure: it's a full-width
+            // stacked list, never subject to horizontal overflow.)
+            scheduleMeasure();
+        }
+
+        var cached = null;
+        try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; }
+        if (cached) { render(cached); return; }
+
+        Promise.all([
+            fetch('https://api.github.com/repos/' + REPO_SLUG)
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .catch(function () { return null; }),
+            fetch('https://api.github.com/repos/' + REPO_SLUG + '/releases/latest')
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .catch(function () { return null; }),
+        ]).then(function (results) {
+            var repoData = results[0];
+            var releaseData = results[1];
+            if (!repoData && !releaseData) return; // offline/rate-limited: stay a plain link, nothing cached, retry next reload
+            var facts = {
+                version: releaseData ? releaseData.tag_name : null,
+                stars: repoData ? repoData.stargazers_count : undefined,
+                forks: repoData ? repoData.forks_count : undefined,
+            };
+            try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(facts)); } catch (e) { /* best-effort */ }
+            render(facts);
+        });
+    })();
 
     // Shell only: the header is static innerHTML, so when the hash changes
     // (view switch) re-apply the `is-active` modifier class on the nav
@@ -415,18 +570,57 @@
     window.addEventListener('mtlx-version', function (e) { setVer(e.detail || window.__mtlxVersion); });
 
     // ---- Shared footer --------------------------------------------------
-    // The affiliation / source-of-truth note, identical on every page.
-    // Injected at DOMContentLoaded (this script runs before the rest of the
-    // body has parsed, so the mount doesn't exist yet). Pages should place
+    // Two paragraphs, identical on every page: the Experimental Preview
+    // notice first, then the affiliation / source-of-truth note (moved
+    // here from the docs page's own bottom-of-page banner — see the
+    // markup below for why). Injected at DOMContentLoaded (this script
+    // runs before the rest of the body has parsed, so the mount doesn't
+    // exist yet). Pages should place
     // <div id="site-footer"></div> after their content wrapper; if a page
     // forgets, the mount is created and appended to <body> as a fallback.
+    //
+    // Collapsible: a full-width "Disclaimer" strip toggles the text body
+    // below it (chevron flips, collapse is instant — no height animation,
+    // see mountFooter's applyFooter()). Auto-collapsed on the graph/viewer
+    // routes when the window is small, so those canvases get the vertical
+    // space back; state is ephemeral (no localStorage), matching the
+    // panel-collapse policy used elsewhere on the site.
     var footerHtml =
-        '<footer class="mtlx-footer">' +
-            '<div class="mtlx-footer-inner">' +
-                'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
-                'In the event of any discrepancies, the specification in the ' +
-                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
-                'remains the definitive source of truth.' +
+        '<footer id="mtlx-footer" class="mtlx-footer">' +
+            '<button id="mtlx-footer-toggle" type="button" class="mtlx-footer-toggle"' +
+                ' aria-expanded="true" aria-controls="mtlx-footer-body">' +
+                '<span class="mtlx-footer-toggle-inner">' +
+                    '<span>Disclaimer</span>' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+                        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+                        ' class="mtlx-footer-chevron">' +
+                        '<path d="M6 9l6 6 6-6" />' +
+                    '</svg>' +
+                '</span>' +
+            '</button>' +
+            '<div id="mtlx-footer-body" class="mtlx-footer-inner">' +
+                // Experimental Preview notice, moved here from the docs
+                // page's own bottom-of-page banner (js/docs-app.jsx) so it
+                // shows on every route, not just docs. Icon is the Tabler
+                // outline "alert-triangle" glyph, normalized to this
+                // file's inline-SVG-string convention (see ICON_TAG etc.
+                // above); needs explicit display:inline in CSS since the
+                // :where() reset sets svg{display:block}.
+                '<p class="mtlx-footer-experimental">' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+                        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+                        ' class="mtlx-footer-warn-icon">' +
+                        '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
+                    '</svg>' +
+                    '<strong>Experimental Preview:</strong> The 3D node previews and parameter values shown across this site are under development and may not match reference renders. For any bugs, please report them in the ' +
+                    '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
+                '</p>' +
+                '<p>' +
+                    'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
+                    'In the event of any discrepancies, the specification in the ' +
+                    '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
+                    'remains the definitive source of truth.' +
+                '</p>' +
             '</div>' +
         '</footer>';
 
@@ -438,10 +632,66 @@
             document.body.appendChild(el);
         }
         el.innerHTML = footerHtml;
+
+        // ---- Collapsible disclaimer: auto-collapse + sticky override ----
+        // "Small" = narrow OR short (either threshold alone is enough to
+        // squeeze the graph/viewer canvas). Auto-collapsed only on those
+        // two routes when small; home/docs default expanded regardless of
+        // size. A manual click sets an override that sticks across
+        // resizes/route changes until defaultCollapsed()'s own value
+        // actually flips — the same sticky-until-next-crossing idiom as
+        // graph-app.jsx's compact-mode prevNarrowRef (narrow->wide/back
+        // crossings restash/restore; an in-between manual toggle is left
+        // alone until the next real crossing).
+        var footerEl = document.getElementById('mtlx-footer');
+        var toggleBtn = document.getElementById('mtlx-footer-toggle');
+        if (!footerEl || !toggleBtn) return;
+
+        var mqWidth = window.matchMedia('(min-width: 768px)');
+        var mqHeight = window.matchMedia('(min-height: 720px)');
+        function isSmall() { return !mqWidth.matches || !mqHeight.matches; }
+        function defaultCollapsed() {
+            var route = shellRouteFor(window.location.hash || '');
+            return isSmall() && (route === 'graph' || route === 'viewer');
+        }
+
+        var prevDefault = defaultCollapsed();
+        var overrideCollapsed = null; // null = follow prevDefault
+        function applyFooter() {
+            var collapsed = overrideCollapsed !== null ? overrideCollapsed : prevDefault;
+            footerEl.classList.toggle('is-collapsed', collapsed);
+            toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+        function reevalFooter() {
+            var next = defaultCollapsed();
+            if (next === prevDefault) return; // no crossing: leave any manual override in place
+            prevDefault = next;
+            overrideCollapsed = null; // crossing the predicate clears the sticky override
+            applyFooter();
+        }
+        applyFooter();
+
+        toggleBtn.addEventListener('click', function () {
+            var current = overrideCollapsed !== null ? overrideCollapsed : prevDefault;
+            overrideCollapsed = !current;
+            applyFooter();
+        });
+
+        var onMqChange = function () { reevalFooter(); };
+        if (mqWidth.addEventListener) {
+            mqWidth.addEventListener('change', onMqChange);
+            mqHeight.addEventListener('change', onMqChange);
+        } else if (mqWidth.addListener) {
+            // Safari < 14 fallback.
+            mqWidth.addListener(onMqChange);
+            mqHeight.addListener(onMqChange);
+        }
+        window.addEventListener('hashchange', reevalFooter);
     };
     // Skipped entirely under VS Code: this global shrink-0 strip would steal
     // bottom height from the full-bleed webview views (the extension already
-    // drops other site chrome there, like the Home tab above).
+    // drops other site chrome there, like the Home tab above). This also
+    // means the collapsible-footer wiring above never runs there.
     if (!window.__MTLX_VSCODE__) {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', mountFooter);
