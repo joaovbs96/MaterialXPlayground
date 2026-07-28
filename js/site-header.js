@@ -252,7 +252,16 @@
                     '<a id="mtlx-header-version" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
                         ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
                         ' class="mtlx-badge">' +
-                        'MaterialX <span data-role="ver">\u2026</span>' +
+                        '<img class="mtlx-badge-logo" src="images/materialx-logo.svg" alt="">' +
+                        // Text + version wrapped in ONE flex item: the pill's
+                        // column-gap (site-header.css) sits BETWEEN flex
+                        // items, so without this wrapper it would apply both
+                        // between logo/text AND between text/version \u2014 on
+                        // top of the trailing space already in "MaterialX ",
+                        // doubling the gap. Wrapping keeps the natural space
+                        // as ordinary inline content, so column-gap only
+                        // ever separates the logo from the text.
+                        '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // GitHub repo widget (mkdocs-material style): octocat +
                     // repo slug, with an async facts row (latest release /
@@ -296,9 +305,21 @@
             '<div id="mtlx-mobile-menu" class="mtlx-mobile-menu">' +
                 '<nav class="mtlx-mobile-nav" aria-label="Site (mobile)">' + mobileTabs + '</nav>' +
                 '<div class="mtlx-mobile-links">' +
+                    // .mtlx-mobile-link-brand adds a flex row (icon + text,
+                    // vertically centered) on top of .mtlx-mobile-link's flat
+                    // block styling (padding, hover bg) \u2014 same split as
+                    // .mtlx-source-mobile does for the GitHub row below,
+                    // without reusing that class itself (its gap is tuned for
+                    // a square octocat glyph, not this wordmark's aspect
+                    // ratio).
                     '<a id="mtlx-header-version-mobile" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="mtlx-mobile-link">' +
-                        'MaterialX <span data-role="ver">\u2026</span>' +
+                        ' class="mtlx-mobile-link mtlx-mobile-link-brand">' +
+                        '<img class="mtlx-badge-logo-mobile" src="images/materialx-logo.svg" alt="">' +
+                        // Same single-flex-item wrapper as the desktop pill
+                        // above, so this row's gap:10px (site-header.css)
+                        // only separates the logo from the text, not the
+                        // text from the version span.
+                        '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // Flat copy of the desktop GitHub widget \u2014 octocat +
                     // repo slug + async facts row \u2014 rather than a plain

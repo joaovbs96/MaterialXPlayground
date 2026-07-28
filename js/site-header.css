@@ -221,15 +221,29 @@
 #mtlx-header-version {
     display: none;
     color: var(--site-gray-300);
-    /* inline-flex (below) turns "MaterialX " + the version <span> into
-       separate flex items, collapsing the whitespace-only gap between
-       them; restore it explicitly. 4px ≈ a space at this 12px font. */
+    /* The logo and the "MaterialX <ver>" text are separate flex items in
+       this inline-flex row (below); column-gap spaces the logo from the
+       text. The text itself is a single flex item (js/site-header.js
+       wraps "MaterialX " + the version <span> in one <span>), so its own
+       natural trailing space renders normally instead of being collapsed
+       and double-spaced by this gap. 4px ≈ a space at this 12px font. */
     column-gap: 4px;
 }
 @media (min-width: 640px) {
     #mtlx-header-version {
         display: inline-flex;
     }
+}
+/* Official MaterialX wordmark, matched to the GitHub octocat's 20px width
+   (.mtlx-source-icon) so the two pills' icons read as the same size —
+   the source SVG is wider than tall (~1.72:1), so height auto renders it
+   at roughly 12px tall. It's just another flex item in
+   #mtlx-header-version's inline-flex row, so the pill's own
+   column-gap: 4px above already spaces it from the "MaterialX" text —
+   no extra margin needed. */
+.mtlx-badge-logo {
+    width: 20px;
+    height: auto;
 }
 
 /* GitHub repo widget (mkdocs-material style): octocat + repo slug, with
@@ -399,6 +413,23 @@
    reasoning as #mtlx-header-version above. */
 #mtlx-header-version-mobile {
     color: var(--site-gray-300);
+}
+/* Turns the version row from a plain block link into an icon+text row,
+   aligned the same way as .mtlx-source-mobile below (left-aligned icon
+   column, vertically centered) — kept as its own class rather than
+   reusing .mtlx-source-mobile since that one's gap is tuned for a square
+   octocat glyph, not this wider-than-tall wordmark. */
+.mtlx-mobile-link-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+/* Matched to the GitHub octocat's 20px width (.mtlx-source-icon) so the two
+   mobile rows' icon columns line up. The source SVG is wider than tall
+   (~1.72:1), so height auto renders it at roughly 12px tall. */
+.mtlx-badge-logo-mobile {
+    width: 20px;
+    height: auto;
 }
 
 /* Mobile GitHub row: a flat copy of the desktop .mtlx-source widget
