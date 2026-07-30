@@ -50,6 +50,12 @@ const RELATIVE_OUTPUT_PATH = path.relative(REPO_ROOT, OUTPUT_PATH);
 
 const CHECK_MODE = process.argv.includes("--check");
 
+// Canonicalize to LF so anchor matching and the --check byte-compare are
+// insensitive to how git checked the files out (autocrlf=true on a Windows
+// clone yields CRLF; .gitattributes now pins these to LF, but this keeps the
+// build correct regardless of local git config).
+const normalizeEol = (s) => s.replace(/\r\n/g, "\n");
+
 function log(...args) {
   console.log("[build-webview]", ...args);
 }
@@ -253,7 +259,7 @@ function splitOnAnchor(text, anchor, label) {
  * Never writes anything — the caller decides whether to write (normal
  * mode) or byte-compare against the committed file (--check mode). */
 async function build() {
-  const indexHtml = await readFile(INDEX_PATH, "utf8");
+  const indexHtml = normalizeEol(await readFile(INDEX_PATH, "utf8"));
 
   if (indexHtml.includes("${")) {
     fail(
@@ -285,7 +291,7 @@ async function build() {
     );
   }
 
-  return output;
+  return normalizeEol(output);
 }
 
 async function main() {
@@ -295,7 +301,7 @@ async function main() {
     if (!existsSync(OUTPUT_PATH)) {
       fail(`${RELATIVE_OUTPUT_PATH} is stale — run \`npm run build:webview\` (or \`npm run build\`) and commit`);
     }
-    const committed = await readFile(OUTPUT_PATH, "utf8");
+    const committed = normalizeEol(await readFile(OUTPUT_PATH, "utf8"));
     if (committed !== output) {
       let firstDiffLine = null;
       const committedLines = committed.split("\n");

@@ -54,3 +54,13 @@ js/gen/** text eol=lf
 # then flag every page as phantom-modified after a local rebuild. text=auto
 # keeps git's binary detection for images/fonts under tutorials/assets/.
 tutorials/** text=auto eol=lf
+
+# scripts/build-webview.mjs reads index.html (matching LF-terminated anchors)
+# and byte-compares vscode_extension/media/webview.html against a fresh splice.
+# Force LF so a Windows checkout's autocrlf=true can't CRLF-convert them and
+# break the anchor match (or the --check comparison). The .mjs itself is pinned
+# too: its multi-line template-literal fragments are copied verbatim into the
+# output, so its own EOL must stay LF.
+index.html                            text eol=lf
+scripts/build-webview.mjs             text eol=lf
+vscode_extension/media/webview.html   text eol=lf
