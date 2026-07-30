@@ -473,11 +473,30 @@
 }
 
 /* ---- Footer --------------------------------------------------------- */
+/* On hover-capable pointers the footer rests collapsed and hover-expands
+   (click pins it open); that state machine lives entirely in
+   site-header.js's mountFooter() — no CSS :hover rule opens the footer,
+   applyFooter() is the single writer of .is-collapsed. */
 
 .mtlx-footer {
+    position: relative;
     flex-shrink: 0;
     border-top: 1px solid var(--site-gray-800);
     background-color: var(--site-gray-900);
+}
+
+/* Expanded body: an overlay above the strip — the in-flow footer is
+   always just the 28px strip, so expanding never resizes #root (and
+   never disturbs the graph/viewer canvases). */
+.mtlx-footer-pop {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    z-index: 40; /* above in-page HUDs, below modal dialogs (z-50) */
+    background-color: var(--site-gray-900);
+    border-top: 1px solid var(--site-gray-800);
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
 }
 
 /* Slim toggle strip: a full-width native <button> (the :where() reset at
@@ -519,11 +538,11 @@
 .mtlx-footer.is-collapsed .mtlx-footer-chevron {
     transform: rotate(180deg);
 }
-/* Collapse is instant (display:none), deliberately NOT height-animated:
-   animating would resize #root every frame and thrash the graph/viewer
-   ResizeObservers + WebGL buffers. Only the chevron rotation above
-   animates. */
-.mtlx-footer.is-collapsed .mtlx-footer-inner {
+/* .mtlx-footer-pop is an overlay (see the rule above), so expanding it
+   never resizes #root or thrashes the graph/viewer ResizeObservers/WebGL
+   buffers — collapse just stays instant (display:none) for simplicity.
+   Only the chevron rotation above animates. */
+.mtlx-footer.is-collapsed .mtlx-footer-pop {
     display: none;
 }
 
@@ -531,14 +550,14 @@
     max-width: var(--site-max-width);
     margin-left: auto;
     margin-right: auto;
-    padding: 0 12px 12px; /* top spacing already supplied by the toggle strip */
+    padding: 10px 12px 12px;
     font-size: 13px;
     line-height: 18px;
     color: var(--site-gray-400);
 }
 @media (min-width: 640px) {
     .mtlx-footer-inner {
-        padding: 0 24px 12px;
+        padding: 10px 24px 12px;
     }
 }
 /* Two stacked paragraphs (Experimental Preview, then affiliation) inside

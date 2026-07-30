@@ -45,7 +45,7 @@
         // ------------------------------------------------------------------
         const CANONICAL_ORDER = ['port', 'description', 'type', 'default', 'accepted_values'];
         const COL_WIDTHS = {
-            port: 'w-52',
+            port: 'w-60',
             type: 'w-48',
             default: 'w-40',
             accepted_values: 'w-44',
@@ -53,11 +53,14 @@
         };
         // Same widths in rem, used to compute each table's minimum width on
         // small screens (fixed columns + a readable minimum for description).
-        const COL_REM = { port: 13, type: 12, default: 10, accepted_values: 11 };
+        // port's 15rem (vs. its 13rem w-52-equivalent width class pre-bump)
+        // gives headroom for long identifiers (e.g. subsurface_radius_scale)
+        // now that the port column is whitespace-nowrap — see table-auto below.
+        const COL_REM = { port: 15, type: 12, default: 10, accepted_values: 11 };
         const DESCRIPTION_MIN_REM = 8;
         const EXTRA_COL_REM = 8;
         const CELL_STYLES = {
-            port: 'font-medium text-blue-400 font-mono break-words',
+            port: 'font-medium text-blue-400 font-mono whitespace-nowrap',
             type: 'font-mono text-xs text-purple-400 break-words',
             default: 'font-mono text-xs text-yellow-300 break-words',
             accepted_values: 'font-mono text-xs text-green-400 break-words',
@@ -217,7 +220,7 @@
                 <div className="overflow-x-auto rounded-lg border border-gray-700">
                     <table
                         style={{ '--tbl-min': `${minRem}rem` }}
-                        className="port-table w-full table-fixed text-sm text-left text-gray-300"
+                        className="port-table w-full table-auto text-sm text-left text-gray-300"
                     >
                         <colgroup>
                             {columns.map(col => (
@@ -227,7 +230,7 @@
                         <thead className="text-xs text-gray-400 uppercase bg-gray-900 border-b border-gray-700">
                             <tr>
                                 {columns.map(col => (
-                                    <th key={col} scope="col" className="px-4 py-3">{headerLabel(col)}</th>
+                                    <th key={col} scope="col" className={`px-4 py-3 ${col === 'port' ? 'whitespace-nowrap' : ''}`}>{headerLabel(col)}</th>
                                 ))}
                             </tr>
                         </thead>

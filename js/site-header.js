@@ -654,9 +654,13 @@
     //
     // Collapsible: a full-width "Disclaimer" strip toggles the text body
     // below it (chevron flips, collapse is instant — no height animation,
-    // see mountFooter's applyFooter()). Auto-collapsed on the graph/viewer
-    // routes when the window is small, so those canvases get the vertical
-    // space back; state is ephemeral (no localStorage), matching the
+    // see mountFooter's applyFooter()). The expanded body is an absolutely
+    // positioned overlay (.mtlx-footer-pop) that pops up above the in-flow
+    // strip, so expanding/collapsing never resizes #root or the page layout
+    // beneath it — see the CSS for that rule. The footer rests collapsed on
+    // every route and every device (no hover behavior, no auto-collapse by
+    // route or screen size); the strip click is the only way to open or
+    // close it, and that state is ephemeral (no localStorage), matching the
     // panel-collapse policy used elsewhere on the site.
     var footerHtml =
         '<footer id="mtlx-footer" class="mtlx-footer">' +
@@ -671,29 +675,31 @@
                     '</svg>' +
                 '</span>' +
             '</button>' +
-            '<div id="mtlx-footer-body" class="mtlx-footer-inner">' +
-                // Experimental Preview notice, moved here from the docs
-                // page's own bottom-of-page banner (js/docs-app.jsx) so it
-                // shows on every route, not just docs. Icon is the Tabler
-                // outline "alert-triangle" glyph, normalized to this
-                // file's inline-SVG-string convention (see ICON_TAG etc.
-                // above); needs explicit display:inline in CSS since the
-                // :where() reset sets svg{display:block}.
-                '<p class="mtlx-footer-experimental">' +
-                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
-                        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
-                        ' class="mtlx-footer-warn-icon">' +
-                        '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
-                    '</svg>' +
-                    '<strong>Experimental Preview:</strong> The 3D node previews and parameter values shown across this site are under development and may not match reference renders. For any bugs, please report them in the ' +
-                    '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
-                '</p>' +
-                '<p>' +
-                    'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
-                    'In the event of any discrepancies, the specification in the ' +
-                    '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
-                    'remains the definitive source of truth.' +
-                '</p>' +
+            '<div id="mtlx-footer-body" class="mtlx-footer-pop">' +
+                '<div class="mtlx-footer-inner">' +
+                    // Experimental Preview notice, moved here from the docs
+                    // page's own bottom-of-page banner (js/docs-app.jsx) so it
+                    // shows on every route, not just docs. Icon is the Tabler
+                    // outline "alert-triangle" glyph, normalized to this
+                    // file's inline-SVG-string convention (see ICON_TAG etc.
+                    // above); needs explicit display:inline in CSS since the
+                    // :where() reset sets svg{display:block}.
+                    '<p class="mtlx-footer-experimental">' +
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+                            ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+                            ' class="mtlx-footer-warn-icon">' +
+                            '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
+                        '</svg>' +
+                        '<strong>Experimental preview:</strong> this site is under active development — 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
+                        '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
+                    '</p>' +
+                    '<p>' +
+                        'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
+                        'In the event of any discrepancies, the specification in the ' +
+                        '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
+                        'remains the definitive source of truth.' +
+                    '</p>' +
+                '</div>' +
             '</div>' +
         '</footer>';
 
@@ -706,60 +712,29 @@
         }
         el.innerHTML = footerHtml;
 
-        // ---- Collapsible disclaimer: auto-collapse + sticky override ----
-        // "Small" = narrow OR short (either threshold alone is enough to
-        // squeeze the graph/viewer canvas). Auto-collapsed only on those
-        // two routes when small; home/docs default expanded regardless of
-        // size. A manual click sets an override that sticks across
-        // resizes/route changes until defaultCollapsed()'s own value
-        // actually flips — the same sticky-until-next-crossing idiom as
-        // graph-app.jsx's compact-mode prevNarrowRef (narrow->wide/back
-        // crossings restash/restore; an in-between manual toggle is left
-        // alone until the next real crossing).
+        // ---- Collapsible disclaimer: rests collapsed, click toggles -----
+        // The footer rests collapsed on every route and every device — no
+        // hover behavior, no auto-collapse by route or screen size. The
+        // strip click is the only toggle, and its state is ephemeral (no
+        // localStorage), matching the panel-collapse policy used elsewhere
+        // on the site. The expanded body (.mtlx-footer-pop) is an overlay
+        // (see the CSS), so opening/closing it never resizes #root or the
+        // page layout beneath it.
         var footerEl = document.getElementById('mtlx-footer');
         var toggleBtn = document.getElementById('mtlx-footer-toggle');
         if (!footerEl || !toggleBtn) return;
 
-        var mqWidth = window.matchMedia('(min-width: 768px)');
-        var mqHeight = window.matchMedia('(min-height: 720px)');
-        function isSmall() { return !mqWidth.matches || !mqHeight.matches; }
-        function defaultCollapsed() {
-            var route = shellRouteFor(window.location.hash || '');
-            return isSmall() && (route === 'graph' || route === 'viewer');
-        }
-
-        var prevDefault = defaultCollapsed();
-        var overrideCollapsed = null; // null = follow prevDefault
+        var collapsed = true;
         function applyFooter() {
-            var collapsed = overrideCollapsed !== null ? overrideCollapsed : prevDefault;
             footerEl.classList.toggle('is-collapsed', collapsed);
             toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        }
-        function reevalFooter() {
-            var next = defaultCollapsed();
-            if (next === prevDefault) return; // no crossing: leave any manual override in place
-            prevDefault = next;
-            overrideCollapsed = null; // crossing the predicate clears the sticky override
-            applyFooter();
         }
         applyFooter();
 
         toggleBtn.addEventListener('click', function () {
-            var current = overrideCollapsed !== null ? overrideCollapsed : prevDefault;
-            overrideCollapsed = !current;
+            collapsed = !collapsed;
             applyFooter();
         });
-
-        var onMqChange = function () { reevalFooter(); };
-        if (mqWidth.addEventListener) {
-            mqWidth.addEventListener('change', onMqChange);
-            mqHeight.addEventListener('change', onMqChange);
-        } else if (mqWidth.addListener) {
-            // Safari < 14 fallback.
-            mqWidth.addListener(onMqChange);
-            mqHeight.addListener(onMqChange);
-        }
-        window.addEventListener('hashchange', reevalFooter);
     };
     // Skipped entirely under VS Code: this global shrink-0 strip would steal
     // bottom height from the full-bleed webview views (the extension already

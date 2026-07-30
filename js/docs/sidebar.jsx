@@ -17,24 +17,30 @@
             <MtlxIcon name="chevron-down" className="w-4 h-4 inline-block mr-1 text-gray-400" />
         );
 
-        // DocsSidebar — the "Node Library" tree: sticky header (title,
-        // expand/collapse-all, search box, match count) above the
-        // recursive lib -> group -> node tree. Extracted verbatim (as JSX)
-        // from App's render body; App still computes treeData/expansion
-        // state/search/selection and passes it all down as props — this
+        // DocsSidebar — the "Node Library" panel: sticky header (title +
+        // help + collapse chevron, intro line, counter pills, filter/3D
+        // control row, search box + expand/collapse-all, match count) above
+        // the recursive lib -> group -> node tree. Originally extracted
+        // verbatim (as JSX) from App's render body; the header now also
+        // absorbs the page-level intro/stats/filter/help row that used to
+        // sit above the grid (see docs-app.jsx). App still computes all the
+        // underlying state/derived data and passes it down as props — this
         // component owns no state of its own.
         function DocsSidebar({
             treeData, docFilter, forceOpen, searchQuery, setSearchQuery, matchCount,
             expandAll, collapseAll, expandedLibs, toggleLib, expandedGroups, toggleGroup,
             selectedNode, setSelectedNode,
+            stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
             return (
-                <div className="md:col-span-1 bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar">
-                    {/* Sticky header: title, expand/collapse, search stay
-                        visible while the tree scrolls underneath. The scroll
-                        container itself is unpadded; the sticky block and the
-                        tree wrapper carry their own padding so the sticky
-                        element sits flush at top with no overlap. */}
+                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar'}>
+                    {/* Sticky header: title (+ help + collapse chevron),
+                        intro line, counter pills, filter/3D row, and search
+                        (+ expand/collapse-all) stay visible while the tree
+                        scrolls underneath. The scroll container itself is
+                        unpadded; the sticky block and the tree wrapper carry
+                        their own padding so the sticky element sits flush at
+                        top with no overlap. */}
                     <div className="sticky top-0 z-10 bg-gray-800 px-4 pt-4 pb-1">
                         <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
                             <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
@@ -42,42 +48,134 @@
                             </h3>
                             <div className="flex items-center gap-1">
                                 <button
-                                    onClick={expandAll}
-                                    title="Expand all"
+                                    onClick={onShowHelp}
+                                    title="How to use this page"
+                                    aria-label="Help"
                                     className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
                                 >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />
-                                    </svg>
+                                    <MtlxIcon name="help" className="w-4 h-4" />
                                 </button>
                                 <button
-                                    onClick={collapseAll}
-                                    title="Collapse all"
-                                    className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                    onClick={onCollapse}
+                                    title="Collapse the node library panel"
+                                    aria-label="Collapse the node library panel"
+                                    className="hidden md:block p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
                                 >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
-                                    </svg>
+                                    <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                                 </button>
                             </div>
                         </div>
-                        <div className="relative pb-2">
-                            <input
-                                type="text"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="Search nodes..."
-                                className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                            />
-                            {searchQuery && (
-                                <button
-                                    onClick={() => setSearchQuery('')}
-                                    title="Clear search"
-                                    className="absolute right-2 top-[0.9rem] -translate-y-1/2 text-gray-500 hover:text-gray-200"
-                                >
-                                    <MtlxIcon name="x" className="w-3.5 h-3.5" />
-                                </button>
-                            )}
+                        <p className="text-xs text-gray-500 pb-2">
+                            Documentation browser and live previews for the MaterialX node libraries.
+                        </p>
+                        {stats && (
+                            <div className="flex w-full text-xs mb-2">
+                                <span className="flex-1 min-w-0 px-2 py-0.5 rounded-l border border-r-0 border-gray-700 bg-gray-900 text-gray-300 text-center whitespace-nowrap">
+                                    <span className="font-semibold text-white">{stats.total}</span> nodes total
+                                </span>
+                                <span className={`flex-1 min-w-0 px-2 py-0.5 rounded-r border text-center whitespace-nowrap ${
+                                    stats.undoc > 0
+                                        ? 'border-amber-700/60 bg-amber-900/20 text-amber-400'
+                                        : 'border-gray-700 bg-gray-900 text-gray-500'
+                                }`}>
+                                    <span className="font-semibold">{stats.undoc}</span> without docs
+                                </span>
+                            </div>
+                        )}
+                        {/* flex-wrap: both controls below are now intrinsically
+                            sized (invisible-sizer technique, not flex-1), so if
+                            the sidebar is ever narrower than their combined width
+                            they wrap to a second line as a graceful fallback
+                            instead of clipping or squeezing labels. */}
+                        <div className="flex items-center flex-wrap gap-1.5 pb-2">
+                            <div className="inline-flex shrink-0 rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
+                                {[
+                                    { mode: 'all', icon: 'file-infinity', label: 'All Nodes' },
+                                    { mode: 'documented', icon: 'file-check', label: 'Documented' },
+                                    { mode: 'undocumented', icon: 'file-x', label: 'Undocumented' },
+                                ].map(({ mode, icon, label }, i) => {
+                                    const active = docFilter === mode;
+                                    return (
+                                        <button
+                                            key={mode}
+                                            onClick={() => applyDocFilter(mode)}
+                                            title={label}
+                                            aria-label={label}
+                                            aria-pressed={active}
+                                            className={`p-1.5 flex items-center gap-1 transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
+                                                active
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                                            }`}
+                                        >
+                                            <MtlxIcon name={icon} className="w-4 h-4 shrink-0" />
+                                            {docFilter === mode && (
+                                                /* Invisible sizer: the longest label ("Undocumented") reserves the
+                                                   column width, the real label overlays it — the group's total width
+                                                   is therefore identical whichever segment is active. */
+                                                <span className="text-xs grid text-left whitespace-nowrap">
+                                                    <span className="invisible col-start-1 row-start-1" aria-hidden="true">Undocumented</span>
+                                                    <span className="col-start-1 row-start-1">{label}</span>
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <button
+                                onClick={togglePreviews}
+                                aria-pressed={showPreviews}
+                                aria-label="Toggle 3D previews"
+                                title={showPreviews
+                                    ? '3D previews are on — click to disable the WebGL node previews (saves resources on slow machines)'
+                                    : '3D previews are off — click to enable the WebGL node previews'}
+                                className={`shrink-0 p-1.5 rounded-lg border flex items-center gap-1 transition-colors ${
+                                    showPreviews
+                                        ? 'bg-blue-600/80 border-blue-500 text-white hover:bg-blue-500/80'
+                                        : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700'
+                                }`}
+                            >
+                                <MtlxIcon name={showPreviews ? 'cube' : 'cube-off'} className="w-4 h-4 shrink-0" />
+                                <span className="text-xs whitespace-nowrap">3D Preview</span>
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-1 pb-2">
+                            <div className="relative flex-1 min-w-0">
+                                <input
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Search nodes..."
+                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                />
+                                {searchQuery && (
+                                    <button
+                                        onClick={() => setSearchQuery('')}
+                                        title="Clear search"
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                                    >
+                                        <MtlxIcon name="x" className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                            </div>
+                            <button
+                                onClick={expandAll}
+                                title="Expand all"
+                                className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />
+                                </svg>
+                            </button>
+                            <button
+                                onClick={collapseAll}
+                                title="Collapse all"
+                                className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
+                                </svg>
+                            </button>
                         </div>
                         {matchCount !== null && (
                             <div className="text-xs text-gray-500 pb-1">
@@ -199,8 +297,10 @@
                             <p>
                                 <span className="font-semibold text-gray-100">Browsing.</span>{' '}
                                 The left panel lists every node, grouped by library and node group. Use the
-                                search box to filter by name, the arrows to expand or collapse everything,
-                                and the chips above to show only documented or undocumented nodes.
+                                search box to filter by name, the arrows next to the search box to expand
+                                or collapse everything, and the three filter icons above the search box to
+                                show all nodes, only documented, or only undocumented ones. The counters at
+                                the top of the panel show how many nodes have documentation.
                             </p>
                             <p>
                                 <span className="font-semibold text-gray-100">Documentation.</span>{' '}
@@ -215,8 +315,8 @@
                                 rotation, show the environment as background, save a PNG preview, and go
                                 full screen. Editing values in the parameter panel regenerates the shader,
                                 and the node can be downloaded as a .mtlx document with the current values.
-                                The global "3D previews" toggle above disables all WebGL rendering to save
-                                resources.
+                                The cube button in the left panel toggles all WebGL previews globally, to
+                                save resources on slow machines.
                             </p>
                             <p>
                                 <span className="font-semibold text-gray-100">Material Viewer.</span>{' '}

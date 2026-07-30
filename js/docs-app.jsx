@@ -484,9 +484,12 @@
             // ----------------------------------------------------------------
             // 'all' | 'documented' | 'undocumented'
             const [docFilter, setDocFilter] = React.useState('all');
-            // Help popup (the "?" button in the stats row).
+            // Help popup (the Help button in the sidebar's control row).
             const [showHelp, setShowHelp] = React.useState(false);
             useEscapeToClose(() => setShowHelp(false), showHelp);
+            // md+-only Node Library panel collapse; ephemeral, no localStorage
+            // (site panel-collapse policy).
+            const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
             const [searchQuery, setSearchQuery] = React.useState('');
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
@@ -705,27 +708,6 @@
 
             return (
                 <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
-                    {!chromeless && (
-                    /* Page intro: the site title/nav/links live in the shared
-                       header (js/site-header.js); only page-specific bits stay. */
-                    <div className="flex items-center justify-between gap-4 flex-wrap">
-                        <p className="text-gray-400 text-sm sm:text-base">
-                            Documentation browser and live previews for the MaterialX node libraries.
-                        </p>
-                        <button
-                            onClick={togglePreviews}
-                            title="Globally enable/disable the WebGL node previews (saves resources on slow machines)"
-                            className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                                showPreviews
-                                    ? 'bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700'
-                                    : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700'
-                            }`}
-                        >
-                            3D previews: {showPreviews ? 'On' : 'Off'}
-                        </button>
-                    </div>
-                    )}
-
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
@@ -741,48 +723,6 @@
                         </div>
                     )}
 
-                    {!chromeless && jsonData && stats && (
-                        <div className="flex items-center gap-3 flex-wrap text-sm">
-                            <span className="bg-gray-800 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg">
-                                <span className="font-semibold text-white">{stats.total}</span> nodes total
-                            </span>
-                            <span className={`px-3 py-1.5 rounded-lg border ${
-                                stats.undoc > 0
-                                    ? 'bg-gray-800 border-amber-700/60 text-amber-400'
-                                    : 'bg-gray-800 border-gray-700 text-gray-500'
-                            }`}>
-                                <span className="font-semibold">{stats.undoc}</span> without docs
-                            </span>
-                            <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
-                                {[
-                                    { mode: 'all', label: 'Show all' },
-                                    { mode: 'documented', label: 'Only documented' },
-                                    { mode: 'undocumented', label: 'Only undocumented' },
-                                ].map(({ mode, label }, i) => (
-                                    <button
-                                        key={mode}
-                                        onClick={() => applyDocFilter(mode)}
-                                        className={`px-2 sm:px-3 py-1.5 text-xs sm:text-sm transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
-                                            docFilter === mode
-                                                ? 'bg-blue-600 text-white'
-                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
-                                        }`}
-                                    >
-                                        {label}
-                                    </button>
-                                ))}
-                            </div>
-                            <button
-                                onClick={() => setShowHelp(true)}
-                                title="How to use this page"
-                                className="ml-auto text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors inline-flex items-center gap-1.5"
-                            >
-                                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-current text-[10px] font-bold" aria-hidden="true">?</span>
-                                Help
-                            </button>
-                        </div>
-                    )}
-
                     {/* Help popup — js/docs/sidebar.jsx's DocsHelpDialog (a
                         portal directly under <body>, see its own comment).
                         App keeps the showHelp state and useEscapeToClose
@@ -791,17 +731,46 @@
 
                     {jsonData && (
                         /* md+: the grid absorbs all height left between the
-                           stats row and the disclaimers; both panels scroll
+                           page top and the disclaimers; both panels scroll
                            internally. The 20rem floor keeps the panels usable
                            on very short desktop windows by letting the page
                            scroll again instead of squishing them further. */
                         <div className={chromeless
                             ? 'grid grid-cols-1 gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'
-                            : 'grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'}>
+                            : (sidebarCollapsed
+                                /* md:-m-6: cancels the shell wrapper's sm:p-6 page
+                                   padding (the active padding at md+) so the collapsed
+                                   doc view runs edge-to-edge; md-scoped because the
+                                   collapse itself only exists at md+. md:gap-0: the
+                                   auto column below holds the collapsed strip, which
+                                   should sit flush against the doc pane rather than
+                                   gapped from it. */
+                                ? 'grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:gap-0 md:flex-1 md:min-h-[20rem] md:-m-6'
+                                : 'grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
+
+                            {/* Vertical twin of the footer's collapsed "Disclaimer" strip: a slim
+                                full-height in-flow bar in the grid's auto column; click re-opens
+                                the panel. */}
+                            {!chromeless && sidebarCollapsed && (
+                                <div className="hidden md:block">
+                                    <button
+                                        onClick={() => setSidebarCollapsed(false)}
+                                        title="Expand the node library panel"
+                                        aria-label="Expand the node library panel"
+                                        aria-expanded="false"
+                                        className="h-full w-7 flex flex-col items-center gap-1.5 py-2 bg-gray-900 border-r border-gray-800 text-gray-400 hover:text-gray-200 transition-colors"
+                                    >
+                                        <MtlxIcon name="chevrons-right" className="w-4 h-4 shrink-0" />
+                                        <span className="text-xs [writing-mode:vertical-rl] whitespace-nowrap">Search Nodes</span>
+                                    </button>
+                                </div>
+                            )}
 
                             {/* Left Sidebar: Hierarchical Tree Menu — js/docs/sidebar.jsx's
                                 DocsSidebar. App owns all the state/derived data below
-                                and passes it down as props. */}
+                                and passes it down as props. Always mounted (not just when
+                                expanded) so its state survives collapse/expand and it keeps
+                                rendering stacked on narrow (<md) viewports. */}
                             {!chromeless && (
                                 <DocsSidebar
                                     treeData={treeData}
@@ -818,13 +787,23 @@
                                     toggleGroup={toggleGroup}
                                     selectedNode={selectedNode}
                                     setSelectedNode={setSelectedNode}
+                                    stats={stats}
+                                    applyDocFilter={applyDocFilter}
+                                    showPreviews={showPreviews}
+                                    togglePreviews={togglePreviews}
+                                    onShowHelp={() => setShowHelp(true)}
+                                    collapsed={sidebarCollapsed}
+                                    onCollapse={() => setSidebarCollapsed(true)}
                                 />
                             )}
 
                             {/* Right Content Area: Node Details */}
-                            <div className={chromeless
-                                ? 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
-                                : 'md:col-span-3 bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'}>
+                            <div className={(chromeless || sidebarCollapsed ? '' : 'md:col-span-3 ')
+                                + 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
+                                /* Collapsed (md+) docs pane loses its card chrome — rounded
+                                   corners, border, shadow — so it reads as edge-to-edge
+                                   content against the now-flush (md:-m-6) shell background. */
+                                + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0 md:shadow-none' : '')}>
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
