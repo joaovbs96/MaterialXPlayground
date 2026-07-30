@@ -228,14 +228,15 @@
                                                                     && selectedNode.name === nodeName
                                                                     && selectedNode.lib === lib
                                                                     && selectedNode.group === group;
-                                                                // Undocumented rows hover/select amber so status is
-                                                                // visible before clicking; keys precomputed in App's
-                                                                // stats memo (isUndocumented per row would rebuild
-                                                                // port tables on every keystroke re-render).
+                                                                // Documented rows hover blue-tinted, undocumented
+                                                                // rows hover amber-tinted, so status is visible
+                                                                // before clicking; keys precomputed in App's stats
+                                                                // memo (isUndocumented per row would rebuild port
+                                                                // tables on every keystroke re-render).
                                                                 const undoc = stats && stats.undocKeys.has(`${lib}-${group}-${nodeName}`);
                                                                 const rowCls = isSelected
                                                                     ? (undoc ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white')
-                                                                    : (undoc ? 'text-gray-400 hover:bg-amber-900/20 hover:text-amber-300' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200');
+                                                                    : (undoc ? 'text-gray-400 hover:bg-amber-900/20 hover:text-amber-300' : 'text-gray-400 hover:bg-blue-900/20 hover:text-blue-300');
                                                                 return (
                                                                     <div
                                                                         key={nodeName}
@@ -328,11 +329,6 @@
                                 and the node can be downloaded as a .mtlx document with the current values.
                                 The cube button in the left panel toggles all WebGL previews globally, to
                                 save resources on slow machines.
-                            </p>
-                            <p>
-                                <span className="font-semibold text-gray-100">Material Viewer.</span>{' '}
-                                The second tab renders complete MaterialX documents: drop a .mtlx file
-                                (optionally with its textures, a folder, or a .zip) anywhere on that page.
                             </p>
                             <p className="text-gray-400">
                                 Something broken or missing? Report it on the{' '}
