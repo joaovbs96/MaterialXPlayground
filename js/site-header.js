@@ -273,7 +273,7 @@
             '<div id="mtlx-header-bar" class="mtlx-header-bar">' +
 
                 // Brand: logo mark + site title (links home). Inside the
-                // shell "home" means the docs view, not a page navigation.
+                // shell "home" is the landing view (hash route #!home).
                 // Under VS Code there's no home to link to (single-document
                 // editor), so render the identical visual as a <span>
                 // instead of an <a> — same classes, no navigation affordance.
@@ -306,12 +306,12 @@
                         ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
                         ' class="mtlx-badge">' +
                         '<img class="mtlx-badge-logo" src="images/materialx-logo.svg" alt="">' +
-                        // Just the version: the pill's column-gap
-                        // (site-header.css) sits BETWEEN flex items, so it
-                        // separates the logo from this span on its own \u2014
-                        // no wrapper needed now that there's no label text
-                        // to keep out of the gap.
-                        '<span data-role="ver">\u2026</span>' +
+                        // Label + version, both wrapped in ONE flex item:
+                        // the pill's column-gap (site-header.css) sits
+                        // BETWEEN flex items, so without the wrapper it
+                        // would land between the label and the version on
+                        // top of the natural space already between them.
+                        '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // GitHub repo widget (mkdocs-material style): octocat +
                     // repo slug, with an async facts row (latest release /
@@ -365,13 +365,12 @@
                     '<a id="mtlx-header-version-mobile" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
                         ' class="mtlx-mobile-link mtlx-mobile-link-brand">' +
                         '<img class="mtlx-badge-logo-mobile" src="images/materialx-logo.svg" alt="">' +
-                        // Unlike the desktop pill (which deliberately omits
-                        // the label, logo + version only), this row keeps
-                        // the "MaterialX" text. Both are wrapped in ONE
-                        // flex item: this row's gap:10px (site-header.css)
-                        // sits BETWEEN flex items, so without the wrapper
-                        // it would land between the label and the version
-                        // instead of the natural space already between them.
+                        // Same "MaterialX" label as the desktop pill above,
+                        // both wrapped in ONE flex item: this row's
+                        // gap:10px (site-header.css) sits BETWEEN flex
+                        // items, so without the wrapper it would land
+                        // between the label and the version instead of the
+                        // natural space already between them.
                         '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // Flat copy of the desktop GitHub widget \u2014 octocat +

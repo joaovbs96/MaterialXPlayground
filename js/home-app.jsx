@@ -13,13 +13,15 @@ const HOME_CARDS = [
         title: 'Node Library & Documentation',
         desc: 'Browse every standard MaterialX node with per-signature docs, port tables, live 3D previews, an implementation-target matrix, and shareable permalinks.',
         img: 'images/preview-docs.jpg',
+        cta: 'Open the Node Library',
     },
     {
         href: '#!viewer',
         icon: 'camera',
         title: 'Material Viewer',
-        desc: 'Load and preview materials with real-time rendering.',
+        desc: 'Load materials by drag-and-drop (.mtlx with textures, a folder, or a .zip) or from curated presets — rendered in real time with image-based lighting, custom HDRI environments, selectable preview geometry, and PNG export.',
         img: 'images/preview-material.jpg',
+        cta: 'Open the Material Viewer',
     },
     {
         href: '#!graph',
@@ -27,6 +29,7 @@ const HOME_CARDS = [
         title: 'Node Graph Editor',
         desc: 'Visually build MaterialX graphs with nested nodegraphs, a live 3D preview, validation, and XML view/export.',
         img: 'images/preview-nodegraph.jpg',
+        cta: 'Open the Graph Editor',
     },
 ];
 
@@ -51,6 +54,14 @@ function HomeApp({ active } = {}) {
                     MaterialX node library, preview materials in real-time 3D, and
                     build node graphs visually.
                 </p>
+                <p className="text-gray-500 text-xs">
+                    <a
+                        href={links.repo}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40"
+                    >View the source on GitHub</a>.
+                </p>
             </div>
 
             {/* Feature cards */}
@@ -63,7 +74,7 @@ function HomeApp({ active } = {}) {
                     >
                         <img
                             src={card.img}
-                            alt={card.title}
+                            alt=""
                             loading="lazy"
                             className="w-full aspect-video object-cover border-b border-gray-700"
                         />
@@ -72,7 +83,7 @@ function HomeApp({ active } = {}) {
                             <div className="mt-3 text-lg font-semibold text-gray-100">{card.title}</div>
                             <p className="mt-1.5 text-sm text-gray-400 flex-1">{card.desc}</p>
                             <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
-                                Open <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
+                                {card.cta} <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
                             </div>
                         </div>
                     </a>

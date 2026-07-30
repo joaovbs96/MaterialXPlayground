@@ -200,6 +200,12 @@
 .mtlx-badge {
     display: inline-flex;
     align-items: center;
+    /* .mtlx-nav-right children default to flex-shrink: 1 — without this,
+       under width pressure the pill compresses below its nowrap content
+       width and clips its text, and because the bar then doesn't overflow,
+       the measured hamburger collapse in js/site-header.js's measure()
+       (which checks scrollWidth > clientWidth) never fires to rescue it. */
+    flex-shrink: 0;
     font-size: 12px;
     line-height: 16px;
     padding: 6px 10px;
@@ -254,6 +260,9 @@
 .mtlx-source {
     display: inline-flex;
     align-items: center;
+    /* Same reasoning as .mtlx-badge above: shrinking would clip its nowrap
+       content AND hide the overflow from measure()'s collapse check. */
+    flex-shrink: 0;
     gap: 8px;
     padding: 4px 10px;
     border-radius: 8px;

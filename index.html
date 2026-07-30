@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MaterialX Playground — Node Library, Viewer & Graph Editor</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <meta name="theme-color" content="#111827">
 
     <!-- SEO / link-preview metadata. og:image must stay an ABSOLUTE URL —
          social scrapers don't resolve relative paths. -->
@@ -13,7 +15,7 @@
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="MaterialX Playground">
     <meta property="og:title" content="MaterialX Playground">
-    <meta property="og:description" content="Browse the MaterialX node library, preview materials in 3D, and build node graphs — free, open source, in your browser.">
+    <meta property="og:description" content="Browse the MaterialX node library, preview materials in real-time 3D, and build shader node graphs — free, open source, in your browser.">
     <meta property="og:url" content="https://joaovbs96.github.io/MaterialXPlayground/">
     <meta property="og:image" content="https://joaovbs96.github.io/MaterialXPlayground/images/og_image.png">
     <meta property="og:image:width" content="1200">
@@ -112,6 +114,19 @@
          The docs and viewer views reconstruct their OWN padded/max-width
          wrappers inside this, in js/shell.jsx. -->
     <div id="root" class="flex-1 relative min-h-0"></div>
+
+    <!-- JS-off fallback: the app is a client-side React SPA with no
+         server-rendered content, so without JavaScript #root stays empty.
+         Inline styles only — Tailwind Play is itself a script and never
+         runs here. -->
+    <noscript>
+        <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#111827;color:#f3f4f6;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Noto Sans',sans-serif;text-align:center;padding:24px;">
+            <div style="max-width:480px;">
+                <h1 style="font-size:1.75rem;margin:0 0 12px;">MaterialX Playground requires JavaScript</h1>
+                <p style="color:#9ca3af;margin:0;line-height:1.5;">Everything runs client-side in your browser — no server, no account. Please enable JavaScript to continue.</p>
+            </div>
+        </div>
+    </noscript>
 
     <!-- Shared footer: filled by js/site-header.js at DOMContentLoaded. -->
     <div id="site-footer" class="shrink-0"></div>

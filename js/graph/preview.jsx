@@ -591,7 +591,7 @@
                                 // keep the built-in checker texture.
                                 const rep = bindDroppedTextures(live, fileMap || {});
                                 if (rep.missing.length) {
-                                    console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
+                                    mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
                                 }
                                 setLabel(built.label || '');
                                 setLoading(false);
@@ -672,7 +672,7 @@
                             live.__outdated = false;
                             const rep = bindDroppedTextures(live, fileMap || {});
                             if (rep.missing.length) {
-                                console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
+                                mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
                             }
                             setUpdating(false);
                             return;
@@ -753,7 +753,7 @@
                         // references keep the built-in checker texture.
                         const rep = bindDroppedTextures(view, fileMap || {});
                         if (rep.missing.length) {
-                            console.warn('node-graph preview: texture file(s) not found among dropped files:', rep.missing);
+                            mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
                         }
                         setLoading(false);
                         setUpdating(false);

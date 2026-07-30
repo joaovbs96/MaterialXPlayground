@@ -180,7 +180,7 @@
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
-            const [status, setStatus] = React.useState('Drop a .mtlx (or a folder / .zip containing one) to begin.');
+            const [status, setStatus] = React.useState('Loading the default document…');
             const [error, setError] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
@@ -1387,7 +1387,14 @@
                             'standard_surface_marble_solid.mtlx': new Blob([xml], { type: 'application/xml' }),
                         });
                     })
-                    .catch(() => { setBusy(false); });
+                    .catch(() => {
+                        setBusy(false);
+                        const hasSession = Object.keys(fileMapRef.current)
+                            .some((k) => /\.mtlx$/i.test(k));
+                        if (!hasSession && !IN_VSCODE) {
+                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Import, or pick a Preset (top left).");
+                        }
+                    });
             }, []);
 
             const onPickFiles = (e) => {
@@ -2150,7 +2157,7 @@
                     return false;
                 }
                 if (!window.JSZip) {
-                    setError('Export failed: JSZip failed to load from the CDN.');
+                    setError('Export failed: the JSZip library is not loaded — reload the page and try again.');
                     return false;
                 }
                 const zip = new JSZip();
@@ -5525,7 +5532,7 @@
                                     .mtlx file). */}
                                 {!IN_VSCODE && (
                                 <div className="text-xs text-gray-500 mt-1.5">
-                                    Files can be dropped anywhere on the page, or use Import in the top left.
+                                    Files can be dropped anywhere on the page — or use Import or Presets in the top left.
                                 </div>
                                 )}
                             </div>
@@ -5912,7 +5919,7 @@
                                         className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
                                     >
                                         <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                        {labeled && <span className="ml-1.5 whitespace-nowrap">Send to Viewer</span>}
+                                        {labeled && <span className="ml-1.5 whitespace-nowrap">Send to Material Viewer</span>}
                                     </button>
                                     )}
                                     </>

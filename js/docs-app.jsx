@@ -233,7 +233,7 @@
                     } else if (e.detail.url) {
                         window.open(e.detail.url, '_blank', 'noopener');
                     } else {
-                        console.warn('mtlx-open-node: no node matches key', e.detail.key);
+                        mtlxWarn('mtlx-open-node: no node matches key', e.detail.key);
                     }
                 };
                 window.addEventListener('mtlx-open-node', onOpen);
@@ -323,14 +323,17 @@
             };
 
             // Keep the address bar in sync with the selection (permalink), and
-            // react to back/forward + manual hash edits. pushState updates the
-            // bar WITHOUT firing hashchange, so no feedback loop; popstate
-            // handles history navigation. Only write the URL while the docs
-            // view is VISIBLE — a late spec-DB load while another shell view
-            // is active must not stomp the shell's '#!' route (pushState
-            // doesn't fire hashchange, so the shell can't recover); when the
-            // view becomes active again, this re-runs and restores the node
-            // permalink.
+            // react to back/forward + manual hash edits. replaceState updates
+            // the bar WITHOUT pushing a new history entry (and without firing
+            // hashchange, so no feedback loop) — a deliberate choice
+            // (CONFIRMED decision, 2026-07-29): browsing between nodes no
+            // longer stacks up one Back-button press per node clicked, so a
+            // single Back exits docs entirely; the URL is still updated on
+            // every selection, so permalinks/refresh/sharing keep working.
+            // Only write the URL while the docs view is VISIBLE — a late
+            // spec-DB load while another shell view is active must not stomp
+            // the shell's '#!' route; when the view becomes active again,
+            // this re-runs and restores the node permalink.
             React.useEffect(() => {
                 // An inline instance (mounted inside the graph editor's docs
                 // dialog) must NEVER touch the parent page's URL/history —
@@ -339,11 +342,7 @@
                 if (!selectedNode || !active) return;
                 const h = selToHash(selectedNode);
                 if (window.location.hash !== h) {
-                    if (EMBED) {
-                        try { history.replaceState(null, '', h); } catch (e) { window.location.replace(h); }
-                    } else {
-                        try { history.pushState(null, '', h); } catch (e) { window.location.hash = h; }
-                    }
+                    try { history.replaceState(null, '', h); } catch (e) { window.location.replace(h); }
                 }
             }, [selectedNode, active]);
             React.useEffect(() => {

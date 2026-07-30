@@ -288,7 +288,7 @@ const fetchPresetFiles = async (preset) => {
             xml = await res.text();
         } catch (e) {
             if (key === baseName) throw e; // the root doc must load
-            console.warn('preset include fetch failed (skipped):', url, e);
+            mtlxWarn('preset include fetch failed (skipped):', url, e);
             continue;
         }
         map[key] = new Blob([xml], { type: 'application/xml' });
@@ -325,7 +325,7 @@ const fetchPresetFiles = async (preset) => {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     map[ref] = await r.blob();
                 } catch (texErr) {
-                    console.warn('preset texture fetch failed (falls back to the checker):', ref, texErr);
+                    mtlxWarn('preset texture fetch failed (falls back to the checker):', ref, texErr);
                 }
             })());
         }
@@ -640,7 +640,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             return;
         }
         if (!window.JSZip) {
-            setError('Export failed: JSZip failed to load from the CDN.');
+            setError('Export failed: the JSZip library is not loaded. Reload the page and try again.');
             return;
         }
         const zip = new JSZip();

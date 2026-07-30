@@ -196,6 +196,15 @@ const getMxEnv = () => {
                         }
                         return { mx, gen, genContext, stdlib, lightData };
                     });
+            })
+            .catch((e) => {
+                // Reset the memo so a later retry (reload, or an app
+                // re-requesting the env) re-attempts the load instead of
+                // replaying this same rejection forever, and wrap the
+                // (often opaque, e.g. a raw fetch/network error) failure in
+                // a message a user can act on.
+                mxEnvPromise = null;
+                throw new Error('The MaterialX engine (WASM) failed to load: check your connection and try again, or reload the page. (' + ((e && e.message) || e) + ')');
             });
     }
     return mxEnvPromise;
@@ -274,6 +283,13 @@ const mxWarnIfLocked = (name) => {
 const DEBUG_SHADERS = (() => {
     try { return !!localStorage.getItem('mtlxDebugShaders'); } catch (e) { return false; }
 })();
+
+// Gated console.warn for expected/recoverable conditions (e.g. a missing
+// texture reference) that would otherwise spam every user's console on
+// every load — real, actionable warnings stay ungated (plain
+// console.warn). Consumers across the app call this as a bare global
+// (window.mtlxWarn, exported below); all of them load after this file.
+const mtlxWarn = (...args) => { if (DEBUG_SHADERS) console.warn(...args); };
 
 // "Force Transparency" (Settings dialog, experimental, DEFAULT OFF).
 // OFF = official-viewer parity: the hwTransparency verdict from shader
@@ -733,7 +749,7 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
         mxRemoveAttr(inp, 'value');
     }
     if (inp && wantedType && mxElType(inp) !== wantedType) {
-        console.warn('ensureTypedInput: "' + inputName + '" is "' + mxElType(inp) + '" (wanted "' + wantedType + '"), path=' + how);
+        mtlxWarn('ensureTypedInput: "' + inputName + '" is "' + mxElType(inp) + '" (wanted "' + wantedType + '"), path=' + how);
     }
     return inp;
 };
@@ -943,7 +959,7 @@ const expandZips = async (map) => {
         const file = map[key];
         delete map[key];
         if (!window.JSZip) {
-            throw new Error('JSZip failed to load from the CDN — .zip drops are unavailable.');
+            throw new Error('The JSZip library is not loaded: .zip files can\'t be expanded. Reload the page and try again.');
         }
         const zip = await JSZip.loadAsync(file);
         const names = Object.keys(zip.files);
@@ -2643,9 +2659,9 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         ? fs.match(new RegExp('\\b' + outVar + '\\s*=[^;]*;', 'g'))
         : null;
     if (!outVar || !outAssignments || !outAssignments.length) {
-        console.warn(`mtlx-engine: could not locate the fragment output assignment for "${label}" — skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);
+        mtlxWarn(`mtlx-engine: could not locate the fragment output assignment for "${label}" — skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);
     } else if (/srgb/i.test(outAssignments.join('\n'))) {
-        console.warn(`mtlx-engine: the fragment output assignment for "${label}" already calls an sRGB encode (despite hwSrgbEncodeOutput=false) — skipping encodeDisplay() to avoid double-encoding (ACES tone mapping will NOT be applied to this material).`);
+        mtlxWarn(`mtlx-engine: the fragment output assignment for "${label}" already calls an sRGB encode (despite hwSrgbEncodeOutput=false): skipping encodeDisplay() to avoid double-encoding (ACES tone mapping will NOT be applied to this material).`);
     } else {
         fs = encodeDisplay(fs);
     }
@@ -4257,7 +4273,7 @@ const createMtlxRenderView = async ({
                                         envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance SH-synthesized)') : '(synthesized)',
                                         '| direct lights:', (lightData && lightData.length) || 0);
                             const envUnbound = declared.filter((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && !newUniforms[u.name]);
-                            if (envUnbound.length) console.warn('UNBOUND env samplers (likely cause of black):', envUnbound.map((u) => u.name));
+                            if (envUnbound.length) mtlxWarn('UNBOUND env samplers (likely cause of black):', envUnbound.map((u) => u.name));
                         }
                     }
 
@@ -5087,7 +5103,7 @@ const MtlxIcon = (props) => {
 })();
 
 Object.assign(window, {
-    getMxEnv, DEBUG_SHADERS, mxExclusive,
+    getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
     getForceTransparency, setForceTransparency,
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,

@@ -525,7 +525,7 @@
                     else if (inp.nodename) { srcId = 'n:' + inp.nodename; outName = inp.output || 'out'; }
                     if (!srcId) continue;
                     const src = byId[srcId];
-                    if (!src) { console.warn('node-graph: dangling connection to', srcId, 'from', d.id); continue; }
+                    if (!src) { mtlxWarn('node-graph: dangling connection to', srcId, 'from', d.id); continue; }
                     if (!outName) outName = (src.outputs[0] && src.outputs[0].name) || 'out';
                     if (!src.outputs.some((o) => o.name === outName)) {
                         src.outputs.push({ name: outName, type: inp.type });

@@ -2,7 +2,7 @@
 
 [![Build, verify & deploy](https://github.com/joaovbs96/MaterialXPlayground/actions/workflows/deploy.yml/badge.svg)](https://github.com/joaovbs96/MaterialXPlayground/actions/workflows/deploy.yml) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![MaterialX](https://img.shields.io/badge/MaterialX-v1.39.5-blue.svg)](https://github.com/AcademySoftwareFoundation/MaterialX)
 
-MaterialX Playground is a set of tools for in-browser interactive visualization of the standard node library, preview materials in real-time 3D, and build node graphs visually, all without installing anything. Everything runs 100% client-side: no server, no account, no data leaves your browser. Shaders are generated and compiled live in your browser through the MaterialX WebAssembly modules.
+MaterialX Playground is a set of in-browser tools to explore the standard MaterialX node library, preview materials in real-time 3D, and build node graphs visually, all without installing anything. Everything runs 100% client-side: no server, no account, no data leaves your browser. Shaders are generated and compiled live in your browser through the MaterialX WebAssembly modules.
 
 Built on the MaterialX v1.39.5 WebAssembly modules (core and shader generation).
 
@@ -43,7 +43,7 @@ Load and inspect MaterialX materials in 3D.
 - **Image-based lighting** from a built-in HDR environment (always on). A toggle shows or hides that environment as the visible backdrop; the lighting itself is unaffected either way.
 - **Drag-and-drop loading.** Drop a `.mtlx` document anywhere on the page, on its own or together with loose textures, a folder of textures, or a `.zip`. Textures are matched by relative path, with a UV-checker fallback for anything unresolved.
 - **Interactive viewport** with orbit (drag) and zoom (wheel/pinch), an optional turntable rotation, selectable preview geometry (shaderball / sphere / cube), a material picker when a document defines several, a save-PNG-preview button, and fullscreen.
-- **Send to editor** to keep working on the current material in the Node Graph Editor.
+- **Send to Graph Editor** to keep working on the current material in the Node Graph Editor.
 
 ### 🕸️ Node Graph Editor
 
@@ -149,6 +149,8 @@ Issues and pull requests are welcome. Please file bugs and feature requests via 
 
 **Icons.** UI icons are from [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, licensed [MIT](images/tabler-icons/LICENSE.txt), inlined as SVG paths in `js/mtlx-engine.js`.
 
+**MaterialX logo.** `images/materialx-logo.svg` is the official MaterialX project logo, © the Academy Software Foundation, obtained from the Academy Software Foundation's official MaterialX project materials ([AcademySoftwareFoundation/artwork](https://github.com/AcademySoftwareFoundation/artwork)). The MaterialX name and logo are trademarks of the Academy Software Foundation / the Linux Foundation and are used here only to identify the MaterialX project. See [Trademarks](#trademarks).
+
 ## License
 
 Released under the [Apache License 2.0](LICENSE). The MaterialX standard libraries vendored under `libraries/` are © the Academy Software Foundation and its contributors, also under the Apache License 2.0.
@@ -157,4 +159,4 @@ Released under the [Apache License 2.0](LICENSE). The MaterialX standard librari
 
 MaterialX™ is a trademark of the Academy Software Foundation, a project of the Linux Foundation. All other trademarks are the property of their respective owners.
 
-References to MaterialX in this project are nominative and descriptive only, used to identify the technology this tool works with. This project is **not affiliated with, endorsed by, or sponsored by** the MaterialX project, the Academy Software Foundation, or the Linux Foundation. This project does not use the MaterialX logo, and nothing here should be read as implying any official status. Where this document and any policy published by the Academy Software Foundation differ, the Foundation's policy governs.
+References to MaterialX in this project are nominative and descriptive only, used to identify the technology this tool works with. The MaterialX logo appears in this project's interface solely to identify the MaterialX project and the version of the MaterialX libraries in use, and links to the official MaterialX documentation; this use does not imply any affiliation with or endorsement by the trademark holders. This project is **not affiliated with, endorsed by, or sponsored by** the MaterialX project, the Academy Software Foundation, or the Linux Foundation, and nothing here should be read as implying any official status. Where this document and any policy published by the Academy Software Foundation or the Linux Foundation (including the Linux Foundation Trademark Usage Guidelines) differ, the Foundation's policy governs.

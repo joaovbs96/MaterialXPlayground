@@ -29,6 +29,26 @@ const EMBED = !!window.__MTLX_EMBED;
 const IN_VSCODE = !!window.__MTLX_VSCODE__;
 
 // ------------------------------------------------------------------
+// WebGL2 capability probe (module-scope, cached — a browser's WebGL2
+// support can't change over the lifetime of a page, so this only ever
+// touches the DOM/creates a throwaway canvas once). The viewer and graph
+// views hard-require WebGL2 for their 3D render loops; docs only uses it
+// for the embedded node-preview thumbnails, so its absence there is a
+// soft warning rather than a block. See Shell's renderView below.
+// ------------------------------------------------------------------
+let __hasWebGL2 = null;
+function hasWebGL2() {
+    if (__hasWebGL2 !== null) return __hasWebGL2;
+    try {
+        const canvas = document.createElement('canvas');
+        __hasWebGL2 = !!(window.WebGL2RenderingContext && canvas.getContext('webgl2'));
+    } catch (e) {
+        __hasWebGL2 = false;
+    }
+    return __hasWebGL2;
+}
+
+// ------------------------------------------------------------------
 // Script/CSS loading utilities (module scope, cached by URL so repeated
 // activations of a view are no-ops after the first).
 // Note: <script>/<link> tags have no fetch-cache-mode equivalent, so these
@@ -47,6 +67,7 @@ function loadScript(src) {
         document.head.appendChild(el);
     });
     __scriptCache.set(src, p);
+    p.catch(() => __scriptCache.delete(src));
     return p;
 }
 const __cssCache = new Map();
@@ -61,6 +82,7 @@ function loadCss(href) {
         document.head.appendChild(el);
     });
     __cssCache.set(href, p);
+    p.catch(() => __cssCache.delete(href));
     return p;
 }
 
@@ -115,6 +137,7 @@ async function loadJsxApp(src) {
         document.head.appendChild(el);
     })();
     __scriptCache.set(src, p);
+    p.catch(() => __scriptCache.delete(src));
     return p;
 }
 // The engine is eagerly loaded by index.html's own <script type="text/babel">
@@ -260,6 +283,10 @@ function Shell() {
         viewer: { mounted: false, status: 'idle' },
         graph: { mounted: false, status: 'idle' },
     });
+    // Dismissible amber WebGL2 warning banner shown above docs content
+    // (docs itself works fine without WebGL2 — only its embedded 3D node
+    // previews don't render). Not per-view state since it's docs-only.
+    const [docsWebglBannerDismissed, setDocsWebglBannerDismissed] = React.useState(false);
 
     // Hash router: '#!viewer' / '#!graph' select those views; '#!docs' or
     // any hash starting with '#/' (legacy '#/lib/group/name' docs
@@ -291,6 +318,14 @@ function Shell() {
     React.useEffect(() => {
         setViewState((prev) => {
             if (prev[activeView].mounted) return prev;
+            // viewer/graph hard-require WebGL2 to render at all — skip
+            // fetching their (sometimes sizeable) dependency bundles for
+            // nothing and go straight to the blocking message below
+            // instead. Docs has no such requirement (see hasWebGL2 above)
+            // and still loads normally.
+            if ((activeView === 'viewer' || activeView === 'graph') && !hasWebGL2()) {
+                return { ...prev, [activeView]: { mounted: true, status: 'no-webgl2' } };
+            }
             return { ...prev, [activeView]: { mounted: true, status: 'loading' } };
         });
     }, [activeView]);
@@ -394,8 +429,26 @@ function Shell() {
             );
         } else if (st.status === 'error') {
             content = (
-                <div className="flex items-center justify-center h-40 text-red-400 text-sm">
-                    Failed to load this view: {String((st.error && st.error.message) || st.error)}
+                <div className="flex flex-col items-center justify-center h-40 gap-3 text-red-400 text-sm text-center px-4">
+                    <span>Failed to load this view: {String((st.error && st.error.message) || st.error)}</span>
+                    <button
+                        type="button"
+                        onClick={() => setViewState((prev) => ({ ...prev, [view]: { mounted: true, status: 'loading' } }))}
+                        className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                    >
+                        Retry
+                    </button>
+                </div>
+            );
+        } else if (st.status === 'no-webgl2') {
+            // Hard block — viewer/graph's render loops cannot run at all
+            // without WebGL2, so there's no degraded mode to fall back to
+            // (unlike docs, see the banner below).
+            content = (
+                <div className="flex items-center justify-center h-40 text-center text-gray-300 text-sm px-4">
+                    {'WebGL2 is not available. The '
+                        + (view === 'viewer' ? 'Material Viewer' : 'Node Graph Editor')
+                        + ' needs a WebGL2-capable browser. Try a current Chrome, Firefox, Edge, or Safari, and make sure hardware acceleration is enabled.'}
                 </div>
             );
         } else if (st.status === 'ready' && window[dep.globalName]) {
@@ -408,8 +461,37 @@ function Shell() {
             } else if (view === 'docs') {
                 // Gives App the wrapper contract its own root markup expects
                 // (`max-w-[1600px] mx-auto md:h-full`) so App's own
-                // `md:h-full` resolves correctly.
-                content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
+                // `md:h-full` resolves correctly. Docs works fine without
+                // WebGL2 (unlike viewer/graph above) — just show a
+                // dismissible warning above content instead of blocking,
+                // since only the embedded node-preview 3D thumbnails are
+                // affected.
+                const webglBanner = !hasWebGL2() && !docsWebglBannerDismissed ? (
+                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-amber-600/50 bg-amber-900/30 text-amber-200 text-xs px-3 py-2">
+                        <span>WebGL2 is unavailable in this browser — node documentation works, but 3D previews won't render.</span>
+                        <button
+                            type="button"
+                            onClick={() => setDocsWebglBannerDismissed(true)}
+                            className="text-amber-200/80 hover:text-amber-100 leading-none"
+                            aria-label="Dismiss"
+                        >
+                            ×
+                        </button>
+                    </div>
+                ) : null;
+                content = webglBanner ? (
+                    // Becomes a percentage-height flex column so the banner
+                    // takes its natural height and App gets the REMAINING
+                    // height via md:flex-1/md:min-h-0 on its own inner
+                    // wrapper, instead of App's md:h-full stealing space
+                    // from the banner (or vice versa).
+                    <div className="max-w-[1600px] mx-auto md:h-full md:flex md:flex-col md:min-h-0">
+                        {webglBanner}
+                        <div className="md:flex-1 md:min-h-0">{rendered}</div>
+                    </div>
+                ) : (
+                    <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>
+                );
             } else if (view === 'viewer') {
                 // Browser: no wrapper at all — MaterialViewerApp's own root
                 // is `absolute inset-0`, a full-bleed stage that positions

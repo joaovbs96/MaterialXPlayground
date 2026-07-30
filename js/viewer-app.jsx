@@ -95,7 +95,7 @@
             const [renderables, setRenderables] = React.useState([]);
             const [chosenMat, setChosenMat] = React.useState(0);
             const [geom, setGeom] = React.useState('shaderball-scene');
-            const [status, setStatus] = React.useState('Drop a .mtlx (optionally with textures / a folder / a .zip) to begin.');
+            const [status, setStatus] = React.useState('Loading the default material…');
             const [error, setError] = React.useState(null);
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
@@ -419,7 +419,11 @@
                     .catch(() => {
                         // Offline / blocked: back to the drop prompt — unless
                         // the user's own load is already in flight.
-                        if (!loadedRef.current) setBusy(false);
+                        const hasSession = Object.keys(fileMapRef.current)
+                            .some((k) => /\.mtlx$/i.test(k));
+                        if (hasSession || loadedRef.current) return;
+                        setBusy(false);
+                        setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
                     });
             }, []);
 
@@ -590,7 +594,21 @@
                                     labelClassName="text-sm text-gray-300 animate-pulse"
                                     barWidthClass="w-56"
                                 />
-                                {renderables.length > 0 && (
+                                {/* Rendered even with nothing loaded (browser only): the
+                                    offline-fallback status text below points here
+                                    ("pick a Preset from the toolbar") for the case
+                                    where the default-material fetch failed, so the
+                                    Presets button (and the rest of the strip — every
+                                    control here is already null-safe against no live
+                                    view/document, see useViewportControls/
+                                    useViewToggle/ViewportControls) needs to be
+                                    reachable with an empty viewer. IN_VSCODE keeps the
+                                    original renderables-only gate: the extension always
+                                    supplies a document, so an empty-state toolbar there
+                                    would only show up in the unrelated "parsed but no
+                                    renderable material" error case, which this fix
+                                    isn't meant to touch. */}
+                                {(renderables.length > 0 || !IN_VSCODE) && (
                                     <ViewportControls
                                         containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
                                         selectClassName="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
@@ -629,11 +647,12 @@
                                                 {!IN_VSCODE && (
                                                 <button
                                                     onClick={sendToEditor}
-                                                    title="Open this material in the node graph editor"
-                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                    title="Open this material in the Node Graph Editor"
+                                                    disabled={!renderables.length}
+                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Send to Graph</span>}
+                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Send to Graph Editor</span>}
                                                 </button>
                                                 )}
                                                 {/* Presets: browser-only, multi-document

@@ -827,7 +827,7 @@
                             try {
                                 const holder = {};
                                 if (!doc.validate(holder)) {
-                                    console.warn(`MaterialX document failed validate() for "${nodeName}" — generation will likely fail.`);
+                                    mtlxWarn(`MaterialX document failed validate() for "${nodeName}": generation will likely fail.`);
                                     if (DEBUG_SHADERS) console.warn(holder.message || '(no message)');
                                 }
                             } catch (vErr) {
@@ -989,7 +989,7 @@
                                 });
                             } catch (prePassErr) {
                                 // Best-effort: the authoritative post-compile pass still runs.
-                                console.warn('MaterialX docs: pre-compile parameter enumeration failed -', prePassErr);
+                                mtlxWarn('MaterialX docs pre-compile parameter enumeration failed:', prePassErr);
                             }
                             if (mounted && preParams.length) {
                                 setParams(preParams);
@@ -1281,12 +1281,17 @@
                                 return out;
                             });
                         } catch (inputErr) {
-                            // Always warn — this used to be DEBUG_SHADERS-only,
-                            // so the filterDefs ReferenceError regression (see
-                            // the hoist comment above Island A) failed SILENTLY
-                            // for everyone not running with debug logging on,
-                            // showing only as "the parameter panel is empty".
-                            console.warn('MaterialX docs: parameter enumeration failed —', inputErr);
+                            // NOTE: this was previously an ALWAYS-ON console.warn
+                            // (not DEBUG_SHADERS-gated) precisely because a prior
+                            // DEBUG_SHADERS-only version let the filterDefs
+                            // ReferenceError regression (see the hoist comment
+                            // above Island A) fail SILENTLY for everyone not
+                            // running with debug logging on, showing only as
+                            // "the parameter panel is empty". Re-gated via
+                            // mtlxWarn as part of the app-wide console-noise
+                            // cleanup — if enumeration failures go quiet again,
+                            // this history is why that's suspicious.
+                            mtlxWarn('MaterialX docs parameter enumeration failed:', inputErr);
                             if (DEBUG_SHADERS) console.warn('nodedef input enumeration failed:', mxErr(mx, inputErr));
                         }
 
