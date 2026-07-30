@@ -116,7 +116,7 @@
     // Mobile-hamburger-only nav icons (the desktop tabs above stay
     // text-only — no `icon` use on the `tabs` markup below). 'docs' /
     // 'viewer' / 'graph' are copied verbatim from MTLX_ICON_PATHS in
-    // js/mtlx-engine.js ('file-code' / 'camera' / 'share') so the mobile
+    // js/shared/ui-commons.js ('file-code' / 'camera' / 'share') so the mobile
     // glyphs match the home page's own feature-card icons
     // (home-app.jsx's HOME_CARDS) exactly. 'home' has no registry entry
     // (the home cards link AWAY from home, never to it), so it's the
@@ -127,7 +127,7 @@
     // svg`). 'camera' is MTLX_ICON_PATHS' one `filled: true` entry among
     // these four, so unlike the others it's fill="currentColor" with no
     // stroke attributes at all, mirroring how MtlxIcon renders filled
-    // icons (js/mtlx-engine.js's ICON_STYLE). currentColor on every icon
+    // icons (js/shared/ui-commons.js's ICON_STYLE). currentColor on every icon
     // means they automatically pick up `.mtlx-tab-mobile`'s current text
     // color, active or not — no separate active-state icon styling needed.
     var ICON_NAV_HOME =

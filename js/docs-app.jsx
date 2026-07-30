@@ -536,15 +536,19 @@
             const stats = React.useMemo(() => {
                 if (!jsonData) return null;
                 let total = 0, undoc = 0;
-                Object.values(jsonData).forEach(groups =>
-                    Object.values(groups).forEach(nodes =>
-                        Object.values(nodes).forEach(info => {
+                const undocKeys = new Set();
+                Object.entries(jsonData).forEach(([lib, groups]) =>
+                    Object.entries(groups).forEach(([group, nodes]) =>
+                        Object.entries(nodes).forEach(([name, info]) => {
                             total++;
-                            if (isUndocumented(info)) undoc++;
+                            if (isUndocumented(info)) {
+                                undoc++;
+                                undocKeys.add(`${lib}-${group}-${name}`);
+                            }
                         })
                     )
                 );
-                return { total, undoc };
+                return { total, undoc, undocKeys };
             }, [jsonData]);
 
             // The tree renders from treeData: the full data, narrowed by the

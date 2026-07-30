@@ -95,6 +95,9 @@
                                     { mode: 'undocumented', icon: 'file-x', label: 'Undocumented' },
                                 ].map(({ mode, icon, label }, i) => {
                                     const active = docFilter === mode;
+                                    const activeCls = mode === 'undocumented'
+                                        ? 'bg-amber-900/20 text-amber-400 ring-1 ring-inset ring-amber-700/60'
+                                        : 'bg-blue-600 text-white';
                                     return (
                                         <button
                                             key={mode}
@@ -102,9 +105,9 @@
                                             title={label}
                                             aria-label={label}
                                             aria-pressed={active}
-                                            className={`p-1.5 flex items-center gap-1 transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
+                                            className={`p-1.5 flex items-center gap-1 transition-colors ${i > 0 ? `border-l ${active && mode === 'undocumented' ? 'border-amber-700/60' : 'border-gray-700'}` : ''} ${
                                                 active
-                                                    ? 'bg-blue-600 text-white'
+                                                    ? activeCls
                                                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
                                             }`}
                                         >
@@ -225,11 +228,19 @@
                                                                     && selectedNode.name === nodeName
                                                                     && selectedNode.lib === lib
                                                                     && selectedNode.group === group;
+                                                                // Undocumented rows hover/select amber so status is
+                                                                // visible before clicking; keys precomputed in App's
+                                                                // stats memo (isUndocumented per row would rebuild
+                                                                // port tables on every keystroke re-render).
+                                                                const undoc = stats && stats.undocKeys.has(`${lib}-${group}-${nodeName}`);
+                                                                const rowCls = isSelected
+                                                                    ? (undoc ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white')
+                                                                    : (undoc ? 'text-gray-400 hover:bg-amber-900/20 hover:text-amber-300' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200');
                                                                 return (
                                                                     <div
                                                                         key={nodeName}
                                                                         onClick={() => setSelectedNode({ lib, group, name: nodeName, info: nodeInfo })}
-                                                                        className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${isSelected ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200'}`}
+                                                                        className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${rowCls}`}
                                                                     >
                                                                         {nodeName}
                                                                     </div>

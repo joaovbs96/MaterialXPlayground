@@ -144,6 +144,8 @@
          explicit react-only preset matches loadJsxApp's own Babel config
          in js/shell.jsx (presets [['react', {runtime: 'classic'}]]) and
          leaves import() native. -->
+    <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
+    <script src="js/shared/ui-commons.js"></script>
     <script type="text/babel" data-presets="react" src="js/mtlx-engine.js"></script>
     <script type="text/babel" data-presets="react" src="js/shell.jsx"></script>
     <script type="text/babel" data-presets="react">
