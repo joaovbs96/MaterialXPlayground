@@ -1,59 +1,12 @@
 #!/usr/bin/env node
 // scripts/build-nodelib.mjs
 //
-// Pre-generates the "Node Library" documentation data at build time instead
-// of parsing it live in the browser via WASM. Writes two committed files:
-//
-//   js/gen/nodelib.json       ("Layer 1") — the spec-derived node database,
-//                             structurally identical to what the old
-//                             in-browser live spec-parser used to produce:
-//                             { library: { nodegroup: { category: {
-//                               description, notes, section, references,
-//                               port_tables, spec_url } } } }
-//
-//   js/gen/nodelib-index.json ("Layer 2") — per-category signature/version
-//                             groups (groupDefVersions), auto-generated port
-//                             tables for undocumented nodes
-//                             (buildAutoTablesFromDefs), def-port fallback
-//                             rows for undocumented nodes with no auto
-//                             tables (buildDefPorts), and the
-//                             implementation-target matrix (buildImplRows),
-//                             plus the sorted union of every shading-
-//                             language target seen (allTargets):
-//                             { meta: {tag, version}, allTargets: [...],
-//                               nodes: { category: { sigGroups, autoTables?,
-//                               defPorts?, impl } } }
-//
-// Both files are produced by instantiating the vendored MaterialX WASM build
-// directly in Node (no browser) — see scripts/lib/version.mjs's
-// extractVersionFromWasm() for the base load pattern this mirrors, and
-// scripts/lib/spec-parser.js / scripts/lib/nodedef-extract.mjs for the
-// actual database/index construction this script wires together.
-//
-// Generating Layer 1 needs network access for the 3 spec markdown files
-// UNLESS vendor/materialx/ is populated (this repo's checkout has it
-// populated by `npm run vendor:offline` — scripts/lib/spec-parser.js's
-// readSpecDoc() logs "spec docs: local vendor/materialx (<file>)" when that
-// local-read path is taken, vs. "spec docs: remote fetch (<file>@<tag>)"
-// when it falls back to raw.githubusercontent.com).
-//
-// Both output files are committed to the repo (same contract as
-// js/gen/mtlx-version.json / scripts/extract-mtlx-version.mjs): `npm run
-// build` (or this script directly) regenerates them, and --check verifies
-// they're not stale WITHOUT writing anything, so a stale commit is caught in
-// CI rather than silently shipping wrong/outdated node docs.
-//
-// Usage:
-//   node scripts/build-nodelib.mjs           (Re)generate js/gen/nodelib.json
-//                                             and js/gen/nodelib-index.json
-//                                             from the vendored WASM + spec
-//                                             docs.
-//   node scripts/build-nodelib.mjs --check   Verify only: rebuild both files
-//                                             in memory and byte-compare
-//                                             against the committed copies.
-//                                             Writes nothing. Non-zero exit
-//                                             on any drift (or on any sanity
-//                                             assertion failure).
+// Pre-generates the Node Library docs (nodelib.json = spec-derived node
+// database, nodelib-index.json = version groups, auto port tables, and
+// impl-target matrix) instead of parsing live in-browser via WASM. Both
+// are committed; --check verifies without writing, so CI catches drift.
+// Needs network unless vendor/materialx/ is populated.
+// Usage: node scripts/build-nodelib.mjs [--check]
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -92,20 +45,16 @@ function fail(message) {
   process.exit(1);
 }
 
-/** Same serialization used for both the write path and the --check
- * byte-compare (mirrors scripts/extract-mtlx-version.mjs's serialize()), so
- * the two can never disagree over formatting. Explicit '\n' (LF, not CRLF —
- * writeFile on a plain string never translates newlines, so this is safe on
- * Windows checkouts). */
+/** Shared by the write path and --check compare (mirrors
+ * scripts/extract-mtlx-version.mjs's serialize()). Explicit '\n' is safe
+ * on Windows since writeFile never translates newlines. */
 function serialize(x) {
   return JSON.stringify(x, null, 1) + "\n";
 }
 
-/** Instantiate the vendored MaterialX WASM build with a live ESSL generator
- * context, mirroring scripts/lib/version.mjs's extractVersionFromWasm() /
- * js/mtlx-engine.js's getMxEnv() load pattern, but additionally building a
- * GenContext + stdlib (needed to walk nodedefs here, not just read the
- * version string). Returns { mx, stdlib }. */
+/** Instantiates the vendored WASM build (mirrors version.mjs's
+ * extractVersionFromWasm() / mtlx-engine.js's getMxEnv()), plus a
+ * GenContext + stdlib for walking nodedefs. Returns { mx, stdlib }. */
 async function loadMxEnv() {
   const jsPath = path.join(REPO_ROOT, "js", "JsMaterialXGenShader.js");
   const mod = await import(pathToFileURL(jsPath));
@@ -119,10 +68,8 @@ async function loadMxEnv() {
   return { mx, stdlib };
 }
 
-/** Build both Layer 1 (db) and Layer 2 (index) in memory. Never writes
- * anything — the caller decides whether to write (normal mode) or
- * byte-compare against the committed files (--check mode) after running
- * the sanity assertions below. */
+/** Builds Layer 1 (db) and Layer 2 (index) in memory only; the caller
+ * decides whether to write them or byte-compare against disk (--check). */
 async function build() {
   const meta = await readVersionMeta();
 
@@ -136,11 +83,9 @@ async function build() {
   // the spec markdown, joined against the WASM nodedefs).
   const db = await MtlxSpecParser.buildNodeDatabase({ mx, stdlib });
 
-  // Layer 2: per-category signature/version groups, auto tables/def-port
-  // fallbacks for undocumented nodes, and the implementation-target matrix.
-  // A fresh document with the stdlib attached as a DATA LIBRARY (referenced,
-  // not contained — same pattern as js/graph/model.jsx, js/node-preview.jsx)
-  // is what getMatchingNodeDefs(category) needs to resolve nodedefs by name.
+  // Layer 2: signature/version groups, auto tables, and the impl matrix.
+  // A document with stdlib attached as a DATA LIBRARY (same pattern as
+  // js/graph/model.jsx) is needed for getMatchingNodeDefs() to work.
   const doc = mx.createDocument();
   doc.setDataLibrary(stdlib);
 
@@ -174,16 +119,9 @@ async function build() {
           row.inherited.forEach((t) => allTargetsSet.add(t));
         });
 
-        // Overwrite-in-place on a repeat category name (e.g. `mix` appears
-        // under more than one nodegroup) — plain-object key insertion order
-        // in JS is determined by the FIRST assignment, so this still leaves
-        // `nodes` in first-appearance order (required below) even though
-        // the stored value reflects the LAST (lib, group) that visited it.
-        // doc.getMatchingNodeDefs(category) queries by name across the
-        // whole document regardless of which (lib, group) triggered the
-        // call, so sigGroups/impl are identical either way; only the
-        // undocumented-ness check (db[lib][group][category]) can vary
-        // across duplicate names.
+        // Repeat category names (e.g. `mix`) overwrite in place; JS keeps
+        // first-insertion key order. sigGroups/impl are identical across
+        // duplicates (name-based lookup) — only undocumented-ness can differ.
         nodes[category] = entry;
       }
     }
@@ -199,12 +137,9 @@ async function build() {
   return { db, index };
 }
 
-/** Run every sanity assertion against the freshly-computed (in-memory) db/
- * index — never against the committed files on disk, so --check mode
- * catches both "stale file" AND "generation itself produced garbage".
- * Collects every failure (rather than stopping at the first) so one run
- * reports everything wrong at once. Returns an array of problem strings
- * (empty = all good). */
+/** Runs sanity checks against the in-memory db/index (never committed
+ * files), so --check catches stale files AND bad generation. Collects
+ * every failure and returns them as an array of strings (empty = ok). */
 function runSanityChecks(db, index) {
   const problems = [];
   const check = (cond, msg) => { if (!cond) problems.push(msg); };
@@ -290,10 +225,9 @@ function runSanityChecks(db, index) {
     check(index.allTargets.includes(t), `index.allTargets is missing '${t}' (got: [${index.allTargets.join(", ")}])`);
   }
 
-  // Impl-file link data (Feature 1) — pin a few known-good resolved paths so
-  // a regression in nodedef-extract.mjs's repoPathFromSourceUri/
-  // resolveImplFile (or the ../-climbing logic) is caught here instead of
-  // silently shipping broken GitHub links.
+  // Pin known-good resolved paths so a regression in
+  // nodedef-extract.mjs's repoPathFromSourceUri/resolveImplFile is
+  // caught here instead of silently shipping broken GitHub links.
   const imageFloat = (index.nodes.image?.impl || []).find((r) => r.type === "float");
   check(!!imageFloat, "index.nodes['image'] has no float-signature impl row");
   if (imageFloat) {

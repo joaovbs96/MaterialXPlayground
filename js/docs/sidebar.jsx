@@ -1,15 +1,10 @@
-// sidebar.jsx — the docs page's left-hand node-library tree (DocsSidebar)
-// and "?" Help modal (DocsHelpDialog). Extracted from js/docs-app.jsx's
-// monolithic App component (Phase 3) — mechanical JSX lift, no behavior
-// change: App still owns every piece of state/derived data these
-// components render, passed down as props. Loaded as text/babel; Babel
-// executes each file in its own function scope, so the public API is
-// exported onto window at the bottom.
+// sidebar.jsx — docs page's left-hand node tree (DocsSidebar) and "?" Help
+// modal (DocsHelpDialog), extracted from js/docs-app.jsx's App. Loaded as
+// text/babel, so the API is exported onto window.
 
-        // Chevron icons for the tree view. Same rendered size/classes as
-        // the original inline SVGs (MTLX_ICON_PATHS' 'chevron-right'/
-        // 'chevron-down', js/mtlx-engine.js) — className passed explicitly
-        // since it differs from MtlxIcon's own default ('w-4 h-4').
+        // Chevron icons for the tree view, matching the original inline SVGs
+        // (MTLX_ICON_PATHS 'chevron-right'/'chevron-down', js/mtlx-engine.js).
+        // className passed explicitly since it differs from MtlxIcon's default.
         const ChevronRight = () => (
             <MtlxIcon name="chevron-right" className="w-4 h-4 inline-block mr-1 text-gray-500" />
         );
@@ -17,15 +12,9 @@
             <MtlxIcon name="chevron-down" className="w-4 h-4 inline-block mr-1 text-gray-400" />
         );
 
-        // DocsSidebar — the "Node Library" panel: sticky header (title +
-        // help + collapse chevron, intro line, counter pills, filter/3D
-        // control row, search box + expand/collapse-all, match count) above
-        // the recursive lib -> group -> node tree. Originally extracted
-        // verbatim (as JSX) from App's render body; the header now also
-        // absorbs the page-level intro/stats/filter/help row that used to
-        // sit above the grid (see docs-app.jsx). App still computes all the
-        // underlying state/derived data and passes it down as props — this
-        // component owns no state of its own.
+        // DocsSidebar — the "Node Library" panel (header + lib/group/node
+        // tree). Purely presentational: App owns all state and derived
+        // data and passes it down as props.
         function DocsSidebar({
             treeData, docFilter, forceOpen, searchQuery, setSearchQuery, matchCount,
             expandAll, collapseAll, expandedLibs, toggleLib, expandedGroups, toggleGroup,
@@ -33,20 +22,13 @@
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
             return (
-                // [scrollbar-gutter:stable]: this element is the overflow-y scroll
-                // container AND (at md+) the sidebar's min-content grid column
-                // (js/docs-app.jsx). The 8px custom scrollbar (index.html's
-                // .custom-scrollbar) takes real layout width, so it appearing/
-                // disappearing as docFilter changes the tree height would nudge the
-                // whole sidebar's width. Reserving the gutter always keeps it constant.
+                // [scrollbar-gutter:stable]: this element is both the scroll
+                // container and (at md+) the min-content grid column; reserve
+                // the gutter so width stays constant as the scrollbar toggles.
                 <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
-                    {/* Sticky header: title (+ help + collapse chevron),
-                        intro line, counter pills, filter/3D row, and search
-                        (+ expand/collapse-all) stay visible while the tree
-                        scrolls underneath. The scroll container itself is
-                        unpadded; the sticky block and the tree wrapper carry
-                        their own padding so the sticky element sits flush at
-                        top with no overlap. */}
+                    {/* Sticky header stays visible while the tree scrolls beneath it. The
+                        scroll container is unpadded; the sticky block and tree wrapper
+                        carry their own padding so the header sits flush at top with no overlap. */}
                     <div className="sticky top-0 z-10 bg-gray-800 px-4 pt-4 pb-1">
                         <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
                             <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
@@ -88,12 +70,9 @@
                                 </span>
                             </div>
                         )}
-                        {/* Both controls below are intrinsically sized (invisible-sizer
-                            technique, not flex-1). The sidebar's grid column is sized to
-                            its min-content width (js/docs-app.jsx's
-                            md:grid-cols-[min-content_...]), which this row drives, so the
-                            filter tri-state and "3D Preview" toggle always sit on one line —
-                            no flex-wrap fallback needed, and the column never grows wider. */}
+                        {/* Both controls are intrinsically sized (invisible-sizer technique,
+                            not flex-1); this row drives the sidebar's min-content grid column
+                            (js/docs-app.jsx), so it always fits on one line without flex-wrap. */}
                         <div className="flex items-center gap-1.5 pb-2">
                             <div className="inline-flex shrink-0 rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
                                 {[
@@ -235,11 +214,9 @@
                                                                     && selectedNode.name === nodeName
                                                                     && selectedNode.lib === lib
                                                                     && selectedNode.group === group;
-                                                                // Documented rows hover blue-tinted, undocumented
-                                                                // rows hover amber-tinted, so status is visible
-                                                                // before clicking; keys precomputed in App's stats
-                                                                // memo (isUndocumented per row would rebuild port
-                                                                // tables on every keystroke re-render).
+                                                                // Documented rows hover blue, undocumented hover amber.
+                                                                // Keys come from App's stats memo — avoids recomputing
+                                                                // isUndocumented (and rebuilding port tables) per keystroke.
                                                                 const undoc = stats && stats.undocKeys.has(`${lib}-${group}-${nodeName}`);
                                                                 const rowCls = isSelected
                                                                     ? (undoc ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white')
@@ -269,20 +246,14 @@
             );
         }
 
-        // DocsHelpDialog — the "?" Help modal. App keeps ownership of the
-        // showHelp state and its useEscapeToClose(...) call (unchanged,
-        // still in App, right next to where showHelp/setShowHelp are
-        // declared) — least change relative to the original single-file
-        // App, and the state naturally belongs with the button that opens
-        // it; this component just receives open/onClose.
+        // DocsHelpDialog — the "?" Help modal. App keeps ownership of showHelp
+        // state and its useEscapeToClose(...) call (least change from the
+        // original single-file App); this component just receives open/onClose.
         function DocsHelpDialog({ open, onClose }) {
             if (!open) return null;
-            // Help popup: click-outside or Esc closes. Rendered through a
-            // portal directly under <body> — a fixed overlay inside the app
-            // tree can end up anchored to an ancestor instead of the
-            // viewport (any transformed / filtered / backdrop-filtered
-            // ancestor becomes the containing block for position:fixed),
-            // which offsets the panel and dims only part of the screen.
+            // Help popup: click-outside or Esc closes. Rendered via a portal
+            // directly under <body>, so a transformed/filtered ancestor can't
+            // hijack position:fixed's containing block and break the overlay.
             return ReactDOM.createPortal(
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"

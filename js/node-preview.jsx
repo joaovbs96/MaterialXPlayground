@@ -3,34 +3,17 @@
 // the shared createMtlxRenderView pipeline (mtlx-engine.js), and owns
 // the dynamic parameter panel + doc-based .mtlx export. Load AFTER
 // mtlx-engine.js and doc-ui.jsx.
-        // index.html's docs popup iframe sets window.__MTLX_EMBED synchronously
-        // before this file loads; in that ~1000px-wide dialog the viewport and
-        // parameter panel go side-by-side starting at the md: breakpoint
-        // instead of lg:, since the iframe never reaches lg: width.
+        // index.html's docs popup iframe sets window.__MTLX_EMBED before
+        // load; in that ~1000px iframe, viewport/panel go side-by-side at
+        // the md: breakpoint instead of lg:, which the iframe never reaches.
         const EMBED = !!window.__MTLX_EMBED;
-        // Some heavy nodegraphs (e.g. triplanarprojection) generate essl
-        // whose call depth blows the wasm shadergen module's stack — a
-        // deterministic overflow ('memory access out of bounds'), because
-        // the stack size is baked into the .wasm at link time; there's no
-        // app-side fix, and retrying always fails the same way. Once a
-        // node+signature (identKey, see below) is confirmed to hit this in
-        // THIS session, remember it and show a neutral notice next time
-        // instead of re-running (and re-trapping) the doomed generation.
+        // Some heavy nodegraphs blow the wasm shadergen stack (deterministic
+        // — stack size is baked in at link time, so retrying never helps).
+        // Once a node+signature hits this, remember it for a neutral notice.
         const WASM_STACK_BLACKLIST = new Set();
-        // Frees a batch of embind MaterialX handles that make up one
-        // exportDocRef entry (created nodes + the renderable "instance" +
-        // the owning doc). Dedupe via Set: for the 'surface' preview kind
-        // `instance` IS `created[0]` (same handle, see the addNode call
-        // sites below) — deleting the same underlying object twice throws
-        // a BindingError, so identity-dedupe first rather than relying on
-        // each delete's own try/catch to paper over it. Order doesn't
-        // matter for correctness (child handles hold only weak links back
-        // to their parent doc — verified: a retained child survives
-        // doc.delete()) but children-before-doc reads naturally, so keep
-        // it. Every individual delete is its own try/catch: an
-        // already-deleted or wrong-type handle throws a clean, catchable
-        // BindingError in this build, never a memory fault — never let one
-        // bad handle in the batch stop the rest from being freed.
+        // Frees the embind handles for one exportDocRef entry. Dedupe via
+        // Set — for 'surface' previews `instance` IS `created[0]`, and a
+        // double-delete throws; each delete gets its own try/catch.
         const deleteMxHandles = (handles) => {
             const unique = new Set((handles || []).filter(Boolean));
             for (const h of unique) {
@@ -38,29 +21,22 @@
             }
         };
         const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable, active = true, embed = EMBED }) => {
-            // Lets a future multi-view shell pause this preview's WebGL render
-            // loop while its parent view is backgrounded, without unmounting.
-            // Standalone index.html never passes this prop, so it defaults true
-            // and nothing changes there.
+            // Lets a future multi-view shell pause this preview's render loop
+            // when backgrounded, without unmounting. Standalone index.html
+            // never passes this prop, so it defaults true and is a no-op.
             const activeRef = React.useRef(active);
             activeRef.current = active;
             // True when hosted inside the VS Code extension's webview (set by
             // its bootstrap before any site script runs). Hides the
             // "send to editor" handoff there — see the button below.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
-            // Node categories are NOT unique across libraries ('add' exists in
-            // stdlib [math] AND pbrlib [pbr: BSDF/EDF/VDF]) — nodeName alone
-            // cannot identify the selected node. nodeKey does, and drives
-            // everything that must react to a SELECTION change (effects,
-            // edit preservation, React keys), since switching stdlib/add →
-            // pbrlib/add keeps nodeName identical.
+            // Node categories aren't unique across libraries ('add' exists in
+            // both stdlib and pbrlib) — nodeName alone can't identify the
+            // selection, so nodeKey (used for effects/keys) includes library.
             const nodeKey = (library || '') + ':' + (nodegroup || '') + ':' + nodeName;
-            // preferredType (the docs page's signature selector) changes which
-            // nodedef is previewed — uniforms and defaults differ per
-            // signature, so it's part of the identity everything re-keys on.
-            // preferredDef (a specific nodedef NAME, e.g. to disambiguate
-            // float-amplitude overloads that share an output type) is more
-            // precise than preferredType and wins when both key the identity.
+            // preferredType (signature selector) and preferredDef (exact
+            // nodedef name, for overloads sharing an output type) both
+            // affect which nodedef previews, so both key the identity below.
             const identKey = nodeKey + '::' + (preferredDef || preferredType || 'auto')
                 + '::' + (disabledNotice ? 'off' : 'on');
             const canvasRef = React.useRef(null);
@@ -78,28 +54,24 @@
             // [{ uniform, label, type, def, min, max, enumNames, enumValues }]
             const [params, setParams] = React.useState([]);
             const [values, setValues] = React.useState({});
-            // Mirrors of the live edit state that SURVIVE re-inits, so switching
-            // geometry (or a string/colorspace regen) does NOT reset the user's
-            // parameter edits. Cleared only when the NODE changes.
+            // Mirrors of the live edit state that SURVIVE re-inits, so
+            // switching geometry (or a string/colorspace regen) does NOT
+            // reset the user's edits. Cleared only when the NODE changes.
             const valuesRef = React.useRef({});
             const pickedTexRef = React.useRef({});
             const prevNodeRef = React.useRef(null);
-            // Bumped on reset and included in each control's React key: this
-            // REMOUNTS every input, guaranteeing the DOM redraws from the
-            // default even when a field has drifted (e.g. cleared/partially
-            // typed text that onChange rejected as NaN — React won't rewrite
-            // a controlled input whose value prop didn't change).
+            // Bumped on reset and folded into each control's React key: this
+            // remounts every input so the DOM redraws from the default even
+            // when a field's text drifted (e.g. a rejected NaN edit).
             const [resetNonce, setResetNonce] = React.useState(0);
-            // Overrides for inputs that AREN'T live uniforms (string/enum inputs
-            // select a code path at generation time). Changing one re-runs the
-            // effect (it's in the dep array) so the shader is regenerated with
-            // the new value applied to the node instance. Map: inputName ->
-            // { value, type }.
+            // Overrides for non-uniform (string/enum) inputs, which select a
+            // code path at generation time. In the effect's deps, so setting
+            // one regenerates the shader. Map: inputName -> { value, type }.
             const [overrides, setOverrides] = React.useState({});
             const overridesRef = React.useRef(overrides);
             overridesRef.current = overrides;
-            // The node these overrides belong to — guards against applying one
-            // node's string edits to another after a selection change.
+            // The node these overrides belong to — guards against applying
+            // one node's string edits to another after a selection change.
             const overridesNodeRef = React.useRef(null);
             // Clear overrides when the selected node changes (only when there
             // are any, to avoid a redundant regen pass).
@@ -113,19 +85,9 @@
             // geometry/pause controls overlay stays usable; the canvas is
             // h-full and the engine's ResizeObserver handles the buffer.
             const viewportRef = React.useRef(null);
-            // Preview geometry (persisted, shared 'mtlx_preview_geom' key —
-            // usePersistedGeom, js/shared/mtlx-ui.jsx) and the rest of the
-            // viewport-controls cluster (useViewportControls, same file):
-            // auto-orbit rotation OFF by default — the model starts still,
-            // the rotate button switches the camera turntable on/off;
-            // env-background toggle (mirrors the material viewer), only
-            // offered once envAvail flips true for a lit preview; the
-            // view-epoch bump ViewportControls' Environment dialog watches
-            // to re-apply rotation/exposure/session override onto a fresh
-            // view after a rebuild; and fullscreen. All applied live via
-            // the render view and re-read fresh at creation time so they
-            // survive a geometry/string/colorspace regen. Shared with
-            // viewer-app.jsx / graph/preview.jsx.
+            // Persisted preview geometry + the viewport-controls cluster
+            // (rotation, env background, view-epoch, fullscreen) from
+            // js/shared/mtlx-ui.jsx — also used by viewer-app.jsx/graph.
             const [geom, pickGeom] = usePersistedGeom('shaderball-scene');
             const {
                 rotating, toggleRotating,
@@ -167,12 +129,12 @@
                 valuesRef.current = Object.assign({}, valuesRef.current, { [p.uniform]: v });
                 setValues((prev) => Object.assign({}, prev, { [p.uniform]: v }));
                 if (p.live) {
-                    // Numeric/vector/color/bool backed by a uniform → update in
-                    // place; renders next frame, no regeneration.
+                    // Numeric/vector/color/bool backed by a uniform → update
+                    // in place; renders next frame, no regeneration.
                     setUniformFromPlain(p, v);
                 } else if (p.regen) {
-                    // String/enum (compile-time) → apply to the node instance and
-                    // regenerate by bumping `overrides` (in the effect deps).
+                    // String/enum (compile-time) → apply to the node
+                    // instance and regenerate via `overrides` (effect deps).
                     overridesNodeRef.current = identKey;
                     setOverrides((prev) => Object.assign({}, prev, { [p.input]: { value: v, type: p.type } }));
                 }
@@ -199,7 +161,7 @@
                 const url = URL.createObjectURL(file);
                 new THREE.TextureLoader().load(url, (tex) => {
                     configureLoadedTexture(tex);
-                    // Survives re-inits (geometry switch / regen) — see valuesRef.
+                    // Survives re-inits (geometry/regen) — see valuesRef.
                     pickedTexRef.current[p.uniform] = tex;
                     const store = uniformsRef.current;
                     if (store && store[p.uniform]) store[p.uniform].value = tex;
@@ -228,20 +190,14 @@
                 // Clearing overrides regenerates from nodedef defaults (only if
                 // any string/enum input had been changed).
                 setOverrides((prev) => (Object.keys(prev).length ? {} : prev));
-                // Remount every control (see resetNonce comment): without this,
-                // a field whose DOM text drifted from state (cleared/partial
-                // typing rejected as NaN) keeps its stale text when the value
-                // prop doesn't change — "reset didn't reset that field".
+                // Remount every control (see resetNonce comment): without
+                // this, a field whose DOM text drifted from state (e.g. a
+                // rejected NaN edit) keeps stale text — "reset didn't reset".
                 setResetNonce((n) => n + 1);
             };
-            // Serialize the previewed node with the CURRENT panel values as a
-            // standalone .mtlx document. Values are kept in MaterialX space
-            // already (colors linear), so this is a direct dump. Shader-kind
-            // nodes get a surfacematerial wrapper for drop-in use.
-            // Update the exportable document with the CURRENT panel values
-            // and serialize it for the "Export" (download) action.
-            // Returns { xml, meta } or null on failure (setError already
-            // called).
+            // Serializes the previewed node (CURRENT panel values, already in
+            // MaterialX space) as a standalone .mtlx doc, wrapping shader-kind
+            // nodes in surfacematerial. Returns { xml, meta } or null.
             const buildExportXml = () => {
                 const meta = exportMetaRef.current;
                 const ed = exportDocRef.current;
@@ -253,16 +209,9 @@
                     if (p.type === 'string' || p.type === 'filename') return String(v);
                     return num(v);
                 };
-                // 1) Update the SAME document shadergen consumed with the
-                //    current UI values. Inputs not yet on the instance are
-                //    created bare and then copyContentFrom the nodedef's own
-                //    input element — the type attribute transfers verbatim in
-                //    C++, so no type string crosses the JS/wasm boundary
-                //    (both addInput's type argument and setType produced
-                //    string-typed inputs in this build).
-                // Numeric-tolerant equality against the nodedef default: a
-                // parameter the user left (or returned) at its default adds
-                // nothing to the file.
+                // 1) Update the SAME document shadergen consumed (so input
+                // types transfer natively, no JS/wasm type strings). Values
+                // equal to the nodedef default (numeric-tolerant) are omitted.
                 const eqDefault = (a, b) => {
                     if (a == null || b == null) return false;
                     if (Array.isArray(a) && Array.isArray(b)) {
@@ -282,9 +231,9 @@
                     if (v == null) continue;
                     try {
                         if (p.type !== 'filename' && eqDefault(v, p.def)) {
-                            // Back at the nodedef default → make sure no stale
-                            // input (e.g. from an earlier export or override)
-                            // lingers on the instance, then omit it.
+                            // Back at the nodedef default → make sure no
+                            // stale input (e.g. from an earlier export or
+                            // override) lingers on the instance, then omit it.
                             if (ed.instance.getInput && ed.instance.getInput(p.input)) {
                                 try { ed.instance.removeInput(p.input); }
                                 catch (e2) { try { ed.instance.removeChild(p.input); } catch (e3) { /* leave it */ } }
@@ -301,17 +250,13 @@
                 if (DEBUG_SHADERS) {
                     console.log('export input types (non-default only) →', typeReport.join(', ') || '(all at defaults)');
                 }
-                // Item 9 belt-and-suspenders: the wiring sites below (translation,
-                // convert.in x2, surface_unlit.emission_color) already strip the
-                // value themselves right after connecting, but this sweep also
-                // catches anything from an older build of this function or a
-                // loaded document that predates the fix — never export an input
-                // with both a value and a connection.
+                // Belt-and-suspenders: wiring sites already strip values
+                // from connected inputs, but this sweep catches stragglers
+                // (older builds, loaded docs) — never both value and link.
                 mxSafe(() => stripValuesFromConnectedInputs(ed.doc), 0);
-                // 2) Serialize the DOCUMENT itself — no options, no
-                //    predicate, no fallback. The standard library is attached
-                //    via setDataLibrary (referenced, not contained), so the
-                //    plain write emits exactly the preview graph.
+                // 2) Serialize the DOCUMENT itself, no options/predicate. The
+                // standard library is only REFERENCED (setDataLibrary), so
+                // the plain write emits exactly the preview graph.
                 let xml = null;
                 try {
                     xml = ed.mx.writeToXmlString(ed.doc);
@@ -336,10 +281,9 @@
                 downloadXml(built.xml, built.meta.nodeName + '.mtlx');
             };
 
-            // Hand this preview graph off to the node graph editor, the same
-            // way the material viewer's "Send to Editor" button does — see
-            // js/viewer-app.jsx. No loose files: the preview graph never
-            // references external textures.
+            // Hand this preview graph to the node graph editor, same as the
+            // material viewer's "Send to Editor" (js/viewer-app.jsx). No
+            // loose files — the preview graph never references textures.
             const sendToEditor = () => {
                 const built = buildExportXml();
                 if (!built) return;
@@ -367,10 +311,9 @@
                     setLoading(true);
                     setError(null);
                     setNotice(null);
-                    // Same node re-initializing (geometry switch or string/colorspace
-                    // regen)? Keep the panel populated (rendered disabled while loading)
-                    // and preserve the user's edits; only a NODE change clears the panel
-                    // so the pre-compile pass below can re-fill it from the new node.
+                    // Same node re-initializing (geometry/string/colorspace
+                    // regen)? Keep the panel populated and edits preserved;
+                    // only an actual NODE change clears it for a fresh fill.
                     const sameNode = prevNodeRef.current === identKey;
                     prevNodeRef.current = identKey;
                     if (!sameNode) {
@@ -387,12 +330,9 @@
                     let mxRef = null;
 
                     try {
-                        // Same node+signature already blew the wasm stack
-                        // earlier this session (see WASM_STACK_BLACKLIST
-                        // above) — it will fail identically every time
-                        // (stack size is baked in at link time), so skip
-                        // straight to the neutral notice instead of paying
-                        // for another doomed generation attempt.
+                        // Already blew the wasm stack this session (see
+                        // WASM_STACK_BLACKLIST) — deterministic, so skip
+                        // straight to the notice instead of retrying.
                         if (WASM_STACK_BLACKLIST.has(identKey)) {
                             const eB = new Error('Preview unavailable: this node’s generated shader exceeds the WASM stack in this build.');
                             eB.isNotice = true;
@@ -410,51 +350,9 @@
                         mxRef = mx;
                         if (!mounted) return;
 
-                        // Route by the node's actual output type. Surface
-                        // shaders render directly; BSDFs get wrapped in a
-                        // `surface`; color/float/vector nodes preview unlit via
-                        // surface_unlit.emission (converting to color3 first if
-                        // needed). Everything else isn't a color surface.
-                        //
-                        // Island A: the whole throwaway-document build below
-                        // (doc creation, setDataLibrary, node-kind resolution,
-                        // every addNode/ensureTypedInput/applyOverrides call,
-                        // down through the closing validate()) allocates and
-                        // mutates a live wasm document — serialize it against
-                        // concurrent shader generation/introspection (see
-                        // mxExclusive in js/mtlx-engine.js). Verified
-                        // synchronous: no awaits anywhere in this region (the
-                        // next await is the rAF well after it closes). `doc`
-                        // and `renderable` returned below are raw wasm-object
-                        // pointers, which SURVIVE heap growth (see the
-                        // mxExclusive comment at the top of mtlx-engine.js) —
-                        // safe to hold across the awaits later in this
-                        // function; only a JS-held heap VIEW (e.g. a
-                        // getData() typed array) would be unsafe, and none is
-                        // created in this region.
-                        //
-                        // ---- Nodedef identity filter ------------------------
-                        // getMatchingNodeDefs matches by CATEGORY only, so for
-                        // ambiguous names ('add' is stdlib/math float/color/...
-                        // AND pbrlib/pbr BSDF/EDF/VDF) it returns defs from
-                        // every library. resolveNodeKind's priority (surface >
-                        // BSDF > color) then made the BSDF interpretation win
-                        // for BOTH pages — black preview and an empty parameter
-                        // panel for the math node. Filter defs by the selected
-                        // node's library (from each def's sourceUri) and
-                        // nodegroup; fall back to unfiltered if the identity
-                        // info would eliminate every def.
-                        // Hoisted to initViewer scope (OUTSIDE Island A's
-                        // callback below): these are pure JS closures over
-                        // `nodeName`/`library`/`nodegroup` only, no wasm/doc
-                        // access, so hoisting is safe — and necessary, because
-                        // Island B (a separate mxExclusive callback further
-                        // down) also calls filterDefs. Sibling callbacks don't
-                        // share each other's locals, so nesting filterDefs
-                        // inside Island A left Island B calling an undefined
-                        // `filterDefs` — a ReferenceError silently swallowed
-                        // by Island B's catch, which emptied the parameter
-                        // panel with no console signal (see that catch below).
+                        // Island A below is synchronous wasm-doc work under
+                        // mxExclusive. filterDefs narrows getMatchingNodeDefs'
+                        // CATEGORY-only matches (e.g. ambiguous 'add') by lib.
                         const libOfDef = (def) => {
                             try {
                                 const uri = def.getSourceUri ? String(def.getSourceUri() || '') : '';
@@ -484,57 +382,38 @@
                         };
 
                         const { doc, renderable, needsLighting, kind, outType, multiOutput } = await window.mxExclusive(() => {
-                        // Free the PREVIOUS exportDocRef entry (if any) under
-                        // the same lock, before allocating this run's doc —
-                        // belt to the effect-cleanup's suspenders below
-                        // (usually a no-op here since cleanup already nulled
-                        // the ref; this only matters if cleanup was skipped
-                        // or raced, e.g. same-node re-init reusing this
-                        // effect instance without an intervening unmount).
+                        // Free the PREVIOUS exportDocRef entry under the same
+                        // lock first — usually a no-op (cleanup already
+                        // nulled it); matters only if cleanup raced/skipped.
                         const prevEd = exportDocRef.current;
                         exportDocRef.current = null;
                         if (prevEd) deleteMxHandles([prevEd.instance, ...(prevEd.created || []), prevEd.doc]);
 
                         const doc = mx.createDocument();
-                        // Hoisted out of the island body below so the
-                        // failed-build catch (see the try/catch wrapping the
-                        // rest of this island) can see and free whatever got
-                        // created before the throw — a partially built graph
-                        // must not leak just because generation later fails.
+                        // Hoisted out of the island body so the failed-build
+                        // catch below can free whatever was created before a
+                        // throw, instead of leaking a partially built graph.
                         let previewInstance = null;
                         const createdNodes = [];
-                        // Wrap the rest of Island A: any throw between here and
-                        // the return below (bad convert wiring, an unpreviewable
-                        // type, a thrown nodedef-identity probe, ...) used to
-                        // leave doc/previewInstance/createdNodes allocated with
-                        // nothing referencing them — a leaked partial graph per
-                        // failed build. Free whatever was created so far and
-                        // rethrow unchanged (this is a failure-path cleanup,
-                        // not error handling: the caller's own try/catch below
-                        // still decides how to present the error to the user).
+                        // A throw between here and the return below used to
+                        // leak doc/previewInstance/createdNodes. Free what
+                        // exists so far, then rethrow unchanged for the caller.
                         try {
-                        // setDataLibrary REFERENCES the standard library
-                        // (nodedef matching, validation, and shadergen all
-                        // consult it) without making it part of the document —
-                        // so a plain writeToXmlString(doc) contains only OUR
-                        // nodes. importLibrary would bake megabytes of stdlib
-                        // into the doc, and the JS binding of XmlWriteOptions
-                        // exposes only writeXIncludeEnable (elementPredicate is
-                        // NOT bound), so there is no way to filter at write
-                        // time. Verified: all preview kinds generate and export
-                        // cleanly through the data library.
+                        // setDataLibrary REFERENCES the stdlib (for
+                        // matching/validation/shadergen) without embedding
+                        // it, so writeToXmlString emits only OUR nodes.
                         if (typeof doc.setDataLibrary === 'function') {
                             doc.setDataLibrary(stdlib);
                         } else {
-                            // Ancient binding without setDataLibrary — exports
-                            // would include the library. Loud, not silent:
+                            // Ancient binding without setDataLibrary — the
+                            // export would include the library. Warn loudly.
                             console.error('setDataLibrary is not bound in this MaterialX build — .mtlx exports will include the standard library.');
                             doc.importLibrary(stdlib);
                         }
 
-                        // Translation graphs (nodedef nodegroup "translation",
-                        // e.g. standard_surface_to_gltf_pbr) convert between
-                        // shading models — rendering one directly is meaningless.
+                        // Translation graphs (nodegroup "translation", e.g.
+                        // standard_surface_to_gltf_pbr) convert between shading
+                        // models — rendering one directly is meaningless.
                         let translationDef = null;
                         try {
                             const defs0 = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
@@ -548,17 +427,17 @@
                             ? { kind: 'translation', outType: 'multioutput', outputName: null, multiOutput: true, types: [] }
                             : resolveNodeKind(doc, nodeName, defMatchesIdentity, preferredType || null, preferredDef || null);
                         const { kind, outType, outputName, multiOutput, types } = rk;
-                        // Element type for the .mtlx export: color-kind nodes use
-                        // their resolved output type ('multioutput' when several),
-                        // shader/bsdf kinds use the nodedef's declared type.
+                        // Element type for the .mtlx export: color-kind
+                        // nodes use their resolved output type ('multioutput'
+                        // when several); shader/bsdf use the nodedef's type.
                         exportMetaRef.current = {
                             nodeName,
                             kind,
                             nodeType: (kind === 'color' || kind === 'translation')
                                 ? (multiOutput ? 'multioutput' : outType)
                                 : (rk.type || (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'))),
-                            // Wiring needed to re-emit the EXACT previewed graph
-                            // (unlit/surface wrappers included) as a valid doc.
+                            // Wiring needed to re-emit the EXACT previewed
+                            // graph (unlit/surface wrappers included) as a doc.
                             outType,
                             multiOutput,
                             outputName: rk.outputName || null,
@@ -570,9 +449,9 @@
                         // js/mtlx-engine.js (loaded before this script) and is
                         // used here as a window global.
 
-                        // Apply string/enum overrides (from the parameter panel)
-                        // onto the node instance before generation, so they take
-                        // effect in the generated shader.
+                        // Apply string/enum overrides (from the parameter
+                        // panel) onto the node instance before generation,
+                        // so they take effect in the generated shader.
                         const applyOverrides = (nodeInst) => {
                             // Ignore overrides left over from a different node.
                             if (overridesNodeRef.current && overridesNodeRef.current !== identKey) return;
@@ -580,12 +459,9 @@
                             for (const inputName of Object.keys(ov)) {
                                 const { value, type } = ov[inputName];
                                 try {
-                                    // The JS embind addInput can DROP/DEFAULT the
-                                    // type argument, leaving the input typed
-                                    // 'color3' — which breaks nodedef resolution
-                                    // ("Could not find a nodedef for node ...",
-                                    // reproduced against real MaterialX with a
-                                    // mistyped input). Force the type explicitly.
+                                    // embind addInput can drop the type arg,
+                                    // leaving 'color3' and breaking nodedef
+                                    // resolution — force the type explicitly.
                                     const forceType = (inp2, t2) => {
                                         try {
                                             if (typeof inp2.setType === 'function') inp2.setType(t2);
@@ -593,10 +469,9 @@
                                         } catch (e2) { /* best-effort */ }
                                     };
                                     if (type === 'colorspace') {
-                                        // Colorspace is an ATTRIBUTE on the filename
-                                        // input, not its value. Ensure the input
-                                        // exists (empty value is valid) and tag it;
-                                        // the CMS bakes the transform at codegen.
+                                        // Colorspace is an ATTRIBUTE on the
+                                        // filename input, not its value — the
+                                        // CMS bakes the transform at codegen.
                                         const inp = ensureTypedInput(doc, nodeInst, inputName, 'filename');
                                         mxSetColorspace(inp, String(value));
                                         continue;
@@ -607,28 +482,13 @@
                             }
                         };
 
-                        // The previewed node instance + every node we create,
-                        // kept for the doc-based .mtlx export. (Declared above,
-                        // right after doc creation — see the hoist comment
-                        // there — so the failed-build catch below can free
-                        // them too.)
-                        // ensureTypedInput(doc, node, inputName, wantedType) now
-                        // lives in js/mtlx-engine.js (loaded before this
-                        // script) and is used here as a window global. This
-                        // page's own inputs are always on the in-scope `doc`
-                        // above, so `addTypedInput` is a thin alias binding it.
+                        // previewInstance + createdNodes (declared earlier
+                        // for failed-build cleanup) are kept for the export.
+                        // addTypedInput aliases ensureTypedInput to this `doc`.
                         const addTypedInput = (node, name2, type2) => ensureTypedInput(doc, node, name2, type2);
-                        // Create/fetch a typed input and wire it: point it at
-                        // srcName (optionally tapping a specific output via
-                        // opts.output — for multi-output taps, e.g. a
-                        // preview_node's selected output), then strip
-                        // whatever value addTypedInput/ensureTypedInput may
-                        // have copied from the nodedef default onto the
-                        // fresh input — a connected input must never also
-                        // carry one. Folds the addTypedInput -> setNodeName
-                        // -> [setAttribute('output', ...)] -> strip-value
-                        // idiom that used to be repeated at every wiring
-                        // site below. Returns the input.
+                        // Creates/wires a typed input to srcName (optionally
+                        // a specific output), stripping any copied nodedef
+                        // default value — a connected input can't carry one.
                         const connectTypedInput = (node, name2, type2, srcName, opts) => {
                             const inp = addTypedInput(node, name2, type2);
                             inp.setNodeName(srcName);
@@ -636,16 +496,9 @@
                             mxRemoveAttr(inp, 'value');
                             return inp;
                         };
-                        // Scoped OUT of the WASM-lifetime cleanup, deliberately:
-                        // the Input handles ensureTypedInput/connectTypedInput
-                        // return (and every def/nodedef-input handle touched by
-                        // applyOverrides, the identity filter, and the
-                        // translationDef probe above) are per-element handles
-                        // covered by FinalizationRegistry auto-cleanup, same as
-                        // the rest of the doc's element tree — only the doc
-                        // itself (and the top-level instance/created-node
-                        // handles tracked via exportDocRef) are deleted
-                        // eagerly by this cleanup pass.
+                        // Input handles from ensureTypedInput/connectTypedInput
+                        // rely on FinalizationRegistry — only the doc and
+                        // top-level exportDocRef handles are freed eagerly.
 
                         if (kind === 'surface') {
                             renderable = doc.addNode(nodeName, 'preview_surface', 'surfaceshader');
@@ -673,12 +526,9 @@
                             createdNodes.push(renderable);
                             needsLighting = true;
                         } else if (kind === 'translation') {
-                            // Translation node (multi-output) + the TARGET shader
-                            // it translates to + a material. Every translation
-                            // output wires to the target's same-named input —
-                            // outputs carry an `_out` suffix the inputs don't
-                            // (verified against real MaterialX: all four stdlib
-                            // translation nodes map fully and generate).
+                            // Translation node (multi-output) + TARGET shader
+                            // + material. Each output wires to the target's
+                            // same-named input, minus its `_out` suffix.
                             previewInstance = doc.addNode(nodeName, 'preview_node', 'multioutput');
                             if (preferredDef) { try { previewInstance.setAttribute('nodedef', preferredDef); } catch (e) { /* best-effort */ } }
                             applyOverrides(previewInstance);
@@ -707,27 +557,21 @@
                             createdNodes.push(previewInstance);
                             let srcName = 'preview_node';
                             let srcIsPreviewNode = true;
-                            // Prefer a direct convert chain straight to
-                            // surfaceshader — most viewable simple types have a
-                            // one-hop convert-to-surfaceshader nodedef, which
-                            // skips the surface_unlit/emission_color detour
-                            // below entirely. Both paths bottom out in an
-                            // unlit surface_unlit, so needsLighting stays
-                            // false (its default) either way.
+                            // Prefer a direct convert chain to surfaceshader
+                            // (most simple types have a one-hop nodedef),
+                            // skipping the surface_unlit/emission_color detour.
                             const direct = findConvertChain(doc, outType, 'surfaceshader');
                             if (direct !== null) {
                                 let prevType = outType;
                                 direct.forEach((toType, i) => {
                                     const isLast = i === direct.length - 1;
-                                    // The last hop lands on 'preview_surface' so
-                                    // the shared material-wiring step below
-                                    // (which taps 'preview_surface' by name)
-                                    // picks it up unchanged.
+                                    // The last hop lands on 'preview_surface'
+                                    // so the shared material-wiring step below
+                                    // picks it up by name, unchanged.
                                     const conv = doc.addNode('convert', isLast ? 'preview_surface' : 'preview_convert' + (i || ''), toType);
-                                    // The first hop taps the preview node (and,
-                                    // for multi-output nodes, carries the
-                                    // `output` selection); later hops chain
-                                    // convert→convert.
+                                    // The first hop taps the preview node
+                                    // (carrying `output` for multi-output);
+                                    // later hops chain convert→convert.
                                     connectTypedInput(conv, 'in', prevType, srcName, srcIsPreviewNode ? { output: outputName } : undefined);
                                     createdNodes.push(conv);
                                     srcName = isLast ? 'preview_surface' : 'preview_convert' + (i || '');
@@ -736,12 +580,9 @@
                                     if (isLast) renderable = conv;
                                 });
                             } else {
-                                // Fall back: bridge the tapped output into a
-                                // color3 emission through convert node(s) — but
-                                // only hops the loaded library actually
-                                // defines, and NO convert at all when the tap
-                                // is already color3 (a color3→color3 convert
-                                // has no nodedef; see findConvertChain).
+                                // Fallback: bridge to color3 emission through
+                                // whatever convert hops the library defines —
+                                // none at all if the tap is already color3.
                                 const chain = findConvertChain(doc, outType, 'color3');
                                 if (chain === null) {
                                     const eC = new Error(`No preview for "${nodeName}" — the library defines no convert path from ${outType} to color3. Try it in the node graph editor.`);
@@ -751,9 +592,9 @@
                                 let prevType = outType;
                                 chain.forEach((toType, i) => {
                                     const conv = doc.addNode('convert', 'preview_convert' + (i || ''), toType);
-                                    // The FIRST hop taps the preview node (and, for
-                                    // multi-output nodes, carries the `output`
-                                    // selection); later hops chain convert→convert.
+                                    // The FIRST hop taps the preview node
+                                    // (carrying `output` for multi-output);
+                                    // later hops chain convert→convert.
                                     connectTypedInput(conv, 'in', prevType, srcName, srcIsPreviewNode ? { output: outputName } : undefined);
                                     createdNodes.push(conv);
                                     srcName = 'preview_convert' + (i || '');
@@ -762,15 +603,9 @@
                                 });
                                 renderable = doc.addNode('surface_unlit', 'preview_surface', 'surfaceshader');
                                 createdNodes.push(renderable);
-                                // surface_unlit's `emission` port is a FLOAT weight
-                                // (default 1.0); the color3 belongs on `emission_color`.
-                                // Adding an `emission` input typed color3 mismatches
-                                // the nodedef's declared float, so NO nodedef matches
-                                // the node instance → "Could not find a nodedef for
-                                // node 'preview_surface'" for every color-kind node.
-                                // No convert chain: emission_color taps preview_node
-                                // directly and must carry the `output` selection
-                                // itself for multi-output color3 taps.
+                                // surface_unlit's `emission` is a FLOAT weight;
+                                // the color3 belongs on `emission_color` (an
+                                // `emission` color3 input breaks the match).
                                 connectTypedInput(renderable, 'emission_color', 'color3', srcName, srcIsPreviewNode ? { output: outputName } : undefined);
                             }
                         } else {
@@ -792,22 +627,20 @@
                         }
 
                         // Doc-based export source: the LIVE pre-generation
-                        // document + the nodes we created. The export writes UI
-                        // values into these and serializes the DOCUMENT — never
-                        // the generated shader's uniform view.
+                        // document + created nodes. Export writes UI values
+                        // into these and serializes the DOCUMENT, not uniforms.
                         exportDocRef.current = {
                             mx, doc,
                             instance: previewInstance,
                             created: createdNodes,
-                            // Closure keeps doc/nodedef context alive for export.
+                            // Closure keeps doc/nodedef context alive for
+                            // export.
                             ensureInput: (n2, t2) => ensureTypedInput(doc, previewInstance, n2, t2),
                         };
 
-                        // Before generating: dump the constructed graph and run
-                        // validate(), so graph-construction mistakes (bad convert
-                        // wiring, multi-output taps, missing defaults) surface
-                        // with a document-level message instead of only a deep
-                        // generation failure.
+                        // Before generating: dump the graph and validate(),
+                        // so construction mistakes surface as a document-level
+                        // message instead of a deep generation failure.
                         if (DEBUG_SHADERS && typeof mx.writeToXmlString === 'function') {
                             try {
                                 console.log(`MTLX preview graph for "${nodeName}":\n` + mx.writeToXmlString(doc));
@@ -815,14 +648,9 @@
                                 console.warn('writeToXmlString failed:', mxErr(mx, xmlErr));
                             }
                         }
-                        // The WASM binding's validate() has an overloadTable
-                        // {'0','1'} — the previous "boolean-only" comment here
-                        // was WRONG (verified headless, see graph-app.jsx's
-                        // matching fix for the Validate dialog). The 1-arg
-                        // overload `validate(holder)` fills holder.message
-                        // with the full newline-separated MaterialX diagnostic
-                        // list on failure, so a debug build gets the real
-                        // reason instead of a bare boolean.
+                        // validate()'s 1-arg overload `validate(holder)` fills
+                        // holder.message with the full diagnostic list on
+                        // failure, giving debug builds the real reason.
                         if (typeof doc.validate === 'function') {
                             try {
                                 const holder = {};
@@ -840,28 +668,18 @@
                         // boundary.
                         return { doc, renderable, needsLighting, kind, outType, multiOutput };
                         } catch (islandErr) {
-                            // Behavior improvement over the old un-wrapped
-                            // island: previously a failed build here left the
-                            // OLD node's doc (from a prior successful run)
-                            // paired with the NEW node's exportMetaRef (set
-                            // above, before any of the code that can throw) —
-                            // Export could then emit a mismatched file mixing
-                            // the old graph with the new node's metadata. Now
-                            // exportDocRef is nulled on failure, so
-                            // buildExportXml's `!ed` guard (see its `if (!meta
-                            // || !ed || ...)` check above) makes Export a
-                            // no-op for a failed node instead of emitting
-                            // something wrong-looking with no error.
+                            // A failed build used to leave the OLD doc paired
+                            // with the NEW exportMetaRef, so Export could emit
+                            // a mismatch. Nulling exportDocRef here no-ops it.
                             exportDocRef.current = null;
                             deleteMxHandles([previewInstance, ...createdNodes, doc]);
                             throw islandErr;
                         }
                         });
 
-                        // --- Generation + rendering (shared engine pipeline) ---
-                        // Resolve the canvas first: a message row from the
-                        // PREVIOUS node may still be committed; give React one
-                        // frame to remount/reveal the canvas, then re-read.
+                        // Generation + rendering (shared pipeline): resolve
+                        // the canvas first — a stale PREVIOUS-node message
+                        // row may still be committed, so give React one frame.
                         let canvas = canvasRef.current;
                         if (!canvas) {
                             await new Promise((r) => requestAnimationFrame(r));
@@ -869,14 +687,9 @@
                             if (!canvas || !mounted) return;
                         }
 
-                        // Pre-compile parameter pass: buildView() below can take hundreds of ms.
-                        // Enumerate the incoming node's nodedef inputs NOW and show the panel
-                        // immediately, rendered DISABLED (loading gate on the params body +
-                        // loadingRef guards on the edit handlers), so it no longer vanishes while
-                        // the shader compiles. The authoritative Island-B pass further down
-                        // replaces these with resolved live/uniform values and re-enables the
-                        // controls. Skipped for a same-node re-init, where the panel already
-                        // shows the correct params and the user's preserved edits.
+                        // buildView() can take hundreds of ms, so enumerate
+                        // nodedef inputs now and show the panel disabled
+                        // immediately; Island B below replaces it once ready.
                         if (!sameNode) {
                             const preferTypePre = kind === 'color' ? (multiOutput ? null : outType)
                                 : (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'));
@@ -903,9 +716,9 @@
                                         return undefined;
                                     };
                                     const LIVE_TYPES = ['float', 'integer', 'boolean', 'vector2', 'vector3', 'vector4', 'color3', 'color4', 'filename'];
-                                    // Type-aware fallback so color/vector controls (renderControl does
-                                    // cur.slice/cur.map) always receive an array even when the nodedef
-                                    // default is absent/unparseable.
+                                    // Type-aware fallback so color/vector
+                                    // controls always receive an array even
+                                    // when the nodedef default is unparseable.
                                     const zeroFor = (type) => {
                                         switch (type) {
                                             case 'float': case 'integer': return 0;
@@ -917,11 +730,9 @@
                                             default: return 0;
                                         }
                                     };
-                                    // Editable-STYLE descriptor from nodedef metadata only (no uniforms
-                                    // yet). Same widget shapes as buildInputParam so the disabled panel
-                                    // matches the post-compile panel; numeric/vector/color/bool/filename
-                                    // are shown editable-disabled (NOT the read-only span fallback) so
-                                    // they look identical once enabled.
+                                    // Editable-style descriptor from nodedef
+                                    // metadata only, matching buildInputParam's
+                                    // shapes so the panel stays consistent.
                                     const buildPendingParam = (inp) => {
                                         const inputName = inp.getName();
                                         const type = inp.getType();
@@ -988,7 +799,8 @@
                                     return out;
                                 });
                             } catch (prePassErr) {
-                                // Best-effort: the authoritative post-compile pass still runs.
+                                // Best-effort — the authoritative
+                                // post-compile pass still runs.
                                 mtlxWarn('MaterialX docs pre-compile parameter enumeration failed:', prePassErr);
                             }
                             if (mounted && preParams.length) {
@@ -1007,7 +819,8 @@
                             label: nodeName,
                             needsLighting,
                             geomName: geom,
-                            // Constrained orbit for the full scene; ignored for other geoms.
+                            // Constrained orbit for the full scene; ignored
+                            // for other geoms.
                             sceneOrbit: geom === 'shaderball-scene',
                             autoRotate: rotating,
                             envBackground: envBg,
@@ -1019,23 +832,9 @@
                         try {
                             view = await buildView();
                         } catch (viewErr) {
-                            // Irregular wasm-race mitigation: mtlx-engine.js's
-                            // mxExclusive mutex (serializing all shared-wasm-
-                            // heap work) is the ROOT fix for the heap-growth/
-                            // detached-pointer race behind these errors; this
-                            // catches a stale-pointer casualty from a
-                            // shader-gen call that was already in flight when
-                            // the heap grew. Retry ONCE on the tell-tale error
-                            // signatures, then fall through to the normal
-                            // error handling below on a repeat failure.
-                            // (This retry path stays as-is — out of scope for
-                            // the WASM-lifetime cleanup above. But that
-                            // cleanup — mxShader/vector/export-doc deletes —
-                            // removes most of the heap pressure that drove
-                            // the heap to grow mid-flight in the first place,
-                            // so this race should now trigger far less often
-                            // in practice, even though the mitigation itself
-                            // is untouched.)
+                            // mxExclusive is the ROOT fix for the heap-growth
+                            // race behind these errors; retry ONCE on the
+                            // tell-tale signatures, then fall through normally.
                             const msg = mxErr(mx, viewErr);
                             if (!mounted || !/memory access out of bounds|has no outputs/i.test(msg)) {
                                 throw viewErr;
@@ -1045,17 +844,9 @@
                             try {
                                 view = await buildView();
                             } catch (viewErr2) {
-                                // Retry exhausted. 'has no outputs' stays
-                                // exactly as before (rethrow raw) — only the
-                                // wasm-stack-overflow signature is contained
-                                // here: unlike the heap-growth race above,
-                                // it's a DETERMINISTIC failure (stack size is
-                                // baked into the .wasm at link time, see
-                                // WASM_STACK_BLACKLIST above), so a same-
-                                // session retry can never succeed. Remember
-                                // this node+signature and surface the neutral
-                                // notice instead of letting the outer catch
-                                // render it as an amber error card.
+                                // Retry exhausted. Only wasm-stack-overflow is
+                                // special-cased: it's DETERMINISTIC (baked at
+                                // link time), so remember it for a notice.
                                 const msg2 = mxErr(mx, viewErr2);
                                 if (mounted && /memory access out of bounds/i.test(msg2)) {
                                     WASM_STACK_BLACKLIST.add(identKey);
@@ -1074,30 +865,15 @@
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         const { uniforms, introspected } = view;
 
-                        // ---- Dynamic parameter UI ----
-                        // The panel is built from the NODE'S OWN nodedef inputs
-                        // (the authoritative list), NOT from shader uniforms —
-                        // string inputs (e.g. `space`) never become GLSL uniforms,
-                        // so a uniform-driven panel drops them and leaks the
-                        // wrapper's (surface_unlit) inputs instead. For each input
-                        // we attach the matching live uniform when one exists
-                        // (numeric/vector/color/bool/filename → edit in place); a
-                        // string/enum input has no uniform, so editing it
-                        // regenerates the shader (see `overrides`).
+                        // Dynamic parameter UI: built from the node's OWN
+                        // nodedef inputs, not shader uniforms (string inputs
+                        // never become GLSL uniforms). Live edits in place.
                         const targetNode = (kind === 'color' || kind === 'translation') ? 'preview_node'
                             : (kind === 'bsdf' ? 'preview_bsdf' : (kind === 'edf' ? 'preview_edf' : 'preview_surface'));
 
-                        // Map introspected public uniforms back to input names,
-                        // for live editing. Match by the element path's LAST
-                        // segment (the input name) or the u_-stripped uniform
-                        // name — leniently, because we only ever CONSUME a match
-                        // for an input name that belongs to the previewed node's
-                        // own nodedef, so wrapper uniforms can't leak in. (The
-                        // earlier strict "path must start with preview_surface"
-                        // test failed for many surface shaders, wrongly routing
-                        // every numeric edit through shader regeneration → the
-                        // "Could not find a nodedef for node 'preview_surface'"
-                        // error when an override was applied to the instance.)
+                        // Maps introspected uniforms back to input names by
+                        // path's last segment (or u_-stripped name) — only
+                        // ever consumed for this node's own nodedef inputs.
                         const uniformByInput = {};
                         for (const u of introspected) {
                             if (!uniforms[u.name]) continue;
@@ -1133,9 +909,9 @@
                                 default: return null;
                             }
                         };
-                        // Parse a MaterialX value string into a plain JS value by
-                        // type. Returns undefined when it isn't parseable as that
-                        // type (e.g. a geometric stream name like "Vworld").
+                        // Parses a MaterialX value string into a plain JS
+                        // value by type; returns undefined when unparseable
+                        // (e.g. a geometric stream name like "Vworld").
                         const NCOMP = { vector2: 2, vector3: 3, color3: 3, vector4: 4, color4: 4 };
                         const parseDefault = (type, s) => {
                             if (s == null || s === '') return undefined;
@@ -1168,8 +944,8 @@
                             const enumValsAttr = attrOf(inp, 'enumvalues');
                             const u = uniformByInput[inputName];
 
-                            // STRING — a fixed set of accepted values → dropdown;
-                            // otherwise a free-text field. Both regenerate.
+                            // STRING — a fixed accepted-value set becomes a
+                            // dropdown; else free text. Both regenerate.
                             if (type === 'string') {
                                 const options = enumAttr ? enumAttr.split(',').map((e2) => e2.trim()).filter(Boolean) : null;
                                 const def = (valueStr != null ? valueStr : (options && options[0])) || '';
@@ -1177,7 +953,8 @@
                                     def, options, regen: true, live: false, uifolder };
                             }
 
-                            // FILENAME — needs a live sampler uniform to preview.
+                            // FILENAME — needs a live sampler uniform to
+                            // preview.
                             if (type === 'filename') {
                                 if (!u || !uniforms[u.name]) return null;
                                 return { uniform: u.name, input: inputName, label, type: 'filename', def: null,
@@ -1186,15 +963,14 @@
 
                             // NUMERIC / VECTOR / COLOR / BOOLEAN.
                             if (LIVE_TYPES.indexOf(type) === -1) {
-                                // Closure/shader/matrix/etc. inputs (BSDF, EDF,
-                                // VDF, ...) have no editable widget, but the
-                                // panel shouldn't look broken for nodes made
-                                // ONLY of them (pbrlib add/mix/multiply):
-                                // show them as read-only connections.
+                                // Closure/shader/matrix inputs (BSDF/EDF/VDF)
+                                // have no editable widget — shown read-only
+                                // so nodes made only of them aren't blank.
                                 return { uniform: 'in::' + inputName, input: inputName, label, type,
                                     def: '(connection)', readonly: true, live: false, uifolder };
                             }
-                            // Numeric enum (name→value) → existing select control.
+                            // Numeric enum (name→value) → existing select
+                            // control.
                             let enumNames = null, enumValues = null;
                             if (enumAttr && (type === 'integer' || type === 'float')) {
                                 enumNames = enumAttr.split(',').map((e2) => e2.trim()).filter(Boolean);
@@ -1204,7 +980,8 @@
                             let max = firstNum(attrOf(inp, 'uisoftmax'), attrOf(inp, 'uimax'));
 
                             if (u && uniforms[u.name]) {
-                                // Live: default comes from the actual uniform value.
+                                // Live: default comes from the actual
+                                // uniform value.
                                 const def = threeToPlain(type, uniforms[u.name].value);
                                 if (def == null || (typeof def === 'number' && isNaN(def))) return null;
                                 if (type === 'float' || type === 'integer') {
@@ -1216,42 +993,31 @@
                                     enumNames, enumValues, live: true, uifolder };
                             }
 
-                            // No uniform (e.g. an input with a geometric default
-                            // like Vworld/Nworld, or one not exposed as a uniform).
-                            // Show it read-only rather than editing it via a
-                            // shader regeneration that can invalidate the node —
-                            // only string/enum inputs (which have no uniform by
-                            // nature) take the regen path.
+                            // No uniform (e.g. a geometric default like
+                            // Vworld/Nworld) — shown read-only rather than
+                            // regenerating, which only string/enum inputs do.
                             const parsed = parseDefault(type, valueStr);
                             return { uniform: 'in::' + inputName, input: inputName, label, type,
                                 def: parsed === undefined ? (valueStr || '(geometry)') : parsed,
                                 readonly: true, live: false, uifolder };
                         };
 
-                        // Enumerate the node's inputs. Prefer the nodedef whose
-                        // output type matches the previewed one (overloaded nodes
-                        // like `mix` differ per signature); dedup by input name.
+                        // Enumerate the node's inputs, preferring the nodedef
+                        // whose output type matches the previewed one
+                        // (overloaded nodes like `mix` differ per signature).
                         const preferType = kind === 'color' ? (multiOutput ? null : outType)
                             : (kind === 'bsdf' ? 'BSDF' : (kind === 'edf' ? 'EDF' : 'surfaceshader'));
-                        // Island B: getMatchingNodeDefs + getActiveInputs/
-                        // getInputs, plus every getName/getType/getAttribute/
-                        // getValueString read inside buildInputParam, are all
-                        // wasm calls — serialize this whole enumeration against
-                        // concurrent shader generation (see mxExclusive in
-                        // js/mtlx-engine.js). Verified synchronous (no awaits
-                        // in this callback). buildInputParam only ever returns
-                        // plain param-descriptor object literals (see its
-                        // definition above) — no live wasm handle crosses the
-                        // lock boundary in `uiParams`.
+                        // Island B: wasm calls run under mxExclusive against
+                        // concurrent generation. buildInputParam returns plain
+                        // objects — no wasm handle crosses into `uiParams`.
                         let uiParams = [];
                         try {
                             uiParams = await window.mxExclusive(() => {
                                 const defsAll = filterDefs(vecToArray(doc.getMatchingNodeDefs(nodeName)));
                                 defsAll.sort((a, b) => {
-                                    // An explicit preferredDef (the docs page's exact
-                                    // nodedef pick, e.g. to disambiguate float-amplitude
-                                    // overloads sharing an output type) wins outright
-                                    // over the output-type match below.
+                                    // An explicit preferredDef (e.g. to
+                                    // disambiguate float-amplitude overloads)
+                                    // wins outright over the output-type match.
                                     if (preferredDef) {
                                         const ad = (a.getName && a.getName() === preferredDef) ? 0 : 1;
                                         const bd = (b.getName && b.getName() === preferredDef) ? 0 : 1;
@@ -1270,27 +1036,18 @@
                                         const nm = inp.getName();
                                         if (seenInput.has(nm)) continue;
                                         const p = buildInputParam(inp);
-                                        // Consume the name only when a param was
-                                        // produced: if this def's signature yields
-                                        // nothing (e.g. a filename without a live
-                                        // sampler), a later overload may still
-                                        // contribute the input.
+                                        // Consume the name only when a param
+                                        // was produced — a later overload may
+                                        // still contribute if this yields none.
                                         if (p) { seenInput.add(nm); out.push(p); }
                                     }
                                 }
                                 return out;
                             });
                         } catch (inputErr) {
-                            // NOTE: this was previously an ALWAYS-ON console.warn
-                            // (not DEBUG_SHADERS-gated) precisely because a prior
-                            // DEBUG_SHADERS-only version let the filterDefs
-                            // ReferenceError regression (see the hoist comment
-                            // above Island A) fail SILENTLY for everyone not
-                            // running with debug logging on, showing only as
-                            // "the parameter panel is empty". Re-gated via
-                            // mtlxWarn as part of the app-wide console-noise
-                            // cleanup — if enumeration failures go quiet again,
-                            // this history is why that's suspicious.
+                            // Enumeration failures must stay visible (mtlxWarn,
+                            // not DEBUG_SHADERS-gated) — a past regression
+                            // failed silently, showing only "panel is empty".
                             mtlxWarn('MaterialX docs parameter enumeration failed:', inputErr);
                             if (DEBUG_SHADERS) console.warn('nodedef input enumeration failed:', mxErr(mx, inputErr));
                         }
@@ -1304,9 +1061,9 @@
                                 initVals[p.uniform] = Array.isArray(p.def) ? p.def.slice() : p.def;
                             }
                             if (sameNode) {
-                                // Re-apply preserved edits: values back onto the
-                                // fresh uniforms, picked textures back onto their
-                                // samplers, colorspace selections back into view.
+                                // Re-apply preserved edits: values onto fresh
+                                // uniforms, picked textures onto their
+                                // samplers, colorspace selections back in view.
                                 for (const p of uiParams) {
                                     if (p.readonly) continue;
                                     if (p.type === 'filename') {
@@ -1342,10 +1099,9 @@
                             return;
                         }
                         const msg = mxErr(mxRef, err);
-                        // The shader generator has no essl (WebGL) implementation
-                        // for every nodedef in the libraries — that's expected
-                        // for some nodes, not a bug, so treat it as a notice
-                        // rather than an error.
+                        // Some nodedefs have no essl (WebGL) implementation in
+                        // the libraries — expected, not a bug, so treat it as
+                        // a notice rather than an error.
                         if (/Could not find a matching implementation/i.test(msg)) {
                             if (mounted) {
                                 setNotice(`No preview for "${nodeName}" — this node has no WebGL (essl) implementation in the MaterialX libraries.`);
@@ -1368,38 +1124,9 @@
                     mounted = false;
                     if (viewRef.current === viewHandle) viewRef.current = null;
                     if (viewHandle) viewHandle.dispose();
-                    // Free this run's export-doc entry through the SAME
-                    // mutex Island A and shader generation use, and read
-                    // exportDocRef.current INSIDE the queued callback (not
-                    // here, synchronously) — this is what makes the dispose
-                    // race-free without any extra bookkeeping:
-                    //   (a) React always runs a cleanup before the NEXT
-                    //       effect's body, so this queued callback is
-                    //       enqueued strictly before any mxExclusive work the
-                    //       next run's Island A can queue — it can never end
-                    //       up deleting the new doc.
-                    //   (b) if THIS run's Island A already queued its own
-                    //       mxExclusive callback before this cleanup fired,
-                    //       mxExclusive's queue is a synchronous FIFO, so
-                    //       this dispose runs AFTER it — by the time it runs,
-                    //       exportDocRef.current is whatever Island A set (or
-                    //       didn't, on the isMounted-bail paths below), and
-                    //       reading the ref at run time (not capturing it
-                    //       now) is what lets this same callback correctly
-                    //       cover both that case and (c).
-                    //   (c) if Island A never got to run at all (bailed
-                    //       before queuing, or this effect tore down before
-                    //       initViewer reached it), this callback finds
-                    //       whatever the previous entry was — Island A's own
-                    //       previous-entry free (see the top of its
-                    //       mxExclusive callback above) — or null, and is a
-                    //       no-op in the null case.
-                    // In-flight code elsewhere that still touches a doc this
-                    // callback deletes out from under it (the isMounted-bail
-                    // checks further down, or mid-flight unmount) hits a
-                    // caught BindingError, never a memory fault — see the
-                    // pre-pass catch and the engine's own generate try/catch
-                    // — contained, not fatal.
+                    // Frees this run's export-doc entry under the SAME mutex
+                    // as Island A, reading exportDocRef.current INSIDE the
+                    // queued callback — this ordering is what makes it safe.
                     window.mxExclusive(() => {
                         const ed = exportDocRef.current;
                         if (!ed) return;
@@ -1409,12 +1136,9 @@
                 };
             }, [identKey, enabled, geom, overrides]);
 
-            // Group params by uifolder (item F2.3): un-foldered params
-            // render first, ungrouped, exactly as before; foldered ones are
-            // bucketed under a collapsible header, preserving the FIRST
-            // appearance order of each folder name. A node with no
-            // uifolder attrs anywhere yields an empty `folders` array, so
-            // the render below falls back to the old flat list untouched.
+            // Groups params by uifolder: un-foldered render first; foldered
+            // ones bucket under a collapsible header, in first-appearance
+            // order. No uifolder attrs → empty `folders`, same as before.
             const paramGroups = React.useMemo(() => {
                 const ungrouped = [];
                 const folderOrder = [];
@@ -1427,20 +1151,15 @@
                 }
                 return { ungrouped, folders: folderOrder.map((name) => ({ name, params: byFolder.get(name) })) };
             }, [params]);
-            // Open/closed state per folder name, default expanded (a name
-            // absent from this map reads as open — see `!== false` below).
-            // Reset whenever the selected node/signature changes, same as
-            // resetNonce, so a folder collapsed on one node doesn't leak
-            // its state onto an unrelated one that happens to reuse a name.
+            // Open/closed state per folder name, default expanded (absent
+            // reads as open). Reset on identKey change so a folder collapsed
+            // on one node doesn't leak onto an unrelated one reusing the name.
             const [paramFoldersOpen, setParamFoldersOpen] = React.useState({});
             React.useEffect(() => { setParamFoldersOpen({}); }, [identKey]);
 
-            // Disabled state: cheap placeholder instead of the canvas/panel.
-            // No hooks may be declared after this point (React hook-order
-            // rule) — toggling `enabled` re-renders this SAME component
-            // instance with/without the early return below, and a hook
-            // declared after it would change the hook count between
-            // renders, crashing the whole page (React error #310/#300).
+            // Disabled state: cheap placeholder instead of canvas/panel. No
+            // hooks may be declared after this point — toggling `enabled`
+            // reuses this instance, so a later hook would crash it (React 310).
             if (enabled === false) {
                 return (
                     <div className="flex items-center justify-between gap-3 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 my-6 text-sm text-gray-400">
@@ -1457,15 +1176,14 @@
                 );
             }
 
-            // Render one control per parameter, by MaterialX type:
-            // enum → select; boolean → checkbox; float/integer → slider +
-            // number field; color3/4 → color picker (+ alpha slider);
-            // vector2/3/4 → per-component number fields.
+            // One control per parameter, by MaterialX type: enum → select,
+            // boolean → checkbox, float/integer → slider+number, color →
+            // color picker, vector → per-component number fields.
             const renderControl = (p) => {
                 const cur = values[p.uniform] !== undefined ? values[p.uniform] : p.def;
                 const numCls = 'w-16 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-gray-200';
-                // Read-only input (e.g. a geometric default like Vworld) — shown
-                // so the input isn't "missing", but not editable.
+                // Read-only input (e.g. a geometric default like Vworld) —
+                // shown so the input isn't "missing", but not editable.
                 if (p.readonly) {
                     return <span className="text-xs text-gray-500 italic font-mono">{String(cur)}</span>;
                 }
@@ -1521,9 +1239,9 @@
                                         className="hidden"
                                         onChange={(e) => {
                                             onFilePick(p, e.target.files && e.target.files[0]);
-                                            // Clear so choosing the SAME file later
-                                            // still fires change (a value-unchanged
-                                            // pick emits no event).
+                                            // Clear so choosing the SAME file
+                                            // later still fires change (an
+                                            // unchanged value emits no event).
                                             e.target.value = '';
                                         }}
                                     />
@@ -1532,8 +1250,8 @@
                                     {cur || 'default checker'}
                                 </span>
                             </div>
-                            {/* Colorspace: a codegen decision (CMS transform baked
-                                into the shader), so picking one regenerates. */}
+                            {/* Colorspace: a codegen decision (CMS transform
+                                baked into the shader), so picking regenerates. */}
                             <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-gray-500 flex-none">colorspace</span>
                                 <select
@@ -1581,12 +1299,9 @@
                 }
                 if (p.type === 'color3' || p.type === 'color4') {
                     const rgb = cur.slice(0, 3);
-                    // Picker AND spinners both speak LINEAR 0-1: rgbToHex /
-                    // hexToRgb are a plain byte<->float mapping with no sRGB
-                    // transfer (see mtlx-engine.js), and everything renders
-                    // from the same stored value — so editing either control
-                    // updates the other on the next render, losslessly for
-                    // spinner→picker and at 8-bit precision for picker→spinner.
+                    // Picker and spinners both speak LINEAR 0-1 (rgbToHex/
+                    // hexToRgb do a plain byte<->float mapping, no sRGB) —
+                    // editing either updates the other on the next render.
                     const setComp = (i, s) => {
                         const n = parseFloat(s);
                         if (isNaN(n)) return;
@@ -1643,10 +1358,9 @@
                 );
             };
 
-            // Desktop (lg+): panel sits to the RIGHT of the preview.
-            // Mobile: flex-col stacks it BELOW.
-            // Notice/error render as a slim row; the viewport layout is then
-            // HIDDEN (not unmounted — the canvas ref must survive).
+            // Desktop (lg+): panel sits right of the preview; mobile stacks
+            // it below. Notice/error render as a slim row, hiding (not
+            // unmounting) the viewport so the canvas ref survives.
             const suppressed = !!(notice || error);
             return (
                 <div className="my-6">
@@ -1674,9 +1388,9 @@
                             onGeomChange={pickGeom}
                             rotating={rotating}
                             onToggleRotating={toggleRotating}
-                            // Engine no-ops auto-rotate for the full scene, and the
-                            // backdrop box fully occludes the env-background sky
-                            // sphere - hide both controls while it's selected.
+                            // Engine no-ops auto-rotate for the full scene,
+                            // and the backdrop box occludes the env sky —
+                            // hide both controls while it's selected.
                             showRotate={geom !== 'shaderball-scene'}
                             showBackgroundToggle={geom !== 'shaderball-scene'}
                             onCameraReset={() => {
@@ -1692,28 +1406,9 @@
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreenView}
                         />
-                        {/* object-contain, not the default 'fill': on every
-                            node switch, initViewer's synchronous state resets
-                            (setParams([]) etc., top of the effect) commit and
-                            paint BEFORE the async doc/shadergen/buildView
-                            pipeline runs — and params.length===0 briefly
-                            drops the side panel (below), widening/narrowing
-                            THIS container via the flex reflow. The canvas's
-                            drawing buffer (width/height attrs) still holds
-                            the PREVIOUS node's view until the new view's
-                            renderer.setSize() finally runs, so for that
-                            window the buffer's aspect and the CSS box's
-                            aspect genuinely diverge (measured: 620x318 buffer
-                            inside a reflowed 956x318 box). A plain <canvas>
-                            is a replaced element that STRETCHES its bitmap
-                            non-uniformly to fill a mismatched box by default
-                            — the reported "smeared wide ball" behind the
-                            loading overlay. object-contain letterboxes
-                            instead (into this container's own bg-gray-900,
-                            so the bars are invisible), and is a no-op once
-                            steady: mtlx-engine.js's ResizeObserver keeps the
-                            buffer's aspect equal to the CSS box's aspect
-                            whenever a view is live. */}
+                        {/* object-contain, not 'fill': on a node switch the
+                            canvas buffer briefly holds the OLD aspect while
+                            the CSS box reflows, causing a "smeared" stretch. */}
                         <canvas ref={canvasRef} className="w-full h-full block object-contain cursor-grab active:cursor-grabbing" />
                     </div>
                     {params.length > 0 && (
@@ -1751,11 +1446,9 @@
                             </div>
                             <div className={'overflow-y-auto p-3 space-y-3 flex-1 custom-scrollbar' + (loading ? ' pointer-events-none opacity-50 select-none' : '')}>
                                 {paramGroups.ungrouped.map((p) => (
-                                    // Key includes nodeName: different nodes often
-                                    // expose SAME-named inputs (image/hextiledimage
-                                    // both have `file`), and a reused DOM file
-                                    // input still holding the old File emits no
-                                    // change event when the same file is re-picked.
+                                    // Key includes nodeName: different nodes
+                                    // share input names (e.g. `file`), and a
+                                    // reused file input won't re-fire on repick
                                     <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
                                         <label className="block text-xs text-gray-400 mb-1">
                                             {p.label} <span className="text-gray-600">({p.type})</span>

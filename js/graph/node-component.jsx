@@ -1,30 +1,21 @@
-// js/graph/node-component.jsx — the React Flow node card renderer used by
-// every node in the graph (data nodes, nodegraphs, interface input/output
-// pseudo-nodes). Split out of js/graph-app.jsx (pure move, no behavior
-// change) as part of the graph view's file split. Loaded after
-// js/graph/style.jsx (consumes its getNodeColor/typeColor/handleStyle/
-// NODE_W window globals) in the graph view's babelScripts manifest (see
-// js/shell.jsx's VIEW_DEPS.graph). Like every other lazy-loaded file in
-// this app, this file has NO top-level import/export — it self-exports via
-// a single Object.assign(window, {}) at the bottom.
+// js/graph/node-component.jsx — renders each graph node as a React Flow
+// card (data nodes, nodegraphs, interface input/output pseudo-nodes).
+// Split out of js/graph-app.jsx. Loaded after js/graph/style.jsx (needs
+// its getNodeColor/typeColor/handleStyle/NODE_W globals) per js/shell.jsx's
+// VIEW_DEPS.graph. No top-level import/export — self-exports via
+// Object.assign(window, {}) at the bottom, like other lazy-loaded files.
 
         const { Handle, Position } = window.ReactFlow;
 
-        // Perf instrumentation (MTLX_PERF_LOG, a bare window global from
-        // js/graph/model.jsx — see that file for the flag definition):
-        // count renders and flush a summary line at most once a second,
-        // piggybacked on render calls rather than a timer/interval (no
-        // extra timers to leak/clear across mounts).
+        // Perf logging (MTLX_PERF_LOG global, defined in js/graph/model.jsx):
+        // counts renders and logs a summary at most once/sec, piggybacked
+        // on render calls instead of a timer, so nothing to clean up on unmount.
         let __mtlxRenderCount = 0;
         let __mtlxRenderWindowStart = 0;
 
-        // One node card: header (accent dot + name + category:type), then a
-        // 22px row per port — inputs with a left target handle (showing the
-        // literal value when unconnected), outputs with a right source
-        // handle. Row height must stay in sync with nodeHeight() above.
-        // Interface inputs / outputs are GRAPH BOUNDARY pseudo-nodes, not
-        // real nodes — they render with a dashed border, darker translucent
-        // body and a diamond (not a dot) so they can't be mistaken for one.
+        // Node card: header + one 22px port row each (row height must
+        // match nodeHeight() above). Interface input/output GRAPH BOUNDARY
+        // pseudo-nodes use a dashed border, darker body, and diamond dot.
         function MtlxGraphNode({ data, selected }) {
             if (MTLX_PERF_LOG) {
                 const now = performance.now();
@@ -106,19 +97,9 @@
                                 title={inp.authored === false ? 'Not set in the document — nodedef default' : undefined}>
                                 <Handle type="target" position={Position.Left} id={'in:' + inp.name}
                                     onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: inp.name, portType: inp.type, dir: 'in' }); }}
-                                    // An OCCUPIED input's handle is made
-                                    // click-through (pointer-events: none —
-                                    // .mtlx-handle-connected rule in
-                                    // index.html/webview.html) so drags fall
-                                    // through to ReactFlow's edge-updater
-                                    // circle at the same spot: grabbing the
-                                    // existing wire (drop back = keep, void =
-                                    // delete, other valid input = reconnect).
-                                    // Tradeoff: the onDoubleClick above is
-                                    // unreachable for occupied inputs (it
-                                    // still works on empty ones). ReactFlow
-                                    // merges this className onto its own
-                                    // .react-flow__handle class.
+                                    // Occupied handles are click-through so
+                                    // drags fall through to the edge-updater
+                                    // circle to reconnect/delete the wire.
                                     className={inp.connected ? 'mtlx-handle-connected' : undefined}
                                     style={handleStyle(typeColor(inp.type))} />
                                 <span className="text-gray-300 truncate">{inp.name}</span>

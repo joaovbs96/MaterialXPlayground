@@ -1,8 +1,7 @@
-// doc-links.jsx — project links, permalink hash<->selection helpers, and
-// official spec deep-link URL builders for the MaterialX node
-// documentation browser. Split out of doc-ui.jsx (Phase 3) — pure move,
-// no behavior change. Loaded as text/babel; Babel executes each file in
-// its own function scope, so the public API is exported onto window at
+// doc-links.jsx — project links, permalink hash<->selection helpers,
+// and official spec deep-link URL builders for the MaterialX node
+// documentation browser. Loaded as text/babel, which runs each file
+// in its own scope, so the public API is exported onto window at
 // the bottom.
 
         // Project links. js/site-header.js is the single source of truth and
@@ -11,28 +10,15 @@
         const ISSUES_URL = window.SITE_LINKS.issues;
         const SPEC_DOCS_URL = window.SITE_LINKS.spec;
 
-        // Permalinks: a node is addressed by lib/group/name in the URL hash,
-        // e.g. #/stdlib/math/add — hash routing needs no server config, so it
-        // works as-is on GitHub Pages. These convert between a selection and
-        // the hash both ways. A NAME-ONLY hash (#/multiply) is also accepted:
-        // other pages (e.g. the node graph's "?" documentation button) know a
-        // node's category but not its library/group, so it's resolved here by
-        // search — exact name first, then the squashed-key convention the
-        // cross-reference index uses (separators stripped, lowercased), with
-        // 'stdlib' winning ties so ambiguous names resolve deterministically.
+        // Permalinks: #/lib/group/name addresses a node in the URL hash
+        // (e.g. #/stdlib/math/add). A name-only hash (#/multiply) also
+        // resolves, by exact match then squashed key, with stdlib winning ties.
         const selToHash = (sel) =>
             sel ? '#/' + [sel.lib, sel.group, sel.name].map(encodeURIComponent).join('/') : '';
 
-        // Parses a `?sig=<token>` query suffix — a VS Code hover deep
-        // link only (see vscode_extension/src/extension.js's openDocs
-        // command and its SIG_TOKEN_RE; selToHash above never emits one)
-        // — into { out, ins: [{name, type}] }, or null when absent/
-        // malformed. Token shape mirrors vscode_extension/src/
-        // nodeSignature.js's buildSigToken output exactly: `<outType>`
-        // optionally followed by `(<name>:<type>,...)`. extension.js
-        // already shape-validated the token before ever building the
-        // hash, but this parse is independently defensive — a hand-
-        // typed/pasted/bookmarked hash is untrusted input too.
+        // Parses a `?sig=<token>` suffix from a VS Code hover deep link
+        // (see vscode_extension's extension.js/nodeSignature.js) into
+        // { out, ins } or null — re-validated here since hashes are untrusted.
         const SIG_HINT_RE = /^([\w.\-:]+)(?:\(([^)]*)\))?$/;
         const parseSigHint = (query) => {
             if (!query) return null;
@@ -63,13 +49,9 @@
             let body = hash.replace(/^#\/?/, '');
             if (!body) return null;
 
-            // Strip a `?sig=...` suffix BEFORE splitting into lib/group/
-            // name segments — it's not part of the addressing scheme,
-            // just an optional hint for which signature to pre-select
-            // once the node itself resolves. `q === -1` (no '?' at all —
-            // every permalink the site itself ever writes) leaves body/
-            // sigHint exactly as they were before this feature existed,
-            // so existing permalinks resolve identically.
+            // Strip a `?sig=...` suffix before splitting into lib/group/
+            // name segments — it's an optional signature hint, not part
+            // of addressing; no '?' leaves old permalinks resolving unchanged.
             const q = body.indexOf('?');
             const sigHint = q === -1 ? null : parseSigHint(body.slice(q + 1));
             if (q !== -1) body = body.slice(0, q);
@@ -116,17 +98,13 @@
         };
 
         // ---- Official spec deep-links ----
-        // Prefer a parser-provided `spec_url` (new JSON schema regenerated
-        // from spec_parser.py). For older JSON, derive it: the spec file
-        // follows the node's library, and the heading anchors in the spec MD
-        // follow the hyphenated "node-<name>" convention observed in the MD
-        // (e.g. oren_nayar_diffuse_bsdf → #node-oren-nayar-diffuse-bsdf).
-        // GitHub resolves those fragments to user-content-prefixed ids.
+        // Prefers node.info.spec_url when present; otherwise derives it
+        // from the hyphenated "node-<name>" anchor convention in the spec
+        // MD (e.g. oren_nayar_diffuse_bsdf → #node-oren-nayar-diffuse-bsdf).
         const SPEC_BASE = window.SITE_LINKS.specBlobBase;
-        // Library -> spec markdown file mapping. This is only ever a
-        // FALLBACK: specUrlForNode below prefers node.info.spec_url (which
-        // the pregenerated js/gen/nodelib.json always supplies) and only
-        // falls through to this derivation when that's missing.
+        // Library -> spec markdown file mapping; fallback only.
+        // specUrlForNode prefers node.info.spec_url (always supplied by
+        // js/gen/nodelib.json) and falls through to this when that's missing.
         const specFileForLib = (lib) => {
             const base = (lib || '').split('/')[0];
             if (base === 'pbrlib' || base === 'bxdf') return 'MaterialX.PBRSpec.md';
@@ -140,19 +118,15 @@
         };
 
         // ---- Vendored-library implementation deep-links ----
-        // repoPath is one of js/gen/nodelib-index.json's impl-row `files[target]`
-        // / `graphFile` values — a repo-relative 'libraries/...' path already
-        // resolved (climbing any file="../..." relative reference) by
-        // scripts/lib/nodedef-extract.mjs's resolveImplFile at build time.
-        // Tag-pinned (window.SITE_LINKS.libBlobBase), unlike SPEC_BASE above,
-        // since the path was resolved against that exact vendored checkout.
+        // repoPath is a resolved 'libraries/...' path from js/gen/nodelib-
+        // index.json (built by nodedef-extract.mjs's resolveImplFile).
+        // Tag-pinned via libBlobBase, matching that exact vendored checkout.
         const implFileUrl = (repoPath) => repoPath ? window.SITE_LINKS.libBlobBase + repoPath : null;
 
         // ---- public API ----
-        // REPO_URL/SPEC_DOCS_URL/specFileForLib have no consumers outside
-        // this file (checked repo-wide, word-boundary grep) — kept as
-        // declarations (specFileForLib backs specUrlForNode; REPO_URL backs
-        // ISSUES_URL's fallback) but omitted from the export list.
+        // REPO_URL/SPEC_DOCS_URL/specFileForLib have no outside consumers
+        // (repo-wide grep), so they're omitted below; specFileForLib backs
+        // specUrlForNode, REPO_URL backs ISSUES_URL's fallback.
         Object.assign(window, {
             ISSUES_URL,
             selToHash, hashToSel,

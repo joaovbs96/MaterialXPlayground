@@ -1,18 +1,8 @@
 // scripts/lib/version.mjs
 //
-// Single source of truth for "what MaterialX version is this repo built
-// against": the vendored WASM build (js/JsMaterialXGenShader.js/.wasm/.data)
-// reports its own version through the JS API, so nothing else in this repo
-// is allowed to hand-type a version literal. extract-mtlx-version.mjs reads
-// it from the WASM once and writes it to js/gen/mtlx-version.json (a
-// committed, generated file); everything else either reads that JSON
-// (readVersionMeta, for code that can `import`/`require` at build/run time)
-// or gets it rewritten into place by stampAll (for the handful of spots —
-// plain <script>-tag globals, the README — that can't).
-//
-// Node >=18, ESM, zero runtime dependencies. Repo root is derived from
-// import.meta.url so this module works from any working directory, same as
-// scripts/vendor.mjs.
+// MaterialX version source of truth: the vendored WASM reports it once
+// into js/gen/mtlx-version.json (extract-mtlx-version.mjs); everything
+// else reads that JSON or gets it stamped in via stampAll.
 
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -24,12 +14,9 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 export const VERSION_META_PATH = path.join(REPO_ROOT, "js", "gen", "mtlx-version.json");
 
-/** Instantiate the vendored MaterialX WASM build (same load pattern
- * js/mtlx-engine.js uses in the browser: only JsMaterialXGenShader.js —
- * loading JsMaterialXCore.js too would double-register embind types) and
- * read its self-reported version. This is the ONLY place in the whole build
- * pipeline allowed to treat the WASM as the version authority — every other
- * consumer derives from its output instead. */
+/** Load the vendored WASM the same way the browser does (only
+ * JsMaterialXGenShader.js — loading JsMaterialXCore.js too double-
+ * registers embind types) and read its self-reported version. */
 export async function extractVersionFromWasm() {
   const jsPath = path.join(REPO_ROOT, "js", "JsMaterialXGenShader.js");
   const mod = await import(pathToFileURL(jsPath));
@@ -45,11 +32,9 @@ export async function extractVersionFromWasm() {
 const VERSION_SHAPE_RE = /^\d+\.\d+\.\d+$/;
 const REGEN_HINT = "run `node scripts/extract-mtlx-version.mjs` (or `npm run build`) to (re)generate it.";
 
-/** Read + validate js/gen/mtlx-version.json. Deliberately has NO literal
- * fallback: the file is generated, so any failure to read/parse/validate it
- * means the build pipeline hasn't run yet (or the file was hand-edited into
- * a bad shape) — throw a clear, actionable error rather than silently
- * making up a version. */
+/** Read + validate js/gen/mtlx-version.json. No literal fallback:
+ * failures mean the build hasn't run yet (or the file was hand-
+ * edited badly) — throw an actionable error instead of guessing. */
 export async function readVersionMeta() {
   const relPath = path.relative(REPO_ROOT, VERSION_META_PATH);
 
@@ -78,16 +63,9 @@ export async function readVersionMeta() {
 }
 
 // ---------------------------------------------------------------------------
-// STAMP_TABLE: every place in the repo that carries its own literal copy of
-// the MaterialX tag because it runs in a context that can't read
-// js/gen/mtlx-version.json directly (plain <script> globals loaded before
-// any module graph exists, a README string). Each entry's `re` must match
-// the target file's content EXACTLY ONCE and capture the current tag as its
-// first group — stampAll() and checkStamps() below both use it, so the
-// "write" and "verify" paths can never disagree with each other.
-//
-// scripts/lib/spec-parser.js's SPEC_TAG fallback is deliberately NOT listed
-// here — a separate phase moves it off a literal fallback entirely.
+// STAMP_TABLE: files with their own literal copy of the MaterialX tag,
+// since they can't read js/gen/mtlx-version.json directly (script
+// globals, README) — shared by stampAll() and checkStamps() below.
 // ---------------------------------------------------------------------------
 export const STAMP_TABLE = [
   {
@@ -122,11 +100,9 @@ export const STAMP_TABLE = [
   },
 ];
 
-/** Apply every STAMP_TABLE replacement in place. Errors (rather than
- * silently skipping) if any pattern fails to match exactly once, since that
- * means the target file's shape changed and STAMP_TABLE is now out of date.
- * Returns the list of files actually rewritten (files already matching
- * `meta` are left untouched — no spurious diffs). */
+/** Applies every STAMP_TABLE replacement in place; errors (rather than
+ * skipping) if a pattern doesn't match exactly once, meaning the file's
+ * shape changed. Returns only the files actually rewritten. */
 export async function stampAll(meta) {
   const changedFiles = [];
   for (const entry of STAMP_TABLE) {
@@ -150,10 +126,9 @@ export async function stampAll(meta) {
   return changedFiles;
 }
 
-/** Extract the current value at each STAMP_TABLE location and compare it
- * against `meta.tag`. Read-only — never writes. Returns an array of problem
- * strings (empty = every stamp agrees), one per disagreement/missing file/
- * unmatched pattern, in the form "path: found vA.B.C, expected vX.Y.Z". */
+/** Compares each STAMP_TABLE location's current value against
+ * `meta.tag`; read-only, never writes. Returns problem strings (empty
+ * = all agree), e.g. "path: found vA.B.C, expected vX.Y.Z". */
 export async function checkStamps(meta) {
   const problems = [];
   for (const entry of STAMP_TABLE) {

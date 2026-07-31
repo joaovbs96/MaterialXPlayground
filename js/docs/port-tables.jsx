@@ -1,15 +1,11 @@
-// port-tables.jsx — port-table data helpers and renderers: normalizing
-// spec port data into tables, deriving signature labels/preview types,
-// and the PortTable / NodeDefPortsTable components. The nodedef-walking
-// machinery that used to live here (defInputs/defOutputs/safeType,
-// nodeDefSigKey, groupDefVersions, dedupeDefsBySignature,
-// buildAutoTablesFromDefs) has moved to build-land
-// (scripts/lib/nodedef-extract.mjs, run by scripts/build-nodelib.mjs) —
-// this file now only renders data that arrives pre-computed in
-// js/gen/nodelib-index.json (see js/docs-app.jsx). PortTable uses
-// MathText (js/docs/rich-text.jsx, loaded before this file). Loaded as
-// text/babel; Babel executes each file in its own function scope, so the
-// public API is exported onto window at the bottom.
+// port-tables.jsx — port-table data helpers and renderers: normalizes
+// spec port data into tables and derives signature labels/preview
+// types for PortTable / NodeDefPortsTable. Nodedef-walking now lives
+// in scripts/lib/nodedef-extract.mjs (build-land); this file only
+// renders data pre-computed into js/gen/nodelib-index.json. Requires
+// MathText (js/docs/rich-text.jsx) loaded first. Loaded as text/babel
+// in its own function scope, so the public API is exported onto
+// window at the bottom.
 
         // Turn a normalized header key back into a display label,
         // e.g. "accepted_values" -> "Accepted Values".
@@ -38,11 +34,9 @@
             return desc === '' || desc === 'No documentation available.';
         };
 
-        // ------------------------------------------------------------------
-        // Shared column layout: every table of a node renders the SAME
-        // columns in the SAME order with FIXED widths, so stacked tables
-        // line up instead of each computing its own widths.
-        // ------------------------------------------------------------------
+        // Shared column layout: every port table renders the same
+        // columns in the same order with fixed widths, so stacked
+        // tables for a node line up instead of each sizing itself.
         const CANONICAL_ORDER = ['port', 'description', 'type', 'default', 'accepted_values'];
         const COL_WIDTHS = {
             port: 'w-60',
@@ -51,11 +45,9 @@
             accepted_values: 'w-44',
             // description gets whatever space is left
         };
-        // Same widths in rem, used to compute each table's minimum width on
-        // small screens (fixed columns + a readable minimum for description).
-        // port's 15rem (vs. its 13rem w-52-equivalent width class pre-bump)
-        // gives headroom for long identifiers (e.g. subsurface_radius_scale)
-        // now that the port column is whitespace-nowrap — see table-auto below.
+        // Same widths in rem, used to compute each table's minimum
+        // width on small screens. port gets extra headroom for long
+        // identifiers since that column is whitespace-nowrap.
         const COL_REM = { port: 15, type: 12, default: 10, accepted_values: 11 };
         const DESCRIPTION_MIN_REM = 8;
         const EXTRA_COL_REM = 8;
@@ -78,11 +70,9 @@
             return ordered;
         };
 
-        // ------------------------------------------------------------------
-        // Signature labels: derive "inputs → output" type summaries from
-        // each table, resolving "Same as <port>" references, so headings
-        // read e.g. "surfaceshader" or "boolean → float, integer"
-        // ------------------------------------------------------------------
+        // Signature labels: derive "inputs → output" type summaries
+        // from each table, resolving "Same as <port>" references, so
+        // headings read e.g. "boolean → float, integer".
         const SAME_AS_RE = /^same as\s+(\S+?)(?:\s+or\s+(.+))?$/i;
 
         const resolveType = (ports, portName, seen) => {
@@ -101,10 +91,9 @@
         const isOutputPort = (name, row) =>
             name === 'out' || /^output\b/i.test(row.description || '');
 
-        // Split resolved type strings ("colorN, vectorN") into individual
-        // tokens and dedupe at token level, so "Same as in1 or float" on a
-        // matrixNN input yields "matrixNN, float" rather than
-        // "matrixNN, matrixNN, float".
+        // Splits resolved type strings into tokens and dedupes at the
+        // token level, so e.g. "Same as in1 or float" on a matrixNN
+        // input yields "matrixNN, float", not a duplicated token.
         const uniqTypeTokens = (typeStrings) => {
             const seen = new Set();
             const out = [];
@@ -133,11 +122,9 @@
             return `${inStr} → ${outStr}`;
         };
 
-        // Concrete MaterialX type to PREVIEW for a signature table: resolve
-        // the output-type tokens (falling back to input tokens when the
-        // table has no output row), expand the spec's family placeholders
-        // (colorN → color3, ...), and prefer a renderable type. Returns
-        // null when nothing can be derived — the preview then auto-picks.
+        // Concrete type to preview for a signature table: resolve
+        // output tokens (falling back to input), expand family
+        // placeholders, and prefer a renderable type; null means auto-pick.
         const SIG_CONCRETE_TOKEN = {
             colorn: 'color3', vectorn: 'vector3', matrixnn: 'matrix33',
         };
@@ -162,15 +149,9 @@
             return concrete[0] || null;
         };
 
-        // Which markdown table documents the signature with this output
-        // type? Spec write-ups that cover several signatures under one
-        // heading (e.g. `multiply`: scalar/vector table + matrixNN table)
-        // author family tokens ('float, colorN or vectorN', 'matrixNN')
-        // rather than splitting per concrete type. Expand those tokens the
-        // same way signaturePreviewType does and pick the first table whose
-        // OUTPUT port types (resolving "Same as X" chains via resolveType,
-        // and falling back to ALL ports when a table has no output row)
-        // cover the wanted concrete type.
+        // Picks the table whose output types cover `type`, expanding
+        // family tokens (e.g. 'matrixNN') the way signaturePreviewType
+        // does, since spec write-ups group several signatures per table.
         const SIG_FAMILY_EXPANSIONS = {
             colorn: ['color2', 'color3', 'color4'],
             vectorn: ['vector2', 'vector3', 'vector4'],
@@ -195,23 +176,17 @@
             return null;
         };
 
-        // `defaultsOverride`: an optional {portName: valueString} map — used
-        // when the docs page's Version picker (index.html) selects a
-        // non-default nodedef version. The spec's own "default" column
-        // reflects whichever version the write-up was authored against
-        // (usually the current default); switching versions overrides just
-        // that cell with the SELECTED version's live nodedef default,
-        // leaving descriptions/types untouched.
-        // Wrapped in React.memo: props are stable after js/docs-app.jsx's
-        // B3 memoization (portTables/columns/typesOverride/refs), so this
-        // skips re-rendering (and re-running the per-cell MathText tree)
-        // on renders that don't actually change this table's data — e.g.
-        // sidebar-search keystrokes.
+        // `defaultsOverride`: optional {portName: value} map from the
+        // Version picker; overrides just the "default" cell with the
+        // selected version's live value, leaving spec prose untouched.
+        //
+        // React.memo: js/docs-app.jsx stabilizes these props, so this
+        // skips re-rendering (and re-running per-cell MathText) on
+        // unrelated renders, e.g. sidebar-search keystrokes.
         const PortTable = React.memo(function PortTable({ table, columns, refs, defaultsOverride, typesOverride }) {
-            // Minimum table width (small screens only, via the .port-table
-            // media rule): sum of the fixed column widths plus a readable
-            // minimum for the flexible description column. Below this the
-            // wrapper scrolls horizontally instead of crushing columns.
+            // Sum of fixed column widths plus a readable minimum for
+            // description; the .port-table media rule uses this so small
+            // screens scroll horizontally instead of crushing columns.
             const minRem = columns.reduce(
                 (sum, c) => sum + (c === 'description' ? DESCRIPTION_MIN_REM : (COL_REM[c] || EXTRA_COL_REM)),
                 0
@@ -261,10 +236,9 @@
             );
         });
 
-        // Rows: [{name, kind, types[], value, enums}], pregenerated by
-        // scripts/build-nodelib.mjs's buildDefPorts port
-        // (scripts/lib/nodedef-extract.mjs) from the union of every
-        // matching nodedef's inputs/outputs — no live WASM read.
+        // Rows: [{name, kind, types[], value, enums}], pregenerated
+        // by scripts/lib/nodedef-extract.mjs from the union of every
+        // matching nodedef's ports — no live WASM read here.
         const NodeDefPortsTable = ({ rows }) => {
             rows = rows || [];
             if (!rows.length) {
@@ -309,17 +283,8 @@
         };
 
         // ---- public API ----
-        // headerLabel, the column-layout consts (CANONICAL_ORDER etc.),
-        // and the signature-label helper cluster (SAME_AS_RE, resolveType,
-        // isOutputPort, uniqTypeTokens, signatureLabel, SIG_CONCRETE_TOKEN,
-        // SIG_PREVIEW_PREFERENCE, SIG_FAMILY_EXPANSIONS, expandSigToken)
-        // have no consumers outside this file (checked repo-wide,
-        // word-boundary grep) — kept as declarations (used internally by
-        // PortTable/unionColumns/signaturePreviewType/pickTableForType) but
-        // omitted from the export list. The nodedef-walking helpers
-        // (defInputs, defOutputs, safeType, nodeDefSigKey, groupDefVersions,
-        // dedupeDefsBySignature, buildAutoTablesFromDefs) no longer live in
-        // this file at all — see scripts/lib/nodedef-extract.mjs.
+        // Only helpers with consumers outside this file are exported;
+        // internal-only helpers (signature/column-layout math) stay local.
         Object.assign(window, {
             getPortTables, isUndocumented,
             unionColumns, signaturePreviewType, pickTableForType, PortTable,

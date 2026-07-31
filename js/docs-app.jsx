@@ -1,54 +1,19 @@
 // docs-app.jsx — the App component for the MaterialX node documentation
-// browser (index.html). Extracted verbatim from the page's inline
-// text/babel script (originally index.html lines 76-1103) — pure move,
-// no behavior change from that extraction. Note: this file uses
-// index.html's literal \uXXXX escape-text convention (e.g. {'↗'}) in a
-// few string literals — same convention as node-graph.html; preserve
-// exactly, do not normalize.
-// Loaded as text/babel; Babel executes each file in its own function
-// scope. Depends on window globals published by js/mtlx-engine.js,
-// js/docs/doc-links.jsx, js/docs/rich-text.jsx, js/docs/port-tables.jsx,
-// js/docs/impl-matrix.jsx, js/docs/sidebar.jsx, and js/node-preview.jsx,
-// so this script tag must load AFTER all of those. Reads
-// window.__MTLX_EMBED (set synchronously by index.html's early <head>
-// script) for embed-mode behavior. The sidebar tree (DocsSidebar) and
-// Help modal (DocsHelpDialog) live in js/docs/sidebar.jsx — App owns all
-// their state/derived data and passes it down as props (see the
-// {jsonData && (...)} block below).
-//
-// Node documentation data source: js/gen/nodelib.json (Layer 1 — the
-// spec-derived {lib:{group:{category:{...}}}} database, same shape the
-// old live in-browser spec parser produced) and js/gen/nodelib-index.json
-// (Layer 2 — per-category sigGroups/autoTables/defPorts/impl, plus
-// allTargets) are both pre-generated at BUILD TIME by
-// scripts/build-nodelib.mjs and committed to the repo — never
-// regenerated in the browser. Docs browsing is therefore fully
-// WASM-free; the MaterialX engine (js/mtlx-engine.js, getMxEnv) is only
-// ever loaded for 3D node previews (see the gated warm-up effect below,
-// near showPreviews).
+// browser (index.html), extracted from its inline text/babel script.
+// Uses index.html's literal \uXXXX escape-text convention (e.g. {'↗'})
+// in some string literals — same as node-graph.html; preserve exactly.
+// Loaded as text/babel after js/mtlx-engine.js and js/docs/*.jsx, which
+// it depends on via window globals; reads window.__MTLX_EMBED (set by
+// index.html's early <head> script) for embed-mode behavior. Node data
+// comes from prebuilt js/gen/nodelib*.json — docs browsing is WASM-free;
+// the MaterialX engine loads only for 3D previews.
 
-        // Given nodeVersionGroups (see groupDefVersions, js/docs/port-
-        // tables.jsx) and a parsed sig hint ({out, ins}, from a VS Code
-        // hover deep link's `?sig=` suffix — see js/docs/doc-links.jsx's
-        // parseSigHint), returns the INDEX of the group to pre-select in
-        // the Signature dropdown, or -1 when nothing matches (leave the
-        // dropdown's own default alone).
-        //
-        // Matching is deliberately permissive: hint.out is matched
-        // exactly against each group's resolved output type first, then
-        // retried lowercased (a hand-typed/legacy hash could differ only
-        // in case) — a SINGLE candidate (or a hint with no typed inputs
-        // to disambiguate with) wins outright. With MULTIPLE candidates
-        // sharing that output type (e.g. fractal3d's several float-
-        // output signatures), hint.ins — the hovered element's typed
-        // <input> children — disambiguates: the first candidate whose
-        // DEFAULT version's inputTypes satisfies EVERY hinted name->type
-        // pair wins; if none do, fall back to the first candidate rather
-        // than showing nothing.
-        // Stable empty fallbacks: an inline `[]`/`{}` literal is a new
-        // reference every render, which defeats React.memo on every
-        // consumer downstream (PortTable et al.) even when the "real"
-        // value hasn't changed. Module-level so identity never changes.
+        // Given nodeVersionGroups and a sig hint ({out, ins}, from a VS Code
+        // hover link's `?sig=` — see doc-links.jsx's parseSigHint), returns
+        // the group index to pre-select (-1 if none), disambiguating via hint.ins.
+        // Stable empty fallbacks: inline `[]`/`{}` literals get a new
+        // identity every render, defeating React.memo on consumers like
+        // PortTable — kept module-level so identity never changes.
         const EMPTY_TABLES = [];
         const EMPTY_COLUMNS = [];
 
@@ -80,22 +45,9 @@
             return candidates[0];
         };
 
-        // Which table(s) to render for the current selection: documented
-        // nodes with SEVERAL port tables under one heading (e.g.
-        // `multiply`: scalar/vector table + matrixNN table) narrow to the
-        // ONE table matching the selected signature's output type once
-        // there's more than one live signature to choose from — otherwise
-        // every table renders stacked, which reads as duplicated content.
-        // Single-table documented nodes are unaffected. Undocumented nodes
-        // show the ONE auto-generated table matching the selected group.
-        // groupDefVersions and dedupeDefsBySignature (js/docs/port-
-        // tables.jsx) walk the SAME getMatchingNodeDefs(name) list in the
-        // same order with the same signature key (nodeDefSigKey), so index
-        // `sig` lines up across sigGroups and autoDoc.tables — see
-        // buildAutoTablesFromDefs. The `sigCount > 1` gate here must stay
-        // in sync with the same gate on typesOverride/defaultsOverride at
-        // the call site below (all three only read live nodedef data once
-        // there's more than one signature to disambiguate with).
+        // Which table(s) to render: narrows multi-table documented nodes to
+        // the ONE table matching the selected signature. Keep `sigCount > 1`
+        // here in sync with the same gate on typesOverride/defaultsOverride below.
         const resolveDisplayTables = (portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables) =>
             portTables.length > 0
                 ? (portTables.length > 1 && sigCount > 1 && selectedGroup
@@ -104,24 +56,17 @@
                 : (sigCount > 1 ? [autoDoc && autoDoc.tables && autoDoc.tables[sig]].filter(Boolean)
                     : effectiveTables);
 
-        // Previewability decided from the selected signature's exact types
-        // (group/version data), passed down to Node3DPreview — the
-        // previewer must not re-derive signature info from nodedefs.
-        // Returns a user-facing notice string when the signature can't be
-        // previewed in isolation, else null (also null before the groups
-        // have loaded, and for multi-output/translation signatures, which
-        // the previewer decides on its own — see its working translation
-        // branch).
+        // Decides previewability from the selected signature's exact types
+        // and passes it to Node3DPreview (which must not re-derive it from
+        // nodedefs). Returns a notice string when unpreviewable, else null.
         const resolvePreviewDisabled = (selectedGroup, selectedVersion, selectedNode) => {
             if (!selectedGroup || !selectedVersion) return null; // groups not loaded — previewer decides
             const CLOSURE = ['BSDF', 'EDF', 'VDF'];
             const VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vector4'];
             const out = selectedGroup.type;
-            // '+'-joined multi-output signature, or the literal 'multioutput'
-            // type string a real multi-output nodedef's getType() returns —
-            // no single primary output type to gate on; multioutput
-            // signatures (including translation graphs) are deferred to the
-            // previewer, which has a working translation branch.
+            // '+'-joined multi-output signature, or the literal
+            // 'multioutput' string nodedef.getType() returns: no single
+            // output type to gate on — deferred to the previewer instead.
             if (!out || out.indexOf('+') !== -1 || out === 'multioutput') return null;
             const inTypes = Object.values(selectedVersion.inputTypes || {});
             const hasClosureInput = inTypes.some((t) => CLOSURE.indexOf(t) !== -1);
@@ -148,18 +93,13 @@
             // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
             // set synchronously in <head> before first paint.
             const EMBED = !!window.__MTLX_EMBED;
-            // inline: this instance is mounted directly inside the graph
-            // editor's docs dialog (part 2), not routed/iframed. It wants the
-            // exact same stripped-down, single-column, no-sidebar rendering
-            // that embed mode already implements — but EMBED is a parse-time
-            // module const, so it can't express "this instance happens to be
-            // embedded in the same page". chromeless covers both cases.
+            // inline: mounted in the graph editor's docs dialog, wanting
+            // embed mode's stripped-down layout. chromeless covers both,
+            // since EMBED (a parse-time const) can't express this case.
             const chromeless = inline || EMBED;
-            // True when hosted inside the VS Code extension's webview (set by
-            // its bootstrap before any site script runs). Distinct from
-            // chromeless: this gates affordances that are meaningless in the
-            // webview specifically (e.g. copying a permalink URL), not the
-            // embed/inline single-node layout.
+            // True when hosted inside the VS Code extension's webview (set
+            // by its bootstrap). Distinct from chromeless: this gates
+            // webview-only affordances (e.g. copying a permalink), not layout.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             // Kept current every render so the mtlx-open-node listener below
             // (registered once per jsonData load) can gate on the LATEST
@@ -170,14 +110,9 @@
             // load can race with the user switching shell views (which rewrites
             // location.hash to a '#!' route and would lose a docs deep link).
             const initialHashRef = React.useRef(window.location.hash);
-            // A signature hint (`{name, hint}`, hint from hashToSel's
-            // sel.sigHint) waiting to be applied to the Signature
-            // dropdown once nodeVersionGroups has loaded for the node it
-            // targets — set at the two hash-driven selection sites below
-            // (applyData's fromHash branch, onNav), consumed at most once
-            // by the effect right after the nodeVersionGroups effect
-            // further down. A ref, not state: it's read/written across
-            // renders but never itself drives one.
+            // A pending sig hint (`{name, hint}`, from hashToSel's sel.sigHint),
+            // applied to the Signature dropdown once nodeVersionGroups loads.
+            // A ref, not state: it must not itself trigger a render.
             const pendingSigRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
@@ -186,23 +121,17 @@
             const [sigIndex, setSigIndex] = React.useState(0);
             React.useEffect(() => {
                 setSigIndex(0);
-                // A pending sig hint targets ONE specific node by name.
-                // If the selection driving this effect is for a
-                // DIFFERENT node than the pending hint's — e.g. the hint
-                // was set by a hash navigation, then something else (a
-                // sidebar click, browser back) changed the selection
-                // again before the consumer effect below ever got a
-                // chance to run — the hint is stale for this node and
-                // must not be applied to it.
+                // A pending sig hint targets ONE specific node by name;
+                // if this selection is for a different node (e.g. a
+                // sidebar click raced the hint before consumption), drop it.
                 if (pendingSigRef.current && selectedNode && pendingSigRef.current.name !== selectedNode.name) {
                     pendingSigRef.current = null;
                 }
             }, [selectedNode]);
             const [copied, setCopied] = React.useState(false);
-            // Resolve doc links that point at a spec #node-... anchor to a
-            // node in the loaded database (anchors and node names both get
-            // separators stripped so hyphenated and squashed conventions both
-            // match). Known → select in-app; unknown → official page.
+            // Resolves doc links pointing at a spec #node-... anchor to a
+            // loaded node (separators stripped from both sides so
+            // hyphenated/squashed spellings match); unknown → official page.
             React.useEffect(() => {
                 if (!jsonData) return undefined;
                 const index = {};
@@ -218,10 +147,9 @@
                 // clickable only when they resolve to a known node.
                 window.__mtlxNodeIndex = index;
                 const onOpen = (e) => {
-                    // Only the ACTIVE instance reacts: a kept-alive docs view
-                    // and an inline dialog instance (part 2) can both be
-                    // mounted at once, and only one should respond to a
-                    // single click.
+                    // Only the ACTIVE instance reacts: a kept-alive docs
+                    // view and an inline dialog instance can both be
+                    // mounted at once; only one should respond per click.
                     if (!activeRef.current) return;
                     const hit = index[e.detail.key];
                     if (hit) {
@@ -243,11 +171,9 @@
                 };
             }, [jsonData]);
 
-            // KaTeX defer-load upgrade (raw text -> rendered math once
-            // window.katex arrives) is now handled by MathText itself via
-            // js/docs/rich-text.jsx's useKatexReady() — App no longer needs
-            // its own poll/state for this (removed; nothing else consumed
-            // the old setKatexReady, confirmed by grep).
+            // KaTeX defer-load is now handled by MathText itself via
+            // rich-text.jsx's useKatexReady(); App no longer needs its
+            // own poll/state for this.
 
             // State to keep track of which tree folders are open
             const [expandedLibs, setExpandedLibs] = React.useState({});
@@ -259,13 +185,9 @@
                 setSelectedNode(null);
                 setDataSource(source);
 
-                // A permalink (#/lib/group/name) wins over the default first node.
-                // If the CURRENT hash is a shell route ('#!...'), the user switched
-                // views while the spec DB was loading — fall back to the hash the
-                // page landed on so the deep-linked node is still selected.
-                // inline: there's no page hash to read at all — the dialog
-                // passes the initial selection via the initialHash prop
-                // instead (read once here, same as the hash snapshot below).
+                // A permalink (#/lib/group/name) wins over the default first
+                // node. A '#!...' hash means a view switch raced the spec-DB
+                // load — fall back to the landed hash; inline uses initialHash.
                 let hashForSel;
                 if (inline) {
                     hashForSel = initialHash || '';
@@ -277,22 +199,17 @@
                 if (fromHash) {
                     setExpandedLibs({ [fromHash.lib]: true });
                     setExpandedGroups({ [`${fromHash.lib}-${fromHash.group}`]: true });
-                    // A `?sig=` hint on this hash (VS Code hover deep
-                    // link only — see doc-links.jsx's parseSigHint) is
-                    // queued for the new-effect consumer below; set
-                    // right before setSelectedNode so the sigIndex-reset
-                    // effect above sees a pending hint whose name already
-                    // matches this selection.
+                    // A `?sig=` hint (VS Code hover deep link only — see
+                    // doc-links.jsx's parseSigHint) is set right before
+                    // setSelectedNode, so the sigIndex-reset effect above sees it.
                     pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
                     setSelectedNode(fromHash);
                     return;
                 }
 
-                // Default landing node: OpenPBR's surface shader when the
-                // data has it — the flagship uber-shader is a far better
-                // first impression (and a parameter-rich preview) than
-                // whatever node happens to sort first. Falls back to the
-                // first node of the first library/group otherwise.
+                // Default landing node: OpenPBR's surface shader when
+                // present — a far better first impression (and a
+                // parameter-rich preview) than whatever sorts first.
                 let def = null;
                 for (const lib of Object.keys(parsedData)) {
                     for (const group of Object.keys(parsedData[lib])) {
@@ -322,18 +239,9 @@
                 }
             };
 
-            // Keep the address bar in sync with the selection (permalink), and
-            // react to back/forward + manual hash edits. replaceState updates
-            // the bar WITHOUT pushing a new history entry (and without firing
-            // hashchange, so no feedback loop) — a deliberate choice
-            // (CONFIRMED decision, 2026-07-29): browsing between nodes no
-            // longer stacks up one Back-button press per node clicked, so a
-            // single Back exits docs entirely; the URL is still updated on
-            // every selection, so permalinks/refresh/sharing keep working.
-            // Only write the URL while the docs view is VISIBLE — a late
-            // spec-DB load while another shell view is active must not stomp
-            // the shell's '#!' route; when the view becomes active again,
-            // this re-runs and restores the node permalink.
+            // Keeps the address bar in sync via replaceState (no history
+            // entry, no hashchange feedback loop) — one Back exits docs
+            // entirely. Only writes while VISIBLE (skips stomping other views).
             React.useEffect(() => {
                 // An inline instance (mounted inside the graph editor's docs
                 // dialog) must NEVER touch the parent page's URL/history —
@@ -384,17 +292,9 @@
                 }
             };
 
-            // Load the pregenerated node documentation JSON (see
-            // scripts/build-nodelib.mjs): js/gen/nodelib.json is the
-            // Layer-1 spec-derived database (same shape applyData always
-            // expected); js/gen/nodelib-index.json is the Layer-2
-            // per-category metadata (sigGroups/autoTables/defPorts/impl,
-            // plus allTargets) consumed via the `genData` state below by
-            // the autoDoc/nodeVersionGroups memos and the
-            // ImplTargetMatrix/NodeDefPortsTable props further down. Both
-            // files are committed to the repo — there is no fallback: a
-            // failure here means a hosting/path problem, not a transient
-            // network hiccup, so the page shows the failed state.
+            // Loads the pregenerated node docs JSON: nodelib.json (Layer 1)
+            // + nodelib-index.json (Layer 2, feeds genData below). Both are
+            // committed — a failure here means a hosting/path bug.
             const [autoLoad, setAutoLoad] = React.useState('loading'); // loading | done | failed
             const [dataSource, setDataSource] = React.useState(null);
             const [genData, setGenData] = React.useState(null);
@@ -415,11 +315,9 @@
                     });
             }, []);
 
-            // Auto-generated port tables (for nodes with no spec
-            // documentation): read straight off genData, the pregenerated
-            // Layer-2 index (js/gen/nodelib-index.json) built by
-            // scripts/build-nodelib.mjs's buildAutoTablesFromDefs port
-            // (scripts/lib/nodedef-extract.mjs) — no live WASM read.
+            // Auto-generated port tables (nodes with no spec docs): read
+            // straight off genData, the pregenerated Layer-2 index — no
+            // live WASM read.
             const autoDoc = React.useMemo(() => {
                 if (!selectedNode || !genData) return null;
                 const name = selectedNode.name;
@@ -428,31 +326,17 @@
                 return { name, status: tables.length ? 'ready' : 'unavailable', tables };
             }, [selectedNode, genData]);
 
-            // VERSION metadata (standard_surface 1.0.1 default / 1.0.0, …)
-            // for EVERY selection — documented or not — read straight off
-            // genData.nodes[name].sigGroups, the pregenerated Layer-2 index
-            // built by scripts/build-nodelib.mjs's groupDefVersions port
-            // (scripts/lib/nodedef-extract.mjs). Intentionally UNFILTERED
-            // across libraries in that build step: ambiguous categories
-            // ('multiply' is stdlib math AND pbrlib BSDF/EDF/VDF) list every
-            // signature; the previewer itself notices the un-compilable
-            // closure ones instead of hiding them here. One entry per type
-            // signature, same grouping node-graph.html's groupSignatures uses.
+            // VERSION metadata for EVERY selection, read off
+            // genData.nodes[name].sigGroups — intentionally UNFILTERED
+            // (e.g. 'multiply' lists every signature); previewer hides the rest.
             const nodeVersionGroups = React.useMemo(() => {
                 if (!genData || !selectedNode) return null;
                 const entry = genData.nodes[selectedNode.name];
                 return (entry && entry.sigGroups) || null;
             }, [selectedNode, genData]);
-            // Consumes a pending sig hint (queued at the two hash-driven
-            // selection sites above) exactly once nodeVersionGroups has
-            // actually loaded for the CURRENTLY selected node — matching
-            // needs live group/version data (matchSigHintToGroups reads
-            // each candidate group's default version's inputTypes),
-            // which only exists once the nodeVersionGroups effect above
-            // resolves. The hint is consumed (pendingSigRef.current
-            // nulled) even on a no-match/idx<=0 result, not just a
-            // successful one, so it's applied at most once and never
-            // leaks into a later, unrelated selection.
+            // Consumes a pending sig hint once nodeVersionGroups has loaded
+            // for the selected node (matching needs live version data).
+            // Cleared even on a no-match, so it applies at most once.
             React.useEffect(() => {
                 const pending = pendingSigRef.current;
                 if (!pending || !selectedNode || pending.name !== selectedNode.name) return;
@@ -461,10 +345,9 @@
                 const idx = matchSigHintToGroups(nodeVersionGroups, pending.hint);
                 if (idx > 0) setSigIndex(idx);
             }, [nodeVersionGroups, selectedNode]);
-            // Which VERSION is selected within the currently resolved
-            // signature group — reset whenever the selection or signature
-            // changes (a different signature may resolve to a different
-            // group with its own default).
+            // Which VERSION is selected within the resolved signature
+            // group — reset on selection/signature change, since a
+            // different signature may resolve to a different default.
             const [versionIndex, setVersionIndex] = React.useState(0);
             React.useEffect(() => { setVersionIndex(0); }, [selectedNode, sigIndex]);
 
@@ -503,26 +386,16 @@
                 try { localStorage.setItem('mtlx_show_previews', nv ? '1' : '0'); } catch (e) { /* best-effort */ }
                 return nv;
             });
-            // Warm the MaterialX module so the version badge in the shared
-            // header resolves (the engine dispatches 'mtlx-version'; the
-            // header listens) and the first 3D preview doesn't pay the WASM
-            // download. Docs BROWSING itself is fully WASM-free now (the
-            // node database and all its metadata come from the pregenerated
-            // js/gen/ JSON, loaded above) — the engine is only ever needed
-            // for 3D previews, so only warm it once previews are actually
-            // enabled (still gets the badge live-upgrade from whichever
-            // view first loads the engine, since 'mtlx-version' is a
-            // window-level event the shared header listens for regardless
-            // of which view triggered it).
+            // Warms the MaterialX module so the header's version badge
+            // resolves and the first preview skips the WASM download.
+            // Docs browsing itself is WASM-free — only warm once previews are enabled.
             React.useEffect(() => {
                 if (!showPreviews) return;
                 getMxEnv().catch(() => {});
             }, [showPreviews]);
-            // Embed mode: the graph editor posts visibility when its docs dialog
-            // hides/shows this iframe — pause the 3D preview loop while hidden
-            // (display:none does not stop the iframe's rAF). Deliberately NOT
-            // togglePreviews: that would persist to localStorage and pollute the
-            // full page's preference.
+            // Embed mode: pauses the 3D preview loop when the graph editor's
+            // docs dialog hides this iframe (display:none doesn't stop rAF).
+            // Not togglePreviews — that would pollute the full page's setting.
             React.useEffect(() => {
                 if (!EMBED) return undefined;
                 const onMsg = (e) => {
@@ -625,12 +498,9 @@
             // Chevron icons for the tree view now live in js/docs/sidebar.jsx
             // (moved with DocsSidebar, their only consumer).
 
-            // Memoized (not recomputed every render): portTables/columns/
-            // typesOverride/refs feed React.memo'd PortTable/MathText/
-            // RichBlocks as props — an inline recompute would hand them a
-            // fresh array/object identity every render (including every
-            // sidebar-search keystroke, which re-renders App but touches
-            // none of this node's underlying data) and defeat the memo.
+            // Memoized so portTables/columns/typesOverride/refs keep a
+            // stable identity for React.memo'd PortTable/MathText/RichBlocks
+            // — an inline recompute would defeat the memo on unrelated re-renders.
             const portTables = React.useMemo(
                 () => selectedNode ? getPortTables(selectedNode.info) : EMPTY_TABLES,
                 [selectedNode]
@@ -641,28 +511,22 @@
             const isAutoTable = portTables.length === 0 && autoReady && autoDoc.tables.length > 0;
             const effectiveTables = portTables.length > 0 ? portTables
                 : (isAutoTable ? autoDoc.tables : EMPTY_TABLES);
-            // Signature selection: the dropdown is now driven by the live
-            // nodedef VERSION GROUPS (nodeVersionGroups), not by counting
-            // markdown tables — a node like fractal3d has ELEVEN nodedefs
-            // (several sharing an output type but differing by the
-            // `amplitude` input type) collapsed into ONE markdown table, so
-            // effectiveTables.length alone could never surface them.
+            // Signature selection is driven by live nodedef VERSION GROUPS,
+            // not by counting markdown tables — fractal3d has ELEVEN
+            // nodedefs collapsed into ONE table, invisible to effectiveTables.length.
             const sigGroups = nodeVersionGroups || [];
             const sigCount = sigGroups.length;
             const sig = Math.min(sigIndex, Math.max(sigCount - 1, 0));
             const selectedGroup = sigGroups[sig] || null;
-            // Which table(s) to render — see resolveDisplayTables above for
-            // the full selection rules (documented multi-table narrowing,
-            // undocumented auto-table pick, sigGroups/autoDoc.tables index
-            // alignment).
+            // Which table(s) to render — see resolveDisplayTables above
+            // for the full selection rules.
             const displayTables = React.useMemo(
                 () => resolveDisplayTables(portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables),
                 [portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables]
             );
             // Concrete type this signature previews as (null → auto-pick).
-            // While nodeVersionGroups is still loading (async), fall back to
-            // the markdown-table-derived heuristic so the preview isn't
-            // blocked on it.
+            // Falls back to the markdown-table heuristic while
+            // nodeVersionGroups is still loading, so preview isn't blocked.
             const previewType = selectedGroup ? selectedGroup.type
                 : (effectiveTables.length > 0 ? signaturePreviewType(effectiveTables[0]) : null);
             // The VERSION picker (same/multiple defaults within a signature)
@@ -672,11 +536,9 @@
             const versionIdx = selectedGroup
                 ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
             const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
-            // Markdown tables carry only ONE signature's worth of port rows,
-            // so once several signatures exist, the selected version's live
-            // type/default data must be projected onto them — otherwise a
-            // dropdown pick that doesn't match the spec's authored signature
-            // would show stale types/defaults.
+            // Markdown tables carry only ONE signature's port rows, so once
+            // several exist, the selected version's live type/default data
+            // must be projected onto them, or a picked signature shows stale data.
             const typesOverride = React.useMemo(
                 () => (sigCount > 1 && selectedVersion && portTables.length > 0)
                     ? { ...selectedVersion.inputTypes, ...selectedVersion.outputTypes } : null,
@@ -699,11 +561,9 @@
             // Footnote references: map key -> {n, url, text}, numbered by
             // order of first appearance (the parser preserves that order).
             const references = (selectedNode && selectedNode.info.references) || [];
-            // Keyed on selectedNode, NOT references: references falls back
-            // to a fresh `[]` on every render when info.references is
-            // absent, so depending on it would defeat the memo (a "changed"
-            // dependency on every render) even though the underlying data
-            // for this node hasn't changed.
+            // Keyed on selectedNode, not references: a missing
+            // info.references falls back to a fresh `[]` every render,
+            // which would defeat the memo even though data hasn't changed.
             const refs = React.useMemo(() => {
                 const map = {};
                 references.forEach((r, i) => { map[r.key] = { n: i + 1, url: r.url, text: r.text }; });
@@ -727,33 +587,25 @@
                         </div>
                     )}
 
-                    {/* Help popup — js/docs/sidebar.jsx's DocsHelpDialog (a
-                        portal directly under <body>, see its own comment).
-                        App keeps the showHelp state and useEscapeToClose
-                        call above; DocsHelpDialog just gets open/onClose. */}
+                    {/* Help popup — js/docs/sidebar.jsx's DocsHelpDialog. App
+                        keeps the showHelp state and useEscapeToClose above;
+                        DocsHelpDialog just gets open/onClose. */}
                     {!chromeless && <DocsHelpDialog open={showHelp} onClose={() => setShowHelp(false)} />}
 
                     {jsonData && (
-                        /* md+: the grid absorbs all height left between the
-                           page top and the disclaimers; both panels scroll
-                           internally. The 20rem floor keeps the panels usable
-                           on very short desktop windows by letting the page
-                           scroll again instead of squishing them further. */
+                        /* md+: the grid absorbs all height between the page
+                           top and disclaimers; panels scroll internally. The
+                           20rem floor avoids squishing them on short windows. */
                         <div className={chromeless
                             ? 'grid grid-cols-1 gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]'
                             : (sidebarCollapsed
-                                /* md:-m-6: cancels the shell wrapper's sm:p-6 page
-                                   padding (the active padding at md+) so the collapsed
-                                   doc view runs edge-to-edge; md-scoped because the
-                                   collapse itself only exists at md+. md:gap-0: the
-                                   auto column below holds the collapsed strip, which
-                                   should sit flush against the doc pane rather than
-                                   gapped from it. */
+                                /* md:-m-6 cancels the shell's page padding
+                                   for edge-to-edge (md-scoped: collapse only
+                                   exists at md+); md:gap-0 keeps the strip flush. */
                                 ? 'grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:gap-0 md:flex-1 md:min-h-[20rem] md:-m-6'
-                                // Expanded: size the sidebar (first) column to its min-content
-                                // — exactly wide enough for DocsSidebar's filter tri-state +
-                                // "3D Preview" row on one line, and no wider. The doc pane's
-                                // three columns stay minmax(0,1fr) and absorb all remaining width.
+                                // Expanded: sizes the sidebar column to its min-content —
+                                // just wide enough for the filter tri-state + "3D Preview"
+                                // row. The doc pane's columns stay minmax(0,1fr).
                                 : 'grid grid-cols-1 md:grid-cols-[min-content_repeat(3,minmax(0,1fr))] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
 
                             {/* Vertical twin of the footer's collapsed "Disclaimer" strip: a slim
@@ -774,11 +626,9 @@
                                 </div>
                             )}
 
-                            {/* Left Sidebar: Hierarchical Tree Menu — js/docs/sidebar.jsx's
-                                DocsSidebar. App owns all the state/derived data below
-                                and passes it down as props. Always mounted (not just when
-                                expanded) so its state survives collapse/expand and it keeps
-                                rendering stacked on narrow (<md) viewports. */}
+                            {/* Left Sidebar: js/docs/sidebar.jsx's DocsSidebar. App owns
+                                the state/derived data below. Always mounted (not just
+                                when expanded) so its state survives collapse/expand. */}
                             {!chromeless && (
                                 <DocsSidebar
                                     treeData={treeData}
@@ -846,9 +696,8 @@
                                                     </a>
                                                 )}
                                                 {/* Under VS Code the webview's origin makes a copied
-                                                    URL meaningless, so hide the button entirely. Gated
-                                                    on IN_VSCODE, not chromeless/inline — this is about
-                                                    the webview host, not the embed/inline layout. */}
+                                                    URL meaningless, so hide the button. Gated on
+                                                    IN_VSCODE, not chromeless/inline — this is host-specific. */}
                                                 {!IN_VSCODE && (
                                                 <button
                                                     onClick={copyPermalink}
@@ -875,10 +724,9 @@
                                             </div>
                                         </div>
 
-                                        {/* INJECTED 3D PREVIEW — wrapped in PreviewErrorBoundary
-                                            since previews touch wasm/GL and a render throw here
-                                            would otherwise blank the whole page (no other error
-                                            boundary exists anywhere in the app). */}
+                                        {/* Wrapped in PreviewErrorBoundary since previews touch
+                                            wasm/GL and a render throw here would otherwise blank
+                                            the whole page — no other error boundary exists. */}
                                         <PreviewErrorBoundary>
                                         <Node3DPreview
                                             nodeName={selectedNode.name}

@@ -1,32 +1,20 @@
 // rich-text.jsx — inline markdown/math rendering for node prose: KaTeX
-// math spans, footnote references, cross-reference chips, and paragraph/
-// sub-heading blocks. Split out of doc-ui.jsx (Phase 3) — pure move, no
-// behavior change. Loaded as text/babel; Babel executes each file in its
-// own function scope, so the public API is exported onto window at the
-// bottom.
+// math spans, footnote refs, cross-reference chips, and paragraph/
+// sub-heading blocks. Loaded as text/babel, so each file runs in its
+// own function scope — the public API is exported onto window below.
 
-        // ------------------------------------------------------------------
-        // Rich text: node prose may contain $inline$ / $$display$$ math
-        // spans (preserved verbatim by the parser) and footnote references
-        // like [^Oren1994]. Math renders via KaTeX; footnote refs render as
-        // superscript numbered links into the node's reference list. If
-        // KaTeX failed to load or a span doesn't parse, the raw text shows
-        // instead so nothing is ever lost.
-        // ------------------------------------------------------------------
-        // Node prose may also contain simple inline HTML from the spec
-        // markdown, e.g. "m<sup>−1</sup>" in anisotropic_vdf's absorption
-        // docs. Without explicit handling, the angle-token styler below
-        // renders "<sup>" as a node-reference chip and leaves "</sup>" as
-        // raw text. Captured here (top priority in the split) and rendered
-        // as REAL superscript/subscript elements.
+        // $inline$/$$display$$ math and [^footnote] refs render via
+        // KaTeX; unrendered/failed spans fall back to raw text so
+        // nothing is lost.
+        // Spec markdown may embed raw <sup>/<sub> HTML, e.g. "m<sup>−1</sup>"
+        // — captured here at top priority so the angle-token styler
+        // below doesn't mis-render it as a node-reference chip.
         const RICH_SPLIT_RE = /(\$\$[^$]+\$\$|\$[^$\n]+\$|\[\^[^\]\s]+\]|<sup>[^<]*<\/sup>|<sub>[^<]*<\/sub>)/g;
         const FOOTNOTE_RE = /^\[\^([^\]\s]+)\]$/;
 
-        // Inline styling for plain prose: numeric vectors like
-        // [0.001, 0.001, 0.01] and MaterialX node names in angle brackets like
-        // <image> render in the monospace table font (a vector needs >=2
-        // comma-separated numbers; an angle token must start with a letter, so
-        // "a < b" isn't matched).
+        // Plain-prose styling: vectors like [0.001, 0.001, 0.01] and
+        // <nodename> tokens render in monospace. Vector needs >=2
+        // comma-sep numbers; token must start with a letter ("a < b" is safe).
         const INLINE_STYLE_RE = /(\[\s*[+-]?\d[\d.eE+-]*(?:\s*,\s*[+-]?\d[\d.eE+-]*)+\s*\]|<[A-Za-z_][\w.:-]*>)/g;
         const MONO = 'font-mono text-[0.9em] bg-gray-900/70 border border-gray-700 rounded px-1 py-0.5';
         const styleInlinePlain = (text, kp) => {
@@ -37,9 +25,9 @@
                     return <code key={kp + 'v' + i} className={MONO + ' text-amber-300'}>{part}</code>;
                 }
                 if (part[0] === '<' && part[part.length - 1] === '>') {
-                    // Cross-reference: a <nodename> token that matches a node in
-                    // the loaded database navigates to it in-app. Unknown tokens
-                    // (ports, placeholders like <geomname>) stay plain chips.
+                    // Cross-reference: <nodename> tokens that match a loaded
+                    // node navigate to it in-app; unknown tokens (ports,
+                    // placeholders like <geomname>) stay plain chips.
                     const inner = part.slice(1, -1);
                     const idx = window.__mtlxNodeIndex;
                     const key = /^[A-Za-z0-9_-]+$/.test(inner) ? inner.replace(/[-_]/g, '').toLowerCase() : null;
@@ -58,10 +46,9 @@
                 return <React.Fragment key={kp + 't' + i}>{part}</React.Fragment>;
             });
         };
-        // Markdown links preserved by the parser: [text](https://...).
-        // Links into a spec's #node-... anchor open the node IN-APP when we
-        // know it (via the mtlx-open-node event the App listens for); anything
-        // else opens the official page in a new tab.
+        // Markdown links [text](https://...): a spec's #node-... anchor
+        // opens the node in-app (via mtlx-open-node) when known;
+        // anything else opens the official page in a new tab.
         const DOC_LINK_RE = /\[([^\]^][^\]]*)\]\((https?:[^)\s]+)\)/g;
         const SPEC_NODE_ANCHOR_RE = /documents\/Specification\/[^#)\s]*#(node-[A-Za-z0-9_-]+)/;
         const openDocLink = (url) => {
@@ -99,20 +86,9 @@
             return out;
         };
 
-        // ------------------------------------------------------------------
-        // KaTeX render cache: renderToString is synchronous and re-parses
-        // its input from scratch, and without memoization it re-runs for
-        // EVERY math span (description + notes + every port-table cell) on
-        // EVERY App render — including every sidebar-search keystroke — and
-        // scales with port count (why standard_surface's port-heavy tables
-        // are far slower to render than add's). Keys are the bounded set of
-        // distinct math spans shipped in the node library, not user input,
-        // so an unbounded cache is fine. Parse failures cache as null
-        // (never re-thrown) so a broken span fails once, not on every
-        // render; the raw text renders instead, same as before this cache
-        // existed. NEVER consult/populate this while window.katex is
-        // absent — callers must keep gating on it themselves.
-        // ------------------------------------------------------------------
+        // Cache: renderToString is synchronous and re-parses every call,
+        // so without it every math span re-renders on every App render
+        // (e.g. each keystroke). Never touch it while window.katex is absent.
         const KATEX_CACHE = new Map();
         const renderKatex = (src, displayMode) => {
             const key = (displayMode ? 'D:' : 'I:') + src;
@@ -127,14 +103,9 @@
             return html;
         };
 
-        // ------------------------------------------------------------------
-        // KaTeX loads with `defer`, so MathText can first render before
-        // window.katex exists (math spans show raw). useKatexReady() lets a
-        // component upgrade once it arrives — a single module-level poll
-        // starts lazily on first subscriber and stops itself the moment
-        // window.katex shows up, notifying every subscriber to re-render,
-        // instead of each mounted MathText running its own 200ms timer.
-        // ------------------------------------------------------------------
+        // KaTeX loads via `defer`, so it may not exist on first render
+        // (math shows raw until then). One shared module-level poll
+        // notifies all useKatexReady() subscribers once it arrives.
         const katexSubs = new Set();
         let katexPollTimer = null;
         const startKatexPoll = () => {
@@ -159,12 +130,9 @@
         }
 
         const MathText = React.memo(function MathText({ text, refs }) {
-            // Return value intentionally unused: subscribing here is what
-            // makes MathText re-render once KaTeX finishes loading, so a
-            // span that fell back to raw text on first paint upgrades to
-            // rendered output — without this, React.memo below (props
-            // unchanged) would skip that re-render and the raw text would
-            // stick forever.
+            // Return value unused: subscribing here re-renders MathText
+            // once KaTeX loads. Without it, React.memo (props unchanged)
+            // would skip that re-render and raw-text spans would stick.
             useKatexReady();
             if (text == null || text === '') return null;
             const parts = String(text).split(RICH_SPLIT_RE);
@@ -219,9 +187,8 @@
             );
         });
 
-        // Renders multi-paragraph prose (description / notes): paragraphs
-        // are separated by \n\n; a paragraph starting with '#'s is a
-        // sub-heading (e.g. "#### Reflectance Equations"); a standalone
+        // Renders multi-paragraph prose: split on \n\n; a paragraph
+        // starting with '#'s becomes a sub-heading; a standalone
         // "$$...$$" paragraph becomes a centered display equation.
         const SUBHEADING_RE = /^#{1,6}\s+(.*)$/;
 
@@ -250,9 +217,8 @@
 
         // ---- public API ----
         // styleInlinePlain/styleInline/openDocLink have no consumers
-        // outside this file (checked repo-wide, word-boundary grep) — kept
-        // as declarations (used internally by MathText/styleInline) but
-        // omitted from the export list.
+        // outside this file (repo-wide grep checked) — used internally
+        // only, so they're omitted from the export below.
         Object.assign(window, {
             MathText, RichBlocks,
         });

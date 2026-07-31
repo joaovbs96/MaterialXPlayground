@@ -1,36 +1,22 @@
-// Extracted verbatim from the inline <script type="text/babel"> block in
-// material-viewer.html (pure move, no behavior change; original 8-space
-// indentation preserved as-is).
-        // material-viewer — drag & drop a MaterialX document and render it
-        // with the SAME pipeline the per-node previews use (createMtlxRenderView
-        // in js/mtlx-engine.js). Accepts:
-        //   - a single .mtlx file
-        //   - a .mtlx plus loose texture files
-        //   - a .mtlx plus a (sub)folder of textures  (Chrome/Edge/Firefox
-        //     directory drops via webkitGetAsEntry)
-        //   - a .zip containing any of the above
-        // Textures referenced by relative path in the document are matched
-        // against the dropped files (exact path, then suffix, then basename).
+        // material-viewer — drag & drop a MaterialX document (alone, with
+        // loose/foldered textures, or as a .zip) and render it with the
+        // same pipeline the per-node previews use (createMtlxRenderView in
+        // js/mtlx-engine.js). Dropped textures are matched to references
+        // by relative path (exact, then suffix, then basename).
+        // Extracted verbatim from material-viewer.html's inline script;
+        // original 8-space indentation preserved as-is.
 
         const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
 
-        // Loaded automatically on page open (like the official viewer's
-        // default selection) — the official OpenPBR default material from
-        // the MaterialX repository. Resolved through window.MtlxAssets
-        // (js/mtlx-assets.js) rather than a hardcoded raw.githubusercontent.com
-        // URL, so a future offline/packaged build serves it from the local
-        // vendor mirror instead — see mtlx-assets.js's header comment. Safe
-        // to call at module-load time (not deferred/lazy): this view's
-        // babelScripts manifest only loads after js/shell.jsx's
-        // loadViewDeps has already awaited MtlxAssets.ready, so the probe
-        // has settled by the time this line executes.
+        // Official OpenPBR default material, resolved via window.MtlxAssets
+        // (not a hardcoded URL) so a future offline build can serve it
+        // locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
         const DEFAULT_MATERIAL_URL =
             window.MtlxAssets.repoUrl('resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx');
 
         // normPath, readDroppedItems, expandZips, findFileForRef,
-        // resolveIncludes and readMtlxText now live in js/mtlx-engine.js
-        // (loaded before this script) and are used here as window globals
-        // like the rest of the shared engine API.
+        // resolveIncludes, readMtlxText live in js/mtlx-engine.js (loaded
+        // before this script), used here as window globals.
 
         // ---- Document loading ---------------------------------------------
 
@@ -42,11 +28,9 @@
             if (typeof mx.readFromXmlString !== 'function') {
                 throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
             }
-            // CRITICAL: readFromXmlString is ASYNC in the JS bindings (it's a
-            // custom post-JS implementation so it can fetch XIncludes) and
-            // returns a Promise. Without the await, the renderable scan below
-            // ran against a still-EMPTY document — which presented as
-            // "parsed, but contains no renderable material" for every file.
+            // CRITICAL: readFromXmlString is ASYNC (a custom post-JS
+            // implementation that fetches XIncludes). Missing the await
+            // left the renderable scan below seeing a still-empty document.
             try {
                 await mx.readFromXmlString(doc, xmlText);
             } catch (e) {
@@ -56,9 +40,8 @@
             else doc.importLibrary(stdlib);
 
             // Renderables: material nodes' surfaceshader inputs first, then
-            // bare surfaceshader nodes as a fallback (see listDocRenderables,
-            // js/mtlx-engine.js, for the getMaterialNodes-not-always-bound
-            // caveat this scan works around).
+            // bare surfaceshader nodes as a fallback (see listDocRenderables
+            // in js/mtlx-engine.js for the caveat this works around).
             const renderables = listDocRenderables(doc);
             return { mx, gen, genContext, lightData, doc, renderables };
         };
@@ -70,17 +53,13 @@
         // ---- App ------------------------------------------------------------
 
         function MaterialViewerApp({ active = true } = {}) {
-            // True when hosted inside the VS Code extension's webview (set by
-            // its bootstrap before any site script runs). The editor is bound
-            // to a single opened .mtlx file, so browser-only / multi-document
-            // affordances (drop zone, file/folder pickers, document picker,
-            // send-to-editor, page-wide drag-drop) are hidden. Always false
-            // in the plain browser.
+            // True inside the VS Code extension webview (set by its bootstrap
+            // before any site script runs). The editor is bound to one opened
+            // .mtlx file, so browser-only affordances (drop zone, pickers) are hidden.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
-            // Lets a future multi-view shell pause this view's background work
-            // (WebGL render loop, global drag-drop) while another view is visible,
-            // without unmounting. Standalone material-viewer.html never passes
-            // this prop, so it defaults true and nothing changes there.
+            // Lets a future multi-view shell pause this view's background
+            // work (render loop, global drag-drop) without unmounting.
+            // Standalone material-viewer.html never passes it, so defaults true.
             const activeRef = React.useRef(active);
             activeRef.current = active;
             const canvasRef = React.useRef(null);
@@ -99,28 +78,23 @@
             const [error, setError] = React.useState(null);
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
-            // Compact-mode threshold (below Tailwind's `md` breakpoint):
-            // drives the toolbar's label/icon-only switch and the Files
-            // sidebar auto-collapse below. Declared here, ABOVE sidebarOpen,
-            // since its lazy initializer reads it — mirrors js/graph-app.jsx's
-            // narrow/paramsOpen ordering.
+            // Compact-mode threshold: drives the toolbar's label/icon switch
+            // and the Files sidebar auto-collapse. Declared above sidebarOpen
+            // since its lazy initializer reads it (mirrors graph-app.jsx).
             const narrow = useNarrowPane();
-            // Floating left "Files" sidebar (browser only) — ephemeral, mirroring
-            // the graph editor's paramsOpen (not persisted across reloads).
+            // Floating left "Files" sidebar (browser only) — ephemeral,
+            // mirroring the graph editor's paramsOpen (not persisted).
             const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
-            // Kept current every render so the transition effect below
-            // (crossing wide<->narrow) always sees the LATEST sidebar/narrow
-            // state instead of the value from first render — same idiom as
-            // js/graph-app.jsx's paramsOpenRef/narrowRef.
+            // Kept current every render so the wide<->narrow transition
+            // effect below always sees the latest state, not the value
+            // from first render (same idiom as graph-app.jsx's refs).
             const sidebarOpenRef = React.useRef(sidebarOpen);
             sidebarOpenRef.current = sidebarOpen;
             const narrowRef = React.useRef(narrow);
             narrowRef.current = narrow;
-            // Presets dialog ("Presets" overlay button): a curated list of
-            // official MaterialX example documents (MTLX_PRESETS in
-            // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks WHICH preset
-            // is fetching so the dialog can spin just that row while every
-            // row is disabled — mirrors js/graph-app.jsx's identical state.
+            // Presets dialog: curated official examples (MTLX_PRESETS in
+            // js/shared/mtlx-ui.jsx). presetsBusyPath tracks which row is
+            // fetching so only it spins while the whole list disables.
             const [presetsOpen, setPresetsOpen] = React.useState(false);
             const [presetsBusy, setPresetsBusy] = React.useState(false);
             const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
@@ -132,17 +106,10 @@
             const [busy, setBusy] = React.useState(false);
             const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
 
-            // --- Viewport controls (mirror the node previewer's) ---
-            // Shared with node-preview.jsx / graph/preview.jsx via
-            // useViewportControls (js/shared/mtlx-ui.jsx): camera
-            // auto-rotation pause (OFF by default — the model starts
-            // still), the environment-background toggle (IBL is always
-            // on), the view-epoch bump ViewportControls' Environment
-            // dialog watches to re-apply rotation/exposure/session
-            // override onto a fresh view after a rebuild, and fullscreen
-            // (the CONTAINER div goes fullscreen, not the canvas, so the
-            // overlaid viewport controls stay visible — the engine's
-            // ResizeObserver resizes the render buffer automatically).
+            // Viewport controls: shared with the previewers via
+            // useViewportControls (js/shared/mtlx-ui.jsx). Fullscreen
+            // targets the CONTAINER div (not the canvas) so the overlaid
+            // controls stay visible; the engine's ResizeObserver handles resizing.
             const viewportRef = React.useRef(null);
             // PNG snapshot base name — material + geometry, exactly as
             // before; read fresh by the hook on every screenshot.
@@ -157,10 +124,9 @@
                 isFullscreen, toggleFullscreen: onToggleFullscreen,
                 takeScreenshot: takeScreenshotRaw,
             } = useViewportControls(viewRef, viewportRef, getSnapshotBase);
-            // The hook's takeScreenshot has no internal try/catch (shared
-            // with the previewers, which swallow a failed snapshot
-            // silently) — the viewer instead surfaces it as an error
-            // banner, so that wrapping stays local to this call site.
+            // The hook's takeScreenshot has no internal try/catch (the
+            // previewers swallow failures silently); here it surfaces as
+            // an error banner instead, so the wrapping stays local.
             const takeScreenshot = () => {
                 try {
                     takeScreenshotRaw();
@@ -168,19 +134,17 @@
                     setError('Save PNG preview failed: ' + errMsg(e));
                 }
             };
-            // Hand the currently loaded document off to the node graph editor:
-            // serialize it, stash the loose (non-.mtlx) files alongside it, and
-            // let the shell's hash route swap views. The graph editor listens
-            // for 'mtlx-load-document' (see js/graph-app.jsx).
+            // Hand the loaded document to the graph editor: serialize it,
+            // stash loose files alongside, and let the shell's hash route
+            // swap views (listens for 'mtlx-load-document', graph-app.jsx).
             const sendToEditor = () => {
                 const loaded = loadedRef.current;
                 if (!loaded || !loaded.doc) return;
                 let xml;
                 try {
-                    // Item 9 belt-and-suspenders: strip any input that carries
-                    // both a value and a connection before handing the document
-                    // to the graph editor — self-heals documents loaded here
-                    // before this fix existed, not just ones built in this app.
+                    // Belt-and-suspenders: strip any input carrying both a
+                    // value and a connection before handing off — self-heals
+                    // documents loaded before this fix existed.
                     mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
                     xml = loaded.mx.writeToXmlString(loaded.doc);
                 } catch (e) {
@@ -192,13 +156,9 @@
                 openInGraphEditor({ xml, name, files });
             };
 
-            // Presets overlay button: fetch a curated official example
-            // .mtlx (fetchPresetFiles, js/shared/mtlx-ui.jsx) and hand it to
-            // ingest() much like a drag-drop. Unlike js/graph-app.jsx's
-            // loadPreset, there's no confirmReplace guard here — the viewer
-            // has no unsaved-edits concept, and a session replace is
-            // already unconditional (see ingest()'s SESSION SEMANTICS
-            // comment below).
+            // Fetch a curated example (fetchPresetFiles) and hand it to
+            // ingest() like a drag-drop. No confirmReplace guard, unlike
+            // graph-app.jsx's loadPreset: the viewer has no unsaved edits.
             const loadPreset = async (preset) => {
                 setPresetsBusy(true);
                 setPresetsBusyPath(preset.path);
@@ -225,13 +185,9 @@
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
 
-                // SESSION SEMANTICS: a drop that contains a .mtlx REPLACES any
-                // previous material session — old documents and textures don't
-                // pile up in memory or in the dropdown. Two merge exceptions:
-                //   - texture-only drops ADD to the current session
-                //     (the "drop the .mtlx first, textures after" flow), and
-                //   - an .mtlx drop MERGES when no session exists yet, so the
-                //     "textures first, then the document" flow keeps its files.
+                // SESSION SEMANTICS: an .mtlx drop REPLACES the current
+                // session (nothing accumulates), except it MERGES when no
+                // session exists yet; texture-only drops always ADD.
                 const hadSession = Object.keys(fileMapRef.current).some((k) => /\.mtlx$/i.test(k));
                 let merged;
                 if (droppedMtlx.length && hadSession) {
@@ -252,12 +208,9 @@
                     return;
                 }
                 if (droppedMtlx.length) {
-                    // One .mtlx → load it directly, no dropdown. Several in the
-                    // SAME drop → the dropdown (mtlxPaths.length > 1) appears.
-                    // A caller-supplied rootKey (e.g. loadPreset, below) wins
-                    // over the "exactly one .mtlx in the map" heuristic when
-                    // present, since a preset's own crawl may have pulled in
-                    // sibling .mtlx documents via xi:include alongside it.
+                    // One .mtlx loads directly; several in the same drop show
+                    // the dropdown. A caller-supplied rootKey (e.g. loadPreset)
+                    // wins, since a preset crawl may pull in sibling .mtlx via xi:include.
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1) ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
                     if (pick) loadDocument(pick, merged);
@@ -273,16 +226,9 @@
                 }
             };
 
-            // (No per-element drop handler: the window-level listeners above
-            // handle drops everywhere, including over the drop zone —
-            // duplicating them here would ingest every drop twice.)
-            // ---- Page-wide drag & drop ----
-            // Files can be dropped ANYWHERE on the page, not just on the drop
-            // zone (which stays, for its file/folder pickers). Listeners live
-            // on window; `ingestRef` always points at the latest ingest so the
-            // one-time registration never acts on stale state. The depth
-            // counter is needed because dragenter/dragleave fire for every
-            // child element crossed.
+            // ---- Page-wide drag & drop: files can drop anywhere, not just the
+            // drop zone (kept for its pickers); no per-element handler, to avoid
+            // ingesting twice. ingestRef keeps the one-time window listener current.
             const ingestRef = React.useRef(ingest);
             ingestRef.current = ingest;
             // Disabled under VS Code: the editor is bound to a single opened
@@ -295,35 +241,14 @@
                 disabled: IN_VSCODE,
             });
 
-            // ---- Receive a material handed off from the node graph editor
-            // (item F2.2's counterpart to the "Send to Editor" button below:
-            // js/graph-app.jsx's "Send to Viewer" button stashes the payload
-            // on window.__mtlxPendingViewerImport, dispatches
-            // 'mtlx-view-document', and jumps the hash to #!viewer). On
-            // arrival here there may already be a pending payload (checked
-            // once on mount) and/or more may arrive later while this tab
-            // stays open (the event). Routed through ingestRef, exactly like
-            // the drag-drop handler above — a .mtlx in the map already
-            // replaces the current session per ingest()'s own semantics, so
-            // no extra confirm dialog is needed here (unlike the graph
-            // editor's guardedIngest, which guards against losing unsaved
-            // graph edits — the viewer has no such concept).
-            // Shared by the mount-time pending-payload check below, the
-            // 'mtlx-view-document' listener, AND (IN_VSCODE only) the
-            // [active] effect further down that flushes a payload deferred
-            // while this view was hidden — defined once here so all three
-            // consume the exact same logic.
+            // ---- Receives a material handed off by the graph editor's
+            // "Send to Viewer" button (__mtlxPendingViewerImport /
+            // 'mtlx-view-document'), routed through ingestRef like drag-drop.
             const handleImport = (payload) => {
                 if (!payload) return;
-                // Defer ingesting while this view is mounted-but-hidden
-                // (the VS Code shell keeps both the graph and viewer views
-                // mounted, showing only one) — ingesting here would still
-                // burn a full shadergen the user can't even see. Stash it;
-                // the [active] effect below flushes it once this view
-                // becomes visible. The bootstrap graph→viewer hashchange
-                // sync usually re-delivers a fresh payload anyway when the
-                // user switches views — this also covers it for when that
-                // sync can't reach here.
+                // Defer while mounted-but-hidden (VS Code keeps both views
+                // mounted) — ingesting would burn a shadergen the user
+                // can't see. The [active] effect below flushes it once visible.
                 if (IN_VSCODE && !activeRef.current) {
                     window.__mtlxPendingViewerImport = payload;
                     return;
@@ -349,10 +274,9 @@
                 window.addEventListener('mtlx-view-document', onViewDoc);
                 return () => window.removeEventListener('mtlx-view-document', onViewDoc);
             }, []);
-            // This view just became visible (VS Code keep-alive shell):
-            // flush any external-edit payload that handleImport deferred
-            // above while it was hidden — mirrors the mount-time pending-
-            // payload consumption in the effect above.
+            // View just became visible (VS Code keep-alive shell): flush
+            // any payload handleImport deferred while hidden, mirroring
+            // the mount-time pending-payload check above.
             React.useEffect(() => {
                 if (!IN_VSCODE || !active) return;
                 if (window.__mtlxPendingViewerImport) {
@@ -362,14 +286,9 @@
                 }
             }, [active]);
 
-            // Compact-mode auto-collapse: crossing wide->narrow stashes
-            // whatever open/closed state the Files sidebar was in and
-            // force-collapses it to a chip; crossing narrow->wide restores
-            // that stash. A manual re-open while still narrow sticks (it's
-            // not restashed until the NEXT wide->narrow crossing) — same
-            // "sticky until next crossing" behavior as js/graph-app.jsx's
-            // params/legend version. prevNarrowRef starts at `narrow`
-            // itself so mount never counts as a crossing.
+            // Compact-mode auto-collapse: wide->narrow stashes the sidebar's
+            // open state and force-collapses it; narrow->wide restores the
+            // stash. A manual re-open while narrow sticks until the next crossing.
             const prevNarrowRef = React.useRef(narrow);
             const preNarrowOpenRef = React.useRef(true);
             React.useEffect(() => {
@@ -392,13 +311,9 @@
                 try { getEnvironment(); } catch (e) { /* optional */ }
             }, []);
 
-            // Default material: like the official viewer, the page opens with
-            // a material already loaded — the official open_pbr_default.mtlx,
-            // fetched straight from the MaterialX repository (raw GitHub
-            // serves CORS '*'). It goes through the normal ingest() path so
-            // the whole session behaves exactly as if the user dropped the
-            // file. Skipped silently when offline (the drop prompt stays) or
-            // when the user managed to drop their own files first.
+            // Default material: page opens with open_pbr_default.mtlx
+            // fetched from the MaterialX repo, through the normal ingest()
+            // path. Skipped silently if offline or the user loaded first.
             React.useEffect(() => {
                 setBusy(true); // bar from the very first paint until rendered
                 fetch(DEFAULT_MATERIAL_URL)
@@ -444,10 +359,9 @@
                 setBusy(true); // stays on through the render effect below
                 setStatus('Parsing ' + path + ' \u2026');
                 try {
-                    // readMtlxText resolves xi:includes for us; only the
-                    // resolved text is parsed here (the raw half of its
-                    // return is for callers that need the as-authored text,
-                    // e.g. the graph editor's own load path — unused here).
+                    // readMtlxText resolves xi:includes; only the resolved
+                    // text is used here (the raw half is for callers needing
+                    // as-authored text, e.g. the graph editor — unused here).
                     const { resolved: xml } = await readMtlxText(map[path], path, map);
                     const loaded = await loadMtlxDocument(xml);
                     loadedRef.current = loaded;
@@ -524,20 +438,13 @@
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
             return (
-                // IN_VSCODE: percentage-height chain (h-full min-h-0 flex
-                // flex-col) so the render viewport below can fill all space
-                // below the header — full-bleed webview, unchanged.
-                // Browser: graph-editor-style full-bleed stage, positioned
-                // against #root via `absolute inset-0` (js/shell.jsx's
-                // viewer wrapClass is now empty — see its comment there).
+                // IN_VSCODE: height chain fills the webview. Browser:
+                // graph-editor-style full-bleed stage via `absolute inset-0`
+                // (js/shell.jsx's viewer wrapClass is now empty).
                 <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'absolute inset-0 bg-gray-900 overflow-hidden'}>
-                    {/* Full-page drop indicator: sits below the sticky header
-                        (h-14 = top-14) and lets events pass through to the
-                        window-level drop handlers. z-40 (not the new
-                        sidebar's z-30, which sits later in the DOM): matches
-                        the graph z-convention (controls 10/30 < drop 40 <
-                        dialogs 50); pointer-events-none so this doesn't
-                        change actual behavior. */}
+                    {/* Full-page drop indicator, below the sticky header
+                        (top-14). z-40 matches the graph z-convention
+                        (controls 10/30 < drop 40 < dialogs 50); pointer-events-none. */}
                     {dragOver && (
                         <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
                             <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
@@ -548,27 +455,13 @@
                         </div>
                     )}
 
-                    {/* IN_VSCODE: height chain continues (flex-1 min-h-0
-                        flex) so the single remaining column (viewport card)
-                        can grow to fill the app root — unchanged.
-                        Browser: `absolute inset-0` — a graph-style stage
-                        that just hosts the viewport card; the old left
-                        column (drop zone, pickers, document/material
-                        selects, texture bind report) now lives in the
-                        floating "Files" sidebar below instead of a grid
-                        column. */}
+                    {/* IN_VSCODE: height chain continues so the viewport card
+                        fills the app root. Browser: `absolute inset-0` stage;
+                        the old left column now lives in the floating "Files" sidebar. */}
                     <div className={IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'}>
-                        {/* Viewport card. Spans the full width in both modes
-                            now (the old left column moved into the floating
-                            "Files" sidebar below, browser only). IN_VSCODE:
-                            full-bleed — flex-1 min-h-0 flex flex-col carries
-                            the height chain down to the viewport;
-                            border/rounded/padding dropped since there's no
-                            surrounding page chrome to frame. Browser:
-                            `absolute inset-0` fills the stage above;
-                            status/error move to floating banners below
-                            instead of living inside this card (see
-                            status/error gating just below). */}
+                        {/* Viewport card, full width in both modes (left
+                            column moved into the "Files" sidebar). Browser:
+                            status/error float above instead of living in the card. */}
                         <div className={IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'}>
                             {IN_VSCODE && status && !busy && (
                                 <div className="text-sm text-gray-400 mb-3">{status}</div>
@@ -578,14 +471,9 @@
                                     {error}
                                 </div>
                             )}
-                            {/* IN_VSCODE: flex-1 min-h-0 so this box actually
-                                receives the card's remaining height instead
-                                of sizing off its (auto-height) canvas child
-                                — unchanged. Browser: `absolute inset-0`
-                                fills the (now full-bleed) viewport card
-                                directly; the old browser-only min-height
-                                floor is gone along with the page-flow
-                                layout that needed it. */}
+                            {/* IN_VSCODE: sized off the card's remaining
+                                height, not the canvas child. Browser: fills
+                                the full-bleed viewport card via `absolute inset-0`. */}
                             <div ref={viewportRef} className={`overflow-hidden bg-gray-900 ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
                                 <LoadingOverlay
                                     show={busy}
@@ -594,20 +482,9 @@
                                     labelClassName="text-sm text-gray-300 animate-pulse"
                                     barWidthClass="w-56"
                                 />
-                                {/* Rendered even with nothing loaded (browser only): the
-                                    offline-fallback status text below points here
-                                    ("pick a Preset from the toolbar") for the case
-                                    where the default-material fetch failed, so the
-                                    Presets button (and the rest of the strip — every
-                                    control here is already null-safe against no live
-                                    view/document, see useViewportControls/
-                                    useViewToggle/ViewportControls) needs to be
-                                    reachable with an empty viewer. IN_VSCODE keeps the
-                                    original renderables-only gate: the extension always
-                                    supplies a document, so an empty-state toolbar there
-                                    would only show up in the unrelated "parsed but no
-                                    renderable material" error case, which this fix
-                                    isn't meant to touch. */}
+                                {/* Rendered even with nothing loaded (browser only) so
+                                    the Presets button stays reachable if the default-material
+                                    fetch failed. IN_VSCODE keeps the original renderables-only gate. */}
                                 {(renderables.length > 0 || !IN_VSCODE) && (
                                     <ViewportControls
                                         containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
@@ -655,15 +532,9 @@
                                                     {labels && <span className="ml-1.5 whitespace-nowrap">Send to Graph Editor</span>}
                                                 </button>
                                                 )}
-                                                {/* Presets: browser-only, multi-document
-                                                    affordance -- the VS Code preview is bound
-                                                    to the open file (same rationale as the
-                                                    graph editor's Presets gate). The dialog
-                                                    portals into the fullscreen/maximized
-                                                    element when active (see PresetsDialog /
-                                                    fullscreenElement in js/shared/mtlx-ui.jsx),
-                                                    so it stays visible in fullscreen without
-                                                    exiting it. */}
+                                                {/* Presets: browser-only (VS Code is bound to the
+                                                    open file). Portals into the fullscreen element
+                                                    when active, so it stays visible without exiting. */}
                                                 {!IN_VSCODE && (
                                                 <button
                                                     onClick={() => setPresetsOpen(true)}
@@ -674,12 +545,9 @@
                                                     {labels && <span className="ml-1.5 whitespace-nowrap">Presets</span>}
                                                 </button>
                                                 )}
-                                                {/* Export Shader Code: not VS Code-gated (unlike
-                                                    Presets/Send-to-Editor above) -- generating
-                                                    the open document's shader source applies to
-                                                    the single file the extension opened. Portals
-                                                    into the fullscreen/maximized element when
-                                                    active, so it no longer exits fullscreen. */}
+                                                {/* Not VS Code-gated: generating shader source
+                                                    applies to the single opened file too. Portals
+                                                    into the fullscreen element when active. */}
                                                 <button
                                                     onClick={() => setShaderExportOpen(true)}
                                                     title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
@@ -692,12 +560,9 @@
                                             </React.Fragment>
                                         )}
                                     >
-                                        {/* Geometry lives here permanently; the material
-                                            picker surfaces only in fullscreen, where the
-                                            sidebar is out of reach. Also shown under VS Code
-                                            (not just fullscreen): the left-column material
-                                            picker is hidden there, so multi-material files
-                                            still need a way to switch materials. */}
+                                        {/* Material picker surfaces here only in fullscreen
+                                            (sidebar out of reach) or under VS Code, where the
+                                            left-column picker is hidden. */}
                                         {(isFullscreen || IN_VSCODE) && renderables.length > 1 && (
                                             <select
                                                 value={chosenMat}
@@ -715,12 +580,8 @@
                                 <canvas
                                     ref={canvasRef}
                                     className="w-full block cursor-grab active:cursor-grabbing"
-                                    // Always fills its container: VS Code and
-                                    // fullscreen already resolved to 100% here;
-                                    // the browser default is now full-bleed too
-                                    // (`absolute inset-0` viewport container
-                                    // above), so the old fixed-height,
-                                    // non-fullscreen floor no longer applies.
+                                    // Always fills its container: VS Code, fullscreen, and
+                                    // the full-bleed browser default all resolve to 100% here.
                                     style={{ height: '100%' }}
                                     tabIndex={-1}
                                 />
@@ -728,12 +589,9 @@
                         </div>
                     </div>
 
-                    {/* Floating status/error banners (browser only) — status/error
-                        used to live inside the viewport card; now that the card is
-                        full-bleed (`absolute inset-0`), they float above it instead,
-                        same idea as the graph editor's error banners. error sits at
-                        top-12 (below status's top-2) so the two don't overlap when
-                        both are shown at once. */}
+                    {/* Floating status/error banners (browser only), same idea as the
+                        graph editor's. error sits at top-12 (below status's top-2)
+                        so the two don't overlap when both show at once. */}
                     {!IN_VSCODE && status && !busy && (
                         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg">{status}</div>
                     )}
@@ -741,17 +599,9 @@
                         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
                     )}
 
-                    {/* Floating left "Files" sidebar (browser only): hard-swap
-                        collapse mirroring the graph editor's param panel
-                        (paramsOpen — js/graph-app.jsx :5328/:5613), just anchored
-                        top-2/bottom-2/left-2 instead of the graph's right-side
-                        placement. Holds everything the old left column used to
-                        (drop zone, pickers, document/material selects, texture
-                        bind report), with the old page-intro paragraph and
-                        bottom-tip text merged into one description block at the
-                        top. When open it may cover the HUD's left edge at narrow
-                        widths (sidebar z-30 > HUD's z-10) — collapse it to reach
-                        the HUD underneath. */}
+                    {/* Floating left "Files" sidebar (browser only), mirroring the
+                        graph editor's param panel but anchored left. May cover the
+                        HUD's left edge at narrow widths — collapse it to reach the HUD. */}
                     {!IN_VSCODE && (sidebarOpen ? (
                         <div className="absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden">
                             <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
@@ -858,15 +708,9 @@
                         </button>
                     ))}
 
-                    {/* Presets dialog ("Presets" overlay button) and Export
-                        Shader Code dialog ("Export Shader Code" overlay
-                        button). Both use the `fixed` overlay variant (not
-                        DialogFrame's `absolute` default): kept deliberately so the
-                        backdrop covers the entire window, including the shared
-                        header/footer outside #root — the old rationale ("this #root
-                        spans a scrollable page") is gone now that the browser stage
-                        is `absolute inset-0` full-bleed, but `fixed` still does the
-                        right thing here (mirrors the graph editor's dialogs). */}
+                    {/* Both dialogs use the `fixed` overlay variant (not
+                        DialogFrame's `absolute` default) so the backdrop covers
+                        the whole window, including the shared header/footer. */}
                     <PresetsDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} onPick={loadPreset}
                         busy={presetsBusy} busyPath={presetsBusyPath}
                         overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70" />

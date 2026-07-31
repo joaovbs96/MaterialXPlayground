@@ -1,57 +1,35 @@
-// js/graph/model.jsx — MaterialX document -> graph model: parsing the
-// document, resolving nodedefs/ports/edges, and building the descriptor
-// list for a scope. Split out of js/graph-app.jsx (pure move, no behavior
-// change) as part of the graph view's file split. Loaded before the other
-// js/graph/*.jsx files in the graph view's babelScripts manifest (see
-// js/shell.jsx's VIEW_DEPS.graph) so their contents can rely on these
-// globals already being present. Like every other lazy-loaded file in this
-// app, this file has NO top-level import/export — it self-exports via a
-// single Object.assign(window, {}) at the bottom. safe/elName/elCat/
-// elType/elAttr are now the engine's mxSafe/mxElName/mxElCat/mxElType/
-// mxElAttr globals (js/mtlx-engine.js) instead of locally-defined copies.
+// js/graph/model.jsx — parses a MaterialX document into the graph
+// model: nodedefs/ports/edges resolution and per-scope descriptor
+// lists. Loaded via js/shell.jsx's VIEW_DEPS.graph before the other
+// js/graph/*.jsx files, which rely on its globals. No top-level
+// import/export — self-exports via Object.assign(window, {}) at the
+// bottom. safe/elName/elCat/elType/elAttr are now the engine's
+// mxSafe/mxElName/mxElCat/mxElType/mxElAttr globals
+// (js/mtlx-engine.js).
 
-        // Perf instrumentation flag: off by default, opt in via
-        // `localStorage.setItem('mtlxPerfLog', '1')`. Read ONCE at module
-        // load (not per call) since it only gates console.log lines used to
-        // profile buildScope/layoutScope/flow-rebuild/render-count during
-        // development — never a source of behavior differences. Exported as
-        // a bare window global below; the other graph/*.jsx files (loaded
-        // after this one) read it the same way they read every other
-        // cross-file global.
+        // Perf logging flag, off by default — opt in via
+        // localStorage.setItem('mtlxPerfLog', '1'). Read once at module
+        // load; only gates console.log profiling, never behavior.
         const MTLX_PERF_LOG = (() => {
             try { return !!localStorage.getItem('mtlxPerfLog'); } catch (e) { return false; }
         })();
 
-        // Loaded automatically on page open — an official example whose
-        // nodegraph (NG_marble1) makes a much better first graph than a
-        // single-node document. Resolved through window.MtlxAssets
-        // (js/mtlx-assets.js) rather than a hardcoded raw.githubusercontent.com
-        // URL, so a future offline/packaged build serves it from the local
-        // vendor mirror instead — see mtlx-assets.js's header comment. Safe
-        // to call at module-load time here: this file only loads (as part
-        // of the graph view's babelScripts manifest) after js/shell.jsx's
-        // loadViewDeps has already awaited MtlxAssets.ready.
+        // Default doc opened on page load. Resolved via MtlxAssets.repoUrl
+        // (not a hardcoded URL) so an offline build can serve it locally;
+        // safe here since shell.jsx already awaits MtlxAssets.ready first.
         const DEFAULT_GRAPH_URL =
             window.MtlxAssets.repoUrl('resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx');
 
-        // ---- Ingestion (same pipeline as material-viewer.html) -------------
-        // normPath, readDroppedItems, expandZips, findFileForRef and
-        // resolveIncludes now live in js/mtlx-engine.js (loaded before this
-        // script) and are used here as window globals like the rest of the
-        // shared engine API.
+        // ---- Ingestion (same pipeline as material-viewer.html) ----
+        // normPath/readDroppedItems/expandZips/findFileForRef/resolveIncludes
+        // live in js/mtlx-engine.js, used here as window globals.
 
-        // ---- MaterialX document → graph model -------------------------------
+        // ---- MaterialX document → graph model ----
 
 
-        // Parse an .mtlx string into a fresh document, with the standard
-        // library attached as a DATA LIBRARY (doc.setDataLibrary): nodedef
-        // matching, validation, and shader generation all consult it, while
-        // getNodes()/getNodeGraphs() still return ONLY the document's own
-        // content and writeToXmlString stays clean — the library is
-        // referenced, never merged. This is what lets untyped ports inherit
-        // their type from nodedefs, and what makes the document renderable.
-        // The stdlib itself is already loaded once by the engine at startup,
-        // so attaching it here costs nothing extra.
+        // Attaches stdlib via setDataLibrary (referenced, not merged) so
+        // nodedef/type resolution and shader gen see it while
+        // getNodes()/writeToXmlString stay scoped to the doc's own content.
         const parseMtlxDocument = async (xmlText) => {
             const { mx, stdlib } = await getMxEnv();
             const doc = mx.createDocument();
@@ -69,9 +47,9 @@
                 console.warn('setDataLibrary is not bound in this MaterialX build — nodedef type inheritance and the material preview are degraded.');
             }
 
-            // In MaterialX, a <nodegraph> can act as a function implementation.
-            // It might carry a "nodedef" attribute directly, OR it might omit it
-            // and be linked via a separate <implementation nodegraph="..."> element.
+            // A <nodegraph> can act as a function implementation, either via
+            // a direct "nodedef" attribute or linked through a separate
+            // <implementation nodegraph="..."> element.
             const implGraphNames = new Set();
             const collectImpls = (container) => {
                 vecToArray(mxSafe(() => container.getImplementations(), [])).forEach((impl) => {
@@ -82,8 +60,8 @@
             collectImpls(doc);
             if (stdlib) collectImpls(stdlib);
 
-            // Instance nodegraphs only — graphs acting as function DEFINITIONS
-            // are skipped so they don't clutter the user's workspace.
+            // Instance nodegraphs only — graphs acting as function
+            // definitions are skipped so they don't clutter the workspace.
             const nodegraphs = vecToArray(mxSafe(() => doc.getNodeGraphs(), []))
                 .filter((g) => !mxElAttr(g, 'nodedef') && !implGraphNames.has(mxElName(g)))
                 .map((g) => mxElName(g));
@@ -91,31 +69,9 @@
             return { mx, doc, nodegraphs, implGraphNames };
         };
 
-        // Validate a document's TEXT AS AUTHORED — deliberately NOT the
-        // live in-memory graph doc (parsed.doc). serializeDocXml (below)
-        // calls stripValuesFromConnectedInputs on the doc IN PLACE before
-        // every write (Export, undo/redo snapshots, AND the VS Code
-        // text-sync path), which silently heals faults like "an input
-        // carries both a value and a connection" — so validating
-        // parsed.doc directly would show a document opened WITH real
-        // faults as perfectly clean the moment any snapshot fires (undo
-        // snapshots alone fire ~350ms after every edit). Building a
-        // fresh, throwaway document straight from the raw XML string
-        // instead means the graph editor's Validate button/dialog always
-        // reports on exactly the same text the VS Code extension's own
-        // validator (vscode_extension/src/validator.js's tier-2 path,
-        // mtlxNode.js's validateSemantic — which likewise just
-        // readFromXmlString's the raw buffer text, xi:include and all)
-        // would report — the actual on-disk/in-buffer document, at every
-        // moment, not "the document as the graph editor has quietly
-        // fixed it so far".
-        //
-        // Returns one of:
-        //   { kind: 'valid' }
-        //   { kind: 'invalid', issues: [ ...verbatim diagnostic lines ] }
-        //   { kind: 'unavailable' } — wasm not ready, no validate()
-        //                             binding in this build, or any other
-        //                             unexpected throw
+        // Validates the raw XML text, not the live parsed.doc — writes
+        // silently heal faults like "input has both value and connection"
+        // before every snapshot, so validating parsed.doc would hide them.
         const validateMtlxXml = async (xml) => {
             if (!xml) return { kind: 'unavailable' };
             try {
@@ -127,11 +83,9 @@
                 try {
                     await mx.readFromXmlString(doc, xml);
                 } catch (e) {
-                    // A document that doesn't even parse is certainly not
-                    // valid — report the parse error itself as the sole
-                    // issue, the same way VS Code's tier-1 XML scanner
-                    // (validator.js's scanXml) reports a malformed file
-                    // before tier 2 (this same wasm validate path) ever runs.
+                    // A parse failure isn't valid either — report it as
+                    // the sole issue, same as VS Code's tier-1 XML scan
+                    // before this tier-2 wasm validate path ever runs.
                     return { kind: 'invalid', issues: [mxErr(mx, e)] };
                 }
                 if (typeof doc.setDataLibrary === 'function') {
@@ -146,20 +100,16 @@
                     return { kind: 'unavailable' };
                 }
                 if (ok) return { kind: 'valid' };
-                // The WASM binding's validate() has an overloadTable
-                // {'0','1'} — the 1-arg overload fills holder.message with
-                // the FULL newline-separated MaterialX diagnostic list on
-                // failure. Shown VERBATIM (no reformatting) — same
-                // contract the old validateOpen-gated effect in
-                // js/graph-app.jsx used to follow.
+                // validate()'s 1-arg overload fills holder.message with
+                // the full newline-separated diagnostic list, shown
+                // verbatim below with no reformatting.
                 const issues = String(holder.message || '')
                     .split(/\r\n|\r|\n/)
                     .map((s) => s.trim())
                     .filter(Boolean);
-                // holder.message empty despite a false result (build
-                // variance, or a failure validate() itself can't
-                // attribute to any single line) -> a single generic
-                // fallback issue, never an empty "invalid" dialog.
+                // holder.message can come back empty on a false result
+                // (build variance) — fall back to a generic issue so the
+                // dialog is never empty.
                 if (!issues.length) issues.push('The document failed validation.');
                 return { kind: 'invalid', issues };
             } catch (e) {
@@ -167,11 +117,9 @@
             }
         };
 
-        // Serialize a parsed document to XML — shared by Export and the
-        // undo/redo snapshot capture. Transient '__pv_*' preview wrappers
-        // only exist inside an in-flight generation; if one is caught
-        // mid-air this throws (marked .transient) so the caller can decide
-        // whether to retry (Export) or just skip this round (undo).
+        // Shared by Export and undo/redo snapshots. If a transient
+        // '__pv_*' preview node is caught mid-generation, throws a
+        // .transient error so the caller can retry or skip this round.
         const serializeDocXml = (parsed) => {
             if (!parsed) throw new Error('no document');
             const hasTransients = vecToArray(mxSafe(() => parsed.doc.getNodes(), []))
@@ -181,13 +129,9 @@
                 err.transient = true;
                 throw err;
             }
-            // Item 9 belt-and-suspenders: strip any input that carries both
-            // a value and a connection before every write. This is the ONE
-            // choke point every caller of serializeDocXml goes through
-            // (Export dialog, undo/redo snapshots via flushUndoSnapshot,
-            // AND the VS Code text-sync path), so it also self-heals
-            // documents that predate this fix or were authored outside the
-            // graph editor, right on the next serialize.
+            // Strips inputs carrying both a value and a connection before
+            // every write — the one choke point all callers share, so it
+            // self-heals documents from outside the graph editor too.
             mxSafe(() => stripValuesFromConnectedInputs(parsed.doc), 0);
             return parsed.mx.writeToXmlString(parsed.doc);
         };
@@ -201,12 +145,9 @@
             return 'node';
         };
 
-        // getNodeDef() in this wasm build is not reliably version-aware: an
-        // instance authoring version="1.0.0" can still resolve the default
-        // nodedef. Resolve explicitly: pinned nodedef= attr wins, then an
-        // authored version= is matched against the category's nodedefs
-        // (filtered to a compatible output type when the instance is typed),
-        // and only then the binding's own resolution.
+        // getNodeDef() isn't reliably version-aware here, so resolve
+        // explicitly: pinned nodedef= wins, then authored version= is
+        // matched against the category's nodedefs, then the binding's own.
         const resolveVersionedNodeDef = (el, docMaybe) => {
             const fallback = () => mxSafe(() => el.getNodeDef(), null) || mxSafe(() => el.getNodeDef(''), null);
             const pinned = mxElAttr(el, 'nodedef');
@@ -236,11 +177,9 @@
             return pool.find((d) => mxSafe(() => d.getVersionString(), '') === ver) || fallback();
         };
 
-        // Every input type the node's signature exposes: authored inputs, the
-        // resolved nodedef's active inputs, and — when the resolved def is
-        // missing or doesn't match the node's output type (getNodeDef() can
-        // mis-resolve unpinned closure overloads) — every category nodedef
-        // with a matching output type.
+        // Every input type the node's signature exposes: authored inputs,
+        // the resolved nodedef's inputs, and — if getNodeDef() mis-resolves
+        // an unpinned closure overload — every same-output-type nodedef.
         const signatureInputTypes = (doc, el, outType) => {
             const authoredInTypes = vecToArray(mxSafe(() => el.getInputs(), [])).map(mxElType);
             const def = resolveVersionedNodeDef(el);
@@ -248,8 +187,8 @@
             const defMatchesOut = def && (mxElType(def) === outType
                 || vecToArray(mxSafe(() => def.getActiveOutputs(), [])).some((o) => mxElType(o) === outType));
             if (!defMatchesOut) {
-                // getNodeDef() can miss (or mis-resolve) unpinned closure overloads;
-                // scan every nodedef of this category with a matching output type.
+                // getNodeDef() can miss/mis-resolve unpinned closure
+                // overloads; scan every same-category, same-output nodedef.
                 const candDefs = vecToArray(mxSafe(() => doc.getMatchingNodeDefs(mxElCat(el)), []))
                     .filter((d) => mxElType(d) === outType
                         || vecToArray(mxSafe(() => d.getActiveOutputs(), [])).some((o) => mxElType(o) === outType));
@@ -264,22 +203,9 @@
             CLOSURE_TYPES.indexOf(outType) !== -1
             && inTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1);
 
-        // Inputs/outputs of an element, with the raw connection attributes
-        // kept verbatim (nodename / nodegraph / interfacename / output).
-        // Port types the document leaves implicit are resolved from the
-        // element's NODEDEF — matched through the data library attached in
-        // parseMtlxDocument. Each input also carries its nodedef DEFAULT
-        // value (defValue) and an `authored` flag; inputs the document does
-        // not author are appended from the nodedef (authored: false) so the
-        // "all inputs" display mode can show them.
-        // opts.authoredOnly (item A4.2, default false/undefined — every
-        // existing caller passes no second arg, so behavior there is
-        // byte-identical): skip the unauthored-nodedef-input enumeration
-        // below when the caller only wants what's actually written in the
-        // document — e.g. encapsulateSelection's snapshot immediately
-        // filters `i.authored !== false` right after calling collectPorts,
-        // so building those nodedef-default entries just to discard them
-        // is wasted WASM round-tripping on a big selection.
+        // Inputs/outputs of an element, types resolved from its NODEDEF
+        // when implicit. opts.authoredOnly (default false) skips appending
+        // unauthored nodedef-default inputs, avoiding wasted WASM round trips.
         const collectPorts = (el, opts) => {
             const authoredOnly = !!(opts && opts.authoredOnly);
             let defMemo; // undefined = not looked up yet; null = no def found
@@ -314,12 +240,9 @@
                 defColorspace: mxElAttr(dIn, 'colorspace'),
                 uifolder: mxElAttr(dIn, 'uifolder'),
             };
-            // Node output type(s), resolved BEFORE the inputs below so each
-            // input can be flagged colorManaged — colorspace only means
-            // anything for color3/color4 DATA, and for filename inputs only
-            // when the node's resolved output is itself color3/color4 (a
-            // filename feeding e.g. a float/vector displacement input has
-            // no colorspace to speak of).
+            // Output type(s) resolved before inputs so each input can be
+            // flagged colorManaged — colorspace only applies to color3/4
+            // data, or filename inputs whose node output is itself color.
             const def0 = nodeDef();
             // el.getOutputs() is a JS<->WASM embind crossing; call it once
             // and reuse the result for both the emptiness check and the map
@@ -334,14 +257,9 @@
             const isColorType = (t) => t === 'color3' || t === 'color4';
             const colorManagedFor = (type) => (type === 'filename' && isColorOutput) || isColorType(type);
 
-            // name -> declaration index in the nodedef's input list (active
-            // inputs first, then plain inputs; first-seen name wins — same
-            // list the unauthored branch below iterates). Built independently
-            // of authoredOnly/def0 above so uifolder grouping downstream
-            // (graph-app.jsx panelParamGroups) can sort by NODEDEF order
-            // regardless of instance/document authoring order. undefined
-            // (via Map#get on a missing key) for names not in the def, e.g.
-            // custom/legacy instance inputs with no nodedef entry.
+            // name -> nodedef declaration index (active inputs first, then
+            // plain), so panelParamGroups can sort by nodedef order
+            // regardless of authoring order. undefined if not in the def.
             const defIndexOf = (() => {
                 const def = nodeDef();
                 const map = new Map();
@@ -367,11 +285,9 @@
                     value: mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
                     defValue: dIn ? mxSafe(() => (dIn.getValueString ? dIn.getValueString() : ''), '') : undefined,
                     authored: true,
-                    // Live wasm element, not just its snapshotted fields — lets
-                    // callers that need to clone this exact input (encapsulate/
-                    // ungroup, via copyContentFrom) reach it without a second
-                    // lookup. Existing callers that only read the plain fields
-                    // above are unaffected.
+                    // Live wasm element, not just snapshotted fields — lets
+                    // encapsulate/ungroup clone this exact input via
+                    // copyContentFrom without a second lookup.
                     el: inp,
                     colorspace: mxElAttr(inp, 'colorspace'),
                     nodename: mxElAttr(inp, 'nodename'),
@@ -382,10 +298,9 @@
                     defIndex: defIndexOf(mxElName(inp)),
                 }, uiMeta(dIn));
             });
-            // Unauthored nodedef inputs (shown only in "all" mode). Their
-            // value IS the default. Skipped entirely in authoredOnly mode —
-            // callers that filter these back out right after calling
-            // collectPorts don't pay for building them.
+            // Unauthored nodedef inputs, shown only in "all" mode (value
+            // is the default). Skipped in authoredOnly mode since those
+            // callers filter them back out anyway.
             const authoredNames = new Set(inputs.map((i) => i.name));
             const def = nodeDef();
             if (def && !authoredOnly) {
@@ -413,7 +328,7 @@
                 name: mxElName(o), type: mxElType(o) || defPortType(mxElName(o), true),
             }));
 
-            // Extract the library and group for conflict-free documentation links
+            // Extract the library/group for conflict-free doc links.
             let lib = '', group = '';
             if (def) {
                 group = mxSafe(() => def.getNodeGroup(), '');
@@ -434,11 +349,9 @@
             return (isFinite(x) && isFinite(y)) ? { x, y } : null;
         };
 
-        // Build the descriptor + edge lists for one scope: '' = the document
-        // root (top-level nodes, instance nodegraphs as single collapsed
-        // nodes, root <output> elements), or the name of a nodegraph (its
-        // internal nodes, plus pseudo-nodes for the graph's interface inputs
-        // and its outputs).
+        // Builds descriptor + edge lists for one scope: '' = document root
+        // (top-level nodes/nodegraphs/outputs), or a nodegraph name (its
+        // nodes plus pseudo-nodes for interface inputs and outputs).
         const buildScope = (parsed, scope) => {
             // Single return below (see it for the matching log line) —
             // start the clock here rather than wrapping the whole body in a
@@ -511,11 +424,9 @@
                 }
             }
 
-            // Edges: one per connected input, resolved exactly like MaterialX
-            // does — interfacename beats nodegraph beats nodename. A source
-            // output referenced by name but not declared on the source (the
-            // common single-output case, or multioutput without explicit
-            // <output> children) is synthesized so the handle exists.
+            // One edge per connected input; precedence is interfacename >
+            // nodegraph > nodename. A referenced-but-undeclared source
+            // output (common single-output case) is synthesized here.
             const edges = [];
             for (const d of descs) {
                 for (const inp of d.inputs) {
@@ -539,15 +450,9 @@
                 }
             }
 
-            // Type-resolution pass: nodedef lookup (collectPorts) already
-            // resolves most implicit types; this pass covers the rest —
-            // pseudo-nodes (interface inputs, outputs, collapsed nodegraphs),
-            // custom nodes with no nodedef, and builds without setDataLibrary.
-            // Types propagate across connections in both directions until
-            // stable, so every port and edge in the CURRENT scope — the
-            // document root or any nodegraph interior — is colored by its
-            // real type. Iterating to a fixed point carries types through
-            // chains of untyped pass-through ports.
+            // Covers types collectPorts' nodedef lookup can't: pseudo-nodes,
+            // custom nodes without a nodedef, builds without setDataLibrary.
+            // Propagates both directions to a fixed point across edges.
             let changed = true, guard = 0;
             while (changed && guard++ < 8) {
                 changed = false;

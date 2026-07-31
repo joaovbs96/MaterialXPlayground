@@ -1,22 +1,13 @@
-// impl-matrix.jsx — the implementation-target matrix: which shading-
-// language targets the standard library ships an <implementation> for,
-// per nodedef signature. Pure presentational component now: the
-// per-signature target index (previously built live in-browser via
-// getImplIndex()/nodeDefSigKey against the WASM stdlib) is pregenerated
-// at build time by scripts/build-nodelib.mjs's buildImplRows port
-// (scripts/lib/nodedef-extract.mjs) into js/gen/nodelib-index.json, and
-// passed down as the `implRows`/`allTargets` props — this file does no
-// WASM work of its own. Loaded as text/babel; Babel executes each file
-// in its own function scope, so the public API is exported onto window
-// at the bottom.
+// impl-matrix.jsx — implementation-target matrix: which shading-language
+// targets the stdlib ships an <implementation> for, per nodedef signature.
+// Purely presentational — implRows/allTargets are pregenerated at build
+// time by scripts/build-nodelib.mjs (scripts/lib/nodedef-extract.mjs)
+// into js/gen/nodelib-index.json; this file does no WASM work itself.
+// Loaded as text/babel; Babel gives each file its own function scope,
+// so the public API is exported onto window at the bottom.
 
-        // ------------------------------------------------------------------
-        // Implementation-target matrix: which render targets (genglsl,
-        // genessl, genosl, genmdl, genmsl, ...) the standard library ships an
-        // <implementation> for, per nodedef — a documentation aid, not a
-        // certification tool (best-effort: falls back to an empty matrix on
-        // any WASM binding mismatch rather than throwing).
-        // ------------------------------------------------------------------
+        // Documentation aid, not a certification tool — renders nothing
+        // (rather than throwing) when the expected data isn't present.
         // Every MaterialX API call goes through mxSafe (js/mtlx-engine.js),
         // same convention as graph-app.jsx's local `safe` helper.
         const IMPL_TARGET_LABELS = {
@@ -28,31 +19,18 @@
             return (stripped || target || '').toUpperCase();
         };
 
-        // props: { nodeName, signature, implRows, allTargets }. implRows is
-        // the pregenerated per-signature array (scripts/build-nodelib.mjs's
-        // buildImplRows, see js/docs-app.jsx's call site) — [{key, type,
-        // targets: [...sorted], inherited: [...sorted], graph, files?,
-        // graphFile?}], one entry per TYPE SIGNATURE (same nodeDefSigKey
-        // grouping groupDefVersions uses). `files`/`graphFile` (added for
-        // Feature 1's "open on GitHub" badge links) are repo-relative
-        // 'libraries/...' paths, omitted entirely when empty/absent —
-        // resolved through implFileUrl (js/docs/doc-links.jsx) before use
-        // below. `signature` picks out just the row for the currently
-        // selected overload, falling back to showing every row (collapsed
-        // when identical) if `signature` isn't provided or doesn't match
-        // anything — same selection rule the old live version used, just
-        // operating on plain arrays instead of Sets/state now that the data
-        // arrives ready-made instead of being computed in an effect.
+        // props: { nodeName, signature, implRows, allTargets }. implRows:
+        // pregenerated per-signature array (scripts/build-nodelib.mjs);
+        // `signature` picks one row, else all rows (collapsed if identical).
         function ImplTargetMatrix({ nodeName, signature, implRows, allTargets }) {
             if (!nodeName || implRows == null || !implRows.length) return null;
 
             const bySig = {};
             implRows.forEach((r) => { bySig[r.key] = r; });
 
-            // Deliberately ignores files/graphFile — two rows with the same
-            // target sets but different resolved source files (unlikely in
-            // practice, but not impossible) still collapse to one display
-            // row; only the visible ✓/✓*/– pattern needs to match.
+            // Deliberately ignores files/graphFile: two rows with the
+            // same target sets but different source files still collapse
+            // to one row — only the ✓/✓*/– pattern needs to match.
             const sameImpl = (a, b) => a.graph === b.graph
                 && a.targets.length === b.targets.length
                 && a.targets.every((t) => b.targets.indexOf(t) !== -1)
@@ -82,11 +60,9 @@
                             {rows.map((row, i) => (
                                 <div key={row.key || i} className="flex items-center gap-1.5 flex-wrap">
                                     {row.graph ? (
-                                        // Feature 1: link to the backing nodegraph's .mtlx on GitHub
-                                        // when the pregenerated data has a resolved path for it;
-                                        // otherwise fall back to the old plain span (e.g. older
-                                        // nodelib-index.json without graphFile, or a graph impl
-                                        // whose source URI had no 'libraries' segment).
+                                        // Feature 1: link to the nodegraph's GitHub
+                                        // source when resolved; else fall back to a
+                                        // plain span.
                                         implFileUrl(row.graphFile) ? (
                                             <a
                                                 href={implFileUrl(row.graphFile)}
@@ -107,10 +83,9 @@
                                         targets.map((t) => {
                                             const explicit = row.targets.indexOf(t) !== -1;
                                             const inherited = !explicit && row.inherited.indexOf(t) !== -1;
-                                            // Explicit and inherited badges both link to a real source
-                                            // file (inherited targets bake to their GLSL parent's path
-                                            // at build time — see nodedef-extract.mjs's inheritance
-                                            // loop); '–' (no implementation at all) never links.
+                                            // Explicit/inherited badges link to source;
+                                            // inherited bakes to the GLSL parent's path
+                                            // at build time. '–' never links.
                                             const path = (explicit || inherited) && row.files ? row.files[t] : null;
                                             const href = implFileUrl(path);
                                             const badgeClassName = badgeBase + (
@@ -166,13 +141,9 @@
             );
         }
 
-        // ---- public API ----
-        // IMPL_TARGET_LABELS and friendlyTargetLabel have no consumers
-        // outside this file (checked repo-wide, word-boundary grep) — kept
-        // as declarations (used internally by ImplTargetMatrix) but
-        // omitted from the export list. TARGET_INHERITANCE/getImplIndex no
-        // longer exist in this file at all — see
-        // scripts/lib/nodedef-extract.mjs.
+        // ---- public API ---- (IMPL_TARGET_LABELS/friendlyTargetLabel
+        // are internal-only; TARGET_INHERITANCE/getImplIndex no longer
+        // live here — see scripts/lib/nodedef-extract.mjs.)
         Object.assign(window, {
             ImplTargetMatrix,
         });

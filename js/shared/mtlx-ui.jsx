@@ -1,43 +1,29 @@
-// js/shared/mtlx-ui.jsx — shared UI-glue library for the three views
-// (docs, viewer, graph). Extracted from the near-identical copies that
-// used to live separately in js/viewer-app.jsx and js/node-preview.jsx —
-// pure extraction, no behavior change. Loaded FIRST in each view's
-// babelScripts manifest (see js/shell.jsx's VIEW_DEPS), right after the
-// eagerly-loaded js/mtlx-engine.js, so every hook/component/function here
-// can rely on the engine's window globals (watchFullscreen,
-// toggleFullscreen, readDroppedItems, MtlxIcon, ...) already being
-// present. Like every other lazy-loaded file in this app, this file has
-// NO top-level import/export — it's Babel-transformed and injected as a
-// plain script, so it self-exports via a single Object.assign(window, {})
-// at the bottom.
+// js/shared/mtlx-ui.jsx — shared UI-glue library for the docs/viewer/graph
+// views (extracted from near-identical copies in js/viewer-app.jsx and
+// js/node-preview.jsx; no behavior change). Loaded FIRST in each view's
+// babelScripts manifest (js/shell.jsx's VIEW_DEPS), right after the
+// eagerly-loaded js/mtlx-engine.js, so it can rely on the engine's window
+// globals (watchFullscreen, MtlxIcon, ...) already being present. No
+// top-level import/export — self-exports via Object.assign(window, {})
+// at the bottom, like every other lazy-loaded file here.
 
-// Recurring Tailwind button class strings — pulled out because the exact
-// same string (verbatim, byte-for-byte) shows up in more than one file;
-// near-twin variants elsewhere (different opacity/sizing) are NOT this —
-// leave those as their own inline strings rather than forcing a match.
+// Recurring Tailwind button strings, pulled out because the exact same
+// string (verbatim) repeats across files. Near-twin variants elsewhere
+// (different opacity/sizing) are NOT this — leave those inline.
 const BTN_SECONDARY = 'h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
 const BTN_PRIMARY = 'h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
-// The graph editor's toolbar button (New/Import/Presets/Export/... and the
-// top-right cluster) — canonicalized on gap-1 (a couple of call sites used
-// gap-1.5 before this constant existed; the 2px difference wasn't visually
-// meaningful, so this is the one shape now). `whitespace-nowrap shrink-0`:
-// HUD toolbar button text must never wrap onto a second line under any
-// circumstance, and the top-right cluster's measured label-collapse (see
-// js/graph-app.jsx) depends on buttons NOT flex-shrinking — a shrinking
-// button would silently absorb pressure by squeezing/wrapping its own
-// label instead of the overflow being visible to the measurement routine.
+// Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
+// js/graph-app.jsx's label-collapse measurement needs buttons that don't
+// flex-shrink, so overflow is visible to it instead of silently absorbed.
 const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0';
 
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
 const errMsg = (e) => String((e && e.message) || e);
 
-// Adds a window keydown listener that calls onClose() on Escape, active
-// whenever `when` isn't exactly `false` (so callers can pass a boolean
-// "is this dialog open" flag directly). Mirrors the Esc-to-close pattern
-// duplicated across the app's dialogs/popups. onClose is read through a
-// ref so the effect only re-subscribes when `when` itself changes, not on
-// every render (matches the original copies' `[showHelp]`-only deps).
+// Calls onClose() on Escape while `when` isn't exactly `false`. onClose is
+// read through a ref so the effect only re-subscribes when `when` itself
+// changes, not on every render.
 const useEscapeToClose = (onClose, when) => {
     const onCloseRef = React.useRef(onClose);
     onCloseRef.current = onClose;
@@ -49,11 +35,9 @@ const useEscapeToClose = (onClose, when) => {
     }, [when]);
 };
 
-// Whether the hosting pane is NARROWER than Tailwind's `md` breakpoint
-// (min-width: 768px — the same threshold js/site-header.css collapses the
-// site nav at). The graph/viewer panes fill the window in both the plain
-// browser and the VS Code webview, so a viewport media query IS the pane
-// width, and matchMedia 'change' fires on webview pane drags too.
+// True when the hosting pane is narrower than Tailwind's `md` breakpoint
+// (768px). The graph/viewer panes fill the window in both the browser and
+// the VS Code webview, so a viewport media query IS the pane width.
 const useNarrowPane = () => {
     const [narrow, setNarrow] = React.useState(
         () => !window.matchMedia('(min-width: 768px)').matches);
@@ -67,42 +51,9 @@ const useNarrowPane = () => {
     return narrow;
 };
 
-// Shared chrome for the app's modal dialogs: a full-viewport backdrop
-// (mousedown outside the panel closes it, unless
-// `backdropCloseDisabled`), a centered panel, and a header bar with
-// a title and a × close button (optionally preceded by
-// `headerRight` extras — XmlDialog's Copy button, DocsDialog's
-// open-in-new-tab link). Each dialog keeps its OWN useEscapeToClose
-// call rather than the frame owning it — the `when` condition
-// differs per dialog (e.g. ExportDialog/PresetsDialog additionally
-// gate it on `!busy`), so the frame has no single answer for when a
-// given dialog should stop listening for Esc.
-// `overlayClassName` (default: the graph/docs dialogs' full-panel
-// backdrop, `absolute inset-0 z-50 flex items-center justify-center
-// bg-gray-950/70`) lets a caller swap in a different backdrop class —
-// the material viewer passes a `fixed inset-0 ...` variant instead,
-// since its #root spans a scrollable page rather than a fixed-size
-// panel, so an `absolute` backdrop would only cover the panel's own
-// scrolled-past bounds instead of the whole viewport. The
-// keepMounted/hidden suffix logic below is unchanged either way.
-// `keepMounted` (DocsDialog only): instead of unmounting while
-// closed, the backdrop stays in the DOM with a `hidden` class
-// toggled on it instead — keeps the embedded docs App warm across
-// close/reopen. Every other dialog unmounts on close via its own
-// `if (!open) return null` guard before ever reaching this
-// component; this component's own `open` check is a harmless
-// second guard for KeybindsHelp and DocsDialog, which don't
-// pre-check it themselves (KeybindsHelp has no `open` prop at all —
-// it's mounted/unmounted by its caller instead — so it always
-// passes `open={true}` here).
-// `closeDisabled`/`backdropCloseDisabled` (Export/Presets only):
-// while a caller-supplied async action is in flight (`busy`), both
-// the × button and backdrop-click-to-close are disabled so the
-// dialog can't be dismissed mid-request. Left undefined by every
-// other dialog, which reproduces their close button's ORIGINAL
-// markup exactly (no `disabled` attribute, no `disabled:opacity-40`
-// class — that class is only appended when a dialog actually wires
-// up `closeDisabled`).
+// Shared modal chrome (backdrop + panel + header/close). `overlayClassName`
+// lets callers swap the backdrop (material viewer needs `fixed`, not
+// `absolute`, since its #root scrolls); `keepMounted` keeps DocsDialog warm.
 const DialogFrame = ({
     open, title, titleClassName, panelClassName, onClose, children,
     headerRight, closeDisabled, backdropCloseDisabled = false,
@@ -134,22 +85,9 @@ const DialogFrame = ({
     );
 };
 
-// Curated MaterialX example documents (item F3.2's "Presets"
-// toolbar button), resolved through window.MtlxAssets
-// (js/mtlx-assets.js) at the SAME base the app already uses for its
-// default startup document (js/graph/model.jsx's DEFAULT_GRAPH_URL)
-// — so a preset pick behaves exactly like that first-load fetch,
-// just chosen by the user instead of hardcoded, and (in a future
-// offline/packaged build) resolves against the local vendor mirror
-// instead of GitHub with zero further code changes — see
-// mtlx-assets.js's header comment. Every path below was verified to
-// exist at the pinned spec tag (HTTP 200 via GitHub's contents API
-// and a direct raw.githubusercontent.com request) before being
-// added; candidates that 404'd (e.g. StandardSurface's plain
-// "standard_surface_brass_tiled.mtlx" — only the "_look_" variant
-// exists at this tag; OpenPbr's "open_pbr_glass_tinted.mtlx" and
-// "open_pbr_anisotropy.mtlx" — no such files at this tag) were
-// dropped rather than guessed at.
+// Curated MaterialX example docs for the "Presets" button, resolved via
+// window.MtlxAssets (same base as the default startup doc). Every path
+// below was verified to exist (HTTP 200) at the pinned tag before adding.
 const MTLX_PRESETS_BASE = window.MtlxAssets.repoUrl('resources/Materials/Examples/');
 const MTLX_PRESETS = [
     { label: 'Marble (solid)', desc: 'Noise-driven solid marble veining', path: 'StandardSurface/standard_surface_marble_solid.mtlx' },
@@ -172,14 +110,9 @@ const MTLX_PRESETS = [
     { label: 'OpenPBR soap bubble', desc: 'Thin-film iridescence on a soap bubble (OpenPBR)', path: 'OpenPbr/open_pbr_soapbubble.mtlx' },
 ];
 
-// Filename refs authored in a preset doc, resolved against any
-// <materialx fileprefix="..."> (document-wide) and/or
-// <nodegraph fileprefix="..."> (scoped to that nodegraph's own body)
-// ancestor per MaterialX's inheritable-attribute semantics (see
-// fetchPresetFiles below). Splits the raw xml into "scopes" (each
-// nodegraph's body, plus everything outside any nodegraph) so each
-// <input type="filename"> tag picks up the right accumulated prefix;
-// a two-pass tag scan within each scope.
+// Filename refs in a preset doc, resolved against inherited
+// <materialx fileprefix> / <nodegraph fileprefix> ancestors. Splits the
+// xml into per-nodegraph "scopes" so each ref gets the right prefix.
 const extractFilenameRefs = (xml) => {
     const rootAttrs = (/<materialx\b([^>]*)>/.exec(xml) || [])[1] || '';
     const rootPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(rootAttrs) || [])[1] || '';
@@ -208,63 +141,9 @@ const extractFilenameRefs = (xml) => {
     return refs;
 };
 
-// Curated-preset crawl (backs the "Presets" toolbar button, item
-// F3.2): fetch a preset's root document from MTLX_PRESETS_BASE +
-// preset.path, then breadth-first crawl any sibling documents/
-// textures it pulls in, returning a relPath -> Blob map ready to
-// hand to a caller's ingest() the same way a drag-dropped .zip
-// would be. A plain single-doc fetch misses two things exercised by
-// the official MaterialX example set:
-//  (1) xi:include: "look" files (e.g. "Brass (tiled look)") pull in a
-//      separate sibling .mtlx for the actual material — resolveIncludes
-//      (js/mtlx-engine.js:535) inlines those from the returned map, but
-//      only if that sibling doc was actually fetched into it.
-//  (2) filename refs that escape the preset's own directory via literal
-//      "../" segments in the authored value AND/OR an inheritable
-//      `fileprefix="..."` attribute (MaterialX spec: set on an ancestor
-//      element — the document root or a <nodegraph> — and prepended,
-//      plain string concatenation, to every descendant filename input's
-//      raw `value`). E.g. "Wood (tiled)"'s <nodegraph
-//      fileprefix="../../../Images/"> makes value="wood_color.jpg"
-//      resolve to "../../../Images/wood_color.jpg", which lands outside
-//      the preset's own directory (resources/Images/, a sibling of
-//      resources/Materials/) — a plain dir-relative fetch 404s on it.
-//
-// `visited` (resolved doc URLs) + `queue` seed with the preset doc; every
-// fetched doc is (a) scanned for xi:include hrefs, resolved against THAT
-// doc's own URL and enqueued for its own scan, and (b) scanned for
-// fileprefix-resolved filename refs (extractFilenameRefs above), fetched
-// relative to THAT doc's own URL. `visited.size` is capped at MAX_DOCS:
-// these examples nest at most one include deep in practice, so this is
-// purely a guard against a malformed/circular include chain spinning
-// forever, not an expected limit. Texture fetches stay best-effort (warn
-// + skip on failure — a skipped ref just shows the UV checker like any
-// unresolved texture); only the ROOT document's fetch failure is fatal
-// (thrown, for the caller to catch).
-//
-// A SAFETY GUARD only ever fetches URLs under the active mode's
-// resources/ root (window.MtlxAssets.resourcesRoot(), recomputed on
-// every call so it stays correct if the active mode changes between
-// calls, not hardcoded a second time); refs that are absolute URLs
-// (scheme://) or resolve outside that root are skipped.
-//
-// Blobs for included docs are keyed the same way mtlx-engine.js's
-// resolveIncludes composes its own lookup when it later runs
-// (fromDir-of-the-including-key + '/' + href — see resolveIncludes,
-// js/mtlx-engine.js:547). Blobs for textures are keyed by the
-// fileprefix-resolved ref string (e.g. "../../../Images/wood_color.jpg")
-// — findFileForRef (js/mtlx-engine.js:517) matches an exact normalized
-// path first, then a unique path-suffix, then a unique basename, so this
-// key resolves correctly whether the WASM binding reports that resolved
-// path or the bare authored filename as the input's value at bind time
-// (bindDroppedTextures, js/mtlx-engine.js:659).
-//
-// Returns { map, rootKey }: `map` is the relPath -> Blob crawl result,
-// `rootKey` is the root document's own key in that map (its base name)
-// — callers pass it straight to their ingest()'s explicit-root-doc
-// param, since ingest()'s "auto-pick when exactly one .mtlx is in the
-// map" heuristic would otherwise also see the included docs' .mtlx keys
-// and stop to ask the user which one to load.
+// Crawls a preset's root doc plus xi:include siblings and fileprefix-
+// resolved filename refs (both can escape the preset's own directory);
+// fetches stay within window.MtlxAssets.resourcesRoot() as a safety guard.
 const fetchPresetFiles = async (preset) => {
     const resourcesRoot = window.MtlxAssets.resourcesRoot();
     const isSafePresetUrl = (url) => url.indexOf(resourcesRoot) === 0;
@@ -335,17 +214,9 @@ const fetchPresetFiles = async (preset) => {
     return { map, rootKey: baseName };
 };
 
-// Presets dialog (toolbar "Presets" button): a scrollable curated
-// list of official MaterialX example documents. Clicking a row
-// hands the preset straight to the caller (`onPick`) — this
-// component owns no fetching itself, matching ExportDialog's
-// "caller does the async work" split. `busy` (driven by the
-// caller while it fetches) disables every row and shows a spinner
-// on whichever one triggered it (`busyPath`) so the user gets
-// feedback without the dialog needing its own network code. Chrome
-// comes from the shared DialogFrame (see above); `overlayClassName`
-// is passed straight through to it (undefined for graph callers,
-// which keeps DialogFrame's own default).
+// Presets dialog: a scrollable curated list of example docs. Clicking a
+// row hands the preset to the caller (`onPick`) — this component owns no
+// fetching itself. `busy`/`busyPath` disable rows and spin the clicked one.
 function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName }) {
     useEscapeToClose(onClose, open && !busy);
     if (!open) return null;
@@ -384,44 +255,31 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
             </div>
         </DialogFrame>
     );
-    // Render inside the fullscreen/maximized viewport element when one is
-    // active (a fixed overlay elsewhere in the tree is invisible under
-    // native fullscreen, and sits behind the CSS-maximize fallback's
-    // pinned element); otherwise render inline exactly as before.
+    // Portal into the fullscreen/maximized viewport element when one is
+    // active — a fixed overlay elsewhere is invisible under native
+    // fullscreen and behind the CSS-maximize fallback's pinned element.
     const fsEl = fullscreenElement();
     return fsEl ? ReactDOM.createPortal(frame, fsEl) : frame;
 }
 
-// Portal target for the app's anchored popovers (EnvDialog, ColorSwatch,
-// SettingsDialog): the natively-fullscreened element when one is active,
-// else document.body. Native fullscreen only top-layers the fullscreened
-// element's own subtree, so a popover portaled to document.body renders
-// underneath it (invisible); portaling into document.fullscreenElement
-// keeps it on the top layer. document.fullscreenElement is null in the
-// non-fullscreen and CSS-maximize fallback paths, so this stays
-// document.body there -- no change to those paths.
+// Portal target for anchored popovers: the fullscreened element when
+// active, else document.body. Native fullscreen only top-layers its own
+// subtree, so a body-portaled popover would render invisibly underneath it.
 const fullscreenPortalRoot = () => (document.fullscreenElement || document.body);
 
 // Approx SettingsDialog popover footprint (px) for the edge-clamp/flip
-// math below -- mirrors ENV_DIALOG_W/H. Height is a safe over-estimate;
-// the cog sits at the top of the strip so the flip branch effectively
-// never fires.
+// math below. Height is a safe over-estimate; the cog sits at the top
+// of the strip so the flip branch effectively never fires.
 const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 180;
 
-// Settings popover (the cogwheel button in ViewportControls' strip below):
-// present in all three apps, since docs/viewer/graph all render
-// ViewportControls, so mounting it there needs zero per-app wiring.
-// Anchored just below the cog and edge-clamped to the viewport, mirroring
-// EnvDialog (portaled to the fullscreen root, closes on Escape + outside
-// pointerdown). Body is a small list of settings rows so more can land
-// here later without restructuring; today there is exactly one row
-// (Force Transparency).
+// Settings popover (cogwheel button in ViewportControls): mounted once
+// there so it's shared across docs/viewer/graph with zero per-app wiring.
+// Anchored below the cog and edge-clamped, mirroring EnvDialog.
 function SettingsDialog({ anchorRef, open, onClose }) {
     useEscapeToClose(onClose, open);
-    // Re-read from the engine's persisted value every time the dialog
-    // opens (not just once on mount) — window.setForceTransparency is the
-    // single source of truth (localStorage-backed), so this only needs to
-    // resync on open rather than track it live.
+    // Re-read from the engine's persisted value on every open (not just
+    // mount) — window.getForceTransparency is the single source of truth,
+    // so this only needs to resync on open rather than track it live.
     const [forceT, setForceT] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
     React.useEffect(() => {
         if (open) setForceT(!!(window.getForceTransparency && window.getForceTransparency()));
@@ -429,11 +287,9 @@ function SettingsDialog({ anchorRef, open, onClose }) {
     const popRef = React.useRef(null);
     const [pos, setPos] = React.useState(null);
 
-    // Right-align to the cog and clamp both axes to the viewport, then
-    // flip above if it would overflow the bottom -- identical math to
-    // EnvDialog's default branch (the cog lives in the same right-edge
-    // strip as the env button). No placement="left" variant: Settings
-    // just opens below the button on every page.
+    // Right-align to the cog and clamp both axes to the viewport, flipping
+    // above if it would overflow the bottom — identical math to EnvDialog's
+    // default branch. No placement="left" variant needed here.
     React.useEffect(() => {
         if (!open) return undefined;
         const rect = (anchorRef && anchorRef.current) ? anchorRef.current.getBoundingClientRect() : null;
@@ -500,15 +356,9 @@ function SettingsDialog({ anchorRef, open, onClose }) {
     );
 }
 
-// Copy arbitrary text to the clipboard, with the same two-tier fallback
-// XmlDialog's copyXml used before this extraction: try
-// navigator.clipboard.writeText first (needs a secure context; some
-// browsers also reject it outside a "fresh" user gesture), and on
-// absence/failure fall back to a throwaway <textarea> +
-// document.execCommand('copy'). Returns whether the copy succeeded, so
-// callers can drive their own "Copied" state off it (ShaderExportDialog
-// below) — this helper owns no UI state itself. XmlDialog keeps its own
-// inline copy (unchanged) rather than being refactored onto this.
+// Copy text to the clipboard: try navigator.clipboard.writeText first
+// (needs a secure context / fresh user gesture), falling back to a
+// throwaway <textarea> + execCommand('copy'). Returns whether it succeeded.
 const copyTextToClipboard = async (text) => {
     let ok = false;
     try {
@@ -534,34 +384,9 @@ const copyTextToClipboard = async (text) => {
     return ok;
 };
 
-// Shader source export dialog (docs/viewer preview's "Export Shader
-// Code" affordance): generates and displays the GLSL/OSL/MDL (etc.)
-// source MaterialX's shader generators produce for a renderable
-// material, lets the user flip between codegen targets and (when a
-// document has more than one) between materials, and offers a Copy/
-// Download of whichever stage is currently showing. This component
-// owns none of the actual codegen — `generate({ renderable, label,
-// targetKey }) => Promise<{ stages }>` is supplied by the caller,
-// which closes over the engine's generateTargetSources and whatever
-// renderable-node bookkeeping its own view already has (mirrors
-// ExportDialog/PresetsDialog's "caller does the async work" split).
-// `stages` is `[{ id: 'vertex'|'pixel', label, code }]` — a target
-// may produce one stage (e.g. a combined OSL/MDL shader) or several
-// (vertex+pixel GLSL); the codegen target list itself comes from the
-// engine global EXPORT_TARGETS (`{ key, label, className, isHw,
-// ext }[]`).
-//
-// Reruns `generate` whenever the open dialog's target or material
-// selection changes (the effect below, keyed on [open, targetKey,
-// matIndex]); `runRef` is a monotonic counter so a slow/stale
-// generate() call that resolves after the user has already switched
-// targets can't clobber the newer result — its `.then`/`.catch` only
-// applies if `runRef.current` still matches the id it captured before
-// calling out. Errors are never swallowed: a rejected generate()
-// always renders inline (no toast, no silent fallback) so a codegen
-// failure for one target doesn't look like a blank/broken dialog.
-// Closing mid-generate is allowed for the same reason — the stale
-// result the in-flight call eventually produces is simply discarded.
+// Shader source export dialog. `generate()` (caller-supplied) does the
+// codegen; `runRef` is a monotonic id so a stale generate() resolving
+// after the user switched targets can't clobber the newer result.
 function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, generate, overlayClassName }) {
     const [targetKey, setTargetKey] = React.useState(() => (EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
     const [matIndex, setMatIndex] = React.useState(0);
@@ -755,10 +580,9 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
     return fsEl ? ReactDOM.createPortal(frame, fsEl) : frame;
 }
 
-// Fullscreen state + toggle for a viewport container. Wraps the engine's
-// watchFullscreen/toggleFullscreen globals (js/mtlx-engine.js): the
-// container div (not the canvas) goes fullscreen, so overlaid viewport
-// controls stay visible. Returns [isFullscreen, toggle].
+// Fullscreen state + toggle for a viewport container, wrapping the
+// engine's watchFullscreen/toggleFullscreen globals. The container div
+// (not the canvas) goes fullscreen, so overlaid controls stay visible.
 const useFullscreen = (viewportRef) => {
     const [isFullscreen, setIsFullscreen] = React.useState(false);
     React.useEffect(() => watchFullscreen(
@@ -768,13 +592,9 @@ const useFullscreen = (viewportRef) => {
     return [isFullscreen, toggle];
 };
 
-// Boolean view-state toggle backed by a live render-view method (e.g. the
-// rotate/env-background buttons): flips the React state and, if the view
-// handle currently has the named method, calls it with the new value so
-// the change applies live without waiting for a re-render/regen. Returns
-// [value, toggle]. Any per-caller extras (like node-preview's envAvail
-// gating of whether the button even shows) stay at the call site — this
-// hook only covers the state+toggle core shared by both copies.
+// Boolean view-state toggle backed by a live render-view method (rotate/
+// env-background buttons): flips React state and, if the view handle has
+// the named method, calls it too so the change applies without a re-render.
 const useViewToggle = (viewRef, method, initial) => {
     const [value, setValue] = React.useState(!!initial);
     const toggle = () => setValue((v) => {
@@ -785,14 +605,9 @@ const useViewToggle = (viewRef, method, initial) => {
     return [value, toggle];
 };
 
-// PNG snapshot of the given render view's current frame, downloaded as
-// `<baseName, sanitized>.png`. Silently no-ops if the view has no frame to
-// snapshot (falsy dataURL) — matches both original copies' behavior.
-// Callers that want an error surfaced (e.g. viewer-app's setError) wrap
-// the call in their own try/catch; view.snapshot() can throw. Unlike
-// downloadBlob below, view.snapshot() hands back a plain data: URL —
-// there's no object URL to revoke, so this deliberately has no setTimeout
-// cleanup step.
+// PNG snapshot of the given render view's frame, downloaded as
+// `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
+// view.snapshot() returns a plain data: URL, so there's no URL to revoke.
 const downloadSnapshot = (view, baseName) => {
     const url = view.snapshot();
     if (!url) return;
@@ -818,18 +633,9 @@ const downloadXml = (xml, filename) => {
     downloadBlob(new Blob([xml], { type: 'application/xml' }), filename);
 };
 
-// Bundles the viewport-control state cluster duplicated across the three
-// preview surfaces (viewer-app.jsx, node-preview.jsx, graph/preview.jsx):
-// rotate/env-background toggles (useViewToggle), env-availability +
-// view-epoch state (both consumed by ViewportControls' Environment
-// dialog), fullscreen (useFullscreen), and a screenshot action.
-// `getSnapshotBase` supplies the FULL PNG base name — each caller's own
-// `<name>_<geom>` convention (material name / node name / preview label)
-// — this hook has no opinion on geometry suffixes itself. Deliberately
-// has NO try/catch around takeScreenshot: the material viewer wraps its
-// own call in try/setError to surface failures to the user; the other
-// two callers swallow them at the call site, matching their original
-// copies.
+// Bundles the viewport-control state cluster shared by the three preview
+// surfaces: rotate/env toggles, env-availability, fullscreen, screenshot.
+// `getSnapshotBase` supplies the PNG base name; no try/catch here by design.
 const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
     const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
     const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
@@ -853,13 +659,9 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
     };
 };
 
-// The `mtlx_preview_geom` localStorage read/validate/write pattern used by
-// node-preview.jsx (the only caller): on mount, read the stored geometry
-// choice and fall back to `defaultGeom` if it's missing or no longer one
-// of the valid options (guards against a stale persisted value rendering
-// the geometry dropdown empty). `pickGeom` writes a new choice back to the
-// SAME key (best-effort - some browsers block localStorage entirely) and
-// updates state. Returns [geom, pickGeom].
+// `mtlx_preview_geom` localStorage read/validate/write pattern (only
+// caller: node-preview.jsx). Falls back to `defaultGeom` if the stored
+// value is missing/invalid, guarding against a stale value.
 const usePersistedGeom = (defaultGeom) => {
     const [geom, setGeom] = React.useState(() => {
         const valid = ['shaderball', 'shaderball-scene', 'sphere', 'cube'];
@@ -877,26 +679,20 @@ const usePersistedGeom = (defaultGeom) => {
 
 // Hand a document off to the node graph editor: stash it (plus any loose
 // files) where js/graph-app.jsx's 'mtlx-load-document' listener expects
-// it, fire that event, then hash-route over to the graph view. Callers
-// that need to collect `files` first (viewer-app's non-.mtlx dropped
-// files) do that at the call site and pass the result in.
+// it, fire that event, then hash-route to the graph view.
 const openInGraphEditor = ({ xml, name, files }) => {
-    // Leaving this view for another tab: drop out of any active fullscreen
-    // (native or the CSS-maximize fallback) so the destination view is
-    // interactive. The shell keeps the old view mounted (just CSS-hidden),
-    // so fullscreen on the now-hidden viewport container would otherwise
-    // persist until the user hits Esc.
+    // Drop out of any active fullscreen (native or the CSS-maximize
+    // fallback) before leaving this view — the shell keeps the old view
+    // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
     if (fullscreenElement()) toggleFullscreen();
     window.__mtlxPendingImport = { xml, name, files: files || null };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
 };
 
-// Filters a relPath -> File|Blob session map down to the loose
-// (non-.mtlx) companion files — the payload openInGraphEditor/
-// openInViewer above hand off ALONGSIDE a document's XML (textures etc.),
-// as opposed to the .mtlx itself. Duplicated verbatim in viewer-app.jsx's
-// sendToEditor and graph-app.jsx's sendToViewer before this extraction.
+// Filters a relPath -> File|Blob session map down to the loose (non-.mtlx)
+// companion files — the payload openInGraphEditor/openInViewer hand off
+// alongside a document's XML, as opposed to the .mtlx itself.
 const looseFilesFrom = (fileMap) => {
     const files = {};
     Object.keys(fileMap || {}).forEach((k) => {
@@ -905,37 +701,22 @@ const looseFilesFrom = (fileMap) => {
     return files;
 };
 
-// Hand a document off to the material viewer — the graph editor's "Send to
-// Viewer" counterpart (item F2.2) to openInGraphEditor above. Same shape,
-// mirrored in reverse: stash it (plus any loose files) where
-// js/viewer-app.jsx's 'mtlx-view-document' listener expects it, fire that
-// event, then hash-route over to the viewer.
+// Hand a document off to the material viewer — openInGraphEditor's mirror
+// counterpart. Stashes it (plus loose files) where js/viewer-app.jsx's
+// 'mtlx-view-document' listener expects it, then hash-routes to the viewer.
 const openInViewer = ({ xml, name, files }) => {
-    // Leaving this view for another tab: drop out of any active fullscreen
-    // (native or the CSS-maximize fallback) so the destination view is
-    // interactive. The shell keeps the old view mounted (just CSS-hidden),
-    // so fullscreen on the now-hidden viewport container would otherwise
-    // persist until the user hits Esc.
+    // Drop out of any active fullscreen (native or the CSS-maximize
+    // fallback) before leaving this view — the shell keeps the old view
+    // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
     if (fullscreenElement()) toggleFullscreen();
     window.__mtlxPendingViewerImport = { xml, name, files: files || null };
     window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: window.__mtlxPendingViewerImport }));
     window.location.hash = '#!viewer';
 };
 
-// Page-wide drag & drop: files can be dropped ANYWHERE on the page, not
-// just a dedicated drop zone. Registers window-level dragenter/dragover/
-// dragleave/drop listeners exactly once (callbacks are read through refs
-// so they always see the latest closure without re-subscribing), tracks
-// enter/leave depth (dragenter/dragleave fire per child element crossed),
-// and on drop reads the dropped items via the engine's readDroppedItems
-// global before handing the resulting relPath -> File|Blob map to
-// onFiles. `activeRef.current === false` (a backgrounded view in the
-// multi-view shell) suppresses all handling. onDragState(bool) drives a
-// drag-over visual indicator. `disabled` (default false) registers NO
-// window listeners at all — used by the VS Code extension callers, where
-// the editor is bound to one opened .mtlx file, so dropping other
-// documents is disabled there. Callers pass their own IN_VSCODE flag; this
-// hook doesn't read window.__MTLX_VSCODE__ itself.
+// Page-wide drag & drop: files can drop anywhere, not just a drop zone.
+// `activeRef.current === false` suppresses handling for backgrounded
+// views; `disabled` registers no listeners (used by VS Code callers).
 const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }) => {
     const onFilesRef = React.useRef(onFiles);
     onFilesRef.current = onFiles;
@@ -988,11 +769,9 @@ const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }
     }, []);
 };
 
-// Absolute-positioned loading overlay shown over a viewport while a
-// document/shader is (re)generating. Defaults match node-preview.jsx's
-// markup; viewer-app.jsx overrides className/labelClassName/barWidthClass
-// to reproduce its own (slightly different z-index/opacity/sizing)
-// markup verbatim.
+// Absolute loading overlay shown over a viewport while (re)generating.
+// Defaults match node-preview.jsx's markup; viewer-app.jsx overrides
+// className/labelClassName/barWidthClass to reproduce its own markup.
 const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass }) => {
     if (!show) return null;
     const wrapCls = className || 'absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 z-10 bg-gray-900/80';
@@ -1006,40 +785,9 @@ const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass 
     );
 };
 
-// Top-right viewport control strip (geometry picker, rotate/env toggles,
-// screenshot, fullscreen) shared by viewer-app.jsx and node-preview.jsx.
-// The two originals differ slightly in container/select/button styling
-// (node-preview is denser — h-6 controls, tighter z-index/gap) — those
-// are exposed as className props (defaulting to node-preview's markup) so
-// viewer-app can override them and reproduce its own markup verbatim.
-// `children` renders extra elements at the START of the strip (viewer-app
-// uses this for its fullscreen-only material <select>); `trailingChildren`
-// renders extra elements just before the fullscreen button (viewer-app
-// uses this for its "send to editor" button, which node-preview doesn't
-// have). `showGeomSelect`/`showRotate` (both default true) hide the
-// geometry dropdown and turntable-rotate button respectively — the graph
-// editor's fixed-scene preview (an authored, non-interactive camera with
-// no geometry choice) turns both off; the two existing callers pass
-// neither prop and keep rendering both controls unchanged.
-// `showBackgroundToggle` (default true) hides the Environment popover's
-// "Background" On/Off row — the graph preview's full GLB scene has an
-// opaque backdrop box that fully occludes the engine's env-background
-// sky sphere, so the toggle would be a no-op there; it passes false.
-// The material viewer and docs preview don't pass it, so the toggle
-// keeps showing exactly as today.
-// `onCameraReset` (default undefined) renders an icon-only "reset
-// camera" button next to the rotate button when provided; when the prop
-// is absent NOTHING renders for it, so callers that don't pass it (the
-// graph editor) are unaffected by construction.
-// Anchored popover for the "Environment" button (replaces the old plain
-// show/hide toggle). Portaled to document.body — same containing-block
-// rationale as ColorSwatch above (this app's panels use backdrop-blur,
-// which breaks plain `position: fixed` descendants). Fully controlled:
-// all state (open/rotation/exposure/error) lives in the owner
-// (ViewportControls) so it survives this component unmounting/
-// remounting and so the owner's viewEpoch-keyed effect (which re-applies
-// rotation/exposure/override to a freshly (re)built view) can read the
-// same values.
+// Viewport control strip (geom/rotate/env/screenshot/fullscreen), shared
+// with per-caller className/visibility overrides. EnvDialog below portals
+// to document.body since backdrop-blur ancestors break `position: fixed`.
 const ENV_DIALOG_W = 224, ENV_DIALOG_H = 240; // approx footprint, used for edge clamping/flip below
 
 const EnvDialog = ({
@@ -1057,30 +805,17 @@ const EnvDialog = ({
     const [pos, setPos] = React.useState(null);
     const fileInputRef = React.useRef(null);
 
-    // Right-align to the anchor and clamp both axes to the viewport — the
-    // env button sits at the panel's right edge, and in the graph preview
-    // (docked bottom-right of the screen) an unclamped left/top-only
-    // position would push this 224px-wide dialog past both the right and
-    // bottom edges. Vertical flip is modeled on ColorSwatch.openPopover
-    // above.
-    // This dialog is shared by the viewer/docs previews AND the graph
-    // preview. The graph preview panel is itself docked at the screen's
-    // right edge, so the default below/right-aligned placement would drop
-    // the dialog on top of the 3D canvas it belongs to — placement="left"
-    // is an opt-in used only there, opening the dialog over the graph
-    // canvas instead (harmless to cover).
+    // Right-align to the anchor and clamp both axes, flipping above if it
+    // would overflow the bottom. `placement="left"` (graph preview only)
+    // anchors to the panel's left edge instead of dropping on the canvas.
     React.useEffect(() => {
         if (!open) return undefined;
         const rect = anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
         if (rect) {
             if (placement === 'left') {
-                // Horizontal anchor is the PANEL's left edge (edgeRef), not
-                // the button's — the env button sits near the right edge of
-                // the (right-docked) preview panel, so anchoring to it would
-                // leave the dialog overlapping most of the panel, including
-                // the 3D canvas. Falls back to the button rect if no
-                // edgeRef was supplied. Vertical position is still taken
-                // from the button rect (unchanged).
+                // Anchors to the PANEL's left edge (edgeRef), not the
+                // button's, so the dialog doesn't overlap the 3D canvas.
+                // Falls back to the button rect if no edgeRef was given.
                 const edgeRect = (edgeRef && edgeRef.current) ? edgeRef.current.getBoundingClientRect() : rect;
                 const left = Math.max(8, edgeRect.left - ENV_DIALOG_W - 8);
                 const top = Math.min(rect.top, window.innerHeight - ENV_DIALOG_H - 8);
@@ -1190,9 +925,8 @@ const EnvDialog = ({
 };
 
 // Friendly labels for the preview-geometry <select>'s raw values (which
-// also double as engine geomName / persisted-storage values - never
-// changed, only how they're displayed). Falls back to the raw value for
-// anything not listed here.
+// double as engine geomName / persisted-storage values, never changed —
+// only how they're displayed). Falls back to the raw value if unlisted.
 const GEOM_LABELS = {
     'shaderball': 'Shaderball',
     'shaderball-scene': 'Shaderball w/ Backdrop',
@@ -1226,10 +960,9 @@ const ViewportControls = ({
     }`,
 }) => {
     const envBtnRef = React.useRef(null);
-    // Spans the full containerClassName strip (which itself spans the full
-    // panel width in the graph preview's docked layout), so its left edge
-    // approximates the PANEL's left edge — used by EnvDialog's placement="left"
-    // branch to clear the whole panel instead of just the env button.
+    // Spans the full strip width (which spans the panel in the graph
+    // preview's docked layout), approximating the PANEL's left edge — used
+    // by EnvDialog's placement="left" to clear the whole panel.
     const panelEdgeRef = React.useRef(null);
     const settingsBtnRef = React.useRef(null);
     const [envOpen, setEnvOpen] = React.useState(false);
@@ -1238,29 +971,17 @@ const ViewportControls = ({
     const [envImportError, setEnvImportError] = React.useState(null);
     const [settingsOpen, setSettingsOpen] = React.useState(false);
 
-    // Re-apply rotation/exposure onto whatever view is now in
-    // viewRef.current every time the host reports a (re)build via
-    // viewEpoch — including the initial mount (a freshly-created view
-    // already starts at engine defaults, so applying 0deg/1.0x here is a
-    // harmless no-op in the common case). Skipped entirely if the host
-    // doesn't pass viewRef (old callers keep the plain toggle-only button
-    // below).
-    // NOTE: no session-override re-apply here anymore — a freshly-created
-    // view already bakes in the current envOverride at creation time
-    // (`envOverride || await getEnvironment()` in createMtlxRenderView),
-    // and any LATER import/reset reaches this view via the engine's
-    // LIVE_VIEWS broadcast (setEnvOverride), so re-applying it here on
-    // every viewEpoch change was redundant.
+    // Re-apply rotation/exposure to the current view on every (re)build
+    // (viewEpoch). No envOverride re-apply here: a fresh view already
+    // bakes it in at creation, and later changes reach it via LIVE_VIEWS.
     React.useEffect(() => {
         if (!viewRef || !viewRef.current) return;
         const view = viewRef.current;
         if (view.setEnvRotation) view.setEnvRotation(envRotation * Math.PI / 180);
         if (view.setEnvExposure) view.setEnvExposure(envExposure);
-        // envRotation/envExposure deliberately excluded: this effect's
-        // job is re-applying state to a NEW view (keyed on viewEpoch),
-        // not reacting to slider drags — those call the view methods
-        // directly in their own onChange handlers below for immediate
-        // feedback without waiting for a re-render.
+        // envRotation/envExposure deliberately excluded: this effect
+        // re-applies state to a NEW view (viewEpoch); slider drags call
+        // the view methods directly in their onChange handlers instead.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewEpoch]);
 
@@ -1293,10 +1014,9 @@ const ViewportControls = ({
         // touches rotation/exposure/override, per spec).
     };
 
-    // When labels are shown the strip is much wider, so allow it to wrap to a
-    // second line (right-aligned) and cap its width to the viewport. Other
-    // consumers (graph/node previews) don't pass showLabels, so they keep the
-    // caller's containerClassName unchanged.
+    // When labels are shown the strip is wider, so let it wrap to a second
+    // line (right-aligned) and cap its width. Other consumers don't pass
+    // showLabels, so they keep containerClassName unchanged.
     const stripClassName = showLabels
         ? `${containerClassName} ${labelsClass}`
         : containerClassName;
@@ -1404,11 +1124,9 @@ const ViewportControls = ({
             {showLabels && <span className="ml-1.5 whitespace-nowrap">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>}
         </button>
     </div>
-    {/* Anchored settings popover (portaled to the fullscreen root, like
-        EnvDialog) rather than a full-screen modal, so it opens in place
-        just below the cog and stays visible in native fullscreen without
-        exiting it. Mounted as a sibling of the strip; the portal makes
-        its DOM position in the tree irrelevant. */}
+    {/* Anchored popover (portaled to the fullscreen root, like EnvDialog)
+        rather than a full-screen modal, so it stays visible in native
+        fullscreen without exiting it. */}
     <SettingsDialog
         anchorRef={settingsBtnRef}
         open={settingsOpen}
@@ -1418,32 +1136,20 @@ const ViewportControls = ({
     );
 };
 
-// Custom color picker swatch — replaces the two native `<input
-// type="color">` uses in the app (js/graph/panels.jsx's color3/color4 row,
-// js/node-preview.jsx's identical param control). Native color inputs open
-// the OS/browser's own picker, which can't be styled or themed and behaves
-// inconsistently across platforms; this popover keeps color editing fully
-// inside the app's own chrome. Speaks the SAME linear-RGB convention as
-// both callers: `rgb` is always `[r, g, b]` floats 0-1, and rgbToHex/
-// hexToRgb (js/mtlx-engine.js — a plain byte<->float mapping, no sRGB
-// transfer) are reused here so the hex field agrees with them exactly.
-// The `position: fixed` popover is portaled onto document.body via
-// ReactDOM.createPortal — a plain in-place sibling would be repositioned
-// by any `backdrop-filter`/`transform` ancestor (see the containing-block
-// explanation on the `popover` variable below).
+// Custom color picker swatch, replacing native `<input type="color">`
+// (unstyleable, inconsistent across platforms). `rgb` is always linear
+// `[r, g, b]` floats 0-1, matching rgbToHex/hexToRgb's convention exactly.
 const ColorSwatch = ({ rgb, onChange, title, className }) => {
     const [open, setOpen] = React.useState(false);
     const [pos, setPos] = React.useState(null); // { left, top } or { left, bottom }
-    // Source of truth WHILE the popover is open. Initialized from `rgb`
-    // only at open time — NOT kept in sync afterward — so dragging
-    // saturation/value at s=0 or v=0 (where hue can't be recovered from
-    // rgb alone) doesn't cause the hue to jump around underneath the user.
+    // Source of truth while the popover is open, initialized from `rgb`
+    // only at open time (not kept in sync) — else dragging at s=0/v=0
+    // (where hue can't be recovered from rgb) would jump the hue underfoot.
     const [hsv, setHsv] = React.useState({ h: 0, s: 0, v: 0 });
     const [hexDraft, setHexDraft] = React.useState('');
-    // Draft strings for the 0-255 R/G/B number row, mirroring hexDraft's
-    // pattern: free-typed text while focused, re-seeded from the committed
-    // `rgb` (see openPopover/commitHex/commit255 below) rather than kept
-    // continuously in sync, so a half-typed value isn't clobbered mid-edit.
+    // Draft strings for the 0-255 R/G/B row, mirroring hexDraft: free-typed
+    // while focused, re-seeded from committed `rgb` rather than kept live,
+    // so a half-typed value isn't clobbered mid-edit.
     const [rgb255Draft, setRgb255Draft] = React.useState(['0', '0', '0']);
     const btnRef = React.useRef(null);
     const popRef = React.useRef(null);
@@ -1498,10 +1204,9 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 
     useEscapeToClose(() => setOpen(false), open);
 
-    // Close on pointerdown anywhere outside the popover/swatch. The
-    // popover itself stops propagation on its own pointerdown (below), so
-    // this only ever sees genuinely-outside events — the swatch button is
-    // still checked via ref for the rare case a future change removes that.
+    // Close on pointerdown outside the popover/swatch. The popover stops
+    // propagation on its own pointerdown, so this only sees truly-outside
+    // events; the button is still ref-checked as a safety net.
     React.useEffect(() => {
         if (!open) return undefined;
         const onDown = (e) => {
@@ -1513,19 +1218,9 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
         return () => window.removeEventListener('pointerdown', onDown);
     }, [open]);
 
-    // Re-seed hexDraft/rgb255Draft from the `rgb` prop while the popover
-    // is open, so an external edit to the same color (e.g. the 0-1
-    // spinners this swatch sits next to) shows up here too. Guarded by
-    // focus: if the hex input or any of the three 255 inputs currently
-    // has focus, skip re-seeding entirely rather than clobber a
-    // half-typed value — all four inputs live inside popRef, so checking
-    // document.activeElement against it covers all four without needing
-    // per-input refs. hsv is deliberately NEVER touched here: re-seeding
-    // it from `rgb` would reintroduce the hue-jump-at-s=0/v=0 bug that
-    // openPopover (seeding hsv only once, at open time) exists to avoid.
-    // `rgb` may be a brand-new array each render with the same values, so
-    // the dependency is a joined string, not the array itself — otherwise
-    // this effect would re-run (and needlessly reset drafts) every render.
+    // Re-seed hexDraft/rgb255Draft from `rgb` while open, skipped while a
+    // draft input has focus. hsv is deliberately never re-seeded here — that
+    // would reintroduce the hue-jump-at-s=0/v=0 bug openPopover avoids.
     const rgbKey = rgb.join(',');
     React.useEffect(() => {
         if (!open) return undefined;
@@ -1540,12 +1235,9 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
     const setFromHsv = (nextHsv) => {
         setHsv(nextHsv);
         const nv = hsvToRgb(nextHsv);
-        // Live-sync the text fields while the user drags the sat/value
-        // square or hue strip, so hex/255 don't go stale mid-drag.
-        // Deriving hex/255 FROM hsv here is safe in either direction —
-        // it's only going the OTHER way (seeding hsv from rgb outside of
-        // openPopover) that's forbidden, since that's what causes the
-        // hue-jump-at-s=0/v=0 bug this component works around elsewhere.
+        // Live-sync hex/255 while dragging the sat/value square or hue
+        // strip. Deriving them FROM hsv is safe; only the reverse (seeding
+        // hsv from rgb outside openPopover) is forbidden — see above.
         setHexDraft(rgbToHex(nv));
         setRgb255Draft(nv.map((c) => String(Math.round(c * 255))));
         onChange(nv);
@@ -1599,18 +1291,9 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 
     const swatchCls = className || 'h-7 w-10 bg-transparent border border-gray-600 rounded cursor-pointer flex-none';
 
-    // The popover itself is portaled straight onto <body> via
-    // ReactDOM.createPortal (the UMD build already loaded by index.html —
-    // no dedicated portal infra needed for this one call) instead of being
-    // rendered as a plain DOM sibling. `position: fixed` alone isn't
-    // enough: several dialogs/panels in this app (including the parameter
-    // panel this swatch usually sits in) use Tailwind's `backdrop-blur`
-    // (backdrop-filter), which — like `transform`/`filter`/`will-change:
-    // transform` — establishes a NEW containing block for fixed-position
-    // descendants in Chromium. A fixed popover nested inside one of those
-    // ends up positioned relative to that ancestor's box, not the
-    // viewport, silently landing hundreds of pixels off target. Portaling
-    // to `document.body` sidesteps the whole containing-block question.
+    // Portaled onto <body> via ReactDOM.createPortal: `position: fixed`
+    // alone isn't enough, since ancestor `backdrop-blur` (like transform/
+    // filter) creates a new containing block, silently mispositioning it.
     const popover = open ? (
         <div
             ref={popRef}
@@ -1664,10 +1347,8 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
                 />
             </div>
             {/* 0-255 byte row — same linear-RGB convention as the hex row
-                above (rgbToHex/hexToRgb: a plain byte<->float mapping, no
-                sRGB transfer), just decimal per-channel instead of packed
-                hex. flex-1/min-w-0 on each input keeps the row inside the
-                popover's fixed POP_W without hardcoding pixel widths. */}
+                above, just decimal per-channel. flex-1/min-w-0 keeps it
+                inside the popover's fixed POP_W without hardcoded widths. */}
             <div className="flex items-center gap-1.5">
                 {['R', 'G', 'B'].map((label, i) => (
                     <div key={label} className="flex items-center gap-1 flex-1 min-w-0">
@@ -1682,14 +1363,9 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
                                 const nd = rgb255Draft.slice();
                                 nd[i] = e.target.value;
                                 setRgb255Draft(nd);
-                                // Native step-arrows and the up/down arrow
-                                // keys produce input events with NO
-                                // inputType (typing yields 'insertText' etc.
-                                // per the InputEvent spec) — commit those
-                                // live so the color follows the spinner.
-                                // Typed digits still wait for blur/Enter
-                                // (committing '2' mid-keystroke of '255'
-                                // would flash dark).
+                                // Step-arrows/arrow keys produce input events
+                                // with NO inputType (typed digits get one) —
+                                // commit those live so the spinner isn't laggy.
                                 if (!(e.nativeEvent && e.nativeEvent.inputType)) commit255(i, e.target.value);
                             }}
                             onBlur={() => commit255(i, rgb255Draft[i])}
@@ -1728,10 +1404,8 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 };
 
 // The site ships production React with no error boundaries — one render
-// throw anywhere unmounts the ENTIRE app (blank page). This boundary
-// wraps the docs page's 3D preview so a preview crash degrades to an
-// inline error card instead (the toggle bug it was added alongside is
-// fixed, but previews touch wasm/GL and stay the riskiest subtree).
+// throw anywhere unmounts the ENTIRE app. This wraps the docs page's 3D
+// preview so a crash degrades to an inline error card instead.
 class PreviewErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { error: null }; }
     static getDerivedStateFromError(error) { return { error }; }

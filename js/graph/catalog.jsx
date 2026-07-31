@@ -1,28 +1,18 @@
-// js/graph/catalog.jsx — the Tab quick-add node catalog: per-nodedef info,
+// js/graph/catalog.jsx — Tab quick-add node catalog: per-nodedef info,
 // grouping a category's nodedefs into type signatures (versions collapsed
-// under their signature), and the memoized catalog builder. Split out of
-// js/graph-app.jsx (pure move, no behavior change) as part of the graph
-// view's file split. Loaded after js/graph/model.jsx in the graph view's
-// babelScripts manifest (see js/shell.jsx's VIEW_DEPS.graph). Like every
-// other lazy-loaded file in this app, this file has NO top-level import/
-// export — it self-exports via a single Object.assign(window, {}) at the
-// bottom. `nodeCatalogPromise` is the only module-mutable state left in
-// the graph view's split files; it lives here alongside buildNodeCatalog,
-// the sole function that touches it.
+// under their signature), and the memoized catalog builder.
+// Loaded after js/graph/model.jsx (see js/shell.jsx's VIEW_DEPS.graph);
+// no top-level import/export, self-exports via Object.assign(window, {})
+// at the bottom. `nodeCatalogPromise` is the only module-mutable state in
+// the graph view's split files; buildNodeCatalog is its sole mutator.
 
         // ---- Tab quick-add: the standard-library node catalog -------------
 
         // One entry per stdlib node category (name, group, signature
         // groups), built once from the loaded library.
-        // One nodedef → its raw info: name, resolved output type, the input
-        // list (name/type/default — inheritance-resolved via
-        // getActiveInputs, so a versioned nodedef that only overrides a
-        // couple of defaults still reports its FULL port list), and version
-        // metadata. A category with several nodedefs (add, mix, …) can vary
-        // along two independent axes — see groupSignatures below, which
-        // tells a genuine type SIGNATURE apart from a mere VERSION of the
-        // same signature (standard_surface 1.0.1 / 1.0.0: identical ports,
-        // different defaults).
+        // Raw per-nodedef info: name, resolved output type, inputs, version.
+        // Inputs come from getActiveInputs, so a versioned nodedef that only
+        // overrides some defaults still reports its FULL port list.
         const nodeDefInfo = (def) => {
             const seen = new Set();
             const inputs = [];
@@ -60,21 +50,14 @@
             return out;
         };
 
-        // A TYPE-SIGNATURE key \u2014 the ordered input types plus the
-        // resolved output type \u2014 independent of version. Two nodedefs
-        // sharing this key are the SAME signature at different versions;
-        // nodedefs with different keys are genuinely different signatures
-        // (mix: float vs color3 vs \u2026).
+        // TYPE-SIGNATURE key: ordered input types plus output type,
+        // version-independent. Same key = same signature across versions;
+        // differing keys = genuinely different (e.g. mix: float vs color3).
         const sigKeyOf = (d) => d.type + '|' + d.inputs.map((i) => i.type).join(',');
 
-        // Group a category's nodedefs into one entry per TYPE SIGNATURE,
-        // each carrying every VERSION of that signature:
-        //   { key, type, outLabel, inputs, inSummary, ambiguous, versions }
-        // `inputs`/`outLabel` describe the DEFAULT (or first) version \u2014
-        // what applySignature retypes/reconciles against; `versions` is
-        // sorted default-first, then by version string descending.
-        // Ambiguity (the output type alone can't resolve which nodedef to
-        // use) is a SIGNATURE-level concern, never a version-level one.
+        // Groups a category's nodedefs by TYPE SIGNATURE, each entry
+        // carrying every VERSION. inputs/outLabel reflect the DEFAULT (or
+        // first) version; ambiguous means output type alone can't disambiguate.
         const groupSignatures = (defs) => {
             const byKey = {};
             const order = [];

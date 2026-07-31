@@ -1,12 +1,9 @@
-// js/graph/panels.jsx — the Tab quick-add search palette and the
-// parameter-panel input row (typed controls: color/vector spinners,
-// enums, sliders, filename picker, text). Split out of js/graph-app.jsx
-// (pure move, no behavior change) as part of the graph view's file split.
-// Loaded after js/graph/style.jsx (consumes its typeColor window global)
-// in the graph view's babelScripts manifest (see js/shell.jsx's
-// VIEW_DEPS.graph). Like every other lazy-loaded file in this app, this
-// file has NO top-level import/export — it self-exports via a single
-// Object.assign(window, {}) at the bottom.
+// js/graph/panels.jsx — Tab quick-add search palette and the parameter-
+// panel input row (typed controls: color/vector spinners, enums, sliders,
+// filename picker, text). Pure move out of js/graph-app.jsx as part of
+// the graph view's file split. No top-level import/export — self-exports
+// via Object.assign(window, {}) at the bottom. Load after js/graph/style.jsx
+// (consumes its typeColor global) per js/shell.jsx's VIEW_DEPS.graph.
 
         // The Tab search palette: type-to-filter over the catalog,
         // arrows + Enter to add, Esc (or Tab again, or clicking away)
@@ -18,13 +15,9 @@
             'matrix33', 'matrix44', 'string', 'vector2', 'vector3', 'vector4',
             'surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF', 'lightshader', 'material'];
 
-        // filterMode/filterType power the port-dot double-click flow (item
-        // 4): filterMode 'in' means the new node must be able to FEED the
-        // port that was double-clicked (match on OUTPUT type, same as the
-        // plain type-filter dropdown); 'out' means the new node must be able
-        // to CONSUME it (match on some INPUT's type instead). null/'' is the
-        // normal Tab/button-triggered flow, where the user drives the
-        // dropdown themselves.
+        // filterMode/filterType drive the port-dot double-click flow:
+        // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
+        // an INPUT that can consume it; null/'' is the normal flow.
         function AddNodeSearch({ catalog, ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
@@ -227,15 +220,9 @@
             );
         }
 
-        // "0.8, 0.8, 0.8" (color3/color4) → CSS color for a preview swatch;
-        // null when the value doesn't parse.
         // ---- Typed parameter controls --------------------------------------
-        // Mirrors the docs-page node previewer: color3/4 → color picker +
-        // per-channel spinners (both speak LINEAR 0-1; rgbToHex/hexToRgb are
-        // a plain byte↔float map, no sRGB transfer); vectorN → per-component
-        // spinners; float/integer → spinner (+ slider when the nodedef
-        // declares a UI range); enums → dropdowns; boolean → checkbox;
-        // strings/filenames → text committed on blur/Enter.
+        // Mirrors the docs-page previewer: color/vector spinners, a
+        // range slider, enum/boolean dropdowns, text on blur/Enter.
         const VEC_SIZE = { color3: 3, color4: 4, vector2: 2, vector3: 3, vector4: 4 };
         const parseComps = (s, n) => {
             const parts = String(s || '').split(',').map((x) => parseFloat(x));
@@ -249,21 +236,15 @@
         };
         const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter((x) => x.length);
 
-        // One parameter row. Connected inputs show — and jump to — the node
-        // feeding them. Unconnected ones edit the literal value. Text-ish
-        // fields commit on blur or Enter; the structured controls (picker,
-        // spinners, sliders) commit through a short debounce, because every
-        // commit writes the document and recompiles the shader — per-tick
-        // commits while dragging a slider would thrash the generator.
-        // Continuous controls also fire onLive per input tick for a GPU-side
-        // live preview, while the debounced commit owns the document write.
+        // One row per param: connected inputs jump to their source node;
+        // unconnected ones edit the value, debounced (each commit writes
+        // the doc and recompiles); onLive fires per tick for a live preview.
         function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
             const [draft, setDraft] = React.useState(inp.value || '');
             React.useEffect(() => { setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
-            // Raw per-component TEXT for vector/color inputs — kept separate
-            // from the numeric `comps` derived below so the <input>'s value
-            // is always exactly what the user typed (see commentary at the
-            // vecN branch of control() for why this matters for caret pos).
+            // Raw per-component TEXT for vector/color inputs, kept apart
+            // from the numeric `comps` below so each <input>'s value is
+            // exactly what was typed (see control()'s vecN branch).
             const [compText, setCompText] = React.useState(
                 () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr)
             );
@@ -290,13 +271,9 @@
                 if (timerRef.current) clearTimeout(timerRef.current);
                 timerRef.current = setTimeout(flush, 300);
             };
-            // Like commitSoon, but the DRAFT shown to the user (`raw`, e.g.
-            // the exact text just typed, possibly "-", "1.", "") can differ
-            // from the VALUE that gets committed to the document (`v`, a
-            // canonicalized number string) — controlled numeric <input>s
-            // reset their caret to the end whenever `.value` is reassigned
-            // to something other than what's currently displayed, so
-            // reformatting on every keystroke makes backspace unusable.
+            // Like commitSoon, but the shown draft (`raw`, e.g. "-", "1.")
+            // can differ from the committed `v` — controlled numeric
+            // <input>s reset the caret on reformat, breaking backspace.
             const commitSoonRaw = (raw, v) => {
                 setDraft(raw);
                 if (onLive) onLive(v);
@@ -305,13 +282,9 @@
                 timerRef.current = setTimeout(flush, 300);
             };
             const commitNow = (v) => { setDraft(v); pendingRef.current = v; flush(); };
-            // Native number step-arrows (and PageUp/Down step presses) fire
-            // an input `change` event whose nativeEvent.inputType is
-            // undefined; typing produces 'insertText'/'deleteContentBackward'/
-            // etc. Used below to flush spinner-driven edits immediately
-            // instead of waiting out the typing debounce — repeated arrow
-            // clicks previously kept pushing the 300ms deadline back, so the
-            // doc/canvas value updated only once the user stopped clicking.
+            // Step-arrow/PageUp/Down changes leave nativeEvent.inputType
+            // undefined (typing sets it) — used to flush spinner edits
+            // immediately instead of waiting out the typing debounce.
             const isSpinEvent = (e) => !(e && e.nativeEvent && e.nativeEvent.inputType);
             React.useEffect(() => flush, []); // unmount: don't drop a pending edit
             const commit = () => { flush(); if (draft !== (inp.value || '')) onCommit(draft); };
@@ -322,11 +295,9 @@
             const enumValues = splitList(inp.enumValues);
             const boxCls = 'bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none';
 
-            // color3/color4 VALUE inputs can also carry a colorspace, but
-            // it's rarely touched — the picker starts collapsed and only
-            // auto-expands when the instance (or a signature/version swap)
-            // already authors one, so it doesn't compete for space with
-            // the swatch on every color row.
+            // Colorspace is rarely touched, so the picker starts collapsed
+            // and only auto-expands when the instance (or a signature/
+            // version swap) already authors one.
             const [csOpen, setCsOpen] = React.useState(!!inp.colorspace);
             React.useEffect(() => { setCsOpen(!!inp.colorspace); }, [nodeId, inp.name, inp.colorspace]);
 
@@ -504,10 +475,8 @@
                                     const raw = e.target.value;
                                     const n = parse(raw);
                                     // Bind to the raw typed text, not a
-                                    // reparsed/reformatted number — see
-                                    // commitSoonRaw's comment. Intermediate
-                                    // states like "", "-", "1." stay
-                                    // displayed but don't commit.
+                                    // reparsed number (see commitSoonRaw);
+                                    // "", "-", "1." stay shown, uncommitted.
                                     if (!isNaN(n)) {
                                         commitSoonRaw(raw, numStr(n));
                                         // Spinner (step-arrow) click, not
@@ -522,11 +491,9 @@
                         </div>
                     );
                 }
-                // Filename → image picker (joins the session's file map,
-                // bound onto the shader like a dropped file) + editable
-                // name field, with the COLORSPACE select right underneath.
-                // Colorspace is a codegen decision (the CMS bakes the
-                // transform into the shader), so picking one recompiles.
+                // Filename → image picker (joins session files, binds by
+                // name) + editable name field; the colorspace select
+                // underneath recompiles the shader (a codegen decision).
                 if (inp.type === 'filename') {
                     return (
                         <div className="space-y-1">
@@ -550,12 +517,9 @@
                                 </label>
                                 {textField()}
                             </div>
-                            {/* Colorspace is only meaningful when the node's
-                                resolved output is color3/color4 — never hide
-                                it, though, when the instance already
-                                authors one (e.g. after a signature/version
-                                swap that no longer resolves to a color
-                                output but left the attribute in place). */}
+                            {/* Colorspace matters only for color3/4 output,
+                                but stays visible if the instance already
+                                authors one (e.g. after a signature swap). */}
                             {(inp.colorManaged || inp.colorspace) && colorspaceRow()}
                         </div>
                     );

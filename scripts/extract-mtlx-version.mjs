@@ -1,42 +1,16 @@
 #!/usr/bin/env node
 // scripts/extract-mtlx-version.mjs
 //
-// The MaterialX version must NEVER be hand-typed anywhere in this repo — the
-// vendored WASM build (js/JsMaterialXGenShader.js/.wasm/.data) is the single
-// source of truth. This script extracts the version from that WASM and
-// writes it to js/gen/mtlx-version.json, then rewrites (“stamps”) the
-// handful of literal copies elsewhere that can't read that JSON at runtime
-// (plain <script>-tag globals loaded before any module graph exists, the
-// README) so they can never silently drift from it. scripts/vendor.mjs
-// (its MTLX_TAG) and vscode_extension/src/specDocs.js (its SPEC_TAG) read
-// js/gen/mtlx-version.json directly instead of being stamped.
+// The MaterialX version must never be hand-typed: the vendored WASM
+// build is the single source of truth. Extracts it to
+// js/gen/mtlx-version.json and stamps the literal copies elsewhere
+// that can't read that JSON at runtime (script-tag globals, README);
+// vendor.mjs/specDocs.js read it directly instead. The JSON file is
+// committed despite being generated so --check can catch a stale
+// commit (builds regenerate/re-stamp it every run) before it ships.
 //
-// js/gen/mtlx-version.json IS committed to the repo (it's what every other
-// consumer reads) even though it's generated — `npm run build` (or this
-// script directly) regenerates it from the WASM and re-stamps on every
-// build, so a stale commit is caught by --check below rather than silently
-// shipping a wrong version.
-//
-// Usage:
-//   node scripts/extract-mtlx-version.mjs           (Re)generate
-//                                                    js/gen/mtlx-version.json
-//                                                    from the WASM and stamp
-//                                                    every dependent literal
-//                                                    to match. Since this
-//                                                    repo's WASM and every
-//                                                    literal already agree,
-//                                                    a normal run is a no-op
-//                                                    on file content (same
-//                                                    bytes rewritten).
-//   node scripts/extract-mtlx-version.mjs --check   Verify only: re-extract
-//                                                    from the WASM and
-//                                                    byte-compare against
-//                                                    the committed JSON,
-//                                                    then verify every
-//                                                    stamped literal agrees
-//                                                    with it. Writes
-//                                                    nothing. Non-zero exit
-//                                                    on any drift.
+// Usage: no args regenerates + stamps; --check verifies only and
+// exits non-zero on drift.
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";

@@ -1,11 +1,8 @@
-// js/graph/style.jsx — layout (dagre) and MaterialX type -> color mapping,
-// plus the descriptor/edge -> React Flow nodes/edges conversion. Split out
-// of js/graph-app.jsx (pure move, no behavior change) as part of the graph
-// view's file split. Loaded after js/graph/model.jsx in the graph view's
-// babelScripts manifest (see js/shell.jsx's VIEW_DEPS.graph). Like every
-// other lazy-loaded file in this app, this file has NO top-level import/
-// export — it self-exports via a single Object.assign(window, {}) at the
-// bottom.
+// js/graph/style.jsx — dagre layout, MaterialX type -> color mapping,
+// and descriptor/edge -> React Flow node/edge conversion. Loaded after
+// js/graph/model.jsx per js/shell.jsx's VIEW_DEPS.graph manifest. Like
+// other lazy-loaded files here, it has no top-level import/export — it
+// self-exports via Object.assign(window, {}) at the bottom.
 
         const { MarkerType } = window.ReactFlow;
 
@@ -17,10 +14,9 @@
         const nodeHeight = (d) => 38 + (d.inputs.length + d.outputs.length) * 22 + 6;
 
         const layoutScope = (descs, edges) => {
-            // Two return points below (stored-position fast path vs. a real
-            // dagre pass) — each logs its own line when the flag is on, so
-            // a scope change that logs BOTH buildScope and two layoutScope
-            // lines back to back would flag a double-layout.
+            // Two return points (stored-position fast path vs. dagre) each
+            // log their own line when MTLX_PERF_LOG is on, so back-to-back
+            // layoutScope logs signal a double-layout bug.
             const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
             const stored = descs.length > 1 && descs.every((d) => d.pos);
             if (stored) {
@@ -57,14 +53,9 @@
 
         // ---- React Flow node rendering ---------------------------------------
 
-        // MaterialX type → port/edge color. Every standard type has a curated,
-        // hand-spread hue (so co-occurring types are never confusable — the old
-        // table gave matrix33 and matrix44 the SAME color, and made integer a
-        // near-twin of float). The shader family intentionally clusters in the
-        // green band but separated by lightness. Anything not in the table
-        // (custom/struct/array types) falls back to a deterministic hash of the
-        // type name, so a given type keeps the exact same color in every scope,
-        // every document, every session.
+        // MaterialX type -> port/edge color, curated so co-occurring
+        // types are never confusable. Types outside the table hash to
+        // a stable color, so custom/struct/array types stay consistent.
         const TYPE_COLORS = {
             boolean: '#d2372b',            // crimson red
             BSDF: '#2e7d32',               // forest green
@@ -112,7 +103,8 @@
             if (data.kind === 'nodegraph') return typeColor('nodegraph');
             if (data.kind === 'input' || data.kind === 'output') return typeColor(data.type);
             
-            // 2. Data nodes pull directly from their output type (color3, float, etc)
+            // 2. Data nodes pull directly from their output type
+            // (color3, float, etc)
             if (data.type) return typeColor(data.type);
             
             // 3. Fallbacks just in case a shader/material lacks a type string
@@ -125,14 +117,9 @@
         const handleStyle = (color) => ({
             width: 9, height: 9, border: '1.5px solid #111827', background: color,
         });
-        // Descriptors + layout → React Flow nodes/edges.
-        // Input display, per node: 'authored' (only inputs written in the
-        // document — "set") or 'all' (plus every nodedef input at its
-        // default value). Connected inputs are ALWAYS visible so no edge
-        // ever dangles. keepRow (patchInputConn, js/graph-app.jsx) is a
-        // flow-state-only flag that pins a just-disconnected port visible
-        // for one more render in 'authored' mode, so it doesn't vanish out
-        // from under the user the instant they disconnect it.
+        // Port mode 'authored' shows only doc-set inputs; 'all' shows
+        // all nodedef inputs. keepRow pins a disconnected port visible
+        // for one extra render so it doesn't vanish mid-interaction.
         const visiblePortsFor = (all, mode) => all.filter((inp) =>
             inp.connected || inp.keepRow || mode === 'all' || inp.authored !== false);
 

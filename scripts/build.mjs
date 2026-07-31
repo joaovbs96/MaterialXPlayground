@@ -1,50 +1,12 @@
 #!/usr/bin/env node
-// scripts/build.mjs
+// scripts/build.mjs — CI/human entry point that (re)generates every
+// derived/committed artifact in this repo and verifies none drifted.
 //
-// Single build orchestrator: the one entry point CI (and humans) call to
-// (re)generate every derived/committed artifact in this repo, and to verify
-// none of them have drifted. Wraps the individual scripts under scripts/ —
-// it does not duplicate their logic, just sequences them.
+// Usage: node scripts/build.mjs [step] [--check] [--with-materialx]
+//   step: all | version | stamp | vendor | nodelib | tutorials | webview
 //
-// Usage:
-//   node scripts/build.mjs                      = `node scripts/build.mjs all`
-//   node scripts/build.mjs [step] [--check] [--with-materialx]
-//
-//     step: all | version | stamp | vendor | nodelib | tutorials | webview
-//           (default: all)
-//     --check          verify every step is up to date WITHOUT writing
-//                       anything; non-zero exit on any drift. Wired into
-//                       `npm run check`.
-//     --with-materialx only meaningful for the `vendor`/`all` steps — also
-//                       populates vendor/materialx/ (see scripts/vendor.mjs).
-//
-// Step order (for `all`): version -> vendor -> nodelib -> tutorials -> webview.
-// version runs first because every other step derives from the
-// WASM-extracted MaterialX version: vendor's MTLX_TAG (--with-materialx)
-// and nodelib's spec-tag/version stamp both read js/gen/mtlx-version.json,
-// which the version step (re)generates. Running anything else first risks
-// building against a stale version file. webview runs last: it derives
-// only from index.html (see scripts/build-webview.mjs), nothing downstream
-// depends on it.
-//
-// The `stamp` step (re-stamp every literal copy of the MaterialX tag across
-// the repo — see scripts/lib/version.mjs) is a step in its own right here
-// for ad-hoc use (`node scripts/build.mjs stamp`), but `all` does NOT run it
-// as a separate step: `node scripts/extract-mtlx-version.mjs` (the `version`
-// step's default-mode entry point) already extracts the version AND stamps
-// every dependent literal in one call, so re-stamping again right after
-// would just be redundant work against the same already-fresh meta.
-//
-// tutorials auto-activates the moment scripts/build-tutorials.mjs and
-// tutorials-src/mkdocs.yml exist (today they live on a separate branch — see
-// .github/workflows/deploy.yml's header comment). Until that branch merges,
-// this step is a harmless, always-succeeding no-op here so `npm run build`
-// and `npm run check` never fail on a fresh `main` checkout.
-//
-// CI (.github/workflows/deploy.yml) calls `npm run build` then verifies the
-// working tree is clean (a stale committed artifact would show up as a
-// diff), then `npm run check` (the same drift checks, but read-only and
-// re-derived from source rather than relying on `git diff`).
+// Order for `all`: version -> vendor -> nodelib -> tutorials -> webview.
+// version runs first: vendor/nodelib read js/gen/mtlx-version.json.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -79,10 +41,9 @@ function failStep(stepName, detail) {
   process.exit(1);
 }
 
-/** Run `node <scriptPath> [...extraArgs]` with stdio inherited, treating both
- * a spawn error (e.g. the binary couldn't be launched) and a non-zero exit
- * status as failure of `stepName`. Never returns on failure — exits the
- * process immediately so a failed step can't let a later step run. */
+/** Runs `node <scriptPath> [...extraArgs]` with stdio inherited. A spawn
+ * error or non-zero exit fails `stepName` and exits immediately, so a
+ * failed step can't let a later step run. */
 function runNodeScript(stepName, scriptPath, extraArgs = []) {
   const result = spawnSync(process.execPath, [scriptPath, ...extraArgs], {
     cwd: REPO_ROOT,
@@ -170,11 +131,9 @@ async function runWebviewStep() {
 
 async function main() {
   if (STEP === "all") {
-    // version first — everything else derives from the WASM-extracted
-    // version (see header comment). `stamp` is deliberately NOT run as a
-    // separate step here: the version step's own default mode (extract +
-    // stampAll) already re-stamps every literal, so a follow-up stamp step
-    // would just redo the same work against the same fresh meta.
+    // version first — everything else derives from it (see header comment).
+    // `stamp` isn't run separately here: the version step's default mode
+    // already re-stamps every literal, so a follow-up stamp step would be redundant.
     await runVersionStep();
     await runVendorStep();
     await runNodelibStep();

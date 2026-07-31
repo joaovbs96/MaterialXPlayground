@@ -1,32 +1,12 @@
 // scripts/lib/nodedef-extract.mjs
 //
-// Build-land port of the nodedef-walking machinery that used to live in two
-// browser files — js/docs/port-tables.jsx (defInputs/defOutputs/safeType,
-// nodeDefSigKey, groupDefVersions, dedupeDefsBySignature,
-// buildAutoTablesFromDefs, getPortTables/isUndocumented, and the
-// NodeDefPortsTable union-walk ported here as buildDefPorts) and
-// js/docs/impl-matrix.jsx (TARGET_INHERITANCE, buildImplIndex ported from
-// getImplIndex, buildImplRows ported from ImplTargetMatrix's per-node bySig
-// grouping effect). Both browser files have since been trimmed down to pure
-// presentational code that renders pregenerated data instead of walking the
-// WASM stdlib live — this module is the one place that logic now lives, run
-// once by scripts/build-nodelib.mjs (Node, no browser/React/window) to
-// produce js/gen/nodelib-index.json ("Layer 2": per-category signature/
-// version groups, auto-generated port tables for undocumented nodes,
-// def-port fallback rows, and the implementation-target matrix).
-//
-// Plain ESM, zero runtime dependencies, no window/DOM — every helper here
-// takes its MaterialX WASM objects (nodedefs, {mx, stdlib}) as plain
-// arguments and returns plain JSON-serializable data.
+// Build-time port of the nodedef-walking logic from js/docs/port-tables.jsx
+// and js/docs/impl-matrix.jsx (browser code is now pure presentational).
+// Run by scripts/build-nodelib.mjs to produce js/gen/nodelib-index.json.
 
-// Ported from js/mtlx-engine.js's vecToArray (~line 583): MaterialX JS
-// marshals std::vector either as a real JS array or as a {size(), get(i)}
-// object depending on the binding; normalize to array. Kept even though
-// this repo's current vendored binding always returns real Arrays (verified:
-// getNodeDefs/getImplementations/getMatchingNodeDefs/getNodeGraphs etc. all
-// return plain Arrays under Node 24) — this tolerance is the established
-// convention throughout this codebase for defensiveness against a future
-// binding that marshals differently.
+// Ported from js/mtlx-engine.js's vecToArray: normalizes MaterialX's
+// std::vector marshaling (real Array or {size(),get(i)}) to a plain Array.
+// Current binding always returns Arrays; kept for future-binding safety.
 export const vecToArray = (v) => {
     if (!v) return [];
     if (Array.isArray(v)) return v;
@@ -41,25 +21,21 @@ export const vecToArray = (v) => {
     return [];
 };
 
-// Ported from js/docs/port-tables.jsx's safeType: an input/output element's
-// type, or '' if the wasm binding throws (e.g. a detached/invalid element) —
-// used wherever a type is only needed for a display/signature string and a
-// thrown exception shouldn't abort the whole computation.
+// Ported from js/docs/port-tables.jsx's safeType: an element's type, or ''
+// if the binding throws (e.g. a detached element) — for display/signature
+// strings where a thrown exception shouldn't abort the whole computation.
 export const safeType = (el) => { try { return el.getType(); } catch (e) { return ''; } };
 
-// Ported from js/docs/port-tables.jsx: def.getActiveInputs()/
-// getActiveOutputs(), falling back to getInputs()/getOutputs() on older
-// bindings that don't expose the Active variants — the vecToArray-wrapped
-// pattern repeated at every nodedef-walking helper below.
+// Ported from js/docs/port-tables.jsx: getActiveInputs/Outputs(), falling
+// back to getInputs/Outputs() on older bindings without the Active variants.
 export const defInputs = (def) => vecToArray(def.getActiveInputs ? def.getActiveInputs()
     : (def.getInputs ? def.getInputs() : null));
 export const defOutputs = (def) => vecToArray(def.getActiveOutputs ? def.getActiveOutputs()
     : (def.getOutputs ? def.getOutputs() : null));
 
 // Ported from js/docs/port-tables.jsx's getPortTables: normalize a node
-// entry so callers support both the new schema
-// ({ port_tables: [{headers, ports}, ...] }) and the old one
-// ({ ports: {...} }).
+// entry so callers support both the new ({port_tables:[...]}) schema and
+// the old ({ports:{...}}) one.
 export const getPortTables = (nodeInfo) => {
     if (Array.isArray(nodeInfo.port_tables)) return nodeInfo.port_tables;
     if (nodeInfo.ports && Object.keys(nodeInfo.ports).length > 0) {
@@ -69,12 +45,9 @@ export const getPortTables = (nodeInfo) => {
     return [];
 };
 
-// Ported from js/docs/port-tables.jsx's isUndocumented: a node counts as
-// undocumented when it has no port tables, no notes, and no real
-// description (the spec parser emits the fallback string
-// "No documentation available." for spec-less nodedefs). This is what
-// scripts/build-nodelib.mjs uses to decide whether a category needs
-// autoTables/defPorts.
+// Ported from js/docs/port-tables.jsx's isUndocumented: true when a node
+// has no port tables, no notes, and only the spec parser's fallback text
+// ("No documentation available.") as description.
 export const isUndocumented = (info) => {
     if (getPortTables(info).length > 0) return false;
     if (info.notes) return false;
@@ -82,11 +55,9 @@ export const isUndocumented = (info) => {
     return desc === '' || desc === 'No documentation available.';
 };
 
-// Ported from js/docs/port-tables.jsx's nodeDefSigKey: a TYPE-SIGNATURE key
-// for a WASM nodedef — the ordered input types plus the resolved output
-// type, independent of version. Two nodedefs sharing this key are the SAME
-// signature at different VERSIONS (standard_surface 1.0.1 / 1.0.0:
-// identical ports, only defaults differ) — see dedupeDefsBySignature.
+// Ported from js/docs/port-tables.jsx's nodeDefSigKey: a version-independent
+// TYPE-SIGNATURE key (ordered input types + resolved output type). Nodedefs
+// sharing this key are the same signature at different versions.
 export const nodeDefSigKey = (def) => {
     const inTypes = defInputs(def).map(safeType).join(',');
     let outType = '';
@@ -96,13 +67,9 @@ export const nodeDefSigKey = (def) => {
     return outType + '|' + inTypes;
 };
 
-// Ported from js/docs/port-tables.jsx's groupDefVersions. Group a
+// Ported from js/docs/port-tables.jsx's groupDefVersions: groups a
 // category's nodedefs into one entry per TYPE SIGNATURE, each carrying
-// every VERSION of that signature. Returns
-// [{ key, type, inSummary, ambiguous, versions: [{ name, version,
-// isDefaultVersion, defaults: {portName: valueString},
-// inputTypes: {portName: type}, outputTypes: {portName: type} }] }],
-// versions sorted default-first then by version string descending.
+// every VERSION (sorted default-first, then version descending).
 export const groupDefVersions = (defs) => {
     const byKey = {};
     const order = [];
@@ -189,11 +156,9 @@ export const dedupeDefsBySignature = (defs) => {
     return order.map((item) => (typeof item === 'string' ? chosen.get(item) : item));
 };
 
-// Ported from js/docs/port-tables.jsx's buildAutoTablesFromDefs. Build port
-// tables (same shape the viewer renders) directly from a node's MaterialX
-// nodedefs, for nodes with NO spec documentation. One table per SIGNATURE
-// (overload) — version-duplicate nodedefs are already collapsed by
-// dedupeDefsBySignature before this runs.
+// Ported from js/docs/port-tables.jsx's buildAutoTablesFromDefs: builds
+// port tables (viewer's shape) from a node's nodedefs when there's no spec
+// documentation. One table per SIGNATURE; callers pre-dedupe versions.
 export const buildAutoTablesFromDefs = (defs) => {
     const tables = [];
     for (const def of defs) {
@@ -228,14 +193,9 @@ export const buildAutoTablesFromDefs = (defs) => {
     return tables;
 };
 
-// Ported from js/docs/port-tables.jsx's NodeDefPortsTable union walk
-// (originally queried stdlib.getMatchingNodeDefs(nodeName) itself; ported
-// here to instead take an already-fetched `defs` array as a parameter,
-// since scripts/build-nodelib.mjs already has that array from its own
-// doc.getMatchingNodeDefs(category) call). Returns
-// [{name, kind, types: [...], value, enums}], one row per distinct
-// input/output name+kind across every def in `defs`, types accumulated
-// (deduped, insertion order) across all defs sharing that name+kind.
+// Ported from js/docs/port-tables.jsx's NodeDefPortsTable union walk; takes
+// an already-fetched `defs` array instead of querying stdlib itself. One
+// row per distinct input/output name+kind, types deduped across all defs.
 export const buildDefPorts = (defs) => {
     const byName = {};
     const order = [];
@@ -263,11 +223,9 @@ export const buildDefPorts = (defs) => {
     return order.map((k) => byName[k]);
 };
 
-// Ported from js/docs/impl-matrix.jsx's TARGET_INHERITANCE. Confirmed by
-// reading libraries/targets/{genmsl,genslangl,essl}.mtlx in the vendored
-// MaterialX standard library: these three targets are declared
-// inherit="genglsl", so a nodedef with no explicit implementation for one of
-// them still renders fine via the inherited GLSL source at generation time.
+// Ported from js/docs/impl-matrix.jsx's TARGET_INHERITANCE. Per
+// libraries/targets/{genmsl,genslangl,essl}.mtlx, these targets declare
+// inherit="genglsl", so nodedefs without an explicit impl still render.
 export const TARGET_INHERITANCE = { essl: 'genglsl', genmsl: 'genglsl', genslang: 'genglsl' };
 
 // Local try/catch helper equivalent to js/mtlx-engine.js's mxSafe, since
@@ -275,9 +233,8 @@ export const TARGET_INHERITANCE = { essl: 'genglsl', genmsl: 'genglsl', genslang
 const safe = (fn, fb) => { try { const v = fn(); return v == null ? fb : v; } catch (e) { return fb; } };
 
 // Repo-relative path ('libraries/...') from an element source URI —
-// modeled on scripts/lib/spec-parser.js's libraryFromSourceUri (which
-// returns only the library NAME; this returns the whole path). null
-// when there's no 'libraries' segment (defensive).
+// modeled on spec-parser.js's libraryFromSourceUri but returns the whole
+// path, not just the library name. null if there's no 'libraries' segment.
 const repoPathFromSourceUri = (uri) => {
     if (!uri) return null;
     const parts = String(uri).replace(/\\/g, '/').split('/');
@@ -299,13 +256,9 @@ const resolveImplFile = (implUri, fileAttr) => {
     return out.indexOf('libraries/') === 0 ? out : null; // never escape the mirror
 };
 
-// Ported from js/docs/impl-matrix.jsx's getImplIndex, as buildImplIndex
-// ({mx, stdlib}) — drops the promise/lock machinery (implIndexPromise,
-// mxExclusive) since this runs once synchronously in Node. Returns
-// nodedefName -> { targets: Set, inherited: Set, graph: bool, files: {target:
-// repoPath}, graphFile: repoPath|null }. `files`/`graphFile` are repo-
-// relative paths ('libraries/...') to the actual source file backing each
-// implementation — see repoPathFromSourceUri/resolveImplFile above.
+// Ported from js/docs/impl-matrix.jsx's getImplIndex as buildImplIndex
+// ({mx, stdlib}) — drops the promise/lock machinery since this runs once
+// synchronously in Node, not concurrently in a browser.
 export const buildImplIndex = ({ mx, stdlib } = {}) => {
     const impls = vecToArray(safe(() => stdlib.getImplementations(), []));
     const index = {};
@@ -354,11 +307,8 @@ export const buildImplIndex = ({ mx, stdlib } = {}) => {
 };
 
 // Ported from js/docs/impl-matrix.jsx's ImplTargetMatrix per-node bySig
-// grouping effect, as buildImplRows(index, defs) — defs is an
-// already-fetched nodedef array for ONE category (same array
-// groupDefVersions/dedupeDefsBySignature consume), index is
-// buildImplIndex's return value. Sets are converted to SORTED arrays in the
-// returned rows.
+// grouping effect. defs is one category's nodedef array, index is
+// buildImplIndex's return value; Sets become sorted arrays in the output.
 export const buildImplRows = (index, defs) => {
     const bySig = {};
     const order = [];
@@ -378,10 +328,9 @@ export const buildImplRows = (index, defs) => {
             if (info.graph) bySig[key].graph = true;
             info.targets.forEach((t) => bySig[key].targets.add(t));
             info.inherited.forEach((t) => bySig[key].inherited.add(t));
-            // First-wins merges: multiple nodedef versions can share a sig
-            // key (nodeDefSigKey groups by signature, not by name), so keep
-            // whichever files/graphFile were captured first in document-load
-            // order rather than letting a later version overwrite them.
+            // First-wins merge: multiple versions can share a sig key
+            // (grouped by signature, not name) — keep whichever
+            // files/graphFile were captured first, not the later version.
             Object.entries(info.files).forEach(([t, p]) => { if (p && !bySig[key].files[t]) bySig[key].files[t] = p; });
             if (info.graphFile && !bySig[key].graphFile) bySig[key].graphFile = info.graphFile;
         }

@@ -1,26 +1,15 @@
-// js/graph/dialogs.jsx — the graph view's modal dialogs: the keyboard
-// shortcuts reference, the in-tab docs viewer, the raw-XML viewer, the
-// validation results popup, and the export dialog. Split out of
-// js/graph-app.jsx (pure move, no behavior change) as part of the graph
-// view's file split. The shared DialogFrame chrome these dialogs all sit
-// in, plus the curated-example picker dialog and its backing data/fetch
-// helper, now live in js/shared/mtlx-ui.jsx instead — shared with the
-// material viewer, which has its own example picker and shader-export
-// dialogs. Loaded after js/shared/mtlx-ui.jsx (consumes its
-// DialogFrame/useEscapeToClose window globals) in the graph view's
-// babelScripts manifest (see js/shell.jsx's VIEW_DEPS.graph). Like every
-// other lazy-loaded file in this app, this file has NO top-level
-// import/export — it self-exports via a single Object.assign(window, {})
-// at the bottom.
+// js/graph/dialogs.jsx — the graph view's modal dialogs: keybinds help,
+// in-tab docs viewer, raw-XML viewer, validation popup, and export
+// dialog. Shared DialogFrame chrome plus the curated-example picker now
+// live in js/shared/mtlx-ui.jsx instead (also used by the material
+// viewer). Must load after mtlx-ui.jsx (needs its DialogFrame/
+// useEscapeToClose window globals) — see VIEW_DEPS.graph in
+// js/shell.jsx. No top-level import/export: self-exports via
+// Object.assign(window, {}) at the bottom.
 
-        // Every keyboard shortcut and mouse interaction currently live in
-        // the editor — kept as one list so it can't silently drift from
-        // reality; update it alongside whatever handler it documents. Each
-        // row's `group` ('mouse' or 'keyboard') picks which subheaded
-        // section of the popup below it renders in. `vscodeOnly` /
-        // `browserOnly` hide a row in the other host (checked against
-        // IN_VSCODE in KeybindsHelp below) — most rows carry neither and
-        // show in both.
+        // Exhaustive list of every shortcut/gesture — keep in sync with
+        // the editor. `group` picks the popup section; `vscodeOnly` /
+        // `browserOnly` hide a row in the other host (see IN_VSCODE below).
         const KEYBINDS = [
             // Mouse & gestures
             { keys: 'Click', desc: 'Select a node — opens the parameter panel and the preview', group: 'mouse' },
@@ -56,13 +45,9 @@
         ];
 
         function KeybindsHelp({ onClose, active = true }) {
-            // True when hosted inside the VS Code extension's webview (set by
-            // its bootstrap before any site script runs). Gates both the
-            // help prose below (the Export paragraph reads differently
-            // there) and the KEYBINDS filter: `browserOnly` rows (drag &
-            // drop, disabled in the extension's single-file webview) drop
-            // out in VS Code, `vscodeOnly` rows (Ctrl/Cmd+S, meaningless in
-            // the browser build) drop out everywhere else.
+            // True inside the VS Code webview; gates the Export prose
+            // below and filters KEYBINDS: drops browserOnly rows in
+            // VS Code, vscodeOnly rows everywhere else.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const keybinds = KEYBINDS.filter((k) => (!k.vscodeOnly || IN_VSCODE) && (!k.browserOnly || !IN_VSCODE));
             const mouseKeybinds = keybinds.filter((k) => k.group === 'mouse');
@@ -131,29 +116,13 @@
             );
         }
 
-        // In-tab docs viewer: renders the docs view's App component (the
-        // same one index.html mounts) INLINE, instead of embedding
-        // index.html?embed=1#/<lib>/<group>/<name> in an iframe. There is no
-        // iframe here anymore because nested iframe document navigations
-        // don't load inside a VS Code webview (webview-resource URLs aren't
-        // served to a document navigated to from within another webview
-        // document) — this dialog now works identically in the browser and
-        // inside the extension's webview. `window.App` (the docs view's
-        // component) is loaded on demand via window.mtlxLoadViewDeps('docs')
-        // (js/shell.jsx), memoized so repeat opens are instant after the
-        // first. `active={open}` is passed straight through to the App
-        // instance to pause its WebGL preview loop while the dialog is
-        // hidden — the direct prop this dialog's iframe predecessor could
-        // only approximate via a postMessage bridge across the frame
-        // boundary. A DIFFERENT node's hash remounts the App below (keyed
-        // on the hash) for a guaranteed fresh selection; re-opening the
-        // SAME node stays warm (the dialog itself stays mounted-but-hidden
-        // while closed, same as before).
+        // Renders the docs view's App inline, not in an iframe (nested
+        // iframe navigation doesn't load inside a VS Code webview).
+        // window.App loads lazily via mtlxLoadViewDeps; keyed on `hash`.
         function DocsDialog({ hash, fullUrl, label, open, onClose, active = true }) {
-            // True when hosted inside the VS Code extension's webview (set by
-            // its bootstrap before any site script runs). Hides the
-            // open-in-new-tab affordance below — in the webview it would
-            // hash-navigate the entire webview, not open a real browser tab.
+            // True inside the VS Code webview; hides the open-in-new-tab
+            // link below (would hash-navigate the whole webview instead
+            // of opening a real browser tab).
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const [docsReady, setDocsReady] = React.useState(() => !!window.App);
             const [loadError, setLoadError] = React.useState(null);
@@ -199,12 +168,9 @@
             );
         }
 
-        // View-only XML dialog (item 8's "Document" button): shows the
-        // current document exactly as Export would write it, without
-        // triggering a download — a quick way to eyeball or copy the raw
-        // MaterialX. `xml` is computed once by the caller when the dialog
-        // opens (not on every render). Chrome comes from the shared
-        // DialogFrame (see above).
+        // View-only XML dialog ("Document" button): shows the document
+        // exactly as Export would write it, without downloading. `xml`
+        // is computed once by the caller when the dialog opens.
         function XmlDialog({ xml, open, onClose }) {
             const [copied, setCopied] = React.useState(false);
             const copyTimerRef = React.useRef(null);
@@ -212,12 +178,9 @@
             React.useEffect(() => () => {
                 if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             }, []);
-            // Syntax highlighting via highlight.js (lazy-loaded per the
-            // graph view's manifest in js/shell.jsx — see VIEW_DEPS.graph).
-            // Purely cosmetic: if the CDN script hasn't landed yet, failed
-            // to load, or throws for any reason, fall back to the plain
-            // <pre>{xml}</pre> text below rather than showing a blank/
-            // broken dialog.
+            // Syntax highlighting via lazily-loaded highlight.js; purely
+            // cosmetic — falls back to the plain <pre>{xml}</pre> below
+            // if hljs hasn't loaded or throws.
             const highlighted = React.useMemo(() => {
                 if (typeof window === 'undefined' || !window.hljs || typeof window.hljs.highlight !== 'function') return null;
                 try {
@@ -288,19 +251,9 @@
             );
         }
 
-        // Validation popup (item 9's "Validate" button): renders the
-        // shared `status` — { kind: 'valid' | 'invalid' | 'unavailable',
-        // issues? } — computed in js/graph-app.jsx by validateMtlxXml
-        // (js/graph/model.jsx) against the document's raw TEXT (docXmlRef),
-        // not the live in-memory doc. Unlike the old per-open computation
-        // this replaced, `status` is now a BACKGROUND value that also
-        // drives the toolbar Validate button's own green/red coloring, so
-        // it can already be non-null the moment this dialog mounts;
-        // opening the dialog additionally forces one immediate refresh
-        // (see graph-app.jsx's validateOpen-gated effect) so a stale
-        // pre-edit result never lingers. Issues are shown VERBATIM — no
-        // truncation, no reformatting — this component only renders
-        // whatever it was handed.
+        // Validation popup: renders the shared `status` ({kind, issues?})
+        // from validateMtlxXml against the raw XML text — a background
+        // value (also colors the toolbar button), refreshed on open.
         function ValidateDialog({ status, open, onClose }) {
             useEscapeToClose(onClose, open);
             if (!open) return null;
@@ -338,31 +291,18 @@
             );
         }
 
-        // Export dialog (toolbar "Export" button): lets the user choose a
-        // filename and a format before writing anything out. Two formats:
-        // a bare .mtlx (identical to the old one-click Export), or a .zip
-        // that bundles the .mtlx alongside every texture the CALLER found a
-        // session-file match for (`textures.resolved`); refs the caller
-        // couldn't match are listed under `textures.unresolved` as a
-        // non-blocking warning — they simply won't be packaged. `onExport`
-        // does the actual work and returns a promise; the Export button
-        // stays disabled/busy until it settles, and the dialog only closes
-        // on success (a thrown/rejected promise leaves it open so the user
-        // can retry, matching ValidateDialog's request/render split but for
-        // a user-triggered action instead of an effect).
+        // Export dialog: pick a filename and format (.mtlx, or .zip
+        // bundling resolved textures) before writing. `onExport` returns
+        // a promise; the dialog stays open (retryable) until it resolves.
         function ExportDialog({ open, onClose, defaultName, textures, onExport }) {
             const [name, setName] = React.useState(defaultName || '');
             const [format, setFormat] = React.useState('mtlx');
             const [busy, setBusy] = React.useState(false);
             useEscapeToClose(onClose, open && !busy);
 
-            // Reset to the caller's latest defaults each time the dialog is
-            // (re)opened — mirrors XmlDialog's "computed once per open by
-            // the caller" contract, just applied to local state instead of
-            // a prop that's recomputed from scratch. (ValidateDialog's own
-            // `status` used to follow this same contract too, but is now a
-            // background value refreshed independently of any one open —
-            // see its effect in js/graph-app.jsx.)
+            // Reset local state to the caller's defaults each time the
+            // dialog (re)opens, so a stale name/format from the last
+            // open never lingers.
             const wasOpen = React.useRef(false);
             React.useEffect(() => {
                 if (open && !wasOpen.current) {

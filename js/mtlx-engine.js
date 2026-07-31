@@ -8,15 +8,9 @@
 // ------------------------------------------------------------------
 // MaterialX 3D Preview Component
 // ------------------------------------------------------------------
-// IMPORTANT: load ONLY JsMaterialXGenShader.js. It is a SUPERSET of
-// JsMaterialXCore.js (core document model + shader generation). If you
-// also load and initialize JsMaterialXCore, embind tries to register
-// the shared C++ types (VectorBase, Vector2, ...) a second time and
-// throws "Cannot register public name 'VectorBase' twice". One module.
-//
-// The whole MaterialX runtime is initialized ONCE and cached at module
-// scope: re-initializing per node select would re-download the wasm and
-// reload the standard libraries every time.
+// Load ONLY JsMaterialXGenShader.js (superset of JsMaterialXCore.js) —
+// loading both makes embind register shared C++ types twice and throw.
+// Runtime is cached at module scope, not re-downloaded per node select.
 let mxEnvPromise = null;
 const getMxEnv = () => {
     if (!mxEnvPromise) {
@@ -36,63 +30,20 @@ const getMxEnv = () => {
                         window.dispatchEvent(new CustomEvent('mtlx-version', { detail: ver }));
                     }
                 } catch (e) { /* version is optional */ }
-                // WebGL 2 targets ESSL (GLSL ES 3.00) — NOT the desktop
-                // GLSL generator, whose #version 400 output won't compile
-                // in a browser. Build the generator + context once and
-                // load the prepackaged standard libraries (from the .data
-                // virtual filesystem) through it. loadStandardLibraries
-                // also registers the source-code search path on the
-                // context, so no manual registerSourceCodeSearchPath call.
+                // WebGL 2 targets ESSL (GLSL ES 3.00), not the desktop GLSL
+                // generator (#version 400 won't compile in-browser).
+                // loadStandardLibraries also registers the source-code search path.
                 const gen = mx.EsslShaderGenerator.create();
                 const genContext = new mx.GenContext(gen);
                 const stdlib = mx.loadStandardLibraries(genContext);
-                // TONE MAPPING (user decision, 2026-07-18): this app
-                // deliberately DIVERGES from the official MaterialX
-                // viewer here. The official viewer sets
-                // hwSrgbEncodeOutput so MaterialX itself emits the
-                // linear->sRGB encode with NO tone mapping at all. This
-                // app instead asks MaterialX for RAW LINEAR output
-                // (hwSrgbEncodeOutput = false) and applies ACES filmic
-                // tone mapping, then sRGB, itself — unconditionally, in
-                // encodeDisplay() below (see that function's header
-                // comment for the exact GLSL and where it was sourced
-                // from). WHY: three.js's own renderer already tone-maps
-                // every BUILT-IN material in the scene via ACES — the
-                // glTF neutral shaderball parts, backdrop, and grid (see
-                // renderer.toneMapping = THREE.ACESFilmicToneMapping,
-                // set where the WebGLRenderer is constructed below).
-                // Leaving the generated MaterialX surface un-tone-mapped
-                // (official-viewer-style) made it visibly diverge —
-                // overblown, un-rolled-off highlights — from its own
-                // neighboring geometry in the SAME scene. In-scene
-                // consistency was judged more valuable than
-                // official-viewer parity for this app.
+                // TONE MAPPING: deliberately diverges from the official
+                // viewer (raw linear output here; ACES + sRGB applied
+                // unconditionally in encodeDisplay() below — see its header).
                 try { genContext.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
 
-                // Direct light, exactly like the official viewer's
-                // registerLights(): bind the directional_light nodedef to
-                // light-type id 1 and pass the light values as the
-                // u_lightData struct array. Values come exclusively from
-                // any <directional_light> blocks authored in
-                // ./environment_map.mtlx. NO HARDCODED FALLBACK (2026-07-18
-                // decision): the app's default environment is now a studio
-                // HDRI (env_maps/studio_kontrast_04_1k.exr) whose IBL
-                // already supplies key/fill; a synthetic full-strength
-                // white directional stacked on top of that washed the
-                // preview out. A rig that defines no lights now yields
-                // rigLights = [] → pure image-based lighting, zero active
-                // direct light sources. A future rig file CAN still add
-                // real lights — the <directional_light> parsing below uses
-                // a real XML parser (DOMParser) and fully supports it. An
-                // earlier version of this parser used regexes, including a
-                // dynamically-built RegExp('<input\\\\s+name="...') whose
-                // FOUR backslashes compiled to a literal-backslash pattern
-                // that could never match real XML — every authored light
-                // silently fell back to defaults. Replaced outright with
-                // DOMParser rather than patched, since this file is
-                // browser-only (DOMParser is always available here) and
-                // XML attribute order/whitespace/self-closing tags aren't
-                // safely regexable anyway.
+                // Direct light, like the official viewer's registerLights():
+                // binds directional_light (id 1) from any <directional_light>
+                // in environment_map.mtlx via DOMParser; no rig means pure IBL.
                 return fetch('./environment_map.mtlx')
                     .then((r) => (r.ok ? r.text() : null))
                     .catch(() => null)
@@ -108,17 +59,9 @@ const getMxEnv = () => {
                                     const opts = genContext.getOptions();
                                     opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, 1);
                                 } catch (e) { /* keep default */ }
-                                // Parse directional_light instances from the rig
-                                // with a real XML parser (DOMParser), not regex —
-                                // handles attribute order/whitespace and
-                                // self-closing <directional_light .../> elements
-                                // (no <input> children, but still a light with
-                                // fallback direction/color/intensity) correctly,
-                                // things a hand-rolled regex can't reliably do.
-                                // Parse failure (or no DOMParser) yields zero rig
-                                // lights via a console.warn, never a throw — this
-                                // env must still load with pure IBL if the rig is
-                                // malformed/absent.
+                                // Parses <directional_light> via DOMParser,
+                                // which handles self-closing tags unlike
+                                // regex. Parse failure warns, never throws.
                                 const rigLights = [];
                                 if (rigXml) {
                                     try {
@@ -135,10 +78,9 @@ const getMxEnv = () => {
                                             const lightEls = rigDoc.getElementsByTagName('directional_light');
                                             for (let i = 0; i < lightEls.length; i++) {
                                                 const lightEl = lightEls[i];
-                                                // getElementsByTagName is scoped to
-                                                // lightEl's own subtree, so this
-                                                // can't pick up a sibling light's
-                                                // <input>.
+                                                // Scoped to lightEl's own subtree,
+                                                // so this can't pick up a sibling
+                                                // light's <input>.
                                                 const inputEls = lightEl.getElementsByTagName('input');
                                                 const inp = (nm) => {
                                                     for (let j = 0; j < inputEls.length; j++) {
@@ -159,23 +101,9 @@ const getMxEnv = () => {
                                         console.warn('direct-light rig: DOMParser failed on environment_map.mtlx — no rig lights loaded.', e);
                                     }
                                 }
-                                // NO FALLBACK LIGHT (2026-07-18 decision):
-                                // previously, an empty rigLights (no
-                                // <directional_light> in environment_map.mtlx)
-                                // pushed a hardcoded full-strength white
-                                // directional here. Removed by design — the
-                                // studio-HDRI environment now in use already
-                                // provides key/fill via IBL, and the
-                                // additive directional washed the preview
-                                // out on top of it. An empty rig is now left
-                                // empty: lightData below stays [], nLights
-                                // is 0 at the uniform-binding site (see
-                                // "Direct light rig" below), and
-                                // u_numActiveLightSources=0 makes the
-                                // generated shader's light loop a no-op —
-                                // pure image-based lighting, safely. See the
-                                // header comment above this block for the
-                                // full rationale.
+                                // No fallback light: an empty rig leaves
+                                // lightData empty, so u_numActiveLightSources
+                                // is 0 and the light loop is a no-op (pure IBL).
                                 // Official rotates light directions by the
                                 // same +90° Y it applies to the env map.
                                 const rot = new THREE.Matrix4().makeRotationY(Math.PI / 2);
@@ -198,11 +126,9 @@ const getMxEnv = () => {
                     });
             })
             .catch((e) => {
-                // Reset the memo so a later retry (reload, or an app
-                // re-requesting the env) re-attempts the load instead of
-                // replaying this same rejection forever, and wrap the
-                // (often opaque, e.g. a raw fetch/network error) failure in
-                // a message a user can act on.
+                // Reset the memo so a retry re-attempts the load instead of
+                // replaying this rejection forever, and wrap the (often
+                // opaque) failure in a message the user can act on.
                 mxEnvPromise = null;
                 throw new Error('The MaterialX engine (WASM) failed to load: check your connection and try again, or reload the page. (' + ((e && e.message) || e) + ')');
             });
@@ -210,32 +136,13 @@ const getMxEnv = () => {
     return mxEnvPromise;
 };
 
-// All work that touches the shared wasm module (document building,
-// nodedef queries, shader generation) must be serialized: the heap can
-// GROW during any of these calls (ALLOW_MEMORY_GROWTH), which detaches
-// the typed-array views/pointers a CONCURRENT in-flight call is holding —
-// surfacing as irregular "memory access out of bounds" / corrupted-read
-// errors ("Node has no outputs defined"). One promise chain = one wasm
-// operation at a time. Rejections don't break the chain.
+// Wasm calls must be serialized — the heap can GROW mid-call
+// (ALLOW_MEMORY_GROWTH), detaching a concurrent call's typed-array
+// views ("memory access out of bounds"). One promise chain at a time.
 let mxQueueTail = Promise.resolve();
-// Lock-discipline diagnostics (not enforcement — see mxWarnIfLocked
-// below, used by the exported synchronous doc-mutating/reading helpers).
-// mxLockDepth counts in-flight mxExclusive calls: incremented when a
-// call is queued, decremented once its fn — and anything fn internally
-// awaits — has fully settled. mxExclusiveHeldSync is true ONLY while
-// fn's own synchronous body is executing on the lock owner's stack: set
-// right before calling fn, cleared in a finally immediately after fn()
-// returns or throws (for an async fn that's the instant it hands back
-// its pending Promise, before any of its internal awaits resume). Every
-// mxExclusive fn in this codebase is a synchronous arrow with no
-// internal await (the three call sites in this file, and JSX-layer ones
-// like `mxExclusive(() => listDocRenderables(doc))`), so in practice
-// mxExclusiveHeldSync stays true for fn's ENTIRE body — including any
-// synchronous helper calls fn makes — which is exactly the "called from
-// inside the lock, legitimate" case mxWarnIfLocked must not flag. A
-// helper invoked from a genuine async gap (after some OTHER operation's
-// await resumes, or from a stray unlocked call racing a generate/
-// compile) sees mxLockDepth > 0 && !mxExclusiveHeldSync and warns.
+// Lock-discipline diagnostics (see mxWarnIfLocked). mxLockDepth counts
+// in-flight mxExclusive calls; mxExclusiveHeldSync is true only while
+// fn's own sync body runs, distinguishing in-lock calls from unlocked ones.
 let mxLockDepth = 0;
 let mxExclusiveHeldSync = false;
 function mxExclusive(fn) {
@@ -259,46 +166,30 @@ function mxExclusive(fn) {
     return p;
 }
 
-// Diagnostic tripwire for the exported SYNCHRONOUS wasm-mutating/reading
-// helpers (ensureTypedInput, mxWriteValue, mxSetColorspace,
-// stripValuesFromConnectedInputs, listDocRenderables, findConvertChain,
-// resolveNodeKind, collectMxUniforms — see the window export bag at the
-// bottom of this file). They're called lock-free from the JSX layer and
-// can't be made self-locking without turning async, which would break
-// every synchronous call site this file doesn't own. This never throws
-// and never blocks a call — it only warns when a helper runs during a
-// genuinely concurrent mxExclusive operation (see mxExclusiveHeldSync
-// above for what "genuinely" excludes), the exact window where the wasm
-// heap could grow out from under an in-flight pointer/typed-array view.
+// Tripwire for synchronous wasm helpers called lock-free from the JSX
+// layer (can't self-lock without turning async). Never throws/blocks —
+// only warns when one runs during a genuinely concurrent mxExclusive op.
 const mxWarnIfLocked = (name) => {
     if (mxLockDepth > 0 && !mxExclusiveHeldSync) {
         console.warn('[mtlx] ' + name + ' called while an exclusive wasm operation is in flight — possible heap-detach hazard; route this call through mxExclusive.');
     }
 };
 
-// Logs the generated GLSL + discovered uniforms to the console — the
-// fastest way to diagnose a black/!runnable shader. Off by default, opt in
-// via `localStorage.setItem('mtlxDebugShaders', '1')`. Read ONCE at module
-// load, mirroring MTLX_PERF_LOG (js/graph/model.jsx).
+// Logs generated GLSL + discovered uniforms — fastest way to diagnose a
+// black/non-running shader. Opt in via localStorage 'mtlxDebugShaders'.
+// Read once at module load, mirroring MTLX_PERF_LOG (js/graph/model.jsx).
 const DEBUG_SHADERS = (() => {
     try { return !!localStorage.getItem('mtlxDebugShaders'); } catch (e) { return false; }
 })();
 
 // Gated console.warn for expected/recoverable conditions (e.g. a missing
-// texture reference) that would otherwise spam every user's console on
-// every load — real, actionable warnings stay ungated (plain
-// console.warn). Consumers across the app call this as a bare global
-// (window.mtlxWarn, exported below); all of them load after this file.
+// texture) that would otherwise spam every load; real warnings stay
+// ungated. Exported as window.mtlxWarn for consumers loaded after this file.
 const mtlxWarn = (...args) => { if (DEBUG_SHADERS) console.warn(...args); };
 
-// "Force Transparency" (Settings dialog, experimental, DEFAULT OFF).
-// OFF = official-viewer parity: the hwTransparency verdict from shader
-// generation stays write-only and every preview material renders opaque
-// (the pre-feature behavior). ON = transparent materials get real alpha
-// blending (transparent/FrontSide/depthWrite:false in
-// applyMaterialInternal). Cached in memory; persisted as '1'/'0'.
-// Setting it dispatches 'mtlx-settings-changed' so each view can rebuild
-// its live preview (the flag is baked in at material build time).
+// "Force Transparency" (Settings dialog, default off). Off = official-
+// viewer parity (opaque previews); on = real alpha blending in
+// applyMaterialInternal. Persisted; setter dispatches 'mtlx-settings-changed'.
 let FORCE_TRANSPARENCY = (() => {
     try { return localStorage.getItem('mtlxForceTransparency') === '1'; } catch (e) { return false; }
 })();
@@ -306,53 +197,25 @@ const getForceTransparency = () => FORCE_TRANSPARENCY;
 const setForceTransparency = (v) => {
     FORCE_TRANSPARENCY = !!v;
     try { localStorage.setItem('mtlxForceTransparency', FORCE_TRANSPARENCY ? '1' : '0'); } catch (e) { /* best-effort */ }
-    // Only caller is the Settings dialog's toggle button (js/shared/
-    // mtlx-ui.jsx) — a UI event fired at most once per click, so this
-    // runs long after LIVE_VIEWS (declared further down this module)
-    // has been populated; no load-time TDZ concern. Mutate every live
-    // view's material flags in place — see refreshTransparencyFlags on
-    // the handle (createMtlxRenderView) for why no rebuild is needed.
+    // Only caller: Settings dialog toggle (js/shared/mtlx-ui.jsx), fired
+    // well after LIVE_VIEWS is populated (no load-time TDZ concern).
+    // Mutates each live view's flags in place — see refreshTransparencyFlags.
     LIVE_VIEWS.forEach((view) => { try { view.refreshTransparencyFlags && view.refreshTransparencyFlags(); } catch (e) { /* view mid-teardown */ } });
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'forceTransparency', value: FORCE_TRANSPARENCY } })); } catch (e) { /* best-effort */ }
 };
 
-// Compile the scene while filtering BENIGN shader-compiler noise.
-// On Windows every browser runs WebGL through ANGLE, which translates
-// GLSL → HLSL and hands it to the D3D compiler (fxc). fxc unrolls the
-// constant-bounded loops in MaterialX's FIS/light code, constant-folds
-// each iteration, and emits "warning X4008: floating point division by
-// zero" for guarded paths it folds to a literal 0 denominator (same
-// fakepath line repeated once per unrolled iteration). This is
-// harmless — float division by zero is well-defined in GLSL and the
-// flagged paths are clamped with M_FLOAT_EPS at runtime — and the
-// official MaterialX web viewer (and even stock three.js materials,
-// see three.js issue #32692) produce the same spam on Windows. three
-// r128 console.warn()s ANY non-empty program info log even when the
-// link succeeded, so we can't avoid it at the source without turning
-// off renderer.debug.checkShaderErrors — which would also kill the
-// real-error path below (badProg diagnostics). Instead, drop only
-// link-SUCCEEDED logs carrying the SPECIFIC fxc X4008/"division by
-// zero" signature quoted above — not just any program-info-log
-// containing the generic word "warning" (that over-broad match could
-// also swallow a genuinely different driver warning riding along in the
-// same info log) — for the duration of this compile. Every OTHER
-// console.warn during the window (any other call shape, any other
-// message) passes straight through to the real console.warn
-// unaffected — this patch only ever intercepts this one exact, known
-// noise pattern. Restoration is unconditional via `finally`, so a throw
-// out of renderer.compile can't leave console.warn patched. With
-// DEBUG_SHADERS they're kept visible at debug level for anyone who goes
-// looking.
+// Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
+// "X4008 division by zero" for unrolled FIS/light loops (harmless,
+// guarded by M_FLOAT_EPS) — matched by exact signature; always restored.
 const compileFilteringDriverNoise = (renderer, scene, camera) => {
     const origWarn = console.warn;
     console.warn = function (...args) {
         const isProgLog = typeof args[0] === 'string' &&
             args[0].indexOf('THREE.WebGLProgram: gl.getProgramInfoLog()') === 0;
         const text = args.join(' ');
-        // Anchored on the exact fxc noise signature from the header
-        // comment (X4008 + "division by zero"), not the generic word
-        // "warning" — a program-info-log carrying some OTHER warning
-        // must still reach the real console.warn.
+        // Anchored on the exact fxc signature (X4008 + "division by
+        // zero"), not the generic word "warning" — any OTHER warning
+        // in the log must still reach the real console.warn.
         const isKnownDriverNoise = isProgLog && /\bX4008\b/.test(text) &&
             /division by zero/i.test(text) && !/error/i.test(text);
         if (isKnownDriverNoise) {
@@ -382,29 +245,9 @@ const parseUniforms = (src) => {
 // generated version line to avoid a duplicate-directive compile error.
 const stripVersion = (src) => src.replace(/^\s*#version[^\n]*\n/, '');
 
-// Some pbrlib nodes (the hair helpers: chiang_hair_roughness,
-// deon_hair_absorption_from_melanin, chiang_hair_absorption_from_color) are
-// implemented as native GLSL whose include chain pulls in the full BSDF
-// machinery (mx_microfacet_specular.glsl and friends). The generator only
-// emits the lighting support for shaders it deems LIT (graphs containing
-// BSDF/EDF nodes), so an UNLIT preview of such a node ends up with source
-// that REFERENCES lighting machinery that was never emitted:
-//   1. `#if DIRECTIONAL_ALBEDO_METHOD` with no #define — a hard error in
-//      GLSL ES (unlike C, an undefined identifier in #if doesn't read as 0):
-//      "'DIRECTIONAL_ALBEDO_METHOD' : unexpected token after conditional expression"
-//   2. calls to the environment API (mx_environment_radiance /
-//      mx_environment_irradiance) and mx_surface_transmission, whose
-//      definitions live in the environment/transmission implementation
-//      files emitted only for lit shaders:
-//      "'mx_environment_radiance' : no matching overloaded function found"
-// The fix supplies exactly what the generator's own "no lighting" flavors
-// would: the default #define (0 = analytic fit) and the no-op stubs from
-// mx_environment_none.glsl. Safe because in these unlit shaders the code
-// paths that call them are never invoked — they only have to compile. The
-// radiance/transmission stubs take a FresnelData parameter, so they are
-// inserted right AFTER that struct's declaration (guaranteed present: it
-// lives in the same microfacet include that references them). Lit shaders
-// define all of this themselves and are left untouched. Pixel stage only.
+// Hair helper pbrlib nodes pull in the full BSDF/lighting include chain,
+// which the generator only emits for LIT shaders, leaving an unlit
+// preview referencing undefined symbols; this patches in no-op stubs.
 const patchUnlitLightingRefs = (src) => {
     const referencedNotDefined = (name) =>
         new RegExp('\\b' + name + '\\s*\\(').test(src) &&
@@ -428,14 +271,9 @@ const patchUnlitLightingRefs = (src) => {
             if (insertAt > 1) {
                 src = src.slice(0, insertAt) + header + fresnel + src.slice(insertAt);
             } else {
-                // Lighting refs WERE detected (needsRad/needsTrans) but the
-                // "struct FresnelData" anchor this patch depends on is
-                // missing — a silent skip here used to leave
-                // mx_environment_radiance/mx_surface_transmission called
-                // but never stubbed, failing to compile later with a
-                // cryptic GLSL error (or worse). Invariant: if lighting
-                // refs are detected, the stub MUST be inserted or this
-                // throws — never a silent no-op.
+                // A silent skip here would leave mx_environment_radiance/
+                // mx_surface_transmission called but never stubbed, failing
+                // later with a cryptic GLSL error — throw instead, loudly.
                 throw new Error('patchUnlitLightingRefs: could not locate the "struct FresnelData" anchor (or its closing "};") in generated fragment shader — MaterialX output format may have changed');
             }
         }
@@ -449,79 +287,13 @@ const patchUnlitLightingRefs = (src) => {
     return src;
 };
 
-// Inject a display transform at the end of the generated PIXEL shader.
-// three.js's renderer.outputEncoding / toneMapping only affect BUILT-IN
-// materials (they're shader-chunk features) — RawShaderMaterial output
-// bypasses both entirely, so without this injection MaterialX's raw
-// linear radiance would be written straight to the sRGB display buffer:
-// too dark on its own (mid-tones roughly halved by the missing sRGB
-// encode) AND missing the ACES highlight rolloff every other object in
-// the scene gets from renderer.toneMapping. We find the shader's
-// `out vec4` variable and append, just before main()'s closing brace
-// (MaterialX emits main last, so the file's last '}' closes it):
-//   1. ACES filmic tone mapping (Stephen Hill's fit, i.e. the
-//      RRTAndODTFit approximation), applied to the raw LINEAR radiance,
-//      then
-//   2. the piecewise IEC 61966-2-1 sRGB OETF, applied to the
-//      now-tone-mapped result.
-//
-// TONE MAPPING (user decision, 2026-07-18 — divergence from the official
-// MaterialX viewer; see hwSrgbEncodeOutput's comment above in the
-// genContext setup for the "why", this comment has the "what"): the
-// official viewer applies NO tone mapping, just a bare linear->sRGB
-// encode. This app instead matches the EXACT ACES curve three.js's OWN
-// renderer applies to every neighboring BUILT-IN material in the same
-// scene (renderer.toneMapping = THREE.ACESFilmicToneMapping, set where
-// the WebGLRenderer is constructed below) — without this, the generated
-// MaterialX surface visibly diverges (overblown, un-rolled-off
-// highlights) from the glTF shaderball parts sitting right next to it.
-// In-scene consistency was judged more valuable than official-viewer
-// parity for this app.
-//
-// The ACES constants below are copied VERBATIM from three r128's own
-// tonemapping shader chunk — extracted straight from the vendored build
-// at vendor/three/three.min.js (search for "RRTAndODTFit"; lives in the
-// `tonemapping_pars_fragment` shader-chunk string) — so the
-// RawShaderMaterial ball matches, bit-for-bit algorithm and not just "an
-// ACES curve", what THREE.WebGLRenderer applies to everything else:
-//
-//   vec3 RRTAndODTFit( vec3 v ) {
-//       vec3 a = v * ( v + 0.0245786 ) - 0.000090537;
-//       vec3 b = v * ( 0.983729 * v + 0.4329510 ) + 0.238081;
-//       return a / b;
-//   }
-//   vec3 ACESFilmicToneMapping( vec3 color ) {
-//       const mat3 ACESInputMat = mat3(
-//           vec3( 0.59719, 0.07600, 0.02840 ), vec3( 0.35458, 0.90834, 0.13383 ),
-//           vec3( 0.04823, 0.01566, 0.83777 )
-//       );
-//       const mat3 ACESOutputMat = mat3(
-//           vec3(  1.60475, -0.10208, -0.00327 ), vec3( -0.53108,  1.10813, -0.07276 ),
-//           vec3( -0.07367, -0.00605,  1.07602 )
-//       );
-//       color *= toneMappingExposure / 0.6;
-//       color = ACESInputMat * color;
-//       color = RRTAndODTFit( color );
-//       color = ACESOutputMat * color;
-//       return saturate( color );
-//   }
-//
-// toneMappingExposure is hardcoded to 1.0 below (matching
-// renderer.toneMappingExposure = 1.0, set right alongside
-// renderer.toneMapping — see that assignment's comment further down)
-// rather than plumbed through as a live uniform: this app exposes no
-// exposure control today, so a constant avoids threading an unused
-// uniform through every generated shader. If an exposure control is
-// ever added, this MUST become a uniform kept in sync with
-// renderer.toneMappingExposure, or the RawShaderMaterial ball will
-// drift from the rest of the scene again.
+// Injects ACES filmic tone mapping (three r128's exact constants) and
+// sRGB OETF before main()'s closing brace — RawShaderMaterial bypasses
+// renderer.toneMapping, so this keeps it matching the rest of the scene.
 const encodeDisplay = (src) => {
-    // Both anchors below are load-bearing: a silent skip here used to mean
-    // the raw-linear MaterialX output shipped straight to the display
-    // buffer with no tone map / sRGB encode — a wrong (too-dark, blown-
-    // highlight) image with no error anywhere. Fail loud instead so a
-    // MaterialX output-format change surfaces immediately, not as a
-    // "why does this look wrong" bug report.
+    // Both anchors are load-bearing: a silent skip here used to ship
+    // raw-linear output straight to the display with no error anywhere.
+    // Fail loud instead, so a format change surfaces immediately.
     const m = src.match(/\bout\s+vec4\s+(\w+)\s*;/);
     if (!m) throw new Error('encodeDisplay: could not locate the fragment shader\'s "out vec4 <name>;" declaration — MaterialX output format may have changed');
     const v = m[1];
@@ -552,12 +324,9 @@ const encodeDisplay = (src) => {
     return src.slice(0, idx) + inject + src.slice(idx);
 };
 
-// Emscripten throws C++ exceptions as NUMBERS (raw exception pointers),
-// not Error objects — a bare catch that stringifies one shows "5247184"
-// or "undefined" instead of the real MaterialX message. Decode the
-// pointer via mx.getExceptionMessage when available; otherwise fall
-// back to normal Error/String handling. ALWAYS route caught MaterialX
-// errors through this.
+// Emscripten throws C++ exceptions as raw NUMBER pointers, not Error
+// objects — a bare catch stringifies one as "5247184"/"undefined" instead
+// of the real message. Decode via mx.getExceptionMessage when available.
 const mxErr = (mx, e) => {
     try {
         if (typeof e === 'number' && mx && typeof mx.getExceptionMessage === 'function') {
@@ -571,12 +340,9 @@ const mxErr = (mx, e) => {
     return String(e);
 };
 
-// CRITICAL WRITE PRIMITIVE — verified against the deployed
-// wasm: the JS binding of setValueString is the TYPED
-// setValue(value, type="string"), so writing a value RETYPES the
-// input to "string". This single binding quirk caused every
-// string-typed export and the colorspace nodedef failures. Writing
-// the raw `value` attribute never touches the type.
+// CRITICAL: the wasm binding of setValueString is the TYPED
+// setValue(value, type="string"), so writing a value RETYPES the input
+// to "string". Writing the raw `value` attribute never touches type.
 const mxWriteValue = (inp, str, type) => {
     mxWarnIfLocked('mxWriteValue'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
     try {
@@ -633,15 +399,9 @@ const mxSetColorspace = (el, cs) => {
     }, false);
 };
 
-// Shortest chain of `convert` hops fromType->toType using ONLY the
-// conversions the loaded library actually defines. This matters because
-// a generator-resolved convert with no matching nodedef (e.g. going
-// color3->color3 for multi-output color taps, or vector2->color3 in one
-// hop) doesn't fail at graph construction — the generator quietly
-// resolves the instance against the first convert nodedef with the
-// right OUTPUT type and emits a call whose argument type doesn't match
-// the emitted function (GLSL: "'NG_convert_float_color3' : no matching
-// overloaded function found"). [] = no convert needed, null = unreachable.
+// Shortest `convert` hop chain fromType->toType (only conversions the
+// library defines) — a mismatched convert otherwise fails silently
+// until GLSL compile. []=no convert needed, null=unreachable.
 const findConvertChain = (doc, fromType, toType) => {
     mxWarnIfLocked('findConvertChain'); // exported doc-reading helper — see mxWarnIfLocked's header comment
     if (fromType === toType) return [];
@@ -679,25 +439,9 @@ const findConvertChain = (doc, fromType, toType) => {
     return null;
 };
 
-// Create-or-fetch an input on `node`, guaranteeing its TYPE — the single
-// safe way to author inputs in this wasm build. Two verified binding
-// quirks make the obvious calls corrupting:
-//   - addInput(name, type) can DROP the type argument (input lands
-//     'color3'),
-//   - setValueString retypes the input to 'string'.
-// Either mistyping breaks nodedef resolution ("Could not find a nodedef
-// for node …") and with it every shader recompile. So: the input is
-// created BARE, the matching nodedef input's content is copied verbatim
-// inside C++ (type + default cross no JS boundary), the type is
-// verified and force-corrected as a fallback, and nodedef UI metadata
-// the copy drags along is stripped. Values are written afterwards with
-// mxWriteValue (raw attribute — never touches type).
-//
-// Categories like `convert` have MANY nodedefs sharing an input name
-// (e.g. 'in') with different types — copying from the first def found
-// (the float variant) would stamp `float` onto vector inputs, making
-// the generator resolve the WRONG convert nodedef. So the def whose
-// input TYPE matches `wantedType` is preferred when one is found.
+// Create-or-fetch an input on `node`, guaranteeing its TYPE — the only
+// safe way here: addInput(name, type) can drop the type arg, and
+// setValueString retypes to 'string', either breaking nodedef resolution.
 const ensureTypedInput = (doc, node, inputName, wantedType) => {
     mxWarnIfLocked('ensureTypedInput'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
     let inp = mxSafe(() => node.getInput(inputName), null);
@@ -718,13 +462,9 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
             const copied = mxSafe(() => { inp.copyContentFrom(defInput); return true; }, false);
             if (copied) {
                 how = 'copied-from-nodedef';
-                // The copy brings the nodedef's UI/doc metadata along —
-                // meaningless on an instance and noisy in exports.
-                // defaultgeomprop is worse than noisy: MaterialX's validator
-                // rejects it outright on a node-instance input ("Invalid
-                // defaultgeomprop on non-definition and non-nodegraph
-                // input") — it's only legal on the nodedef/nodegraph-
-                // interface input it was just copied FROM.
+                // The copy brings nodedef UI/doc metadata along — noisy in
+                // exports. defaultgeomprop is worse: MaterialX's validator
+                // rejects it outright on a node-instance input.
                 for (const attr of ['uimin', 'uimax', 'uisoftmin', 'uisoftmax', 'uistep',
                     'uiname', 'uifolder', 'uiadvanced', 'doc', 'enum', 'enumvalues', 'defaultgeomprop']) {
                     mxRemoveAttr(inp, attr);
@@ -754,49 +494,9 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
     return inp;
 };
 
-// Belt-and-suspenders sweep run immediately before every writeToXmlString
-// call site (graph/model.jsx serializeDocXml, node-preview.jsx
-// buildExportXml, viewer-app.jsx send-to-editor). Two independent checks on
-// every <input> found while walking the document, both fixing attributes
-// that are legal on SOME elements but not the one currently holding them:
-//
-// 1) A leftover `value` on an input that ALSO carries a connection
-//    (nodename/nodegraph/interfacename). MaterialX forbids an input binding
-//    both a value and a connection — doc.validate() reports it as "Node
-//    input has too many bindings" — and every consumer (shadergen, the
-//    graph UI) reads the connection and ignores the value on a connected
-//    input anyway, so removing it is semantics-preserving, never a
-//    behavior change to a valid document. Root cause of the stale value is
-//    ensureTypedInput() above copying the nodedef's default VALUE onto a
-//    freshly-created input; callers are expected to strip it themselves
-//    right after wiring a connection (see graph-app.jsx's
-//    stashValueBeforeRemoval call sites), but this sweep also self-heals
-//    documents authored elsewhere or loaded from disk before this fix
-//    existed.
-// 2) A `defaultgeomprop` on any input whose PARENT is not itself a
-//    <nodegraph> or <nodedef> — i.e. any node-INSTANCE input.
-//    defaultgeomprop is only legal on a nodedef's declared input or a
-//    nodegraph's own interface input; MaterialX's validator rejects it
-//    outright on a node instance ("Invalid defaultgeomprop on
-//    non-definition and non-nodegraph input"). Unlike check 1, this is NOT
-//    gated on "connected" — the rule applies regardless of connection
-//    state. Root cause is the same class of bug: ensureTypedInput's
-//    nodedef-copy path (fixed to strip it going forward) and encapsulate/
-//    ungroup's node-instance cloning (ditto) can each produce this, but
-//    this sweep also self-heals a document that already had the leak
-//    before those fixes existed — a later export cleans it up even though
-//    nothing in THIS session wrote the bad attribute.
-//
-// In both cases removal is semantics-preserving, never a behavior change to
-// an otherwise-valid document — it only ever deletes an attribute that
-// couldn't legally apply where it sits anyway.
-//
-// Recursive walk over doc.getChildren() (mxSafe-wrapped at every step, so
-// one hostile/unbound element can't abort the sweep); depth-capped at 10,
-// which is generous headroom for MaterialX's actual nesting (doc ->
-// nodegraph -> node -> input is 3 deep) rather than a real limit anyone
-// should hit. Returns the number of attributes stripped, for perf/debug
-// logging by callers that want it.
+// Sweep run before every writeToXmlString call, fixing two attributes
+// MaterialX's validator rejects: a leftover `value` on a connected
+// input, and `defaultgeomprop` on a node-instance input. Depth-capped walk.
 const stripValuesFromConnectedInputs = (doc, maxDepth) => {
     mxWarnIfLocked('stripValuesFromConnectedInputs'); // exported doc-mutating helper — see mxWarnIfLocked's header comment
     const cap = (typeof maxDepth === 'number') ? maxDepth : 10;
@@ -810,9 +510,8 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
                     || mxElAttr(child, 'nodegraph')
                     || mxElAttr(child, 'interfacename');
                 // Presence, not truthiness: an empty value="" on a
-                // connected input is just as invalid ("too many
-                // bindings") as a non-empty one, and mxElAttr's ''
-                // fallback can't tell "absent" from "present but empty".
+                // connected input is just as invalid as a non-empty one;
+                // mxElAttr's '' fallback can't tell absent from present-but-empty.
                 if (connected && mxElHasAttr(child, 'value')) {
                     const removed = mxRemoveAttr(child, 'value');
                     if (removed) stripped++;
@@ -834,30 +533,16 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
     return stripped;
 };
 
-// Doc-level renderable scan: given a MaterialX document, returns
-// [{ name, node }] — one entry per renderable surface (a material
-// node's bound surfaceshader, or a bare surfaceshader node as a
-// fallback when the document defines no material nodes at all). Ported
-// from loadMtlxDocument's renderable scan in js/viewer-app.jsx so it
-// can be SHARED rather than duplicated: callers today are the viewer's
-// document load (js/viewer-app.jsx) and both apps' shader-export
-// dialogs. Scans doc.getNodes() by TYPE rather than relying on
-// getMaterialNodes(), which isn't bound in every JS build (same caveat
-// as loadMtlxDocument).
-//
-// Callers passing a LIVE graph doc (as opposed to one freshly parsed
-// from XML) must invoke this from inside mxExclusive — it walks wasm
-// document state and does no locking of its own.
+// Doc-level renderable scan: returns [{ name, node }], one entry per
+// renderable surface. Scans by TYPE rather than getMaterialNodes(),
+// which isn't bound in every JS build. Live-doc callers need mxExclusive.
 const listDocRenderables = (doc) => {
     mxWarnIfLocked('listDocRenderables'); // exported doc-reading helper — see mxWarnIfLocked's header comment
     const renderables = [];
     const seen = new Set();
-    // Defensive skip of transient __pv_* wrapper nodes. The graph
-    // preview pipeline creates/destroys these entirely inside its own
-    // mxExclusive hold (see prewarmPreviewTarget and the buildRenderable
-    // cleanup it calls), so none should ever be visible to a caller of
-    // this function — this check is belt-and-suspenders against a
-    // caller that somehow races that hold.
+    // Defensive skip of transient __pv_* wrapper nodes: the graph
+    // preview pipeline creates/destroys these inside its own mxExclusive
+    // hold, so this guards against a caller somehow racing that hold.
     const isPvName = (nm) => typeof nm === 'string' && nm.indexOf('__pv_') === 0;
     const pushShader = (displayName, shaderNode) => {
         if (!shaderNode) return;
@@ -908,10 +593,7 @@ const listDocRenderables = (doc) => {
 const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 
 // ------------------------------------------------------------------
-// Drag & drop ingestion pipeline — shared by node-graph.html and
-// material-viewer.html. Both pages accept a single .mtlx file, a
-// .mtlx plus loose files, a .mtlx plus a (sub)folder, or a .zip
-// containing any of the above.
+// Drag & drop ingestion — shared by node-graph.html/material-viewer.html.
 // ------------------------------------------------------------------
 
 // Normalize a path for matching: forward slashes, lowercase, no
@@ -1025,10 +707,9 @@ const resolveIncludes = async (xml, fileMap, fromDir, visited) => {
     return parts.join('');
 };
 
-// Read a dropped file entry and resolve its xi:includes against the rest
-// of `map`. Callers need BOTH strings back: the graph editor validates the
-// RAW as-authored text (noteDocXml) while parsing consumes the RESOLVED
-// text, so this returns both rather than picking one.
+// Read a dropped file entry, resolving xi:includes against `map`. Callers
+// need BOTH strings: the graph editor validates the RAW as-authored text
+// while parsing consumes the RESOLVED text.
 const readMtlxText = async (entry, path, map) => {
     const raw = await entry.text();
     const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -1036,12 +717,9 @@ const readMtlxText = async (entry, path, map) => {
     return { raw, resolved };
 };
 
-// Session-lifetime texture cache, keyed by file identity (not by
-// node/uniform), so re-binding the SAME dropped file after a
-// docRev-triggered view rebuild reuses the already-decoded
-// THREE.Texture instead of kicking off a fresh async TextureLoader
-// load — that async gap is what let the checker placeholder flash
-// on every committed parameter edit.
+// Session-lifetime texture cache, keyed by file identity — re-binding the
+// same dropped file after a view rebuild reuses the decoded THREE.Texture
+// instead of a fresh async load, which let the checker placeholder flash.
 const TEXTURE_CACHE = new Map();
 const textureCacheKey = (blob, fallback) => {
     if (blob && blob.name != null && blob.size != null && blob.lastModified != null) {
@@ -1050,25 +728,9 @@ const textureCacheKey = (blob, fallback) => {
     return fallback; // e.g. the fileMap key, when identity fields are missing
 };
 
-// Parse a dropped .exr Blob into a three.js texture via THREE.EXRLoader
-// (script tag pinned to three@0.147.0 — newer than the r128 core, see
-// index.html for why — alongside RGBELoader/GLTFLoader, same
-// DataTextureLoader family). EXRLoader.parse always returns RGBAFormat
-// data — the implementation hardcodes numChannels = 4 — so unlike
-// RGBELoader's env path (see prepareEnv/padToRGBA above) there's no
-// RGB->RGBA repack needed here. setDataType(FloatType) is explicit
-// (mirrors loadHdrTexture below): 0.147.0's EXRLoader constructor
-// defaults this.type to HalfFloatType, not FloatType like older
-// versions, and leaving it on the default would silently swap d.data
-// from a Float32Array to a half-float Uint16Array.
-// A THREE.DataTexture already defaults to generateMipmaps=false and
-// NearestFilter (see three's DataTexture ctor); left at no-mipmaps
-// (forcing mips on Float/HalfFloat data hits the same "not
-// color-renderable" WebGL restriction padToRGBA works around for the
-// env textures, and a material preview swatch doesn't need mip levels)
-// but bumped to LinearFilter for both min/mag so it isn't blocky —
-// LinearFilter is mipmap-free and texture-completeness-safe without a
-// mip chain, unlike a LinearMipmapLinear* filter would be.
+// Parses a dropped .exr Blob via THREE.EXRLoader (pinned to three@0.147.0,
+// see index.html). setDataType(FloatType) is explicit: 0.147.0 defaults to
+// HalfFloatType, silently swapping d.data to a Uint16Array otherwise.
 const loadExrTexture = async (blob) => {
     if (typeof THREE.EXRLoader === 'undefined') {
         console.warn('mtlx-engine: THREE.EXRLoader unavailable (script blocked/offline) — .exr textures fall back to the checker.');
@@ -1087,20 +749,9 @@ const loadExrTexture = async (blob) => {
     }
 };
 
-// Parse a dropped .hdr Blob via the already-loaded THREE.RGBELoader.
-// r128's DataTextureLoader family exposes a synchronous .parse(buffer),
-// which is also how the built-in environment is parsed now (see
-// parseEnvBuffer below — a fetch()'d ArrayBuffer through that same
-// synchronous .parse() call). Explicitly set to FloatType (not the default
-// UnsignedByteType/RGBE byte packing) so the plain MaterialX sampler
-// shader — which has no RGBE decode step — reads linear values
-// directly; that yields RGBFormat (3-channel) data per RGBELoader's
-// source, which THREE.DataTexture accepts as-is. Same no-mipmap
-// reasoning as loadExrTexture above: RGB16F/RGB32F can't safely
-// generateMipmap on WebGL2, but nothing here asks it to, so
-// padToRGBA's repack (needed only when mips ARE forced, as prepareEnv
-// does for the IBL environment) is unnecessary for this sampler-only
-// use.
+// Parses a dropped .hdr Blob via THREE.RGBELoader's synchronous .parse().
+// Explicitly set to FloatType (not the default RGBE byte packing) so the
+// MaterialX sampler, which has no RGBE decode step, reads linear values.
 const loadHdrTexture = async (blob) => {
     if (typeof THREE.RGBELoader === 'undefined') {
         console.warn('mtlx-engine: THREE.RGBELoader unavailable — .hdr textures fall back to the checker.');
@@ -1119,19 +770,9 @@ const loadHdrTexture = async (blob) => {
     }
 };
 
-// After the view is up: bind dropped textures onto the shader's
-// filename sampler uniforms by their document-referenced paths.
-// Cache hits assign synchronously; cache misses fall back to an async
-// load — THREE.TextureLoader for anything a plain <img> can decode,
-// or the arrayBuffer+parse loaders above for .exr/.hdr, which three's
-// TextureLoader can't handle (bindDroppedTextures previously fell
-// silently through to the UV checker for both). `onBound` (optional)
-// is invoked once per texture that finishes binding (sync for cache
-// hits, async otherwise) so callers can re-render as textures land —
-// on a failed/unsupported parse it's simply never called for that
-// uniform, same as a TextureLoader error, leaving the checker default
-// the sampler uniforms are created with (see getDefaultTexture) as-is.
-// Returns { bound: [...], missing: [...] } for the UI report.
+// Binds dropped textures onto the shader's filename sampler uniforms.
+// Cache hits assign synchronously; misses load async (TextureLoader, or
+// the .exr/.hdr parsers above). `onBound` fires per texture that lands.
 const bindDroppedTextures = (view, fileMap, onBound) => {
     const bound = [], missing = [];
     for (const u of view.introspected) {
@@ -1177,17 +818,9 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     return { bound, missing };
 };
 
-// Extract a plain JS array from either a real JS array or a
-// MaterialX/embind vector-like value ({size(),get(i)} or a typed-array
-// producing {data()}). Shared by mxValueToThreeUniform (below) and
-// plainizeMxUniformData (below) — the latter is the one that matters for
-// heap safety: it runs INSIDE generatePreviewSourcesUnlocked, still under
-// the mxExclusive lock (see mxExclusive, js/mtlx-engine.js), and its
-// Array.from/push calls copy the data out of any heap-backed view into a
-// plain, detached JS array before the lock releases. mxValueToThreeUniform
-// itself may also be called with values that already went through that
-// conversion (plain arrays) — Array.isArray short-circuits those safely,
-// so it stays tolerant of both shapes.
+// Extracts a plain JS array from a real array or an embind vector-like
+// value ({size(),get(i)} or {data()}). plainizeMxUniformData relies on
+// this to detach heap-backed views before the mxExclusive lock releases.
 const mxDataToPlainArray = (d) => {
     if (Array.isArray(d)) return d;
     if (d && typeof d.data === 'function') { try { return Array.from(d.data()); } catch (e) { /* not iterable */ } }
@@ -1195,27 +828,9 @@ const mxDataToPlainArray = (d) => {
     return null;
 };
 
-// Enumerate a ShaderStage's uniform variables via MaterialX shader
-// introspection — the official viewer's approach (§7.1). Returns
-// [{ name, type, data }] where data is the raw getData() payload of
-// the recorded default (null when the uniform has no default, e.g.
-// the per-frame transform matrices). Every access is defensive:
-// exact embind shapes vary across MaterialX JS builds.
-//
-// CAUTION: `data` here may be a LIVE heap-backed view (val.getData() below)
-// for vector/matrix/color types — it is NOT safe to hold across an await or
-// past the mxExclusive lock releasing (a later heap grow detaches it). Every
-// caller of collectMxUniforms MUST immediately run its output through
-// plainizeMxUniformData (below) before returning across the lock boundary.
-// Currently the only caller is generatePreviewSourcesUnlocked, which does
-// exactly that — do not add a new caller outside the lock without the same
-// treatment.
-//
-// Scoped OUT of the mxShader-delete WASM-lifetime pass above, deliberately:
-// the `st`/blockMap/value handles this function reads (getStage's ownership
-// is ambiguous in this binding, and the getData() views above must outlive
-// whatever handle produced them) are left for FinalizationRegistry
-// GC-reclaim rather than deleted eagerly here.
+// Enumerate a ShaderStage's uniforms via MaterialX introspection. `data`
+// may be a LIVE heap-backed view for vector/matrix/color types — run it
+// through plainizeMxUniformData before the mxExclusive lock releases.
 const collectMxUniforms = (stage) => {
     mxWarnIfLocked('collectMxUniforms'); // exported doc-reading helper (per shader-gen, not per-frame) — see mxWarnIfLocked's header comment
     const out = [];
@@ -1268,30 +883,22 @@ const collectMxUniforms = (stage) => {
     return out;
 };
 
-// Types whose collectMxUniforms `data` is (or may be) a live embind
-// vector/heap-backed view rather than a plain JS primitive — the ones
-// that need mxDataToPlainArray to detach them. Scalars (float/integer/
-// boolean) and filename/string values already arrive as plain JS from
-// embind, so they pass through untouched.
+// Types whose collectMxUniforms `data` may be a live embind heap-backed
+// view, needing mxDataToPlainArray to detach it. Scalars and
+// filename/string values already arrive as plain JS, untouched.
 const VECTOR_MX_TYPES = new Set(['vector2', 'vector3', 'vector4', 'color3', 'color4', 'matrix33', 'matrix44']);
 
-// Convert ONE collectMxUniforms() entry's `data` field to plain JS —
-// MUST run before the mxExclusive lock that's active during
-// generatePreviewSourcesUnlocked releases (see mxExclusive,
-// js/mtlx-engine.js, and the CAUTION note on collectMxUniforms above).
-// Returns a new entry object; never mutates the input.
+// Converts ONE collectMxUniforms() entry's `data` to plain JS — must run
+// before the mxExclusive lock (see the caution on collectMxUniforms
+// above) releases. Returns a new entry object; never mutates the input.
 const plainizeMxUniformData = (u) => {
     if (u.data == null || !VECTOR_MX_TYPES.has(u.type)) return u;
     return Object.assign({}, u, { data: mxDataToPlainArray(u.data) });
 };
 
-// Convert a MaterialX default value (by MaterialX type name) into a
-// three.js uniform. Returns null for types that can't be a plain
-// default (filename/sampler/string) — env samplers are bound
-// separately and the rest are safely skipped. `data` is expected to
-// already be plain JS (see plainizeMxUniformData) by the time this is
-// called from applyIntrospectedUniformDefaults, but mxDataToPlainArray
-// tolerates a live wasm vector too, for robustness.
+// Converts a MaterialX default value into a three.js uniform. Returns
+// null for types that can't be a plain default (filename/sampler/string).
+// `data` should be plain JS already; a live wasm vector is tolerated too.
 const mxValueToThreeUniform = (type, data) => {
     const arr = mxDataToPlainArray;
     switch (type) {
@@ -1310,13 +917,8 @@ const mxValueToThreeUniform = (type, data) => {
 };
 
 // The parameter UI's color picker speaks LINEAR, like MaterialX itself:
-// its hex bytes are a plain byte <-> float mapping (byte / 255) onto the
-// stored linear 0-1 values — deliberately NOT an sRGB encode. This keeps
-// the picker in exact agreement with the 0-1 RGB spinners rendered next
-// to it (#808080 IS linear ~0.502 per channel), at the cost of the
-// swatch being displayed by the browser as if those bytes were sRGB.
-// linToSrgb / srgbToLin stay exported for anything that does need a
-// display-referred conversion.
+// hex bytes map byte/255 onto stored linear values, deliberately NOT an
+// sRGB encode — keeps the picker in agreement with the 0-1 RGB spinners.
 const linToSrgb = (c) => {
     const x = Math.max(0, Math.min(1, c));
     return x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
@@ -1328,24 +930,9 @@ const rgbToHex = (rgb) => '#' + rgb.slice(0, 3).map((c) => {
 }).join('');
 const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
 
-// Shared default texture for `filename` (image) inputs: a UV checker
-// generated on a canvas, so image nodes preview out of the box instead
-// of sampling an unbound (black) sampler. One instance is reused for
-// every filename uniform and restored by "Reset to default".
-//
-// getDefaultTexture() MUST stay synchronous — every consumer (sampler
-// defaults, docs reset, dropped-texture fallbacks) calls it expecting a
-// bindable THREE texture back immediately. So the canvas checker is
-// still drawn and returned on the spot. But it's a crude placeholder;
-// on that same first call we kick off a one-time async load of the
-// real repo asset (see the image path below) and, once it
-// arrives, UPGRADE the SAME texture object in place — swap .image and
-// set needsUpdate — rather than replacing `defaultTexture` with a new
-// THREE.Texture. Every consumer already holds a reference to (or a
-// `{ value: getDefaultTexture() }` uniform pointing at) this singleton,
-// so we can't hand out a different object later; mutating .image is
-// what makes already-bound previews pick up the real image on their
-// very next render without any consumer-side change-detection.
+// Shared default texture for `filename` inputs: a canvas UV checker so
+// image nodes preview instead of sampling unbound black. getDefaultTexture()
+// stays synchronous; a later async load UPGRADES this same object in place.
 let defaultTexture = null;
 // Fires exactly once, from the first getDefaultTexture() call, and
 // mutates `defaultTexture` (never reassigns it) when the real asset
@@ -1395,9 +982,8 @@ const configureLoadedTexture = (t) => {
 };
 
 // ---- Preview geometry ----
-// Alias three's attributes to the names the MaterialX vertex shader
-// expects, and provide tangents (real ones when computable, constant
-// +X fallback otherwise). Works on any BufferGeometry.
+// Aliases three's attributes to MaterialX vertex-shader names, providing
+// tangents (real when computable, constant +X fallback otherwise).
 const prepGeometry = (geometry) => {
     if (!geometry.getAttribute('uv')) {
         // MaterialX shaders read texcoords; give degenerate UVs
@@ -1409,10 +995,9 @@ const prepGeometry = (geometry) => {
     geometry.setAttribute('i_normal', geometry.getAttribute('normal'));
     geometry.setAttribute('i_texcoord_0', geometry.getAttribute('uv'));
     let iTangent = null;
-    // r128's computeTangents CONSOLE.ERRORs (rather than throwing) when
-    // index/position/normal/uv are missing — precheck so a geometry
-    // that can't have real tangents goes straight to the fallback
-    // without the scary log.
+    // r128's computeTangents CONSOLE.ERRORs (not throws) when
+    // index/position/normal/uv are missing — precheck so an ineligible
+    // geometry goes straight to the fallback without the scary log.
     const canTangent = !!(geometry.getIndex()
         && geometry.getAttribute('position')
         && geometry.getAttribute('normal')
@@ -1453,33 +1038,9 @@ const normalizeGeometry = (geometry) => {
     return geometry;
 };
 
-// Shaderball: two GLB exports of the ASWF/USD-WG Standard
-// Shader Ball shipped locally under models/ (see models/LICENSE.txt) —
-// shaderball.glb (full scene: backdrop box, grid, emitter backplanes,
-// neutral ball parts, an embedded camera) and shaderball_simple.glb
-// (ball only, no camera). Both replace the old remote gh-pages fetch
-// entirely: the URL is resolved via `new URL(..., document.baseURI).href`
-// — the SAME
-// document.baseURI idiom js/mtlx-assets.js's own local-mode URLs use —
-// so this resolves correctly against the plain website's origin AND
-// the VS Code webview's `<base href>`, with no asset-resolver probe (or
-// any other async gate) to await first.
-//
-// CACHE-OWNERSHIP POLICY: glbSceneCache holds the RAW GLTFLoader result
-// (gltf.scene straight off the loader — geometries/materials as
-// GLTFLoader built them, not yet cloned) keyed by absolute URL, fetched
-// once and reused for the rest of the page's life. Every consumer
-// (instantiateShaderballScene below) takes what it needs via
-// OBJECT3D.clone() + selective material clone()s (see there) rather
-// than mutating the cached scene in place, and NOTHING in this file
-// ever calls .dispose() on a cached entry's geometries/materials — the
-// SAME never-dispose-the-shared-cache policy createMtlxRenderView's own
-// disposePartial() already applies to envRadiance/envIrradiance (see
-// its comments below) and js/mtlx-assets.js applies to its own fetched
-// MaterialX documents. A cache miss (missing/corrupt models/,
-// GLTFLoader script not loaded) resolves to null rather than
-// rejecting, so a failed load degrades to the sphere fallback below
-// instead of throwing out of createMtlxRenderView.
+// Shaderball: two GLB exports of the ASWF/USD-WG Standard Shader Ball
+// under models/ (see models/LICENSE.txt). glbSceneCache holds the raw
+// GLTFLoader result per URL; consumers clone() rather than mutate/dispose it.
 const glbSceneCache = new Map();
 const loadGlbScene = (url) => {
     if (!glbSceneCache.has(url)) {
@@ -1494,18 +1055,9 @@ const loadGlbScene = (url) => {
     return glbSceneCache.get(url);
 };
 
-// Instantiate a PER-VIEW copy of the shaderball scene from the shared
-// cache above. mode: 'full' (shaderball.glb - the embedded camera +
-// every backdrop/emitter mesh; fixed-camera preset for the graph editor,
-// or an orbitable preset for docs/viewer when the caller opts in with
-// sceneOrbit) or 'simple'
-// (shaderball_simple.glb, viewer/docs — ball only, framed like the
-// sphere/cube presets). Returns null when the GLB failed to load OR
-// (defensively) doesn't contain a mesh named 'material_surface' — the
-// node both authored GLBs reserve as the slot for the generated
-// MaterialX material; createMtlxRenderView treats either case exactly
-// like today's "shaderball fetch failed" contract: fall back to the
-// plain sphere.
+// Instantiates a PER-VIEW copy of the cached shaderball scene. mode:
+// 'full' (shaderball.glb, embedded camera) or 'simple' (ball only).
+// Returns null on load failure or a missing 'material_surface' mesh.
 const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
     const url = new URL(
         mode === 'full' ? 'models/shaderball.glb' : 'models/shaderball_simple.glb',
@@ -1514,13 +1066,9 @@ const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
     const gltf = await loadGlbScene(url);
     if (!gltf) return null;
 
-    // Object3D.clone(true) deep-clones the NODE hierarchy but only
-    // shallow-copies each mesh's geometry/material (shared by
-    // reference with the cached original) — so two concurrently-live
-    // views (e.g. the graph's inline docs dialog open over a live
-    // graph preview) instantiating from the SAME cache entry don't
-    // silently share mutable per-view state until the traverse below
-    // fixes that up.
+    // Object3D.clone(true) deep-clones the node hierarchy but only
+    // shallow-copies each mesh's geometry/material (shared by reference)
+    // — two concurrent views need the traverse below to un-share state.
     const group = gltf.scene.clone(true);
     let glbCamera = null;
     let surfaceMesh = null;
@@ -1532,40 +1080,25 @@ const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
         }
         if (!obj.isMesh) return;
         if (obj.name === 'material_surface') {
-            // The generated MaterialX material lands here — leave
-            // whatever glTF gave it (both GLBs author this primitive
-            // with a NULL material) untouched; createMtlxRenderView
-            // pre-assigns this mesh onto its shell `mesh` var so
-            // applyMaterialInternal's `mesh.material = material`
-            // branch does the actual assignment.
+            // The generated MaterialX material lands here (both GLBs
+            // author this primitive with a NULL material) —
+            // createMtlxRenderView assigns it via applyMaterialInternal.
             surfaceMesh = obj;
             return;
         }
         if (/^backplane/.test(obj.name)) {
-            // Emitter panels (backplane / backplane.001): NULL glTF
-            // material + a baked vertex COLOR_0, no UVs — self-lit
-            // "light card" look. toneMapped:true (changed from false,
-            // user-approved, 2026-07-18): now that the generated
-            // MaterialX surface ALSO gets ACES applied (see
-            // encodeDisplay's header comment), running these panels'
-            // baked brightness through the SAME ACES curve keeps every
-            // light-emitting/bright element in the scene consistent —
-            // leaving them un-tone-mapped would make the panels the one
-            // remaining outlier that doesn't roll off like everything
-            // else.
+            // Emitter panels: NULL glTF material + baked vertex COLOR_0,
+            // self-lit "light card" look. toneMapped:true keeps them on
+            // the same ACES curve as the MaterialX surface (encodeDisplay).
             const m = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true });
             obj.material = m;
             ownedMaterials.push(m);
             return;
         }
         if (obj.material) {
-            // Every other glTF-materialed mesh (backdrop box, grid,
-            // neutral ball parts): clone() so this view OWNS its
-            // material instance instead of sharing the cached
-            // original's — without this, setEnvExposure's
-            // envMapIntensity mutation (see the handle below) would
-            // leak into every other live/future view instantiated
-            // from the same cache entry.
+            // Every other glTF-materialed mesh: clone() so this view
+            // OWNS its material instance — without it, setEnvExposure's
+            // envMapIntensity mutation would leak across cached views.
             const wasArray = Array.isArray(obj.material);
             const clones = (wasArray ? obj.material : [obj.material]).map((m) => m.clone());
             obj.material = wasArray ? clones : clones[0];
@@ -1574,25 +1107,15 @@ const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
     });
     if (!surfaceMesh) return null;
 
-    // Per-view geometry clone: prepGeometry MUTATES the geometry
-    // (adds i_position/i_normal/i_texcoord_0/i_tangent attribute
-    // aliases) — clone first so the cache's original geometry (shared
-    // with every other view's clone of this same node) stays pristine.
+    // Per-view geometry clone: prepGeometry MUTATES the geometry (adds
+    // i_position/i_normal/etc aliases) — clone first so the cache's
+    // original geometry stays pristine for other views.
     surfaceMesh.geometry = prepGeometry(surfaceMesh.geometry.clone());
 
     if (mode === 'simple') {
-        // Whole-scene analog of normalizeGeometry (above): both GLBs
-        // bake a 0.01 scale into an internal root node, and the ball's
-        // actual authored size doesn't line up with the sphere/cube
-        // presets' radius-1 convention — center the assembly's
-        // bounding sphere at the origin and scale it to radius 1 so
-        // this preset frames identically under the SAME cameraDistance
-        // (3.6 / 2.55) and OrbitControls min/maxDistance the sphere/
-        // cube presets already assume. Applied as a WRAPPING group
-        // transform (rather than baking it into every descendant's
-        // geometry, the way normalizeGeometry does for a single
-        // BufferGeometry) since this scene's meshes have their own
-        // internal node transforms that must stay intact.
+        // Whole-scene analog of normalizeGeometry: centers the bounding
+        // sphere at radius 1 so this preset frames like sphere/cube.
+        // Wraps in a group transform since meshes keep internal transforms.
         const bs = new THREE.Box3().setFromObject(group).getBoundingSphere(new THREE.Sphere());
         const outer = new THREE.Group();
         outer.add(group);
@@ -1607,14 +1130,9 @@ const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
     return { group, surfaceMesh, glbCamera, ownedMaterials };
 };
 
-// Build the selected preview geometry: cube/sphere only — the
-// shaderball presets are full GLB SCENES, handled separately by
-// instantiateShaderballScene() and createMtlxRenderView's scene-mode
-// dispatch (see `sceneMode`/`sceneInst` near the top of that function
-// and the geometry-step dispatch further down). Any unrecognized
-// `which` (including a scene-mode name arriving here because scene
-// instantiation itself failed) falls back to the sphere — today's
-// exact fallback contract.
+// Builds cube/sphere preview geometry only — shaderball presets are full
+// GLB scenes handled separately by instantiateShaderballScene(). Any
+// unrecognized `which` falls back to the sphere.
 const buildPreviewGeometry = async (which) => {
     if (which === 'cube') {
         return normalizeGeometry(new THREE.BoxGeometry(1.3, 1.3, 1.3));
@@ -1622,35 +1140,13 @@ const buildPreviewGeometry = async (which) => {
     return new THREE.SphereGeometry(1, 64, 64);
 };
 
-// Resolve how to preview a node from its nodedefs. Handles:
-//  - overloaded defs (e.g. add: float/color3/vector3/... variants)
-//  - MULTI-OUTPUT defs (many noise nodes expose out/outr/outg/...):
-//    we pick the FIRST viewable output.
-// Returns { kind, outType, outputName, multiOutput } where kind is
-// 'surface' | 'bsdf' | 'edf' | 'color' | null. outputName is the specific
-// output to tap (null = the def's single/default output). multiOutput
-// is true when the node instance must be created as type 'multioutput'.
+// Resolves how to preview a node from its nodedefs: handles overloaded
+// defs and MULTI-OUTPUT defs (picks the first viewable output). Returns
+// { kind, outType, outputName, multiOutput }.
 const COLOR_VIEWABLE = ['color3', 'color4', 'float', 'vector2', 'vector3', 'vector4'];
-// Resolve how to preview a node category. `defFilter` (optional) narrows the
-// matching nodedefs — needed because categories are not unique across
-// libraries ('add' is stdlib math AND pbrlib BSDF/EDF/VDF) and the priority
-// below would otherwise pick the wrong interpretation. Falls back to the
-// unfiltered set if the filter eliminates everything.
-// `preferType` (optional): an explicit output type chosen by the UI's
-// signature selector. When a candidate of that type exists it WINS over the
-// default priority; a non-viewable choice (matrix33, EDF, ...) returns
-// kind:null so the preview shows its honest "isn't a viewable color
-// surface" notice instead of silently previewing something else.
-// `preferDefName` (optional): an explicit nodedef NAME. More precise than
-// preferType — needed when several nodedefs share an output type but differ
-// by another input's type (e.g. fractal3d's float-amplitude overloads),
-// which preferType alone cannot disambiguate. When it names a real nodedef,
-// the candidate set is narrowed to just that def before anything else runs.
-// The lookup runs on the UNFILTERED list and, when it hits, overrides
-// defFilter entirely — the caller pins this exact nodedef on the preview
-// instance, so kind resolution must honor the same def or generated code
-// diverges from the instantiated type. Unresolvable names fall through to
-// the defFilter-narrowed behavior, unaffected by preferDefName.
+// `defFilter` (optional) narrows matching nodedefs — categories aren't
+// unique across libraries ('add' is math AND BSDF/EDF/VDF). `preferType`
+// picks an output type explicitly; `preferDefName` pins an exact nodedef.
 const resolveNodeKind = (doc, nodeName, defFilter, preferType, preferDefName) => {
     mxWarnIfLocked('resolveNodeKind'); // exported doc-reading helper (per node-selection, not per-frame) — see mxWarnIfLocked's header comment
     let defs = vecToArray(doc.getMatchingNodeDefs(nodeName));
@@ -1719,10 +1215,9 @@ const resolveNodeKind = (doc, nodeName, defFilter, preferType, preferDefName) =>
     return { kind: null, types: allTypes };
 };
 
-// Synthesize a small equirectangular environment (LDR, safe to filter
-// and mip on WebGL2) so image-based lighting has something to sample:
-// a sky-to-ground gradient with a soft overhead "sun" for speculars.
-// Real previews would load an HDR; this keeps the viewer self-contained.
+// Synthesizes a small equirect environment (LDR, filter/mip-safe): a
+// sky-to-ground gradient with a soft overhead "sun" for speculars.
+// Keeps the viewer self-contained when no HDR is loaded.
 const makeEnvTexture = (w, h, blurred) => {
     const data = new Uint8Array(w * h * 4);
     const sky = [150, 190, 235], horizon = [225, 225, 220], ground = [70, 66, 60];
@@ -1754,12 +1249,9 @@ const makeEnvTexture = (w, h, blurred) => {
         }
     }
     const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
-    // Equirect mapping: irrelevant for the IBL sampler uniforms; the
-    // visible skybox mesh (bgMesh, see createMtlxRenderView) uses a
-    // flipY=true copy of this texture (makeBackgroundTexture) — see
-    // that function's header comment for why flipY=true is correct
-    // for the mirrored-sphere backdrop (not merely a scene.background
-    // leftover — scene.background is gone entirely, see bgMesh).
+    // Equirect mapping: irrelevant for the IBL sampler; the visible
+    // skybox mesh uses a flipY=true copy of this texture
+    // (makeBackgroundTexture) — see its header comment for why.
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -1770,58 +1262,26 @@ const makeEnvTexture = (w, h, blurred) => {
     return tex;
 };
 
-// Path to the app's default equirectangular (lat-long) environment map:
-// a studio EXR (studio_kontrast_04_1k.exr) — parsed via EXRLoader
-// (see parseEnvBuffer below) and routed through the same
-// prepareEnv/padToRGBA pipeline an .hdr would use (EXRLoader always
-// emits RGBA data, so padToRGBA's RGB->RGBA repack is a no-op
-// passthrough for this file). There is no paired
-// "<name>_irradiance.exr": diffuse irradiance is always SYNTHESIZED via
-// true SH cosine convolution (shIrradianceFromEquirect, below) rather
-// than loaded from an authored prefiltered map — see
-// buildEnvFromParsedTexture. Leave as-is / remove the file to fall back
-// to the synthesized sky (getEnvironment() resolves null on any
-// fetch/parse failure, same contract as before).
+// Path to the app's default equirect environment: a studio EXR, parsed
+// via EXRLoader and routed through prepareEnv/padToRGBA. No paired
+// irradiance file — diffuse irradiance is always SH-synthesized (below).
 const ENV_MAP_URL = './env_maps/studio_kontrast_04_1k.exr';
 
 // Load the environment ONCE and reuse across previews. Resolves to
 // { radiance, irradiance, mips } or null if no file is present, in
 // which case the caller uses the synthesized makeEnvTexture sky.
 let envPromise = null;
-// Session-wide user-imported environment override (Environment dialog's
-// "Import..."): when set, every NEWLY-CREATED render view uses this
-// instead of the default getEnvironment() result. null = no override.
-// getEnvironment() itself is untouched — it's still the Reset target and
-// the fallback for views created before any import.
+// Session-wide user-imported environment override: when set, every
+// newly-created render view uses this instead of getEnvironment().
+// null = no override; getEnvironment() itself stays the Reset target.
 let envOverride = null;
-// Registry of live render-view handles (createMtlxRenderView's return
-// value), so environment imports/resets (setEnvOverride below) can
-// broadcast to EVERY live view, not just whichever one happens to be
-// visible. Without this, a hidden keep-alive view (e.g. a preview kept
-// alive across a tab switch) keeps whatever environment it was built
-// with — env is baked in at view creation (see `envOverride ||
-// getEnvironment()` in createMtlxRenderView below) — and surfaces later
-// as "the first imported map reappears" when the user switches back to
-// it. Entries are added right before createMtlxRenderView returns its
-// handle and removed by the handle's own dispose() (see its wiring
-// below), so this never outlives the view it tracks.
+// Registry of live render-view handles, so environment imports/resets
+// broadcast to EVERY live view, not just the visible one — otherwise a
+// hidden keep-alive view keeps its stale baked-in environment.
 const LIVE_VIEWS = new Set();
 // ---- Environment preparation: OFFICIAL VIEWER PARITY ----
-// The official viewer (main.js) does, per texture:
-//   prepareEnvTexture: DataTexture(RGBA), RepeatWrapping (S), max
-//   anisotropy, LinearMipmapLinearFilter, generateMipmaps = TRUE.
-// and loads TWO files: a radiance env and a PREFILTERED IRRADIANCE
-// env ('Lights/irradiance/<same>.hdr'). Mips are essential: the FIS
-// specular lookup picks its LOD from roughness — without a mip chain
-// every roughness samples the razor-sharp base level, which reads as
-// "too reflective" and makes the highlight pattern swim ("rotate")
-// as roughness changes.
-//
-// r128 gotcha (cause of an earlier all-black regression): RGBELoader's
-// half-float path outputs RGB-format data, and RGB16F is NOT
-// color-renderable, so gl.generateMipmap fails → incomplete texture →
-// samples black. Official three's loader emits RGBA. Fix: pad RGB →
-// RGBA before upload, THEN mipmapping is safe.
+// Mips are essential (FIS specular LOD needs them). r128 gotcha:
+// RGBELoader's half-float RGB16F isn't mippable — padToRGBA fixes it.
 const padToRGBA = (tex) => {
     const img = tex.image;
     if (!img || !img.data) return tex;
@@ -1851,25 +1311,9 @@ const prepareEnv = (tex) => {
     t.needsUpdate = true;
     return t;
 };
-// Build the texture used as the shell-owned skybox mesh's visible
-// backdrop (bgMesh, see createMtlxRenderView) from a prepared radiance
-// texture. It must be a SEPARATE texture from the IBL sampler, because
-// the two consumers disagree on V orientation:
-//   - MaterialX's mx_latlong_map_lookup maps "up" to v = 0, i.e. it
-//     wants the .hdr's first scanline at v = 0 → flipY = FALSE
-//     (what a fresh DataTexture gives us — reflections are correct).
-//   - The skybox mesh samples this texture through three's own
-//     SphereGeometry UVs (uv.y = 1 - v, so uv.y = 1 sits at the +Y
-//     pole — see BG_BASE/BG_SIGN's derivation comment above
-//     createMtlxRenderView for the full walk-through), which wants the
-//     .hdr's first scanline at v = 1 → flipY = TRUE.
-// This is NOT a stale leftover from the old scene.background design —
-// it was re-derived independently for the mirrored-sphere mesh above
-// and lands on the SAME flag value, because three's own classic
-// equirect-panorama recipe (webgl_panorama_equirectangular: a plain
-// image texture, default flipY=true, on `SphereGeometry(...).scale(
-// -1,1,1)`) makes the identical assumption on the identical geometry.
-// Shares the pixel data; only the upload orientation differs.
+// Builds the skybox mesh's visible backdrop from a prepared radiance
+// texture — must be SEPARATE from the IBL sampler: the two disagree on
+// V orientation (MaterialX flipY=false, this skybox mesh flipY=true).
 const makeBackgroundTexture = (src) => {
     const img = src.image;
     const bg = new THREE.DataTexture(img.data, img.width, img.height, src.format, src.type);
@@ -1905,36 +1349,9 @@ const halfToFloat = (h) => {
     if (exp === 31) return frac ? NaN : sign * Infinity;
     return sign * (1 + frac / 1024) * Math.pow(2, exp - 15);
 };
-// True SH (spherical-harmonic, l<=2, 9-coefficient) cosine-convolution
-// irradiance, used by buildEnvFromParsedTexture for EVERY environment —
-// the app's default env (getEnvironment(), a bare EXR with no paired
-// irradiance file) and user-imported ones (loadEnvironmentFromFile)
-// alike. There used to be an optional paired "<name>_irradiance.hdr"
-// convention with a box-blur fallback for files that lacked one; both
-// are gone (removed 2026-07-18) in favor of always
-// computing the real thing here — a plain box blur (~5.6deg for a 64x32
-// target) is not a cosine convolution, so mx_environment_irradiance's
-// diffuse term would read as a recognizable, slightly-softened copy of
-// the environment ("map painted on the mesh"). Ramamoorthi & Hanrahan
-// 2001, "An Efficient Representation for Irradiance Environment Maps".
-// Builds a bare 64x32 RGBA/HalfFloat DataTexture (mapping/wrap/filters/
-// encoding are added later by prepareEnv() at the call site).
-//
-// Direction convention (used identically by BOTH the projection pass
-// below and the evaluation pass — see Pass 2 comment for why any
-// consistent convention works): equirect (u,v) -> (theta,phi) with
-// y-up and v=0 at the top (theta=0 = +Y), matching MaterialX's
-// mx_latlong_map_lookup orientation (see makeBackgroundTexture above):
-//   theta = PI * (v+0.5) / H     (0 at top/+Y, PI at bottom/-Y)
-//   phi   = 2*PI * (u+0.5) / W
-//   d = (sx, sy, sz) = (sin(theta)*cos(phi), cos(theta), sin(theta)*sin(phi))
-// The SH basis below is the textbook z-up formula with "z" (the polar
-// axis) relabeled to sy (our up axis) and "x","y" (the equatorial
-// axes) relabeled to sx,sz — a pure axis rename, still an orthonormal
-// basis, so it's correct as long as the SAME labeling is used for both
-// projecting the source radiance AND evaluating the result (exact
-// horizontal phase/handedness doesn't matter for the convolution's
-// correctness, only that both passes agree).
+// True SH (l<=2) cosine-convolution irradiance (Ramamoorthi & Hanrahan
+// 2001) — replaces the old paired "_irradiance.hdr" convention. Uses a
+// y-up equirect convention matching MaterialX's mx_latlong_map_lookup.
 const shIrradianceFromEquirect = (tex) => {
     try {
         const srcImg = tex.image;
@@ -1945,12 +1362,9 @@ const shIrradianceFromEquirect = (tex) => {
             srcIsHalf ? halfToFloat(srcImg.data[idx + 1]) : srcImg.data[idx + 1],
             srcIsHalf ? halfToFloat(srcImg.data[idx + 2]) : srcImg.data[idx + 2],
         ];
-        // Pass 0 (pre-downsample box-average — same technique the old
-        // box-blur irradiance helper used, before its removal 2026-07-18,
-        // see this function's header comment — just to a float buffer
-        // instead of a half-float DataTexture): caps the Pass 1
-        // projection loop below at <=128x64 (<=8k) texels regardless of
-        // source size.
+        // Pass 0: pre-downsample box-average to a float buffer, capping
+        // the Pass 1 projection loop below at <=128x64 texels regardless
+        // of source size.
         let W = srcImg.width, H = srcImg.height, get;
         if (W > 128 || H > 64) {
             const dW = Math.min(W, 128), dH = Math.min(H, 64);
@@ -1977,10 +1391,9 @@ const shIrradianceFromEquirect = (tex) => {
         } else {
             get = (x, y) => readPx((y * W + x) * srcStride);
         }
-        // Pass 1: project the (possibly pre-downsampled) radiance onto
-        // the 9 SH basis functions, weighted by each texel's
-        // differential solid angle dOmega = (2*PI/W)*(PI/H)*sin(theta)
-        // (equirect texels shrink toward the poles).
+        // Pass 1: project radiance onto the 9 SH basis functions,
+        // weighted by each texel's differential solid angle
+        // dOmega = (2*PI/W)*(PI/H)*sin(theta) (texels shrink toward poles).
         const c = new Float64Array(9 * 3); // [coef*3 + channel], RGB per coefficient
         for (let y = 0; y < H; y++) {
             const theta = Math.PI * (y + 0.5) / H;
@@ -2009,22 +1422,9 @@ const shIrradianceFromEquirect = (tex) => {
                 }
             }
         }
-        // Pass 2: evaluate the cosine-convolved irradiance at each
-        // OUTPUT texel's direction (SAME mapping as Pass 1, just over
-        // the fixed 64x32 output grid). Al are the standard
-        // Ramamoorthi-Hanrahan cosine-lobe coefficients per SH band
-        // (A0=PI, A1=2*PI/3, A2=PI/4); the sum is then scaled by 1/PI
-        // to convert accumulated irradiance back to "equivalent incoming
-        // radiance" units, matching mx_environment_irradiance's expected
-        // input (the same convention a plain box average would use: a
-        // uniform env of radiance L must map to L, not PI*L). Sanity
-        // check for a uniform environment (L constant):
-        //   c00 = L * Y00 * (integral of dOmega = 4*PI) = L*0.282095*4*PI
-        //   E(N) = A0 * c00 * Y00 = PI * (L*0.282095*4*PI) * 0.282095
-        //        = PI * L * 4*PI*0.282095^2  ~=  PI * L * 4*PI*(1/(4*PI)) = PI*L
-        //   E(N) / PI = L  ->  matches the input radiance, as required.
-        // Negative results (ringing from the truncated l<=2 series) are
-        // clamped to 0.
+        // Pass 2: evaluate cosine-convolved irradiance per output texel
+        // using the Ramamoorthi-Hanrahan cosine-lobe coefficients, scaled
+        // by 1/PI to match mx_environment_irradiance's expected units.
         const OW = 64, OH = 32;
         const A0 = Math.PI, A1 = (2 * Math.PI) / 3, A2 = Math.PI / 4;
         const A = [A0, A1, A1, A1, A2, A2, A2, A2, A2];
@@ -2069,20 +1469,9 @@ const shIrradianceFromEquirect = (tex) => {
         return null;
     }
 };
-// Parse a raw environment-file ArrayBuffer into a bare, un-prepared
-// THREE.DataTexture. `ext` is the lowercase extension including the dot
-// ('.hdr' | '.exr'). Shared by getEnvironment() (the app's default env,
-// fetched from ENV_MAP_URL) and loadEnvironmentFromFile (the Environment
-// dialog's Import...) so there is exactly ONE parsing implementation for
-// the two supported formats — the two callers used to duplicate this
-// (RGBELoader/EXRLoader construction + .setDataType + .parse +
-// DataTexture wrap) verbatim. Returns null on any failure (unsupported
-// ext, missing loader script, parse failure); callers decide how to
-// surface that — getEnvironment() treats null as "fall back to the
-// synthesized sky", loadEnvironmentFromFile throws a friendlier,
-// user-facing Error instead (its own loader-presence checks run BEFORE
-// calling this, purely so the dialog can show which specific loader is
-// missing — this function itself is silent on that distinction).
+// Parses a raw environment ArrayBuffer into a bare DataTexture, shared
+// by getEnvironment() and loadEnvironmentFromFile — one parser for both
+// formats. Returns null on failure; callers decide how to surface it.
 const parseEnvBuffer = (buf, ext) => {
     try {
         if (ext === '.hdr') {
@@ -2095,11 +1484,9 @@ const parseEnvBuffer = (buf, ext) => {
         }
         if (ext === '.exr') {
             if (typeof THREE.EXRLoader === 'undefined') return null;
-            // HalfFloatType (not FloatType, unlike loadExrTexture's
-            // material-sampler use above): RGBA16F is core-filterable/
-            // mip-able on WebGL2, while RGBA32F needs optional
-            // extensions — and prepareEnv() below forces a mip chain for
-            // the IBL/background textures this feeds.
+            // HalfFloatType, not FloatType (unlike loadExrTexture's
+            // sampler use above): RGBA16F is core mip-able on WebGL2,
+            // while RGBA32F needs optional extensions.
             const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
             return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
         }
@@ -2108,20 +1495,9 @@ const parseEnvBuffer = (buf, ext) => {
         return null;
     }
 };
-// Build the full { radiance, irradiance, mips, background,
-// prefilteredIrr } shape both getEnvironment() and
-// loadEnvironmentFromFile return, from a raw parseEnvBuffer() result.
-// Second half of the shared parse-and-build pipeline (see
-// parseEnvBuffer's header comment above for the first half) — folds
-// what used to be getEnvironment's and loadEnvironmentFromFile's own,
-// separately-duplicated environment-preparation steps into one place.
-// Irradiance is ALWAYS synthesized via true SH cosine convolution
-// (shIrradianceFromEquirect) — there is no more paired
-// "<name>_irradiance.hdr" convention (removed 2026-07-18 along with its
-// URL constant and box-blur helper, see shIrradianceFromEquirect's
-// header comment), so prefilteredIrr is always false; kept in the
-// return shape only because callers (createMtlxRenderView) still read
-// it.
+// Builds the full { radiance, irradiance, mips, background,
+// prefilteredIrr } shape from a raw parseEnvBuffer() result — shared by
+// getEnvironment() and loadEnvironmentFromFile.
 const buildEnvFromParsedTexture = (raw) => {
     const radiance = prepareEnv(raw);
     const irrSrc = shIrradianceFromEquirect(raw);
@@ -2137,13 +1513,8 @@ const buildEnvFromParsedTexture = (raw) => {
 const getEnvironment = () => {
     if (!envPromise) {
         // fetch() -> ArrayBuffer -> parseEnvBuffer, mirroring
-        // loadEnvironmentFromFile's file.arrayBuffer() -> parseEnvBuffer
-        // path below (same helper, different byte source). Any failure
-        // anywhere in the chain (network, missing loader script, bad
-        // file) resolves null — the existing synthesized-sky fallback at
-        // the createMtlxRenderView call site (`env ? env.radiance :
-        // makeEnvTexture(...)`) handles that, so this promise never
-        // rejects.
+        // loadEnvironmentFromFile's path (same helper, different byte
+        // source). Any failure resolves null; this promise never rejects.
         const ext = ENV_MAP_URL.slice(ENV_MAP_URL.lastIndexOf('.')).toLowerCase();
         envPromise = fetch(ENV_MAP_URL)
             .then((r) => (r.ok ? r.arrayBuffer() : null))
@@ -2158,16 +1529,9 @@ const getEnvironment = () => {
     return envPromise;
 };
 
-// Load a user-dropped equirectangular environment file (Import... in the
-// Environment dialog) and build it into the SAME shape getEnvironment()
-// returns, by reusing its helpers (parseEnvBuffer +
-// buildEnvFromParsedTexture — see their header comments above; this used
-// to duplicate both loaders' construction AND the prepare/SH/mips/
-// background steps inline). Throws a friendly Error for unsupported
-// extensions or missing loaders/parse failures; callers (the dialog)
-// catch and show it inline. (Unlike getEnvironment(), this does NOT
-// resolve null on failure — there's no silent synthesized-sky fallback
-// for an explicit user Import; the dialog needs to know why it failed.)
+// Loads a user-dropped environment file into the same shape
+// getEnvironment() returns, reusing its parse/build helpers. Unlike
+// getEnvironment(), throws on failure instead of a silent fallback.
 const loadEnvironmentFromFile = async (file) => {
     const name = ((file && file.name) || '').toLowerCase();
     const ext = name.slice(name.lastIndexOf('.'));
@@ -2191,12 +1555,9 @@ const loadEnvironmentFromFile = async (file) => {
     return buildEnvFromParsedTexture(raw);
 };
 
-// Set/clear the session-wide environment override (see envOverride
-// above). setEnvOverride(null) clears it (Reset) — subsequent new views
-// fall back to getEnvironment() again. Also broadcasts to every
-// currently-live view (LIVE_VIEWS, see above) so an import/reset is
-// visible on hidden keep-alive views too, not just whichever view
-// created it.
+// Set/clear the session-wide environment override. null clears it
+// (Reset) — new views fall back to getEnvironment(). Also broadcasts to
+// every live view (LIVE_VIEWS) so hidden keep-alive views update too.
 const setEnvOverride = (env) => {
     envOverride = env || null;
     if (envOverride) {
@@ -2215,22 +1576,15 @@ const setEnvOverride = (env) => {
 };
 const getEnvOverride = () => envOverride;
 
-// Standard MaterialX color spaces accepted on filename inputs.
-// Changing one is a CODEGEN decision (the CMS inserts the transform
-// into the shader), so the picker goes through the regen override
-// path, not a uniform.
+// Standard MaterialX color spaces accepted on filename inputs. Changing
+// one is a CODEGEN decision (the CMS inserts the shader transform), so
+// the picker goes through the regen override path, not a uniform.
 const COLORSPACES = ['srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709',
     'acescg', 'lin_ap1', 'srgb_displayp3', 'lin_displayp3', 'adobergb', 'lin_adobergb', 'none'];
 
-// One persistent hidden WebGL2 context used ONLY to pre-warm driver shader
-// compiles (KHR_parallel_shader_compile). Created lazily once, on a 1x1
-// canvas that never enters the DOM, and NEVER disposed — its GL objects are
-// completely decoupled from every preview canvas/renderer lifecycle, so
-// rebuild churn can't invalidate handles mid-poll (the source of the old
-// glGetProgramiv console warnings). ANGLE/Chrome cache compiled programs
-// per GPU process keyed by source, so a compile finished here makes the
-// display context's compile of the SAME source a fast cache hit.
-// null = not tried yet; false = unavailable (no WebGL2 or no extension).
+// One persistent hidden WebGL2 context, created lazily and never
+// disposed, used ONLY to pre-warm driver shader compiles — a compile
+// here makes the display context's later compile a fast driver cache hit.
 let MTLX_WARM_CTX = null;
 const getWarmContext = () => {
     if (MTLX_WARM_CTX !== null) return MTLX_WARM_CTX;
@@ -2247,22 +1601,13 @@ const getWarmContext = () => {
     return MTLX_WARM_CTX;
 };
 
-// Shader sources already pre-warmed (or fully display-compiled) this
-// session — the driver cache is primed for these, so a repeat pre-warm
-// would only ADD ~300ms of pointless background wait before the display
-// compile's cache hit. Keyed by a fast djb2 hash of the concatenated
-// sources (collisions are harmless: a false "already warmed" just means
-// one un-warmed sync compile, same as pre-warm-less behavior).
+// Shader sources already pre-warmed this session — repeating would only
+// add pointless background wait. Keyed by a fast djb2 hash; collisions
+// are harmless (worst case, one un-warmed sync compile).
 const MTLX_WARMED_SOURCES = new Set();
-// Deliberately no size gate here. An earlier version skipped pre-warm
-// for sources under 128 KB, assuming only "small" preview shaders would
-// fall under it — but measured 2026-07 on an RTX 4070 Ti / ANGLE D3D11,
-// real standard_surface/OpenPBR preview shaders are ~80-106 KB, UNDER
-// that gate, and their synchronous display compile froze the whole UI
-// for 2.5-2.9s. A genuinely tiny shader costs at most one or two poll
-// ticks (~16-32ms) to pre-warm — the poll checks completion once before
-// its first sleep — and MTLX_WARMED_SOURCES above already prevents
-// repeat pre-warms of the same source.
+// Deliberately no size gate: a prior 128 KB cutoff assumed only small
+// shaders needed pre-warming, but real standard_surface/OpenPBR previews
+// are ~80-106 KB and froze the UI 2.5-2.9s synchronously when skipped.
 const warmKey = (vs, fs) => {
     let h = 5381;
     const s = vs + ' ' + fs;
@@ -2270,23 +1615,9 @@ const warmKey = (vs, fs) => {
     return s.length + ':' + h;
 };
 
-// Pre-compile vs/fs on the hidden warm context and resolve when the driver
-// reports completion (or on bail/timeout). Returns 'done' | 'bailed' |
-// 'skipped'. Never throws; a warm failure must never break the preview.
-//
-// The throwaway source below must match byte-for-byte what three.js's
-// WebGLProgram will itself submit for the DISPLAY compile, or the driver's
-// source-keyed cache simply misses (never a correctness issue — just no
-// speed win, i.e. identical to not pre-warming at all). Verified from the
-// r128 source for our exact configuration (RawShaderMaterial +
-// glslVersion:GLSL3, WebGL2, no material.defines): prefixes reduce to
-// nothing (customDefines/customExtensions are empty; the WebGL2
-// built-in-material prefix block is skipped for RawShaderMaterial), and
-// resolveIncludes / replaceLightNums / replaceClippingPlaneNums /
-// unrollLoops are no-ops on MaterialX-generated GLSL (it uses none of
-// three's #include<>, NUM_*_LIGHTS, or #pragma unroll_loop_start
-// conventions). So three submits exactly '#version 300 es\n' + vs / + fs —
-// reproduced here.
+// Pre-compiles vs/fs on the hidden warm context; never throws. The
+// submitted source must match byte-for-byte what three.js's WebGLProgram
+// submits for display, or the driver cache misses (harmless, no speed win).
 const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
     const ctx = getWarmContext();
     if (!ctx) return 'skipped';
@@ -2334,21 +1665,17 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
     const __waitStart = performance.now();
     let timedOut = false;
 
-    // isProgram() is the silent validity check: it returns false for a
-    // deleted/invalid handle WITHOUT generating a GL error (unlike
-    // getProgramParameter on an invalid handle, which logs
-    // "GL_INVALID_VALUE: glGetProgramiv: Program object expected" once
-    // per pre-warm on Chrome). isContextLost / the null-guard / the
-    // try/catch below stay as belt-and-suspenders inner fallbacks.
+    // isProgram() is the silent validity check: false for a
+    // deleted/invalid handle WITHOUT a GL error (unlike getProgramParameter,
+    // which logs "GL_INVALID_VALUE" once per pre-warm on Chrome).
     const isWarmDone = () => {
         try {
             if (gl.isContextLost()) return true;
             if (!gl.isProgram(warmProgram)) return true;
             const v = gl.getProgramParameter(warmProgram, ext.COMPLETION_STATUS_KHR);
             // A GL error (invalid/deleted program) returns null WITHOUT
-            // throwing — treat it as "nothing left to wait for" instead of
-            // polling (and console-spamming GL_INVALID_VALUE) until the
-            // timeout cap.
+            // throwing — treat it as "nothing left to wait for" instead
+            // of polling (and console-spamming) until the timeout cap.
             return (v === null) ? true : !!v;
         } catch (e) {
             // Disposed/invalid handle — nothing left to wait for.
@@ -2362,18 +1689,16 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
     let tick = 0;
     for (;;) {
         if (isWarmDone()) break;
-        // Safety cap: on timeout just stop polling and proceed. The real
-        // compile below will then block for whatever compile time remains —
-        // same as not pre-warming, so this can never be WORSE, only equal
-        // or better.
+        // Safety cap: on timeout, stop polling and proceed — the real
+        // compile then blocks for whatever time remains, so this is
+        // never WORSE than not pre-warming, only equal or better.
         if ((performance.now() - __waitStart) > WAIT_TIMEOUT_MS) {
             timedOut = true;
             break;
         }
-        // Escalating poll interval: fast compiles typically resolve within
-        // about a frame, so the first ~6 ticks poll at 16ms; the longer
-        // 50ms tick only matters for multi-second compiles, where that
-        // granularity is irrelevant.
+        // Escalating poll interval: fast compiles resolve within about a
+        // frame, so the first ~6 ticks poll at 16ms; the 50ms tick only
+        // matters for multi-second compiles.
         const pollMs = tick < WAIT_POLL_FAST_TICKS ? WAIT_POLL_FAST_MS : WAIT_POLL_MS;
         tick++;
         await new Promise((resolve) => setTimeout(resolve, pollMs));
@@ -2393,44 +1718,9 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
     return 'done';
 };
 
-// prewarmPreviewTarget — background driver pre-warm for a preview TARGET
-// that isn't the one currently on screen (the graph view's idle-warm
-// effect, js/graph-app.jsx, walks the document's other nodes with this
-// after the main build settles). Builds that target's preview renderable,
-// generates its shader sources, and hands them to prewarmShaderCompile
-// above — all without touching any live render view — so that if the user
-// later clicks the node, createMtlxRenderView/applyMaterial hits the warm
-// path (~0.3s) instead of paying a fresh driver compile (~3s for a heavy
-// standard_surface/OpenPBR shader).
-//
-// `buildRenderable` is a SYNCHRONOUS caller-supplied closure (graph-app.jsx
-// passes () => window.buildPreviewRenderable(parsed, target)) returning
-// { renderable, cleanup, ... } — only .renderable and .cleanup are used
-// here, matching buildPreviewRenderable's contract (js/graph/preview.jsx).
-// buildRenderable mutates the LIVE MaterialX document (transient __pv_*
-// wrapper nodes/outputs via addNode/addOutput/setAttribute — see preview.
-// jsx's own comment above buildPreviewRenderable), so it must run inside
-// the SAME mxExclusive hold as the shader generation that consumes those
-// wrappers, and the wrappers must be gone again before that hold releases:
-// findDocRenderable (preview.jsx) walks the live document's node list and
-// does NOT filter out '__pv_material'/'__pv_*' names, so a wrapper left
-// behind even momentarily after the lock releases could be picked up as
-// the DOCUMENT'S OWN default renderable by a concurrent
-// buildPreviewRenderable(parsed, null) call racing on the wasm queue
-// (H-B1). Hence: build -> generate -> cleanup, all inside ONE synchronous
-// mxExclusive callback, never split across separate locked calls.
-//
-// NEVER call this from inside an existing mxExclusive callback — same
-// deadlock convention as generatePreviewSources/generatePreviewSourcesUnlocked
-// above: mxExclusive queues callbacks strictly in call order, so a
-// callback that awaits THIS function's return (which itself needs a fresh
-// turn of that same queue) would wait on work that can only run after it.
-//
-// Returns 'done' | 'bailed' | 'skipped' | 'failed'. Never throws — a
-// failed pre-warm (missing ESSL implementation, unsupported node, closure-
-// modifier filtered upstream, etc.) is expected and must never surface as
-// a visible error; the node in question just keeps its normal (unwarmed)
-// cost the first time it's actually selected.
+// Background driver pre-warm for an off-screen preview target — builds,
+// generates, and pre-compiles inside ONE mxExclusive hold (H-B1 race
+// safety). NEVER call from inside an existing mxExclusive (deadlock).
 const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, label, isMounted = () => true }) => {
     // No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
     // generating sources here would only be thrown away — skip the work.
@@ -2464,32 +1754,9 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
 
 
 // ------------------------------------------------------------------
-// checkTargetTransparency — commit-time transparency re-check for the
-// fast-uniform-edit path (tryFastUniformUpdate in graph-app.jsx), which
-// intentionally SKIPS regenerating shader sources for edits that only
-// change uniform values. That path still needs to know whether the
-// target's surface is transparent (e.g. an edit flips a mix/mask input
-// that changes isTransparentSurface's verdict even though no shader
-// text is touched) so it can keep the live material's transparent/
-// depthWrite flags in sync without paying for a full regenerate.
-//
-// Same H-B1 single-hold rationale as prewarmPreviewTarget above: build
-// -> read the verdict -> cleanup, all inside ONE synchronous mxExclusive
-// callback, so the transient __pv_* wrapper nodes never outlive the
-// lock (see prewarmPreviewTarget's comment above for the full
-// explanation of why a wrapper surviving past the lock is dangerous).
-//
-// Returns a boolean verdict, or null when indeterminate (no renderable,
-// isTransparentSurface unavailable, or any thrown error) — NEVER
-// throws. Callers should treat null as "don't change the existing
-// transparency flags", not as false.
-//
-// NEVER call this from inside an existing mxExclusive callback — same
-// deadlock convention as generatePreviewSources/prewarmPreviewTarget
-// above: mxExclusive queues callbacks strictly in call order, so a
-// callback that awaits THIS function's return (which itself needs a
-// fresh turn of that same queue) would wait on work that can only run
-// after it.
+// checkTargetTransparency: fast-uniform-edit transparency re-check —
+// same H-B1 single-hold rule as prewarmPreviewTarget (build->read->
+// cleanup in one mxExclusive hold; never call from inside one).
 // ------------------------------------------------------------------
 const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
     try {
@@ -2510,63 +1777,14 @@ const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
 
 
 // ------------------------------------------------------------------
-// generatePreviewSources — shader-generation slice of
-// createMtlxRenderView, extracted so tryRefreshRenderView can
-// regenerate + diff a target's sources against a live view's
-// compiled sources without paying for a full view rebuild (measured
-// gen.generate: 20-40ms, vs. WebGLRenderer init + GL compile for a
-// full rebuild). Args: { mx, gen, genContext, renderable, label,
-// isMounted }. Returns { vs, fs, introspected, transparent } or null when
-// isMounted() went false before generation started (nothing GL-side
-// exists yet at that point, so there's nothing to clean up here; the
-// caller decides whether it needs disposePartial). Throws Error with a
-// decoded MaterialX message on generation failure.
-//
-// `introspected` folds in what used to be a separate post-lock step in
-// each caller (getStage + collectMxUniforms): both the wasm reads AND
-// the heap-view→plain-JS conversion (plainizeMxUniformData) now happen
-// HERE, while still inside the mxExclusive lock (see generatePreviewSources
-// below) — so every entry's `data` is fully detached, ordinary JS by the
-// time this function returns and the lock releases. mxShader itself is
-// never returned AND is now explicitly `.delete()`d before returning:
-// neither caller needs it once introspection is done here, and holding
-// onto it past the lock would invite exactly the kind of post-unlock wasm
-// access this refactor removes — deleting it here also closes the WASM
-// heap leak that used to accumulate one shader per generation (mxShader
-// IS a raw pointer that survives heap growth on its own — see the
-// mxExclusive comment at the top of this file — but there's no remaining
-// reason for a caller to touch it, so it's deleted and kept out of the
-// returned shape). The export path (generateTargetSourcesUnlocked below)
-// deletes its own mxShader the same way.
+// generatePreviewSources: shader-generation slice of createMtlxRenderView,
+// letting tryRefreshRenderView diff sources without a full rebuild.
+// Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
 const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true }) => {
-    // OFFICIAL PARITY: per-material generation options. Transparency
-    // detection switches the generated blending path (glass etc.);
-    // COMPLETE interface exposes every input as a uniform for the
-    // editor.
-    //
-    // genContext (and its options) are SHARED module-scope state across
-    // every material generated in a session — this is the only per-call
-    // customization point. hwTransparency in particular MUST be
-    // deterministic per call: it used to be left untouched on a thrown
-    // isTransparentSurface (or an absent function), which meant a
-    // transparent material A generated just before an opaque material B
-    // could leave B rendering with A's stale hwTransparency=true if B's
-    // detection attempt failed — order-dependent, wrong-looking output
-    // with no error. Reset first, unconditionally, in its own try/catch
-    // (getOptions() could in principle throw too); THEN attempt the real
-    // detection in its existing try/catch. Invariant: on any detection
-    // failure the material is opaque (false), never "whatever the
-    // previous material left" — deterministic default, opaque on
-    // failure.
-    //
-    // `transparent` mirrors whatever hwTransparency ends up being on
-    // genContext's options, captured locally so it can ride along in
-    // this function's return value (three.js material flags downstream
-    // need to know the verdict codegen actually used — see
-    // applyMaterialInternal in createMtlxRenderView). Set ONLY after the
-    // option write itself succeeds, so it can never disagree with what
-    // gen.generate() below actually saw.
+    // OFFICIAL PARITY: per-material generation options on SHARED
+    // module-scope genContext. hwTransparency is reset FIRST,
+    // unconditionally — else a failed detection leaks A's stale value onto B.
     let transparent = false;
     try { genContext.getOptions().hwTransparency = false; } catch (e) { /* option absent */ }
     try {
@@ -2582,17 +1800,13 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
                 mx.ShaderInterfaceType.SHADER_INTERFACE_COMPLETE;
         }
     } catch (e) { /* default interface */ }
-    // Generated shaders use the generator's default FIS
-    // specular-environment method. hwSpecularEnvironmentMethod
-    // is NOT settable through this JsMaterialXGenShader build —
-    // the embind setter rejects both the unexposed enum object
-    // and raw ints (verified at runtime, 2026-07). Don't retry.
+    // Generated shaders use the generator's default FIS specular-
+    // environment method. hwSpecularEnvironmentMethod is NOT settable
+    // in this build — the embind setter rejects it. Don't retry.
 
     // Bail before the ~expensive shader-generation call if this
-    // build has already been superseded (caller's effect
-    // cleanup flipped `mounted` while we were awaiting above) —
-    // nothing GL-side exists yet, so there's nothing for the
-    // caller to dispose either.
+    // build was superseded (mounted flipped while awaiting above) —
+    // nothing GL-side exists yet, so there's nothing to dispose.
     if (!isMounted()) return null;
     let mxShader;
     const __genPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
@@ -2608,49 +1822,15 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
             + (performance.now() - __genPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
     }
 
-    // Stage identifiers: some JS builds don't expose the
-    // mx.Stage enum object (hence "Cannot read ... 'VERTEX'").
-    // The underlying constant values are just the strings
-    // "vertex" and "pixel", which getSourceCode accepts.
+    // Stage identifiers: some JS builds don't expose the mx.Stage enum
+    // object ("Cannot read ... 'VERTEX'"). The underlying constants are
+    // just the strings "vertex"/"pixel", which getSourceCode accepts.
     const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
     const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
     const vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
-    // hwSrgbEncodeOutput is now set to false (see the genContext setup
-    // near the top of this file), so MaterialX should emit RAW LINEAR
-    // output with no display encode of its own — encodeDisplay() (ACES
-    // tone map + sRGB; see its header comment for the full rationale
-    // and the exact GLSL) is injected UNCONDITIONALLY below, not just as
-    // a fallback. A SAFETY NET is kept: if some wasm build ignores
-    // hwSrgbEncodeOutput and emits its own sRGB encode anyway, injecting
-    // ACES+sRGB on top of that would double-encode AND run the tone map
-    // on already-nonlinear data — warn loudly and skip the injection
-    // rather than silently producing a wrong image.
-    //
-    // SCOPED CHECK (2026-07-18 fix — was whole-shader /srgb/i.test(fs)):
-    // testing the ENTIRE shader string false-positives on essentially
-    // every standard_surface-based material. MaterialX's ESSL generator
-    // unconditionally emits its full color-management function LIBRARY
-    // into every shader, including mx_srgb_encode()/mx_srgb_decode()
-    // DEFINITIONS — those are always present in the source text
-    // regardless of whether any node in the graph actually CALLS them.
-    // With hwSrgbEncodeOutput=false those functions sit dead in the
-    // shader (0 call sites, confirmed by call-site analysis while
-    // diagnosing an "overblown / hard-clipped highlight" preview
-    // report), yet the old whole-file regex matched their names anyway
-    // and skipped encodeDisplay() on effectively every material,
-    // permanently disabling the ACES+sRGB injection app-wide — the
-    // shader's real last statement was plain `out1 =
-    // vec4(SR_marble1_out.color, 1.0);`, no encode call in sight.
-    //
-    // Fix: only ask whether the STATEMENT THAT WRITES THE FRAGMENT
-    // OUTPUT invokes an srgb encode, not whether the substring "srgb"
-    // appears anywhere in ~100KB of shared library code. Reuse
-    // encodeDisplay()'s own `out vec4 <name>;` detection to find the
-    // output variable, then test only the assignment(s) to THAT
-    // variable. If the output variable (or an assignment to it) can't
-    // be located at all — an unexpected shader shape this code has
-    // never seen — fail safe exactly as before: warn and skip injection
-    // rather than guess.
+    // hwSrgbEncodeOutput=false means raw linear output, so encodeDisplay()
+    // is injected below unless the FRAGMENT OUTPUT's own assignment
+    // already encodes srgb — checking the whole shader string false-positives.
     let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
     fs = patchUnlitLightingRefs(fs);
     const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
@@ -2666,13 +1846,9 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         fs = encodeDisplay(fs);
     }
 
-    // --- Uniform introspection (folded in from the callers — see the
-    // block comment above). Still fully inside the mxExclusive lock:
-    // getStage/collectMxUniforms are wasm reads, and plainizeMxUniformData
-    // converts every vector/matrix/color `data` field to a plain, detached
-    // JS array BEFORE this function returns (i.e. before the lock can
-    // release) — nothing in the returned `introspected` array holds a
-    // live embind/heap reference.
+    // Uniform introspection, still fully inside the mxExclusive lock:
+    // plainizeMxUniformData converts every vector/matrix/color `data`
+    // field to a plain, detached JS array before the lock can release.
     let introspected = [];
     for (const stageName of [VERTEX_STAGE, PIXEL_STAGE]) {
         let st = null;
@@ -2681,52 +1857,29 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     }
     introspected = introspected.map(plainizeMxUniformData);
 
-    // Everything read above (vs, fs, introspected) is now detached plain
-    // JS — this is the last reference to mxShader, so free it here while
-    // still inside the mxExclusive lock. Guarded: a BindingError here must
-    // never fail an otherwise-successful generation. (Loop-local `st`
-    // stage handles read above are NOT deleted — getStage ownership is
-    // ambiguous in this binding; they're GC-reclaimed via
-    // FinalizationRegistry instead.)
+    // Last reference to mxShader — free it here, still inside the lock.
+    // Guarded: a BindingError here must never fail an otherwise-successful
+    // generation. Loop-local `st` handles are left for FinalizationRegistry.
     try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
     return { vs, fs, introspected, transparent };
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
-// the shared wasm heap (see mxExclusive above). Every caller — internal
-// (tryRefreshRenderView, createMtlxRenderView below) and external — must
-// go through THIS wrapper, never generatePreviewSourcesUnlocked
-// directly, so a shader-gen call never overlaps another in-flight wasm
-// operation. Neither internal caller runs inside an existing
-// mxExclusive callback, so this cannot nest/deadlock.
+// the shared wasm heap. Callers must go through THIS wrapper, never call
+// generatePreviewSourcesUnlocked directly, to avoid overlapping wasm ops.
 const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
 
 // ------------------------------------------------------------------
-// Shader EXPORT — as opposed to PREVIEW above: generates the canonical
-// (non-browser-adapted) shader source for a renderable in one of
-// MaterialX's other hardware/non-hardware target languages, for the
-// "Export shader" dialogs. Deliberately separate from
-// generatePreviewSources* above: export contexts bind NO light rig and
-// reuse NOTHING from the module-scope ESSL preview generator/context —
-// each target gets its own generator + GenContext (created lazily,
-// cached below). Exported code is the canonical material shader as
-// MaterialX itself would emit it: it keeps its own #version, gets no
-// ACES/sRGB display encode, and has no direct-light rig wired in. It
-// will intentionally differ from the on-screen preview shader,
-// INCLUDING for the 'essl' target, which shares a target language with
-// the preview but none of its generation options.
+// Shader EXPORT (vs. PREVIEW above): generates canonical, non-browser-
+// adapted shader source in MaterialX's other target languages. Each
+// target gets its own generator + GenContext — no light rig, no ACES/
+// sRGB encode, and it intentionally differs from the preview shader.
 // ------------------------------------------------------------------
 
-// One row per selectable export target. `className` is the embind
-// class name of that target's ShaderGenerator — all 8 are registered
-// in JsMaterialXGenShader.wasm, but only Essl's .create() has ever
-// actually been exercised by this repo before this addition, so every
-// access below is guarded (see getExportGen). `isHw` selects the
-// hardware-generator option path (hwTransparency) and whether a
-// 'vertex' stage is expected at all — the non-hardware languages (OSL,
-// MDL) only ever emit a single stage. `ext` is the file-extension
-// convention per stage, for export-dialog download filenames.
+// One row per selectable export target. `className` names the embind
+// ShaderGenerator class (only Essl's .create() was exercised before
+// this, so access below is guarded). `isHw` picks the hardware path.
 const EXPORT_TARGETS = [
     { key: 'essl',   label: 'GLSL ES (WebGL 2)',           className: 'EsslShaderGenerator',  isHw: true,  ext: { vertex: '.vert', pixel: '.frag' } },
     { key: 'glsl',   label: 'GLSL (desktop OpenGL)',       className: 'GlslShaderGenerator',  isHw: true,  ext: { vertex: '.vert', pixel: '.frag' } },
@@ -2738,24 +1891,14 @@ const EXPORT_TARGETS = [
     { key: 'mdl',    label: 'MDL (NVIDIA)',                className: 'MdlShaderGenerator',   isHw: false, ext: { pixel: '.mdl' } },
 ];
 
-// Per-target { gen, ctx } cache. Building a GenContext and loading the
-// standard libraries against it isn't free (same cost as the
-// module-scope ESSL setup in getMxEnv above) — each target pays that
-// cost once, lazily, on first use, rather than all 8 paying it upfront
-// at wasm-load time. Failed targets are deliberately left OUT of the
-// cache (see getExportGen) so a build that's missing e.g. MDL doesn't
-// permanently poison retries for it.
+// Per-target { gen, ctx } cache — building a GenContext + loading
+// stdlib isn't free, so each target pays once, lazily. Failed targets
+// are deliberately left OUT of the cache so a missing target can retry.
 const EXPORT_GEN_CACHE = new Map();
 
-// Resolve (lazily create + cache) the { gen, ctx } pair for one export
-// target. NOTE what this deliberately does NOT do: it does not bind
-// any light rig, and its GenContext is not the module-scope preview
-// genContext and not derived from it in any way — export contexts
-// start from MaterialX's own defaults. That's the point (see the
-// file-level comment above): exported code is the canonical material
-// shader, not a browser-preview adaptation, so it will legitimately
-// look different from the ESSL the preview pipeline generates even
-// though the 'essl' target shares its target language.
+// Resolves (lazily create + cache) the { gen, ctx } pair for one export
+// target. Deliberately binds no light rig and starts from MaterialX's
+// own defaults, not the preview genContext — exported code is canonical.
 const getExportGen = (mx, target) => {
     const cached = EXPORT_GEN_CACHE.get(target.key);
     if (cached) return cached;
@@ -2766,11 +1909,9 @@ const getExportGen = (mx, target) => {
     }
     const gen = Cls.create();
     const ctx = new mx.GenContext(gen);
-    // loadStandardLibraries's job here is registering this target's
-    // source-code search path on `ctx` (see the identical note in
-    // getMxEnv above) — the stdlib DOCUMENT it returns is discarded;
-    // every document passed into generateTargetSources* already carries
-    // the shared stdlib as its own data library (see loadMtlxDocument).
+    // loadStandardLibraries here only registers the source-code search
+    // path on `ctx` — its returned stdlib document is discarded, since
+    // callers' documents already carry the shared stdlib.
     mx.loadStandardLibraries(ctx);
 
     // Cache ONLY once every step above has succeeded — a target that
@@ -2781,25 +1922,9 @@ const getExportGen = (mx, target) => {
     return entry;
 };
 
-// Unlocked worker for shader EXPORT — see generateTargetSources below
-// for the public, mxExclusive-serialized entry point. NEVER call this
-// directly from outside an existing mxExclusive callback.
-//
-// Args: { mx, renderable, label, targetKey }. Returns { stages }, a
-// non-empty array of { id, label, code } entries — 'vertex'/'Vertex'
-// and/or 'pixel'/'Pixel' (the latter labeled 'Shader' for non-hardware
-// targets, which only ever produce a single stage). Throws Error with
-// a decoded MaterialX message (see mxErr) on any failure, including
-// the case where generation itself succeeds but every stage comes back
-// empty.
-//
-// Deliberately does NOT apply stripVersion / patchUnlitLightingRefs /
-// encodeDisplay — those three are browser-PREVIEW transforms (strip
-// the #version line three.js's WebGL2 context injects its own copy of;
-// rewrite unlit-material lighting references so the preview's light
-// rig doesn't warn; inject ACES+sRGB display encoding), specific to
-// feeding the ESSL preview shader into three.js. Exported code is
-// MaterialX's canonical, untouched output.
+// Unlocked worker for shader EXPORT — see generateTargetSources for the
+// public entry point; never call directly outside an mxExclusive hold.
+// Skips preview transforms (stripVersion/encodeDisplay) — output is canonical.
 const generateTargetSourcesUnlocked = ({ mx, renderable, label, targetKey }) => {
     const target = EXPORT_TARGETS.find((t) => t.key === targetKey);
     if (!target) throw new Error('Unknown export target: ' + targetKey);
@@ -2833,9 +1958,8 @@ const generateTargetSourcesUnlocked = ({ mx, renderable, label, targetKey }) => 
     }
 
     // No stage-enumeration API exists — same fallback as the preview
-    // path above (see generatePreviewSourcesUnlocked): some JS builds
-    // don't expose the mx.Stage enum object, but getSourceCode accepts
-    // the underlying "vertex"/"pixel" string constants directly.
+    // path: some JS builds don't expose mx.Stage, but getSourceCode
+    // accepts the "vertex"/"pixel" string constants directly.
     const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
     const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
     const read = (st) => {
@@ -2861,38 +1985,16 @@ const generateTargetSourcesUnlocked = ({ mx, renderable, label, targetKey }) => 
     return { stages };
 };
 
-// Public entry point for shader EXPORT — serializes
-// generateTargetSourcesUnlocked against the shared wasm heap (see
-// mxExclusive at the top of this file). NEVER call this from inside an
-// existing mxExclusive callback — same deadlock convention as
-// generatePreviewSources/generatePreviewSourcesUnlocked above:
-// mxExclusive queues callbacks strictly in call order, so a callback
-// that awaits THIS function's return (which itself needs a fresh turn
-// of that same queue) would wait on work that can only run after it.
+// Public entry point for shader EXPORT: serializes
+// generateTargetSourcesUnlocked against the shared wasm heap. NEVER
+// call this from inside an existing mxExclusive callback (deadlock).
 const generateTargetSources = (args) => mxExclusive(() => generateTargetSourcesUnlocked(args));
 
 // ------------------------------------------------------------------
-// applyIntrospectedUniformDefaults — upload MaterialX's introspected
-// uniform DEFAULTS onto a three.js uniforms map. Two modes:
-//   overwrite=false (view creation): explicit bindings already
-//     present on `uniforms` win — skip those names; skip entries with
-//     no default (u.data == null, left for WebGL's implicit 0); then
-//     bind the default checker texture to every unset `filename`
-//     sampler so image/tiledimage nodes render out of the box.
-//   overwrite=true (fast-refresh, tryRefreshRenderView): the
-//     generated source is byte-identical to the live view's, so every
-//     name is already bound on `uniforms` — OVERWRITE each entry's
-//     .value in place (three.js RawShaderMaterial reads .value
-//     per-frame, so mutating it is enough; no material rebuild
-//     needed). Restricted to the 'PublicUniforms' block — that's
-//     where every document-driven input value lives; the
-//     'PrivateUniforms' block (transforms, env, lights) is explicitly
-//     bound by createMtlxRenderView at creation and several of its
-//     entries carry non-null generator defaults that would clobber
-//     those live bindings (u_numActiveLightSources → 0 kills the
-//     direct light; env mips/samples likewise). `filename` entries
-//     are never touched either — the caller rebinds textures via
-//     bindDroppedTextures afterward.
+// applyIntrospectedUniformDefaults: uploads MaterialX's introspected
+// defaults onto a three.js uniforms map. overwrite=false (view creation)
+// skips explicit bindings and no-default entries; overwrite=true (fast-
+// refresh) overwrites PublicUniforms only, in place — never PrivateUniforms.
 // ------------------------------------------------------------------
 const PREVIEW_TRANSFORM_UNIFORM_NAMES = new Set([
     'u_worldMatrix', 'u_viewProjectionMatrix', 'u_worldInverseTransposeMatrix', 'u_viewPosition',
@@ -2904,10 +2006,9 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
             const tu = mxValueToThreeUniform(u.type, u.data);
             if (tu) uniforms[u.name] = tu;
         }
-        // Bind the default checker to every `filename` sampler
-        // so image/tiledimage nodes render out of the box —
-        // an unbound sampler reads black. (Env samplers are
-        // bound later by name and are not `filename` ports.)
+        // Bind the default checker to every `filename` sampler so
+        // image/tiledimage nodes render out of the box — an unbound
+        // sampler reads black. (Env samplers aren't `filename` ports.)
         for (const u of introspected) {
             if (u.type === 'filename' && !uniforms[u.name]) {
                 uniforms[u.name] = { value: getDefaultTexture() };
@@ -2918,15 +2019,9 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
     // Fast-refresh: same values just recomputed from a re-generated
     // (but byte-identical-source) shader — overwrite in place.
     for (const u of introspected) {
-        // ONLY the public uniform block: document-driven input values
-        // live exclusively in PublicUniforms. Everything in
-        // PrivateUniforms (transforms, env matrix/mips/samples,
-        // u_numActiveLightSources/u_lightData, refraction flags, ...)
-        // was explicitly bound by createMtlxRenderView at creation and
-        // must never be clobbered by a refresh — several private
-        // entries DO carry non-null generator defaults (e.g.
-        // u_numActiveLightSources defaults to 0, which would silently
-        // kill the direct light rig).
+        // ONLY the public block: PrivateUniforms (transforms, env,
+        // lights) was bound at creation and must never be clobbered —
+        // some defaults are non-null (u_numActiveLightSources=0 kills lights).
         if (u.block !== 'PublicUniforms') continue;
         if (u.data == null) continue;
         if (u.type === 'filename') continue;
@@ -2942,43 +2037,11 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
 };
 
 // ------------------------------------------------------------------
-// tryRefreshRenderView — attempt a cheap in-place refresh of an
-// EXISTING render view instead of a full teardown+rebuild. Re-runs
-// shader generation for `renderable` (gen.generate measures 20-40ms —
-// cheap relative to a full WebGLRenderer init + GL compile) and
-// compares the regenerated sources against the live view's compiled
-// vs/fs. When byte-identical (unconnected add/delete, edits on
-// branches that don't feed this preview target, group/ungroup
-// elsewhere in the graph — all cases where the target's shader didn't
-// actually change), only the uniform DEFAULTS are re-uploaded onto
-// the EXISTING compiled material/uniforms object in place — no GL
-// recompile. The caller still owns rebinding dropped textures
-// (bindDroppedTextures) since `filename` entries are intentionally
-// left untouched here.
-// Args: { view, mx, gen, genContext, renderable, label, isMounted }
-// where `view` is a previous createMtlxRenderView() return value.
-// Returns { refreshed: false, srcs: null } when generation itself threw
-// or bailed (isMounted() went false mid-generate, or gen.generate
-// failed) — there is nothing usable to hand back, so the caller must
-// fall back to its own from-scratch rebuild (which will regenerate).
-// Returns { refreshed: false, srcs } when the regenerated source is a
-// real mismatch against the live view's compiled vs/fs (including the
-// filename-value-mismatch case below, which additionally sets
-// `texChange: true`) — `srcs` IS the already-generated
-// { vs, fs, introspected } for `renderable`, so the caller's fallback
-// rebuild/apply path can consume it directly instead of calling
-// generatePreviewSources() a second time. (The old contract returned a
-// bare `{ refreshed: false }` here and accepted the caller re-running
-// generation from scratch — a real rebuild's renderer+GL-compile cost
-// dwarfed the extra 20-40ms regen, so it was judged fine at the time;
-// now that callers can apply a pre-generated material in place instead
-// of always tearing down the renderer, that duplicate regen is no
-// longer negligible, so it's eliminated by threading `srcs` through.)
-// Returns { refreshed: true } when `view.uniforms`/`view.introspected`
-// were updated in place.
-// NOTE: async (awaits the mxExclusive-locked generatePreviewSources —
-// see mxExclusive above). Callers must `await` this now; it no longer
-// returns its result synchronously.
+// tryRefreshRenderView — attempts a cheap in-place refresh of an
+// existing view instead of a full rebuild: regenerates sources and, if
+// byte-identical to the live view's, re-uploads only uniform defaults.
+// Returns { refreshed, srcs } (srcs handed back so a real-mismatch
+// caller doesn't need to regenerate again) or { refreshed: true }.
 // ------------------------------------------------------------------
 const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, label, isMounted = () => true }) => {
     const __t = window.MTLX_PERF_LOG ? performance.now() : 0;
@@ -2989,32 +2052,14 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         return { refreshed: false, srcs: null };
     }
     if (!srcs) return { refreshed: false, srcs: null };
-    // Belt-and-suspenders: a hwTransparency flip changes the generated
-    // epilogue GLSL too, so the srcs.vs/fs inequality above will normally
-    // already catch this — but compare the verdict explicitly instead of
-    // relying on that as an invariant. Gated on FORCE_TRANSPARENCY: while
-    // the setting is off the verdict is never applied to rendering (see
-    // applyMaterialInternal), so a verdict flip alone is irrelevant here
-    // and forcing a rebuild for it would just be a pointless refresh.
+    // Belt-and-suspenders: compare the transparency verdict explicitly
+    // rather than relying on srcs.vs/fs alone. Gated on FORCE_TRANSPARENCY
+    // — when off, a verdict flip is irrelevant and forcing rebuild is pointless.
     if (srcs.vs !== view.vs || srcs.fs !== view.fs || (FORCE_TRANSPARENCY && (!!srcs.transparent !== !!view.isTransparent))) return { refreshed: false, srcs };
 
-    // A `filename`-type input's VALUE (the referenced texture path) can
-    // change without the generated GLSL text changing at all — the path
-    // isn't baked into shader source, so the srcs.vs/fs check above can't
-    // see it. But applyIntrospectedUniformDefaults below is called with
-    // overwrite:true and deliberately SKIPS filename-type uniforms (see
-    // its own `if (u.type === 'filename') continue;`) — the caller is
-    // expected to rebind the actual texture afterward via
-    // bindDroppedTextures. Empirically, rebinding a texture onto an
-    // in-place-reused compiled view/material this way does NOT make it
-    // visible (the checker default stays on screen); only a full rebuild
-    // (createMtlxRenderView) has been proven to make a newly-assigned
-    // texture actually render. So: if any filename uniform's referenced
-    // value differs between the OLD (currently-bound) introspection and
-    // the freshly-regenerated one, treat that as equivalent to a real
-    // shader-source change and force the full-rebuild path. Do NOT
-    // "simplify" this away without re-verifying that underlying
-    // WebGL/three.js behavior — it's the whole reason this check exists.
+    // A filename value can change without the GLSL text changing, so
+    // the vs/fs check above misses it — and empirically, rebinding a
+    // texture onto a reused view does NOT render; force a full rebuild instead.
     const oldFilenames = new Map();
     for (const u of view.introspected || []) {
         if (u.type === 'filename') oldFilenames.set(u.name, u.data != null ? u.data : null);
@@ -3030,11 +2075,9 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         if (oldVal !== newVal) return { refreshed: false, srcs, texChange: true };
     }
 
-    // Introspection (getStage/collectMxUniforms + the heap-view→plain-JS
-    // conversion) now happens INSIDE generatePreviewSourcesUnlocked, still
-    // under the mxExclusive lock — srcs.introspected is already plain JS
-    // by the time it gets here, post-lock. No wasm reads left in this
-    // function.
+    // Introspection now happens INSIDE generatePreviewSourcesUnlocked,
+    // under the mxExclusive lock — srcs.introspected arrives here already
+    // plain JS, post-lock. No wasm reads left in this function.
     view.introspected = srcs.introspected;
     applyIntrospectedUniformDefaults(view.uniforms, srcs.introspected, { overwrite: true });
     if (window.MTLX_PERF_LOG) {
@@ -3045,47 +2088,9 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 };
 
 // ------------------------------------------------------------------
-// createMtlxRenderView — the PERSISTENT render pipeline shell for one
-// preview surface, encapsulated so both pages share it. Everything
-// expensive to recreate — WebGLRenderer, scene/camera/orbit controls,
-// env (IBL) textures, preview geometry — is built ONCE, right here;
-// every later document edit instead calls the returned handle's
-// applyMaterial() to swap in just a fresh RawShaderMaterial (generate
-// ESSL -> upload MaterialX uniform defaults (introspection) -> bind
-// env/lights -> compile-check) onto this SAME shell, so the old
-// material keeps rendering (camera/controls untouched, env textures
-// never re-uploaded) until the new one compiles and swaps in. This
-// replaces the old design, where every edit tore the whole view down
-// and rebuilt it from scratch (new WebGLRenderer on the same canvas,
-// full env re-upload, camera/controls reset) — see git history of
-// this file for the abandoned two-canvas alternative that predated
-// this shell design.
-// The FIRST build below (see "First build" near the bottom) routes
-// through the exact same inner helper — applyMaterialInternal, see
-// further down — that the handle's applyMaterial() uses for every
-// later swap, so first-build behavior/return shape stays byte-
-// compatible for callers that only ever do a single first build and
-// never call applyMaterial() again (node-preview.jsx, viewer-app.jsx).
-// See also tryRefreshRenderView above, whose mismatch returns now hand
-// back already-generated `srcs` for exactly this apply path to
-// consume without a second, redundant generatePreviewSources() call.
-// Args: { canvas, mx, gen, genContext, renderable, lightData, label,
-//         needsLighting, geomName, autoRotate, isMounted, isActive,
-//         isAlive, debugKind }
-// isAlive (optional — see the comment on `aliveFn` below): a liveness
-// check consumed ONLY by the animate() rAF loop. Every creation-time
-// bail check in this function keeps reading the run-scoped
-// `isMounted` (THIS build must still abort if its own caller unmounts
-// mid-init) — `isAlive` exists because a persistent shell can outlive
-// the `isMounted` of whichever build first created it (every later
-// applyMaterial() call brings its own, shorter-lived isMounted).
-// Callers that never call applyMaterial() again can omit it; `aliveFn`
-// then falls back to `isMounted`, which is exactly today's behavior.
-// Returns { uniforms, introspected, vs, fs, controls, renderer,
-//           applyMaterial(), setEnvironment(),
-//           setEnvExposure(), ..., dispose() } or null when
-// isMounted() went false mid-way through THIS build (already cleaned
-// up). Throws Error with a decoded MaterialX/GLSL message on failure.
+// createMtlxRenderView — persistent render-pipeline shell for one
+// preview surface: renderer/scene/camera/env/geometry built ONCE;
+// every edit calls applyMaterial() to swap materials on the SAME shell.
 // ------------------------------------------------------------------
 // Skybox backdrop rotation calibration — read by createMtlxRenderView's
 // shell init (applies the persisted envRotationRad to bgMesh before the
@@ -3255,26 +2260,9 @@ const NEUTRAL_ENV_ROTATION_CHUNK = `#if defined( USE_ENVMAP )
 #endif`;
 // ------------------------------------------------------------------
 
-// Full-scene mode (fullScene, see createMtlxRenderView below): the GLB's
-// authored camera has a FIXED vertical FOV (yfov, ~13.44deg for
-// shaderball.glb) sized for its own authored 16:9 aspect (~1.7778) — the
-// classic glTF "vertical-fit" camera convention. Adopting the CANVAS's
-// aspect (user decision: no letterbox/pillarbox, see the camera.aspect
-// assignments in createMtlxRenderView/syncSize below) is harmless when
-// the canvas is WIDER than 16:9 — the extra width just reveals more
-// scene at the same vertical framing — but on a NARROWER canvas (e.g.
-// the square graph panel) it CROPS THE SIDES: the vertical fov stays
-// fixed at 13.44deg while the horizontal fov shrinks with the aspect,
-// so the shaderball can spill outside the frame. Fix: derive the
-// authored HORIZONTAL half-fov from the authored (vFov, aspect) pair,
-// then re-derive a WIDENED vertical fov that reproduces that same
-// horizontal half-fov at the narrower canvas aspect — i.e. widen the
-// vertical field instead of cropping the horizontal one, guaranteeing
-// the whole authored 16:9 frame (and therefore the whole shaderball)
-// stays visible. No-op (returns the authored fov unchanged) once
-// canvasAspect >= authoredAspect — the ordinary wide-canvas case above.
-// Only used by fullScene; sphere/cube/simple modes keep today's fixed
-// 45-degree PerspectiveCamera fov untouched.
+// Full-scene mode: the GLB's camera has a FIXED vertical FOV sized for
+// its authored 16:9 aspect; a NARROWER canvas would crop the sides. Fix:
+// widen the vertical fov to preserve the authored horizontal half-fov.
 const effectiveFullSceneVFov = (authoredFovDeg, authoredAspect, canvasAspect) => {
     if (canvasAspect >= authoredAspect) return authoredFovDeg;
     const authoredHalfVFov = (authoredFovDeg * Math.PI / 180) / 2;
@@ -3287,40 +2275,25 @@ const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
     autoRotate = true, envBackground = false,
-    // isMounted: lifecycle — false is PERMANENT (component unmounted); the
-    // render loop terminates and in-flight init aborts. isActive: visibility —
-    // false is TEMPORARY (view backgrounded in the multi-view shell); the loop
-    // keeps scheduling frames but skips all render work until it flips back.
-    // isAlive: OPTIONAL — see the big doc comment above this function.
-    // Only the animate() loop reads it (via `aliveFn` just below); every
-    // creation-time bail check below still reads `isMounted` directly.
+    // isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
+    // TEMPORARY visibility (backgrounded view skips render, keeps looping).
+    // isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
     isMounted = () => true, isActive = () => true, isAlive = null, debugKind = '',
-    // Initial camera pull-back. 3.6 is the classic roomy framing; small
-    // square previews pass ~2.55 so the radius-1 shape fills the frame.
-    // IGNORED in full-scene mode (geomName === 'shaderball-scene'): the
-    // camera there is copied verbatim from the GLB's own embedded
-    // camera (see the detached-camera block below) — there is no
-    // pull-back distance to apply.
+    // Initial camera pull-back. 3.6 is roomy framing; ~2.55 fills the
+    // frame for small square previews. IGNORED in full-scene mode — the
+    // camera there is copied verbatim from the GLB's own embedded camera.
     cameraDistance = 3.6,
-    // false (default) = authored GLB camera fixed and non-interactive (graph
-    // editor, unchanged); true (docs/viewer) = OrbitControls with pivot on
-    // the authored view ray at the ball's depth, zoom capped at the authored
-    // distance, polar clamp at the backdrop floor, Box3 containment
-    // backstop; ignored outside full-scene mode.
+    // false (default) = fixed, non-interactive authored GLB camera (graph
+    // editor); true (docs/viewer) = OrbitControls with pivot/zoom/polar
+    // clamp and Box3 containment. Ignored outside full-scene mode.
     sceneOrbit = false,
 }) => {
     // See the isAlive doc above: defaulting to isMounted here preserves
     // today's exact behavior for every caller that doesn't pass isAlive.
     const aliveFn = isAlive || isMounted;
-    // Mode derived from geomName, read throughout this function:
-    // 'shaderball-scene' -> the FULL authored GLB scene, detached embedded
-    // camera; fixed by default (no OrbitControls, graph editor) or
-    // constrained-orbitable when the caller passes sceneOrbit (docs/viewer);
-    // 'shaderball' -> the SIMPLE (ball-only) GLB scene, normalized like
-    // a sphere/cube preset, with today's ordinary orbit/zoom controls;
-    // 'sphere'/'cube' (or anything else, including a fallback — see
-    // sceneInst below) -> null, the original prepGeometry(
-    // buildPreviewGeometry(...)) path, completely unchanged.
+    // Mode derived from geomName: 'shaderball-scene' -> full authored GLB
+    // scene with detached embedded camera; 'shaderball' -> simple
+    // (ball-only) GLB; anything else -> null (ordinary sphere/cube path).
     const sceneMode = geomName === 'shaderball-scene' ? 'full'
         : geomName === 'shaderball' ? 'simple' : null;
     let reqId = null;
@@ -3329,34 +2302,12 @@ const createMtlxRenderView = async ({
     let controls = null;
     let stopped = false;
     // Shell-level material/geometry/uniforms state, reassigned by
-    // applyMaterialInternal() (defined further down) on every swap so
-    // the SAME shell (renderer/scene/camera/controls/env textures
-    // below) can back a long sequence of document edits instead of
-    // paying for a fresh createMtlxRenderView() call per edit.
-    // `uniforms` was a `const` before this persistent-shell
-    // restructure; it MUST be a `let` now — every closure below that
-    // reads it (setUniforms, animate, the handle's setEnvRotation/
-    // setEnvExposure/setEnvironment, bindMaterialUniforms,
-    // applyMaterialInternal) captures this SAME binding, so reassigning
-    // it here after a swap is what makes the new material's uniforms
-    // visible to all of them without threading a fresh value through
-    // each one individually.
+    // applyMaterialInternal() on every swap so one shell backs many edits.
+    // `uniforms` MUST be `let`: every closure below shares this binding.
     let mesh = null, material = null, geometry = null, uniforms = null;
-    // Scene-mode state (both null/empty when sceneMode is null, i.e.
-    // the sphere/cube path — every sceneGroup-touching line below
-    // guards with `if (sceneGroup)`/`if (sceneInst)` and is a safe
-    // no-op there, mirroring bgMesh's established pattern in this
-    // function). sceneGroup: the instantiated GLB scene's root Object3D
-    // (added to `scene` below), holding `mesh` (material_surface) as
-    // one of its descendants. sceneOwnedMaterials: the per-view-cloned
-    // materials instantiateShaderballScene() created for every OTHER
-    // (non-material_surface) mesh in sceneGroup — disposed by
-    // disposePartial below; the shared, CACHED geometries/original
-    // materials they were cloned from never are (see loadGlbScene's
-    // cache-ownership comment above). pmremRT: the WebGLRenderTarget
-    // backing scene.environment (PMREM-baked IBL for sceneGroup's
-    // ordinary glTF meshes) — regenerated by setEnvironment below,
-    // disposed by disposePartial.
+    // Scene-mode state, null/empty when sceneMode is null (sphere/cube
+    // path guards with `if (sceneGroup)`). sceneGroup: instantiated GLB
+    // root. sceneOwnedMaterials/pmremRT: disposed by disposePartial below.
     let sceneGroup = null, sceneOwnedMaterials = [], pmremRT = null;
     // The radiance texture, kept so the caller can toggle it as the
     // visible backdrop (setEnvBackground) via bgMesh below — the IBL
@@ -3367,17 +2318,9 @@ const createMtlxRenderView = async ({
     // derivation of why this is a bare RotationY(rad) — no extra PI/2.
     const envRotationMatrix3 = (rad) =>
         new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationY(rad));
-    // Attach the live-rotatable env patch (see NEUTRAL_ENV_ROTATION_CHUNK
-    // above) to one neutral glTF PBR material. Nested here (rather than a
-    // standalone top-level helper) so onBeforeCompile's closure reads
-    // `envRotationRad` — a `let` in THIS shell's scope — fresh at ACTUAL
-    // compile time (whenever three first builds this material's GL
-    // program, typically the first render) rather than a value snapshotted
-    // at attach time: a setEnvRotation() call landing in the narrow window
-    // between attach and first compile is picked up correctly instead of
-    // silently lost. setEnvRotation below (the live-update path, for AFTER
-    // first compile) reads back `material.userData.envRotationUniform`,
-    // stashed here once the program has actually compiled.
+    // Attaches the live-rotatable env patch to one neutral glTF PBR
+    // material. Nested here so onBeforeCompile reads `envRotationRad`
+    // fresh at ACTUAL compile time, not a value snapshotted at attach time.
     const patchNeutralMaterialEnvRotation = (material) => {
         material.onBeforeCompile = (shader) => {
             shader.uniforms.uEnvRotation = { value: envRotationMatrix3(envRotationRad) };
@@ -3387,53 +2330,22 @@ const createMtlxRenderView = async ({
             );
             material.userData.envRotationUniform = shader.uniforms.uEnvRotation;
         };
-        // customProgramCacheKey: r128's Material.prototype default already
-        // derives this from onBeforeCompile.toString() — since every
-        // patched material gets this SAME function body, that alone
-        // already keys them apart from any unpatched sibling. Set
-        // explicitly anyway (a stable constant, cheap) as documented
-        // insurance against a future edit that makes the closure
-        // material-specific (which would break toString-based caching by
-        // making every patched material's onBeforeCompile.toString()
-        // differ, or WORSE, coincidentally collide).
+        // r128's Material default already derives customProgramCacheKey
+        // from onBeforeCompile.toString(), which already keys these apart
+        // — set explicitly anyway as insurance against a future edit.
         material.customProgramCacheKey = () => 'neutralEnvRotation';
     };
-    // Shell-owned skybox mesh — replaces scene.background entirely.
-    // Built once (below, in the needsLighting env-fetch block) when an
-    // env exists; stays null for unlit previews (needsLighting=false),
-    // so every bgMesh-touching line in this function guards with
-    // `if (bgMesh)` and is a safe no-op there.
-    //
-    // WHY not scene.background: envBgTexture has mapping =
-    // EquirectangularReflectionMapping, so r128's WebGLBackground
-    // module converts it ONCE into a cubemap and caches that cubemap
-    // in a WeakMap keyed by the source texture (invalidated only by
-    // texture.dispose()) — the cube-map background path it then draws
-    // completely ignores texture.offset/texture.matrix, so the old
-    // per-frame `envBgTexture.offset.x = ...` write (see git history)
-    // was a silent no-op: the lighting rotated but the backdrop never
-    // moved. three doesn't gain a rotatable scene.background
-    // (scene.backgroundRotation) until r163; this codebase targets
-    // r128. Owning the mesh ourselves sidesteps that cache entirely —
-    // rotating bgMesh.rotation.y is a normal, un-cached transform.
+    // Shell-owned skybox mesh, replacing scene.background: r128's
+    // WebGLBackground caches an equirect texture as a cubemap, ignoring
+    // texture.offset/matrix (a per-frame offset write was a silent no-op).
     let bgMesh = null;
-    // Shell-level env (IBL) state — fetched ONCE, below (see the
-    // env-fetch block after the ResizeObserver setup), rather than
-    // inside every material apply: the env textures never change
-    // across a document edit, so re-fetching (or, on the no-file
-    // fallback, re-synthesizing) them on every swap would be pure
-    // waste. bindMaterialUniforms() (below) reads these on EVERY apply
-    // to bind them onto that particular material's actual sampler
-    // names. envExposure defaults to 1.0 to match the literal default
-    // the old inline code used for u_envLightIntensity.
+    // Shell-level env (IBL) state, fetched ONCE (not per material
+    // apply) since env textures never change across a document edit.
+    // bindMaterialUniforms() reads these on every apply.
     let envRadiance = null, envIrradiance = null, envMips = 0, envExposure = 1.0;
-    // envHasFile/envPrefilteredIrr: used ONLY by the DEBUG_SHADERS log
-    // inside bindMaterialUniforms below, to reproduce the exact
-    // "(radiance + prefiltered irradiance files)" / "(radiance file;
-    // irradiance downsampled...)" / "(synthesized)" message the old
-    // inline code derived from the `env` descriptor object — which no
-    // longer lives past the one-time shell-level fetch, so its two
-    // relevant flags are captured here instead.
+    // envHasFile/envPrefilteredIrr: used only by the DEBUG_SHADERS log
+    // in bindMaterialUniforms, to reproduce the old descriptive message
+    // now that `env` no longer lives past the one-time shell-level fetch.
     let envHasFile = false, envPrefilteredIrr = false;
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
@@ -3444,22 +2356,13 @@ const createMtlxRenderView = async ({
         if (resizeObs) resizeObs.disconnect();
         if (controls) controls.dispose();
         // Best-effort: renderer.dispose() below only frees the
-        // renderer's OWN GL state, not user-created three.js resources
-        // like the current material/geometry — dispose those too now
-        // that the shell can go through many material/geometry swaps
-        // over its life (each swap already disposes its own PREVIOUS
-        // material/geometry; this only matters for whatever is still
-        // live at final teardown).
+        // renderer's OWN GL state, not material/geometry — dispose those
+        // too (each swap already disposes its own previous ones).
         try { if (material) material.dispose(); } catch (e) { /* already disposed/invalid */ }
         try { if (geometry) geometry.dispose(); } catch (e) { /* ditto */ }
-        // bgMesh: dispose its OWN geometry (a SphereGeometry built
-        // fresh per shell, below — nobody else references it) and
-        // material (a MeshBasicMaterial, ditto), and drop it from the
-        // scene. Do NOT dispose bgMesh.material.map (envBgTexture) —
-        // env textures are shared/cached (getEnvironment()'s
-        // envPromise, setEnvOverride's broadcast env) across every
-        // live view; same non-disposal policy this function already
-        // applies to envRadiance/envIrradiance, never disposed here.
+        // bgMesh: dispose its own geometry/material and drop it from
+        // the scene. Do NOT dispose bgMesh.material.map (envBgTexture)
+        // — env textures are shared/cached across every live view.
         try {
             if (bgMesh) {
                 scene.remove(bgMesh);
@@ -3467,18 +2370,9 @@ const createMtlxRenderView = async ({
                 bgMesh.material.dispose();
             }
         } catch (e) { /* already disposed/invalid, or scene never got this far */ }
-        // sceneGroup (scene-mode only — see its declaration above):
-        // drop the whole instantiated GLB hierarchy from the scene and
-        // dispose the per-view material CLONES instantiateShaderballScene
-        // made for it (sceneOwnedMaterials). Do NOT dispose any of
-        // sceneGroup's GEOMETRIES here (material_surface's own per-view
-        // geometry CLONE is already covered by the generic
-        // `geometry.dispose()` above — `geometry` and
-        // `mesh.geometry`/sceneInst.surfaceMesh.geometry are the SAME
-        // object in scene mode) and do NOT touch the cached gltf itself
-        // — the rest of sceneGroup's geometries are shared with every
-        // other view instantiated from the same glbSceneCache entry
-        // (see loadGlbScene's cache-ownership comment above).
+        // sceneGroup (scene-mode only): drops the GLB hierarchy and
+        // disposes its per-view material CLONES (sceneOwnedMaterials).
+        // Does NOT dispose geometries — shared with other cached views.
         try {
             if (sceneGroup) {
                 scene.remove(sceneGroup);
@@ -3487,54 +2381,33 @@ const createMtlxRenderView = async ({
                 });
             }
         } catch (e) { /* already disposed/invalid, or scene never got this far */ }
-        // pmremRT: this view's OWN prefiltered-environment render
-        // target (see the env block below) — safe to dispose outright.
-        // Do NOT dispose the PMREMGenerator instance that produced it
-        // (see the env block's comment on why: r128's PMREMGenerator
-        // shares its LOD-plane geometries at MODULE scope, and
-        // disposing any one instance tears those down for every other
-        // PMREMGenerator, present or future).
+        // pmremRT: this view's OWN render target — safe to dispose.
+        // Do NOT dispose the PMREMGenerator instance itself: r128 shares
+        // its LOD-plane geometries at MODULE scope across all instances.
         try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
         if (renderer) renderer.dispose();
     };
-    // [mtlx-perf] whole-function total — everything below, from shader
-    // generation through the GL compile that makes the view handle ready
-    // to return. See the finer-grained gen.generate / WebGLRenderer init /
-    // GL compile timers further down for a breakdown.
+    // [mtlx-perf] whole-function total, from shader generation through
+    // the GL compile. See the finer-grained timers further down for a
+    // breakdown (gen.generate / WebGLRenderer init / GL compile).
     const __totalPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
     try {
-                // Generate the shader from the renderable surface node
-                // (transparency + COMPLETE interface options, gen.generate,
-                // stage-source extraction/patching) — see
-                // generatePreviewSources for the full breakdown; extracted
-                // so tryRefreshRenderView can reuse it for a source diff
-                // without pulling in the rest of this function.
+                // Generates the shader from the renderable surface node
+                // — see generatePreviewSources for the full breakdown;
+                // extracted so tryRefreshRenderView can reuse it for a diff.
                 const __srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
-                // Bail before the ~expensive shader-generation call if this
-                // build has already been superseded (caller's effect
-                // cleanup flipped `mounted` while we were awaiting above) —
-                // nothing GL-side exists yet (renderer isn't created until
-                // below), so disposePartial() is a safe, idempotent no-op
-                // here beyond flagging `stopped`.
+                // Bail if this build was superseded while awaiting above
+                // — nothing GL-side exists yet, so disposePartial() is a
+                // safe, idempotent no-op beyond flagging `stopped`.
                 if (!__srcs) { disposePartial(); return null; }
                 // introspected: already plain JS, converted inside the
-                // mxExclusive-locked generatePreviewSourcesUnlocked before
-                // the lock released — see that function's comment. No
-                // getStage/collectMxUniforms left in this function.
+                // mxExclusive-locked generatePreviewSourcesUnlocked
+                // before the lock released. No wasm reads left here.
                 const { vs, fs, introspected, transparent } = __srcs;
 
-                // Pre-warm the driver's shader compile on the persistent
-                // hidden GL context BEFORE the display renderer is created
-                // below. Running the warm first means the display context
-                // is created only AFTER the driver has finished (or is
-                // well underway with) compiling — instead of a fresh
-                // WebGLRenderer init contending with an in-flight
-                // background compile queue on the SAME context (measured
-                // 0.8-2.5s WebGLRenderer init stalls with the old
-                // after-renderer placement). The display path below is
-                // therefore byte-for-byte the original, un-warmed code —
-                // the pre-warm here is a pure side effect that primes the
-                // driver's source-keyed compile cache.
+                // Pre-warms the driver compile BEFORE the display renderer
+                // is created — the old after-renderer placement measured
+                // 0.8-2.5s WebGLRenderer init stalls from queue contention.
                 const warmResult = await prewarmShaderCompile({ vs, fs, isMounted, label });
                 if (warmResult === 'bailed' || !isMounted()) { disposePartial(); return null; }
 
@@ -3544,9 +2417,8 @@ const createMtlxRenderView = async ({
                 const cw = canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || 400;
                 const ch = canvas.clientHeight || 256;
                 // Bail before allocating the WebGL context if this build
-                // was superseded while shader generation was running above
-                // — still nothing GL-side exists yet, so disposePartial()
-                // stays a safe no-op.
+                // was superseded during shader generation above —
+                // disposePartial() is still a safe no-op here.
                 if (!isMounted()) { disposePartial(); return null; }
                 const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -3554,9 +2426,8 @@ const createMtlxRenderView = async ({
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
                 renderer.debug.checkShaderErrors = true;
                 // NOTE: outputEncoding/toneMapping are NO-OPS for
-                // RawShaderMaterial (built-in-material shader chunks).
-                // The actual display transform is injected into the
-                // generated pixel shader by encodeDisplay() above.
+                // RawShaderMaterial — the actual display transform is
+                // injected into the pixel shader by encodeDisplay() above.
                 if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
                 renderer.toneMapping = THREE.ACESFilmicToneMapping;
                 renderer.toneMappingExposure = 1.0;
@@ -3567,139 +2438,77 @@ const createMtlxRenderView = async ({
 
                 const scene = new THREE.Scene();
 
-                // Instantiate the scene-mode GLB (if any) BEFORE the
-                // camera below: full-scene mode needs the GLB's own
-                // embedded camera to construct the shell camera from.
-                // isMounted bail mirrors every other await in this
-                // function — nothing GL-scene-side has been added yet,
-                // so disposePartial() is still a safe no-op beyond
-                // flagging `stopped`.
+                // Instantiates the scene-mode GLB (if any) BEFORE the
+                // camera: full-scene mode needs the GLB's embedded camera
+                // to build the shell camera. isMounted bail is a safe no-op.
                 const sceneInst = sceneMode ? await instantiateShaderballScene(sceneMode) : null;
                 if (!isMounted()) { disposePartial(); return null; }
                 if (sceneMode && !sceneInst) {
-                    // GLB missing/corrupt, GLTFLoader unavailable, or
-                    // the asset lacks a material_surface mesh — degrade
-                    // exactly like the old remote-shaderball fetch
-                    // failure did: fall back to the plain sphere
-                    // (buildPreviewGeometry's default branch handles any
-                    // unrecognized geomName, scene names included) with
-                    // a single console warning instead of crashing.
+                    // GLB missing/corrupt, no GLTFLoader, or the asset
+                    // lacks a material_surface mesh — degrade to the
+                    // plain sphere fallback with a warning, not a crash.
                     console.warn('shaderball scene unavailable, falling back to sphere:', geomName);
                 }
                 if (sceneInst) {
                     sceneGroup = sceneInst.group;
                     sceneOwnedMaterials = sceneInst.ownedMaterials;
                     // Env-rotation patch: every neutral glTF PBR material
-                    // (base/core/sss_bars, backdrop, grid — anything lit by
-                    // scene.environment/PMREM below) EXCEPT the backplanes'
-                    // MeshBasicMaterial clones, which have no envMap at all
-                    // and so don't sample it. 'envMapIntensity' in m is the
-                    // SAME duck-typing check setEnvExposure below already
-                    // uses to find this exact set of materials.
+                    // EXCEPT the backplanes' MeshBasicMaterial clones
+                    // (no envMap). Same duck-typing check as setEnvExposure.
                     sceneOwnedMaterials.forEach((m) => {
                         if ('envMapIntensity' in m) patchNeutralMaterialEnvRotation(m);
                     });
                 }
-                // fullScene: the full authored preset (shaderball.glb) -
-                // fixed authored camera and no fallback spin by default
-                // (graph editor); docs/viewer opt into constrained
-                // orbit/zoom via sceneOrbit (see the controls +
-                // fallbackSpin + animate() changes below). 'simple' scene
-                // mode (viewer/docs) behaves like an ordinary orbitable
-                // preset and is NOT fullScene.
+                // fullScene: the full authored preset (shaderball.glb) —
+                // fixed camera, no fallback spin by default; docs/viewer
+                // opt into orbit/zoom via sceneOrbit. 'simple' is NOT fullScene.
                 const fullScene = !!(sceneInst && sceneMode === 'full');
-                // Populated only in the fullScene-adoption branch just
-                // below; read again by syncSize further down on every
-                // resize. null in every other mode — those keep the
-                // fixed-45-degree camera untouched (see
-                // effectiveFullSceneVFov's header comment above).
+                // Populated only in the fullScene-adoption branch below;
+                // read again by syncSize on every resize. null in every
+                // other mode (fixed-45-degree camera untouched).
                 let fullSceneAuthoredFov = null;
                 let fullSceneAuthoredAspect = null;
-                // Authored GLB camera pose cached at adoption time below -
-                // the scene-orbit config block restores it (OrbitControls'
-                // constructor re-aims the camera at the placeholder (0,0,0)
-                // target), and resetCamera() returns to it via OrbitControls
-                // saveState/reset.
+                // Authored GLB camera pose cached at adoption time —
+                // the scene-orbit config block restores it (OrbitControls
+                // re-aims at (0,0,0)), and resetCamera() returns to it.
                 let sceneAuthoredPose = null;
 
                 const camera = new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
-                // Slightly elevated three-quarter framing; the elevation
-                // scales with the distance so the viewing angle stays the
-                // same whether the caller wants breathing room (3.6) or a
-                // frame-filling close-up (~2.55 in the square previews).
+                // Slightly elevated three-quarter framing; elevation
+                // scales with distance so the viewing angle stays constant.
                 // (fullScene overrides this wholesale immediately below.)
                 camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
 
                 if (fullScene && sceneInst.glbCamera) {
                     const gc = sceneInst.glbCamera;
-                    // DETACHED camera — WHY: the GLB's camera node sits
-                    // under 'standard_shader_ball_scene', a root node
-                    // that bakes in a 0.01 scale (see the GLB layout
-                    // note in instantiateShaderballScene's header
-                    // comment above). Rendering gc itself IN-HIERARCHY
-                    // (as a live child of sceneGroup) would carry that
-                    // 0.01 scale into its composed matrixWorld, and
-                    // camera.matrixWorldInverse — used verbatim by
-                    // WebGLRenderer every frame — is that matrix's
-                    // INVERSE: view-space distances would come out
-                    // ~100x too large, pushing the entire scene past
-                    // this camera's own authored zfar=10 (everything
-                    // clips). Copying WORLD position + WORLD quaternion
-                    // (the 0.01 scale factor cancels out of a pure
-                    // rotation, so quaternion needs no correction) onto
-                    // the shell's OWN, never-parented camera sidesteps
-                    // the problem entirely.
+                    // DETACHED camera: the GLB's camera sits under a root
+                    // node baking a 0.01 scale — rendering it in-hierarchy
+                    // would inflate distances ~100x, clipping past zfar=10.
                     sceneGroup.updateMatrixWorld(true); // sceneGroup isn't added to `scene` until below; compute its world matrices standalone first
                     gc.getWorldPosition(camera.position);
                     gc.getWorldQuaternion(camera.quaternion);
                     sceneAuthoredPose = { position: camera.position.clone(), quaternion: camera.quaternion.clone() };
-                    // gc.near/far are already in the units
-                    // THREE.PerspectiveCamera expects (GLTFLoader's
-                    // camera loader builds gc as a real PerspectiveCamera)
-                    // — copy verbatim. gc.fov (the AUTHORED vertical fov,
-                    // already in degrees) is captured below instead of
-                    // being copied straight onto camera.fov — see
-                    // effectiveFullSceneVFov's header comment above for
-                    // why.
+                    // gc.near/far are already in THREE.PerspectiveCamera's
+                    // units — copy verbatim. gc.fov is captured below
+                    // rather than copied straight — see effectiveFullSceneVFov.
                     camera.near = gc.near;
                     camera.far = gc.far;
-                    // Authored aspect: gc.aspect (GLTFLoader's camera
-                    // constructor uses `aspectRatio || 1`; this GLB
-                    // authors ~1.7778/16:9, so gc.aspect already reads
-                    // that value). The `|| 1.7778` fallback only matters
-                    // for a hypothetical GLB that omits aspectRatio
-                    // entirely, where gc.aspect would otherwise be the
-                    // constructor's bare `1` default rather than a real
-                    // authored value. Stashed in the outer closure vars
-                    // above so syncSize (below) can redo this same
-                    // computation on every resize, not just at adoption.
+                    // Authored aspect: gc.aspect (this GLB authors
+                    // ~1.7778/16:9); the `|| 1.7778` fallback only matters
+                    // for a hypothetical GLB that omits aspectRatio.
                     fullSceneAuthoredFov = gc.fov;
                     fullSceneAuthoredAspect = gc.aspect || 1.7778;
-                    // Aspect from the CANVAS, not the GLB's own authored
-                    // aspect — user decision: adopt the preview
-                    // viewport's aspect so there's no letterbox/pillarbox
-                    // and no layout change, same as every other preset.
-                    // Naively keeping gc's fixed vertical fov here would
-                    // CROP THE SIDES on a narrower-than-authored canvas
-                    // (e.g. the square graph panel); route through
-                    // effectiveFullSceneVFov so the vertical fov widens
-                    // instead, keeping the whole authored 16:9 frame (and
-                    // therefore the whole shaderball) visible.
+                    // Aspect from the CANVAS, not the GLB's own — no
+                    // letterbox/pillarbox, same as every other preset.
+                    // effectiveFullSceneVFov widens the fov instead of cropping.
                     camera.aspect = cw / ch;
                     camera.fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
                     camera.updateProjectionMatrix();
                 }
 
-                // Orbit + zoom + auto-rotate. Rotating the CAMERA (not
-                // the mesh) lets manual orbiting, zooming, and the
-                // pause button all compose naturally. Full-scene mode
-                // gets a FIXED camera by default: the authored camera
-                // above stays exactly where the GLB placed it (graph
-                // editor - no mouse interaction, rotation button hidden,
-                // see setAutoRotate's no-op below and js/graph/preview.jsx's
-                // ViewportControls props). Callers that want interaction
-                // in full-scene mode (docs/viewer) opt in with sceneOrbit;
-                // the graph editor passes nothing and stays fixed.
+                // Orbit + zoom + auto-rotate: rotating the CAMERA (not
+                // the mesh) lets orbit/zoom/pause compose naturally.
+                // Full-scene mode is FIXED by default; opt in with sceneOrbit.
                 controls = null;
                 if (THREE.OrbitControls && (!fullScene || sceneOrbit)) {
                     controls = new THREE.OrbitControls(camera, canvas);
@@ -3708,47 +2517,32 @@ const createMtlxRenderView = async ({
                     controls.enablePan = false;
                     controls.minDistance = 1.4;
                     controls.maxDistance = 9;
-                    // Camera auto-orbit (OFF by default; toggled by the
-                    // rotate button). Orbiting the camera keeps the
-                    // specular highlight pinned to the same spot on the
-                    // model — the classic showcase look. The visible
-                    // environment pans while orbiting, which is the
-                    // accepted tradeoff of this mode.
+                    // Camera auto-orbit (off by default): pins the
+                    // specular highlight to the same spot on the model
+                    // (showcase look); the visible environment pans as a tradeoff.
                     controls.autoRotate = !!autoRotate;
                     controls.autoRotateSpeed = 1.5;
                 }
-                // No-OrbitControls-script fallback spin (see
-                // fallbackSpin's declaration above) must also stay off
-                // in full-scene mode — there is no controls instance to
-                // gate it, so force it here explicitly.
+                // No-OrbitControls fallback spin must also stay off in
+                // full-scene mode — no controls instance exists to gate
+                // it, so force it here explicitly.
                 if (fullScene) fallbackSpin = false;
 
-                // Fullscreen "fit to ball" (setFullscreenFit handle method,
-                // below): while on, the whole shaderball's world bounding
-                // sphere must stay inside the frame at all times, layered
-                // ON TOP of the everyday effectiveFullSceneVFov framing
-                // above/below (only ever WIDENS the fov — never narrower
-                // than the everyday framing). Camera position/orientation
-                // are never touched here — this is a pure fov (zoom) change.
-                // fullScene-only; sphere/cube/simple previews have ordinary
-                // OrbitControls zoom instead and never set this flag (see
-                // js/graph/preview.jsx, the only caller).
+                // Fullscreen "fit to ball": keeps the ball's bounding
+                // sphere inside the frame, only ever WIDENING the fov on
+                // top of the everyday framing. fullScene-only; pure fov change.
                 let fullscreenFit = false;
-                // World-space bounding sphere of the whole ball assembly
-                // (material_surface + neutral_objects together), computed
-                // ONCE per scene and cached here — see getBallBoundingSphere
-                // just below.
+                // World-space bounding sphere of the whole ball assembly,
+                // computed ONCE per scene and cached here — see
+                // getBallBoundingSphere just below.
                 let ballBoundingSphere = null;
-                // Scene-orbit hard-containment box (sceneGroup bounds inset
-                // 2%/axis, union-expanded by the authored camera position so
-                // the default pose is always legal); null in every other
-                // mode - see the scene-orbit config block and animate().
+                // Scene-orbit hard-containment box (sceneGroup bounds
+                // inset 2%/axis, expanded so the default pose stays
+                // legal); null in every other mode.
                 let sceneOrbitClampBox = null;
                 // Reference camera->ball distance for scene-orbit framing,
-                // captured once at setup from the AUTHORED pose (not the
-                // live, user-zoomed distance) so recomputeCameraFov's
+                // captured from the AUTHORED pose so recomputeCameraFov's
                 // fit-to-ball fov stays constant while the user zooms.
-                // null in every non-(fullScene+sceneOrbit) mode.
                 let sceneOrbitFitDist = null;
                 // Radius of the framing target (the ball proper, see the
                 // config block below), paired with sceneOrbitFitDist for the
@@ -3756,15 +2550,8 @@ const createMtlxRenderView = async ({
                 let sceneOrbitFitRadius = null;
 
                 // Finds (and caches) the ball assembly's world bounding
-                // sphere: the GLB's 'shader_ball' node by name (holds
-                // material_surface + neutral_objects), falling back to
-                // material_surface's own parent if that name isn't present
-                // in some future re-export, and finally sceneGroup itself
-                // as a last resort so this can never throw. Box3.
-                // setFromObject reads world matrices, so force them current
-                // first — cheap, and this whole function only runs its
-                // Box3/Sphere computation once per scene (later calls hit
-                // the ballBoundingSphere cache above).
+                // sphere: 'shader_ball' by name, falling back to
+                // material_surface's parent, then sceneGroup (never throws).
                 const getBallBoundingSphere = () => {
                     if (ballBoundingSphere) return ballBoundingSphere;
                     if (!sceneGroup) return null;
@@ -3777,31 +2564,15 @@ const createMtlxRenderView = async ({
                     return ballBoundingSphere;
                 };
 
-                // Single entry point for every fov-affecting event (every
-                // resize via syncSize below, and the fit toggle itself) so
-                // they can never disagree with each other: starts from the
-                // everyday effectiveFullSceneVFov framing, then — ONLY
-                // while fullscreenFit is on — widens further if the ball's
-                // angular size at the FIXED camera position would otherwise
-                // exceed the frame on either axis. Writes camera.fov only;
-                // callers own their own camera.updateProjectionMatrix().
+                // Single entry point for every fov-affecting event so they
+                // never disagree: starts from effectiveFullSceneVFov, then
+                // widens further only while fullscreenFit is on.
                 const recomputeCameraFov = () => {
                     if (fullSceneAuthoredFov == null) return; // non-fullScene modes keep their fixed fov untouched
                     let fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
-                    // Scene-orbit default framing: fit the ball PROPER (the
-                    // material_surface mesh, captured in the config block
-                    // below) to the ACTUAL viewport aspect from its runtime
-                    // bounds, rather than trusting the authored ~16:9
-                    // vertical fov (which overflows on the wider docs/viewer
-                    // canvases). Uses the fixed setup distance so zooming
-                    // (which moves the camera, not the fov) never rescales
-                    // the frame; recomputed on resize so a reflow re-fits to
-                    // the new aspect. Same both-axes sphere-fit identity as
-                    // the fullscreenFit branch below, but it REPLACES the
-                    // base fov here (the ball, not the whole authored 16:9
-                    // frame, is what must fit). fullscreenFit stays
-                    // graph-only and never combines with this (the graph
-                    // never passes sceneOrbit).
+                    // Scene-orbit default framing: fits the ball PROPER
+                    // to the actual viewport aspect (authored ~16:9 fov
+                    // overflows wider canvases). REPLACES the base fov here.
                     if (sceneOrbitFitDist != null && sceneOrbitFitRadius != null
                         && sceneOrbitFitDist > sceneOrbitFitRadius) {
                         const theta = Math.asin(Math.min(1, sceneOrbitFitRadius / sceneOrbitFitDist));
@@ -3815,19 +2586,12 @@ const createMtlxRenderView = async ({
                         const dist = sphere ? camera.position.distanceTo(sphere.center) : 0;
                         if (sphere && dist > sphere.radius) {
                             // Angular radius of the ball as seen from the
-                            // camera: asin(r / d), clamped to 1 to guard
-                            // fp overshoot when dist is only fractionally
-                            // larger than radius.
+                            // camera: asin(r/d), clamped to 1 against fp
+                            // overshoot when dist is barely larger than radius.
                             const theta = Math.asin(Math.min(1, sphere.radius / dist));
-                            // The ball must fit BOTH axes: the vertical
-                            // half-fov must cover theta directly, and the
-                            // horizontal half-fov (also theta -- the
-                            // sphere's silhouette is a circle, same
-                            // angular radius on every axis) must cover
-                            // theta once converted back to a vertical fov
-                            // through the aspect ratio (the same
-                            // tan/atan identity effectiveFullSceneVFov
-                            // above uses).
+                            // The ball must fit BOTH axes: vertical
+                            // half-fov covers theta directly; horizontal
+                            // half-fov converts back via the same tan/atan.
                             const vFovForVertical = 2 * theta;
                             const vFovForHorizontal = 2 * Math.atan(Math.tan(theta) / camera.aspect);
                             const FIT_MARGIN = 1.06; // ~6% breathing room so the ball doesn't touch the frame edge
@@ -3838,27 +2602,17 @@ const createMtlxRenderView = async ({
                     camera.fov = fov;
                 };
 
-                // Keep the drawing buffer + aspect in sync with layout:
-                // the params panel appears after init (flex reflow), and
-                // mobile rotation/resizes change the canvas CSS size.
-                // Without this the sphere stretches on any reflow.
+                // Keeps the drawing buffer + aspect in sync with layout
+                // (panel reflow, mobile rotation/resize) — without this
+                // the sphere stretches on any reflow.
                 const syncSize = () => {
                     const w = canvas.clientWidth || cw;
                     const h = canvas.clientHeight || ch;
                     renderer.setSize(w, h, false);
                     camera.aspect = w / h;
-                    // fullScene only (fullSceneAuthoredFov stays null in
-                    // every other mode, see its declaration above):
-                    // resize can change WHICH side of the
-                    // canvasAspect >= authoredAspect comparison we're on
-                    // (e.g. a panel widening past 16:9 on a layout reflow,
-                    // or entering/exiting fullscreen), so this must be
-                    // recomputed on every resize, not just once at
-                    // adoption — recomputeCameraFov above also folds in the
-                    // fullscreen "fit to ball" widening while that flag is
-                    // on. sphere/cube/simple modes are untouched — they
-                    // keep today's fixed 45-degree fov (recomputeCameraFov
-                    // no-ops when fullSceneAuthoredFov is null).
+                    // fullScene only: resize can flip which side of the
+                    // canvasAspect >= authoredAspect comparison we're on,
+                    // so this must be recomputed every resize, not once.
                     recomputeCameraFov();
                     camera.updateProjectionMatrix();
                 };
@@ -3867,32 +2621,15 @@ const createMtlxRenderView = async ({
                     resizeObs.observe(canvas);
                 }
 
-                // Image-based lighting for lit surfaces/BSDFs, AND/OR
-                // (widened gate — new) scene-mode's ordinary glTF
-                // meshes (neutral ball parts, backdrop, grid), which
-                // are ALWAYS lit via scene.environment/PMREM below
-                // regardless of whether the GENERATED material itself
-                // needsLighting: an unlit color node's shaderball
-                // preview still shows those neighboring parts lit, per
-                // the design brief. Fetched ONCE here, at SHELL level,
-                // rather than inside every material apply below: the
-                // env textures (radiance/irradiance/background) never
-                // change across a document edit, so re-fetching (or, on
-                // the no-file fallback, re-synthesizing) them on every
-                // swap would be pure waste. The per-material BINDING of
-                // these textures onto the CURRENT shader's actual
-                // declared sampler names still happens fresh on every
-                // apply — see bindMaterialUniforms below — since that
-                // depends on what THAT particular generated shader
-                // declares.
+                // Image-based lighting for lit surfaces/BSDFs AND/OR
+                // scene-mode's glTF meshes (always lit via PMREM, even
+                // under an unlit material). Fetched ONCE at shell level.
                 if (needsLighting || sceneInst) {
                     const env = envOverride || await getEnvironment();
                     if (!isMounted()) { disposePartial(); return null; }
-                    // Independent of envRadiance/etc. below (which only
-                    // the needsLighting branch populates): scene-mode's
+                    // Independent of envRadiance/etc. below: scene-mode's
                     // PMREM further down needs A radiance source even
-                    // when THIS material is unlit and never touches the
-                    // u_env* uniforms/envRadiance at all.
+                    // when this material is unlit and never touches u_env*.
                     const radianceSrc = env ? env.radiance : makeEnvTexture(256, 128, false);
                     if (needsLighting) {
                         if (env) {
@@ -3910,27 +2647,9 @@ const createMtlxRenderView = async ({
                             envBgTexture = makeBackgroundTexture(envRadiance);
                             envHasFile = false;
                         }
-                        // Shell-owned skybox mesh — see bgMesh's
-                        // declaration above for the WHY-not-scene.
-                        // background rationale. SphereGeometry + the x-
-                        // mirror is the canonical r128 "camera inside a
-                        // sphere" panorama recipe. R=50 sits well inside
-                        // the camera's far=100 (see the PerspectiveCamera
-                        // constructed above) with plenty of margin.
-                        // MeshBasicMaterial is unlit (a backdrop, not a
-                        // lit surface) with depthWrite:false + a very low
-                        // renderOrder so it's drawn FIRST and every real
-                        // object simply paints over it — depthWrite:false
-                        // means it never touches the depth buffer, so draw
-                        // order (not depth testing) is what keeps it
-                        // behind everything, regardless of the actual
-                        // (large) sphere radius.
-                        // rotation.y is seeded from envRotationRad (not a
-                        // bare 0) so a persisted rotation is already
-                        // correct on the very first rendered frame — same
-                        // DELIBERATE TWEAK pattern u_envMatrix uses in
-                        // bindMaterialUniforms below. See BG_BASE/BG_SIGN's
-                        // derivation comment above createMtlxRenderView.
+                        // Shell-owned skybox mesh (see bgMesh's declaration
+                        // above). depthWrite:false + a low renderOrder draws
+                        // it first, so draw order alone keeps it behind everything.
                         const bgGeometry = new THREE.SphereGeometry(50, 64, 32);
                         bgGeometry.scale(-1, 1, 1);
                         bgMesh = new THREE.Mesh(
@@ -3943,72 +2662,24 @@ const createMtlxRenderView = async ({
                         scene.add(bgMesh);
                     }
                     if (sceneInst) {
-                        // Scene-mode lighting for sceneGroup's ordinary
-                        // glTF meshes: bake radianceSrc into a PMREM
-                        // (prefiltered mip-mapped radiance environment
-                        // map) and drive scene.environment from it —
-                        // three's standard IBL path for MeshStandard-
-                        // family materials. This is a COMPLETELY
-                        // separate lighting mechanism from the u_env*
-                        // uniform binding above (the generated MaterialX
-                        // shader samples its own u_envRadiance/
-                        // u_envIrradiance directly and only lights
-                        // `mesh`/material_surface) — the two coexist
-                        // without conflict because they light disjoint
-                        // sets of meshes. A fresh PMREMGenerator is used
-                        // here and NEVER disposed: r128's
-                        // PMREMGenerator shares its LOD-plane blur
-                        // geometries at MODULE scope (built once,
-                        // reused by every instance), and calling
-                        // .dispose() on any ONE instance tears those
-                        // down for every PMREMGenerator in the page,
-                        // present or future — breaking every other
-                        // scene-mode view for the rest of the session.
-                        // Only the returned render target (pmremRT) is
-                        // this view's own — see disposePartial above,
-                        // which disposes it.
+                        // Scene-mode lighting: bakes radianceSrc into a
+                        // PMREM driving scene.environment. NEVER dispose
+                        // the PMREMGenerator — r128 shares state module-wide.
                         pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(radianceSrc);
                         scene.environment = pmremRT.texture;
                     }
                 }
 
-                // Selected preview geometry. Scene mode (sceneInst,
-                // resolved above): add the instantiated GLB hierarchy to
-                // the scene and PRE-ASSIGN the shell's `mesh`/`geometry`
-                // to its material_surface mesh/geometry — this is what
-                // makes the FIRST applyMaterialInternal() call below
-                // (which checks `if (!mesh)`) take the `mesh.material =
-                // material` branch instead of constructing a fresh
-                // THREE.Mesh: the generated MaterialX material lands on
-                // material_surface exactly as it would land on a
-                // freshly-built sphere/cube mesh. Its geometry was
-                // already prepGeometry'd (attributes aliased to
-                // MaterialX names + tangents) inside
-                // instantiateShaderballScene. Otherwise (sphere/cube,
-                // or the scene-load-failure fallback where sceneInst is
-                // null) — today's unchanged path.
+                // Selected preview geometry. Scene mode pre-assigns the
+                // shell's `mesh`/`geometry` to material_surface, so the
+                // first applyMaterialInternal() reuses it, not a fresh Mesh.
                 if (sceneInst) {
                     scene.add(sceneGroup);
                     mesh = sceneInst.surfaceMesh;
                     geometry = mesh.geometry;
-                    // Force sceneGroup's (and every descendant's,
-                    // including `mesh`) matrixWorld to be current RIGHT
-                    // NOW rather than leaving it at construction-time
-                    // identity until the first renderer.render() call
-                    // (render() is what normally keeps this in sync, via
-                    // its own scene.updateMatrixWorld() — see r128's
-                    // WebGLRenderer.render). That matters here because
-                    // animate()'s first tick calls setUniforms() —
-                    // which reads mesh.matrixWorld directly — BEFORE its
-                    // own renderer.render() call. The sphere/cube path
-                    // never needed this: `mesh` sits directly under
-                    // `scene`, whose own transform is always identity,
-                    // so a stale matrixWorld there is coincidentally
-                    // still correct. sceneGroup ('simple' mode's
-                    // normalizing wrapper Group, in particular) is NOT
-                    // identity, so skipping this would show the ball at
-                    // its raw, un-normalized transform for exactly one
-                    // frame.
+                    // Forces sceneGroup's matrixWorld current NOW: the
+                    // first animate() tick reads mesh.matrixWorld in
+                    // setUniforms() before renderer.render() would sync it.
                     sceneGroup.updateMatrixWorld(true);
                 } else {
                     geometry = prepGeometry(await buildPreviewGeometry(geomName));
@@ -4016,30 +2687,29 @@ const createMtlxRenderView = async ({
                 if (!isMounted()) { disposePartial(); return null; }
 
                 if (fullScene && sceneOrbit && controls) {
-                    // OrbitControls' constructor already ran update() against its
-                    // placeholder (0,0,0) target and re-aimed the camera - restore
-                    // the authored pose before deriving the pivot ray from it.
+                    // OrbitControls' constructor already ran update()
+                    // against its placeholder (0,0,0) target and re-aimed
+                    // the camera — restore the authored pose first.
                     if (sceneAuthoredPose) {
                         camera.position.copy(sceneAuthoredPose.position);
                         camera.quaternion.copy(sceneAuthoredPose.quaternion);
                     }
                     const sphere = getBallBoundingSphere();
-                    // Pivot on the authored view ray at the ball's depth: orientation is
-                    // unchanged by OrbitControls' first lookAt(target) (the GLB camera
-                    // has zero roll), and the orbit pivots at the ball.
+                    // Pivot on the authored view ray at the ball's depth:
+                    // orientation is unchanged by OrbitControls' first
+                    // lookAt (zero roll), and the orbit pivots at the ball.
                     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
                     let d = sphere ? sphere.center.clone().sub(camera.position).dot(fwd) : 0;
                     if (!(d > 0)) d = sphere ? camera.position.distanceTo(sphere.center) : 0.5;
                     controls.target.copy(camera.position).addScaledVector(fwd, d);
                     controls.minDistance = Math.min(d, sphere ? sphere.radius * 1.5 : d * 0.5);
-                    // Auto-rotate stays OFF regardless of the caller's autoRotate arg:
-                    // the rotate button is hidden for the scene preset and setAutoRotate
-                    // no-ops for fullScene - honoring a stale `rotating` here would start
-                    // a turntable the user can't stop.
+                    // Auto-rotate stays OFF regardless of autoRotate: the
+                    // rotate button is hidden here and setAutoRotate no-ops
+                    // for fullScene — a stale `rotating` could start a turntable.
                     controls.autoRotate = false;
-                    // Containment: sceneGroup bounds == the backdrop box. Inset 2% per
-                    // axis (5% in y would pin the floor clamp at the target's own height),
-                    // then union the authored camera position so the default pose is legal.
+                    // Containment: sceneGroup bounds == the backdrop box.
+                    // Inset 2% per axis, then union the authored camera
+                    // position so the default pose is always legal.
                     const box = new THREE.Box3().setFromObject(sceneGroup);
                     const size = box.getSize(new THREE.Vector3());
                     box.min.x += size.x * 0.02; box.max.x -= size.x * 0.02;
@@ -4047,32 +2717,17 @@ const createMtlxRenderView = async ({
                     box.min.z += size.z * 0.02; box.max.z -= size.z * 0.02;
                     box.expandByPoint(camera.position);
                     sceneOrbitClampBox = box;
-                    // Zoom-out limit: back up along the authored eye ray until
-                    // the containment wall - the ray-box EXIT distance from the
-                    // pivot through the camera (the pivot sits inside the box,
-                    // so intersectBox returns the exit face). Always >= the
-                    // authored distance, so the initial framing is reachable
-                    // and never disturbed. No polar-angle clamp: the animate()
-                    // containment clamp below enforces the floor and side walls
-                    // directly; a static angle scaled to maxDistance would
-                    // forbid low angles at close range.
+                    // Zoom-out limit: the ray-box EXIT distance from the
+                    // pivot through the camera, always >= the authored
+                    // distance so the initial framing stays reachable.
                     const back = camera.position.clone().sub(controls.target).normalize();
                     const exit = box.containsPoint(controls.target)
                         ? new THREE.Ray(controls.target.clone(), back).intersectBox(box, new THREE.Vector3())
                         : null;
                     controls.maxDistance = exit ? controls.target.distanceTo(exit) : d * 4;
-                    // Capture the setup distance + tight ball radius, then apply
-                    // the aspect-correct fit-to-ball fov now (recomputeCameraFov
-                    // also re-runs on every resize via syncSize). saveState()
-                    // below snapshots the resulting default framing for
-                    // resetCamera(). Framing target = the ball PROPER (the
-                    // material_surface mesh `mesh`), not the whole shader_ball
-                    // assembly (base + clips). Radius = HALF the largest world
-                    // AABB extent - NOT Box3.getBoundingSphere(), which returns
-                    // the box's circumscribed sphere (half the diagonal, ~sqrt(3)x
-                    // too large for a roughly spherical mesh) and framed the ball
-                    // ~1.7x too far out. Falls back to the assembly `sphere` if
-                    // `mesh` is somehow absent.
+                    // Captures setup distance + ball radius for the fit-to-
+                    // ball fov. Radius = HALF the largest AABB extent, not
+                    // Box3.getBoundingSphere() (which framed ~1.7x too far).
                     let fitCenter = null, fitRadius = null;
                     if (mesh) {
                         mesh.updateMatrixWorld(true);
@@ -4088,21 +2743,16 @@ const createMtlxRenderView = async ({
                     sceneOrbitFitDist = fitCenter ? camera.position.distanceTo(fitCenter) : null;
                     recomputeCameraFov();
                     camera.updateProjectionMatrix();
-                    // Snapshot for resetCamera(): position0/target0 now hold the
-                    // authored pose + derived pivot, so controls.reset() restores
-                    // this exact framing.
+                    // Snapshot for resetCamera(): position0/target0 now
+                    // hold the authored pose + derived pivot, so
+                    // controls.reset() restores this exact framing.
                     controls.saveState();
                 }
 
                 const vp = new THREE.Matrix4();
-                // Hoisted above the first material apply (previously
-                // defined right before the one-time compile-check
-                // further down): applyMaterialInternal below calls this
-                // itself right after building/swapping the mesh's
-                // material, and the animate() loop calls it every frame
-                // after that. The guard is defensive only — nothing
-                // calls this before the first applyMaterialInternal()
-                // populates mesh/uniforms.
+                // Hoisted above the first material apply: applyMaterialInternal
+                // calls this after every swap, and animate() calls it every
+                // frame. The guard is defensive only.
                 const setUniforms = () => {
                     if (!mesh || !uniforms) return;
                     mesh.updateMatrixWorld();
@@ -4117,31 +2767,16 @@ const createMtlxRenderView = async ({
                 };
 
                 // ------------------------------------------------------
-                // bindMaterialUniforms — build a FRESH uniforms object
-                // for ONE material apply from freshly-generated shader
-                // sources (srcs = { vs, fs, introspected }). Pulled out
-                // of this function's per-build body (previously ran
-                // once, inline, for the shell's single material) so
-                // applyMaterialInternal below can re-run it on every
-                // swap WITHOUT re-running the surrounding one-time shell
-                // setup (renderer/scene/camera/controls/env fetch
-                // above). Reads the shell-level env state fetched once
-                // above (envRadiance/envIrradiance/envMips/envExposure/
-                // envRotationRad/envBgTexture) rather than re-fetching.
-                // Reassigns envRadSamplerName/envIrrSamplerName (shell-
-                // level, read by the handle's setEnvironment/
-                // setEnvRotation/setEnvExposure below) so they always
-                // point at the sampler names THIS material's shader
-                // actually declares. Returns the new uniforms object;
-                // does not touch the shell `uniforms` binding itself —
-                // the caller (applyMaterialInternal) does that.
+                // bindMaterialUniforms: builds a FRESH uniforms object
+                // for ONE material apply, reading the shell-level env
+                // state fetched once above rather than re-fetching. Returns
+                // the object; does not touch the shell `uniforms` binding.
                 // ------------------------------------------------------
                 const bindMaterialUniforms = (srcs) => {
                     const { vs, fs, introspected } = srcs;
                     // MaterialX-generated shaders expect their own attribute
-                    // names (i_position, i_normal, i_texcoord_0, i_tangent)
-                    // and transform uniforms (u_*), so we use RawShaderMaterial
-                    // (no three.js built-in injection) and feed both manually.
+                    // names (i_position, i_normal, ...) and u_* transform
+                    // uniforms, so we use RawShaderMaterial and feed both manually.
                     const newUniforms = {
                         u_worldMatrix: { value: new THREE.Matrix4() },
                         u_viewProjectionMatrix: { value: new THREE.Matrix4() },
@@ -4149,19 +2784,9 @@ const createMtlxRenderView = async ({
                         u_viewPosition: { value: new THREE.Vector3() },
                     };
 
-                    // --- Upload MaterialX's uniform DEFAULTS (introspection) ---
-                    // GLSL ES 3.0 forbids `uniform float x = 1.0;` initializers,
-                    // so the generated ESSL declares bare uniforms and expects
-                    // the app to upload each default from the shader's uniform
-                    // blocks. In WebGL an UNSET uniform reads as 0 — so
-                    // surface_unlit's unconnected `emission` WEIGHT (default
-                    // 1.0) was 0, multiplying every unlit preview to black,
-                    // and every PBR weight/color default was 0 too, blacking
-                    // out lit nodes. Mirrors the official viewer (§7.1).
-                    // `introspected` was already collected + plainized inside
-                    // the mxExclusive lock by generatePreviewSourcesUnlocked —
-                    // nothing left to read from mxShader/wasm here, just
-                    // apply the plain defaults.
+                    // GLSL ES 3.0 forbids uniform initializers, so the app
+                    // must upload each default — an unset uniform reads as
+                    // 0 in WebGL, which blacked out every unlit/PBR preview.
                     applyIntrospectedUniformDefaults(newUniforms, introspected);
                     if (DEBUG_SHADERS) {
                         console.log('introspected uniforms:',
@@ -4176,17 +2801,9 @@ const createMtlxRenderView = async ({
                     const declared = parseUniforms(fs).concat(parseUniforms(vs));
                     const declaredNames = new Set(declared.map((u) => u.name));
                     const has = (n) => declaredNames.has(n);
-                    // Find a declared sampler whose name matches a pattern.
-                    // ALWAYS anchored to /env/i: canonical names are
-                    // u_envRadiance/u_envIrradiance, and the radiance/
-                    // irradiance term below is kept loose only to tolerate
-                    // version drift in that suffix. Without the /env/i
-                    // anchor, a MATERIAL image sampler whose name happens to
-                    // contain "specular"/"diffuse" (or "radiance"/etc.) could
-                    // match too — previously latent (only bound at creation),
-                    // it became a live bug once the imported-HDR broadcast
-                    // (see setEnvironment / LIVE_VIEWS below) started writing
-                    // straight into whatever uniform name this returned.
+                    // Finds a declared sampler by pattern, ALWAYS anchored
+                    // to /env/i first — without it, a material sampler
+                    // named e.g. "specular" could false-match (a real past bug).
                     const findSampler = (re) =>
                         declared.find((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && re.test(u.name));
 
@@ -4199,12 +2816,9 @@ const createMtlxRenderView = async ({
                         console.groupEnd();
                     }
 
-                    // Image-based lighting for lit surfaces/BSDFs. Bind the
-                    // (already-fetched, shell-level) env textures to
-                    // whatever sampler names THIS shader really uses
-                    // (u_envRadiance / u_envIrradiance in current builds,
-                    // but matched loosely so version drift doesn't leave
-                    // them unbound → black).
+                    // Image-based lighting: binds the already-fetched,
+                    // shell-level env textures to whatever sampler names
+                    // THIS shader uses, matched loosely against version drift.
                     if (needsLighting) {
                         const radSampler = findSampler(/radiance|specular|prefilter/i);
                         const irrSampler = findSampler(/irradiance|diffuse/i);
@@ -4216,58 +2830,26 @@ const createMtlxRenderView = async ({
                         envRadSamplerName = radSampler && radSampler.name;
                         envIrrSamplerName = irrSampler && irrSampler.name;
                         // OFFICIAL PARITY: env matrix is ALWAYS a +90° Y
-                        // rotation (getLightRotation in main.js) — identity
-                        // orients the environment differently from the
-                        // reference render. DELIBERATE TWEAK: seeded from
-                        // envRotationRad (not a bare 0) so a material swap
-                        // PRESERVES whatever rotation offset the user
-                        // already dialed in via setEnvRotation() — this is
-                        // identical to the old behavior on the very first
-                        // build, when envRotationRad is still its initial 0.
+                        // rotation. Seeded from envRotationRad (not a bare
+                        // 0) so a material swap PRESERVES the user's rotation.
                         if (has('u_envMatrix')) newUniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
                         if (has('u_envRadianceMips')) newUniforms.u_envRadianceMips = { value: envMips };
                         if (has('u_envRadianceSamples')) newUniforms.u_envRadianceSamples = { value: 16 };
-                        // DELIBERATE TWEAK: seeded from envExposure (not a
-                        // literal 1.0) so a material swap PRESERVES
-                        // whatever exposure the user already dialed in via
-                        // setEnvExposure() — identical to the old behavior
-                        // on the very first build, when envExposure is
-                        // still its initial 1.0.
+                        // Seeded from envExposure (not a literal 1.0) so a
+                        // material swap PRESERVES whatever exposure the
+                        // user already dialed in via setEnvExposure().
                         if (has('u_envLightIntensity') && !newUniforms.u_envLightIntensity) newUniforms.u_envLightIntensity = { value: envExposure };
                         if (has('u_refractionEnv')) newUniforms.u_refractionEnv = { value: true };
-                        // Direct light rig (struct-array uniform; three maps
-                        // {type,direction,color,intensity} onto the generated
-                        // LightData struct members by name). nLights is 0
-                        // whenever environment_map.mtlx defines no
-                        // <directional_light> blocks (the default, current
-                        // rig) — no hardcoded fallback is pushed anymore
-                        // (see getMxEnv() above), so pure IBL is the normal
-                        // case. That's safe end to end: codegen always
-                        // reserves LightData[] capacity >= 1 regardless of
-                        // rig content (hwMaxActiveLightSources forced to
-                        // >=1 in getMxEnv), so the shader compiles either
-                        // way; u_numActiveLightSources=0 makes its light
-                        // loop a no-op at runtime; and skipping the
-                        // u_lightData upload below when nLights is 0 just
-                        // leaves that uniform unset on `newUniforms` —
-                        // three.js's RawShaderMaterial path
-                        // (WebGLUniforms.seqWithValue) silently drops any
-                        // declared-but-unset uniform from the upload list,
-                        // same "no default -> WebGL's implicit 0" pattern
-                        // used throughout applyIntrospectedUniformDefaults
-                        // above. A rig that DOES author lights still works
-                        // unchanged: nLights > 0 uploads u_lightData as
-                        // before.
+                        // Direct light rig (struct-array uniform). nLights=0
+                        // when the rig defines no lights is safe: codegen
+                        // reserves LightData[] capacity >= 1 either way.
                         const nLights = (lightData && lightData.length) || 0;
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
                         if (nLights && has('u_lightData')) newUniforms.u_lightData = { value: lightData };
                         if (DEBUG_SHADERS) {
-                            // envPrefilteredIrr is always false now (see
-                            // buildEnvFromParsedTexture's header comment
-                            // — the paired-<name>_irradiance.hdr
-                            // convention was removed 2026-07-18); kept in
-                            // the log purely as a future-proofing hook if
-                            // that convention ever comes back.
+                            // envPrefilteredIrr is always false now (the
+                            // paired-<name>_irradiance.hdr convention was
+                            // removed); kept as a future-proofing log hook.
                             console.log('env bound → radiance:', radSampler && radSampler.name,
                                         '| irradiance:', irrSampler && irrSampler.name,
                                         envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance SH-synthesized)') : '(synthesized)',
@@ -4281,54 +2863,17 @@ const createMtlxRenderView = async ({
                 };
 
                 // ------------------------------------------------------
-                // applyMaterialInternal — build a new RawShaderMaterial
-                // from `srcs` and swap it onto the shell's mesh IN
-                // PLACE: no renderer/scene/camera/controls/geometry/env-
-                // texture recreation. Used for BOTH the very first build
-                // (below) and every later document edit (via the
-                // handle's applyMaterial(), added further down) —
-                // routing the first build through the SAME code path is
-                // what keeps first-build behavior byte-compatible with
-                // today. On a compile error, the OLD material/uniforms
-                // are restored onto the mesh/shell vars and the BAD
-                // material is disposed BEFORE throwing — see the
-                // ordering comment in the badProg branch below; it is
-                // LOAD-BEARING.
+                // applyMaterialInternal: builds a new RawShaderMaterial
+                // from `srcs` and swaps it onto the shell's mesh IN PLACE
+                // (no renderer/scene/camera recreation). On a compile
+                // error, restores the OLD material/uniforms and disposes
+                // the bad one BEFORE throwing — see the badProg branch below.
                 // ------------------------------------------------------
                 const applyMaterialInternal = (srcs, applyLabel) => {
                     const newUniforms = bindMaterialUniforms(srcs);
-                    // Transparency verdict comes from generation-time
-                    // isTransparentSurface (see generatePreviewSourcesUnlocked's
-                    // hwTransparency block above) — srcs.transparent is exactly
-                    // what codegen used to pick the epilogue, never re-derived
-                    // here. These flags only take effect when the experimental
-                    // Force Transparency setting (FORCE_TRANSPARENCY, DEFAULT
-                    // OFF) is on; off = the verdict is ignored here entirely,
-                    // matching official-MaterialX-viewer behavior (every
-                    // preview renders opaque, exactly like before this
-                    // feature). Flipping the setting never rebuilds this
-                    // material or its shader — setForceTransparency mutates
-                    // every live view's material.transparent/depthWrite flags
-                    // in place via the handle's refreshTransparencyFlags (see
-                    // its definition below) — the alpha epilogue is already
-                    // baked into srcs.fs regardless of the setting. NormalBlending
-                    // (three.js's default) with STRAIGHT alpha: MaterialX's
-                    // ESSL epilogue emits straight (non-premultiplied) alpha,
-                    // so do NOT set premultipliedAlpha on this material. Known
-                    // tradeoff: DoubleSide + transparent + depthWrite:false
-                    // means the ball's own back/front faces composite in
-                    // whatever order r128 happens to draw them — no intra-mesh
-                    // sorting — so self-overlapping transparent geometry can
-                    // show ordering artifacts; accepted for preview quality,
-                    // no two-pass (depth-prepass) rendering is implemented.
-                    // u_alphaThreshold still gets its generator default
-                    // (0.001) through the existing introspected-uniform
-                    // upload path below; if that upload is ever skipped, a
-                    // null `data` degrades to an implicit 0.0 threshold —
-                    // i.e. never discards — so no extra code is needed here
-                    // for that case. The opaque path (isTransparent false)
-                    // stays byte-equivalent to before: transparent:false,
-                    // depthWrite:true are three.js/r128's own defaults.
+                    // Transparency verdict is srcs.transparent, gated on
+                    // FORCE_TRANSPARENCY. STRAIGHT alpha (MaterialX's own
+                    // epilogue) — do NOT set premultipliedAlpha here.
                     const isTransparent = !!srcs.transparent && FORCE_TRANSPARENCY;
                     const newMaterial = new THREE.RawShaderMaterial({
                         vertexShader: srcs.vs,
@@ -4341,20 +2886,17 @@ const createMtlxRenderView = async ({
                     });
 
                     // Stash the outgoing material/uniforms so a compile
-                    // failure below can restore them and this swap is a
-                    // no-op from the outside (the old material keeps
-                    // rendering). Both are null on the very first build —
-                    // nothing to restore/dispose in that case.
+                    // failure below can restore them, making the swap a
+                    // no-op from the outside. Both are null on the first build.
                     const oldMaterial = material;
                     const oldUniforms = uniforms;
                     material = newMaterial;
                     uniforms = newUniforms;
 
                     if (!mesh) {
-                        // First call for this shell: nothing to swap onto
-                        // yet — create the mesh and add it to the
-                        // (already-created, shell-level) scene. Every
-                        // later call just reassigns mesh.material below.
+                        // First call for this shell: create the mesh and
+                        // add it to the shell-level scene. Every later
+                        // call just reassigns mesh.material below.
                         mesh = new THREE.Mesh(geometry, material);
                         scene.add(mesh);
                     } else {
@@ -4362,22 +2904,13 @@ const createMtlxRenderView = async ({
                     }
 
                     // Compile now and surface any GLSL error to the UI
-                    // instead of failing to a silent black canvas.
-                    // (Filters benign ANGLE/fxc X4008-style warnings —
-                    // see compileFilteringDriverNoise.)
+                    // instead of a silent black canvas. Filters benign
+                    // ANGLE/fxc X4008 warnings — see compileFilteringDriverNoise.
                     setUniforms();
 
-                    // [mtlx-perf] timing for the actual GL compile —
-                    // separate from and nested inside js/graph/preview.jsx's
-                    // buildPreviewRenderable timing, which wraps prep+compile
-                    // together; this isolates just the renderer.compile() call
-                    // below. With the pre-warm (prewarmShaderCompile, called
-                    // by the first-build path and by the handle's
-                    // applyMaterial() below) completed beforehand, this is
-                    // now typically an ANGLE program-cache hit (~15-25ms).
-                    // If the pre-warm was skipped or failed, this is the
-                    // full synchronous compile — measured 2.5-2.9s for real
-                    // preview material shaders.
+                    // [mtlx-perf] timing for renderer.compile() alone.
+                    // With the pre-warm completed beforehand, this is
+                    // typically an ANGLE cache hit (~15-25ms) vs. 2.5-2.9s cold.
                     const __compilePerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                     compileFilteringDriverNoise(renderer, scene, camera);
                     if (window.MTLX_PERF_LOG) {
@@ -4388,20 +2921,9 @@ const createMtlxRenderView = async ({
                         (p) => p.diagnostics && p.diagnostics.runnable === false
                     );
                     if (badProg) {
-                        // LOAD-BEARING ORDER (verified against r128
-                        // sources): restore the OLD material/uniforms onto
-                        // the mesh AND the shell vars FIRST — so the shell
-                        // is back to a fully working state — THEN dispose
-                        // the BAD new material. r128's material.dispose()
-                        // -> deallocateMaterial -> releaseProgram frees its
-                        // GL program and removes it from
-                        // renderer.info.programs; leaving that dispose
-                        // out (or doing it before the restore) would leave
-                        // the bad program sitting in that list, so the
-                        // very next apply's badProg scan above would find
-                        // it again and this would throw forever even after
-                        // the user fixed the actual error. Do NOT reorder
-                        // this without re-verifying that behavior.
+                        // LOAD-BEARING ORDER: restore OLD material/uniforms
+                        // FIRST, then dispose the BAD one — reordering this
+                        // leaves the bad program in renderer.info.programs forever.
                         mesh.material = oldMaterial;
                         material = oldMaterial;
                         uniforms = oldUniforms;
@@ -4421,11 +2943,8 @@ const createMtlxRenderView = async ({
                 };
 
                 // First build: routes through the exact same helper every
-                // later applyMaterial() call uses (see the doc comment on
-                // applyMaterialInternal above) — throws the same styled
-                // Error on a compile failure, caught by the outer
-                // try/catch below (disposePartial() + rethrow), identical
-                // to today's first-build failure behavior.
+                // later applyMaterial() call uses, throwing the same styled
+                // Error on failure — identical to today's first-build path.
                 applyMaterialInternal({ vs, fs, introspected, transparent }, label);
 
                 const animate = () => {
@@ -4434,27 +2953,17 @@ const createMtlxRenderView = async ({
                     if (!isActive()) return;
                     if (controls) {
                         controls.update(); // damping + autoRotate
-                        // Scene-orbit hard containment (null in every other mode): the
-                        // PRIMARY floor/side-wall enforcement now that maxDistance is the
-                        // only OrbitControls-native limit. r128's update() recomputes its
-                        // spherical from position-target each call, so this external clamp
-                        // is stable frame to frame; re-aim at the target so the clamped
-                        // frame stays coherent.
+                        // Scene-orbit hard containment (null elsewhere):
+                        // the primary floor/side-wall enforcement, since
+                        // maxDistance is the only OrbitControls-native limit.
                         if (sceneOrbitClampBox && !sceneOrbitClampBox.containsPoint(camera.position)) {
                             sceneOrbitClampBox.clampPoint(camera.position, camera.position);
                             camera.lookAt(controls.target);
                         }
                     } else if (fallbackSpin) {
                         // OrbitControls script blocked → old behavior.
-                        // Spin the WHOLE assembled scene when present
-                        // (simple-mode shaderball) — rotating just
-                        // `mesh` would leave its neutral parts/backdrop
-                        // stationary while the ball itself spun away
-                        // from them. sceneGroup is null on the
-                        // sphere/cube path, so this is `mesh` there,
-                        // same as before. (fullScene forces
-                        // fallbackSpin false above, so this branch never
-                        // fires for the fixed-camera graph preset.)
+                        // Spins the WHOLE assembled scene when present —
+                        // rotating just `mesh` would leave the backdrop static.
                         (sceneGroup || mesh).rotation.y += 0.005;
                     }
                     setUniforms();
@@ -4470,41 +2979,25 @@ const createMtlxRenderView = async ({
             uniforms, introspected, vs, fs, controls, renderer,
             isTransparent: !!transparent,
             // Live auto-orbit toggle (no regen needed). No-op in
-            // full-scene mode by contract: every full-scene caller hides
-            // the rotate button (js/graph/preview.jsx; docs/viewer with
-            // the scene preset selected - see ViewportControls' showRotate
-            // prop), and letting fallbackSpin turn on would rotate the
-            // authored sceneGroup that's meant to stay put. In sceneOrbit
-            // mode the scene-orbit config block already forces
-            // controls.autoRotate false regardless; this guard keeps the
-            // contract correct even if something calls it anyway.
+            // full-scene mode by contract: every caller hides the rotate
+            // button there, and fallbackSpin would rotate the authored scene.
             setAutoRotate: (on) => {
                 if (fullScene) return;
                 fallbackSpin = !!on;
                 if (controls) controls.autoRotate = !!on;
             },
-            // Fullscreen "fit to ball" toggle (see recomputeCameraFov/
-            // getBallBoundingSphere above) — js/graph/preview.jsx calls
-            // this with the live fullscreen state so the whole shaderball
-            // stays visible while fullscreen, and reverts to today's exact
-            // everyday framing the moment fullscreen ends. FOV-only:
-            // camera position/orientation are never touched. No-op outside
-            // full-scene mode — sphere/cube/simple previews have ordinary
-            // OrbitControls zoom instead.
+            // Fullscreen "fit to ball" toggle: keeps the whole shaderball
+            // visible while fullscreen, FOV-only (camera position/
+            // orientation untouched). No-op outside full-scene mode.
             setFullscreenFit: (on) => {
                 if (!fullScene) return;
                 fullscreenFit = !!on;
                 recomputeCameraFov();
                 camera.updateProjectionMatrix();
             },
-            // Reset the camera framing to this view's default. With
-            // OrbitControls, saveState/reset does it uniformly: for
-            // scene-orbit the state saved at setup is the authored pose +
-            // derived pivot; for sphere/cube/simple views the constructor
-            // snapshotted the standard pull-back pose at creation. The
-            // graph's fixed-camera full scene has controls === null and a
-            // camera that never moves - nothing to do. The no-OrbitControls
-            // fallback restores the standard pose manually.
+            // Resets the camera to this view's default. With OrbitControls,
+            // saveState/reset does it uniformly. The graph's fixed-camera
+            // full scene has controls === null — nothing to do there.
             resetCamera: () => {
                 if (controls) { controls.reset(); return; }
                 if (fullScene) return;
@@ -4521,49 +3014,21 @@ const createMtlxRenderView = async ({
             // UI hide the toggle for unlit previews instead of
             // offering a button that can't do anything.
             hasEnvBackground: () => !!envBgTexture,
-            // Live rotation offset (radians) for the IBL environment.
-            // Preserves official-viewer parity (base +90 Y, see
-            // u_envMatrix above) and adds the user's offset on top.
-            // Uniform mutation takes effect next frame on this
-            // RawShaderMaterial (no material/shader rebuild needed).
-            // FORMERLY an accepted r128 limitation that this only
-            // re-oriented `mesh`'s own u_envMatrix uniform and bgMesh,
-            // leaving sceneGroup's neutral parts/backdrop (lit via
-            // scene.environment, a PMREM render TARGET with no r128
-            // scene.environmentRotation — that lands only in r162+) static
-            // — REVOKED: every qualifying sceneOwnedMaterials entry was
-            // patched at creation (see patchNeutralMaterialEnvRotation and
-            // NEUTRAL_ENV_ROTATION_CHUNK's derivation comment, both above
-            // createMtlxRenderView) with a live `uEnvRotation` uniform;
-            // fan the same rad out to it below instead of rebaking the
-            // whole PMREM per slider tick (which stays reserved for
-            // setEnvironment's Import/Reset, where a full rebake is
-            // unavoidable anyway since the SOURCE texture changes there,
-            // not just its orientation).
+            // Live rotation offset (radians) for the IBL environment —
+            // takes effect next frame via uniform mutation, no rebuild.
+            // Also fans out to sceneGroup's patched uEnvRotation uniforms.
             setEnvRotation: (rad) => {
                 if (uniforms.u_envMatrix) {
                     uniforms.u_envMatrix.value = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad);
                 }
                 envRotationRad = rad;
-                // Rotate the visible backdrop mesh to match — see
-                // BG_BASE/BG_SIGN's derivation comment above
-                // createMtlxRenderView (this is a real geometry
-                // rotation, not a texture-offset hack: bgMesh's
-                // declaration above explains why the old offset.x
-                // write never worked on r128). bgMesh is null for
-                // previews with no env; guard so this stays a no-op
-                // there, mirroring hasEnvBackground()'s contract.
+                // Rotates the visible backdrop mesh to match (a real
+                // geometry rotation, not a texture-offset — see bgMesh's
+                // declaration above for why offset.x never worked on r128).
                 if (bgMesh) bgMesh.rotation.y = BG_BASE + BG_SIGN * rad;
-                // Scene-mode neutral parts: mirror the SAME offset onto
-                // every patched material's live uEnvRotation uniform (see
-                // patchNeutralMaterialEnvRotation above). Guarded per-
-                // material because onBeforeCompile only populates
-                // userData.envRotationUniform once three actually compiles
-                // that material's GL program (typically the first render)
-                // — a call landing before that is a safe no-op here, since
-                // patchNeutralMaterialEnvRotation's onBeforeCompile reads
-                // this same envRotationRad fresh at compile time, so the
-                // eventual first compile still seeds correctly.
+                // Scene-mode neutral parts: mirrors the SAME offset onto
+                // every patched material's live uEnvRotation uniform — a
+                // call before first compile is a safe no-op, seeded fresh.
                 sceneOwnedMaterials.forEach((m) => {
                     const u = m.userData.envRotationUniform;
                     if (u) u.value = envRotationMatrix3(rad);
@@ -4574,23 +3039,13 @@ const createMtlxRenderView = async ({
             // previews so this reads as a full exposure control.
             setEnvExposure: (x) => {
                 if (uniforms.u_envLightIntensity) uniforms.u_envLightIntensity.value = x;
-                // Persist onto the shell too: bindMaterialUniforms()
-                // above seeds a NEW material's u_envLightIntensity from
-                // envExposure (see the DELIBERATE TWEAK comment there),
-                // so a future structural edit's swap keeps whatever
-                // exposure the user last set here instead of resetting
-                // to 1.0.
+                // Persist onto the shell too: bindMaterialUniforms seeds
+                // a NEW material's u_envLightIntensity from envExposure,
+                // so a future swap keeps the user's setting, not resetting to 1.0.
                 envExposure = x;
-                // Scene-mode's sceneGroup meshes (neutral ball parts,
-                // backdrop, grid) are ordinary glTF PBR materials lit by
-                // scene.environment/PMREM rather than the generated
-                // shader's u_envLightIntensity uniform above — their
-                // per-material envMapIntensity is the equivalent
-                // exposure knob, so fan the same value out to every one
-                // of them. Skip `mesh` (material_surface): its exposure
-                // is already driven by the uniform write above, on the
-                // MaterialX RawShaderMaterial — it has no
-                // envMapIntensity property at all.
+                // Scene-mode's sceneGroup meshes are ordinary glTF PBR
+                // materials lit via scene.environment/PMREM — their
+                // envMapIntensity is the equivalent knob. Skip `mesh`.
                 if (sceneGroup) {
                     sceneGroup.traverse((obj) => {
                         if (obj.isMesh && obj !== mesh && obj.material && 'envMapIntensity' in obj.material) {
@@ -4599,12 +3054,9 @@ const createMtlxRenderView = async ({
                     });
                 }
             },
-            // Re-derive the material's blend flags from the stored hwTransparency
-            // verdict and the CURRENT Force Transparency setting, in place — no
-            // shader change is involved (the alpha epilogue is baked at generation
-            // regardless of the setting; the setting only gates these three.js
-            // flags), so a toggle never needs a rebuild. Broadcast to all live
-            // views by setForceTransparency.
+            // Re-derives the material's blend flags from the stored
+            // hwTransparency verdict + CURRENT FORCE_TRANSPARENCY, in
+            // place — no shader change, so a toggle never needs a rebuild.
             refreshTransparencyFlags: () => {
                 if (!material) return;
                 const on = !!handle.isTransparent && FORCE_TRANSPARENCY;
@@ -4612,57 +3064,37 @@ const createMtlxRenderView = async ({
                 material.depthWrite = !on;
                 material.needsUpdate = true;
             },
-            // Live-swap the environment (radiance/irradiance/mips/
-            // background) without a shader rebuild — used by the
-            // Environment dialog's Import.../Reset. Swaps bgMesh's
-            // texture in place (rotation/visibility are left exactly
-            // as they were — this only changes WHAT's shown, never
-            // WHETHER it's shown). Also regenerates scene-mode's PMREM
-            // (see below) so sceneGroup's meshes follow an Import/Reset
-            // too. No-op (safely) on views with no lighting/env
-            // samplers AND no sceneGroup.
+            // Live-swaps the environment without a shader rebuild — used
+            // by the Environment dialog's Import/Reset. Also regenerates
+            // scene-mode's PMREM. No-op on views with no lighting/env.
             setEnvironment: (env) => {
                 if (!env) return;
                 if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
                 if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = env.irradiance;
                 if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
-                // Persist onto the SHELL env state too (not just the
-                // current material's live uniforms) — H-A2b:
-                // bindMaterialUniforms() above reads envRadiance/
-                // envIrradiance/envMips on every FUTURE material swap, so
-                // without this an import/reset here would look right on
-                // the CURRENT material but silently revert to the stale
-                // env on the very next structural edit's apply.
+                // Persist onto the SHELL env state too, not just the
+                // current material's uniforms — otherwise a future swap
+                // silently reverts to the stale env.
                 envRadiance = env.radiance;
                 envIrradiance = env.irradiance;
                 envMips = env.mips;
                 envBgTexture = env.background;
                 // bgMesh is null for previews with no env — guard so
-                // an Import/Reset broadcast (setEnvOverride's
-                // LIVE_VIEWS loop, which also try/catches each call as
-                // a backstop) can't throw calling this standalone.
+                // an Import/Reset broadcast (setEnvOverride's LIVE_VIEWS
+                // loop) can't throw calling this standalone.
                 if (bgMesh) {
                     bgMesh.material.map = envBgTexture;
                     bgMesh.material.needsUpdate = true;
                 }
-                // Scene-mode PMREM regen: unlike the uniform swaps above,
-                // a PMREM render target is baked from a SPECIFIC source
-                // texture at generation time — there is no live-texture-
-                // swap API on it, so the only way to point
-                // scene.environment at the new radiance is to rebuild
-                // the prefiltered target from scratch and swap it in.
-                // try/catch is a pure backstop (mirrors the bgMesh guard
-                // above and setEnvOverride's own per-view try/catch) —
-                // WebGLRenderTarget allocation can only realistically
-                // fail on a lost/invalid GL context.
+                // Scene-mode PMREM regen: a PMREM render target is baked
+                // from a source texture at generation time — no live-swap
+                // API, so rebuild from scratch. try/catch is a pure backstop.
                 if (sceneGroup) {
                     try {
                         const oldPmremRT = pmremRT;
-                        // Fresh PMREMGenerator, never disposed — see the
-                        // creation-time PMREM block above for why
-                        // disposing one would break every other
-                        // PMREMGenerator on the page (r128 shares LOD-
-                        // plane geometries at module scope).
+                        // Fresh PMREMGenerator, never disposed — disposing
+                        // one would break every other PMREMGenerator
+                        // (r128 shares LOD-plane state module-wide).
                         pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(env.radiance);
                         scene.environment = pmremRT.texture;
                         // The OLD render target IS this view's own,
@@ -4674,52 +3106,31 @@ const createMtlxRenderView = async ({
                     }
                 }
             },
-            // Apply a newly-generated (or already-generated, via `srcs`)
-            // material into this SAME shell — the persistent-shell
-            // replacement for calling createMtlxRenderView() again on
-            // every document edit. Returns null (without touching the
-            // still-live material) when superseded/unmounted/stopped at
-            // any point, or when generation/pre-warm bailed. Throws
-            // applyMaterialInternal's styled Error on a real compile
-            // failure — the old material is already restored by then
-            // (see applyMaterialInternal above), so the caller's error
-            // overlay shows over a still-rendering preview. On success,
-            // updates this handle's public fields IN PLACE (see the
-            // comment below) and returns the handle itself.
+            // Applies a new (or already-generated) material into this
+            // SAME shell, instead of calling createMtlxRenderView() again.
+            // Returns null when superseded/bailed; throws on real compile failure.
             applyMaterial: async ({ mx, gen, genContext, renderable, srcs = null, label, isMounted = () => true }) => {
                 const __applyPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
-                // `stopped` is disposePartial's flag (set by dispose()
-                // below) — an apply arriving after teardown must do
-                // nothing, not resurrect GL state on an already-disposed
-                // renderer/context.
+                // `stopped` is disposePartial's flag — an apply arriving
+                // after teardown must do nothing, not resurrect GL state
+                // on an already-disposed renderer/context.
                 if (stopped || !isMounted()) return null;
                 if (!srcs) {
                     srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
                 }
-                // A thrown generation error (bad MaterialX graph etc.) is
-                // NOT caught here — it propagates to the caller exactly
-                // like a first-build failure does, so the UI can show the
-                // same error overlay while THIS handle's old material
-                // keeps rendering underneath it (nothing above this point
-                // has touched the live material yet).
+                // A thrown generation error is NOT caught here — it
+                // propagates like a first-build failure, so the UI shows
+                // the same overlay while the old material keeps rendering.
                 if (!srcs || !isMounted() || stopped) return null;
                 const warmResult = await prewarmShaderCompile({ vs: srcs.vs, fs: srcs.fs, isMounted, label });
-                // 'bailed' (caller superseded this apply mid-warm) or a
-                // lost isMounted(): must not touch the still-rendering
-                // live material — leave it exactly as-is, nothing
-                // disposed, nothing swapped; the superseding call owns
-                // the next apply.
+                // 'bailed' or a lost isMounted(): must not touch the
+                // still-rendering live material — leave it as-is; the
+                // superseding call owns the next apply.
                 if (warmResult === 'bailed' || !isMounted() || stopped) return null;
                 applyMaterialInternal(srcs, label);
-                // Update the handle's public fields IN PLACE. Object-
-                // literal shorthand (`uniforms, introspected, vs, fs` on
-                // this handle, set once at construction below) captures
-                // the VALUE of the shell `let`s at THAT moment — it is
-                // NOT a live binding — so every successful swap must
-                // re-assign these here for external readers
-                // (tryFastUniformUpdate in graph-app.jsx,
-                // bindDroppedTextures above) to see the new material's
-                // state instead of the shell's original one.
+                // Updates the handle's public fields IN PLACE: the
+                // object-literal shorthand below captures a snapshot,
+                // not a live binding, so every swap must re-assign these.
                 handle.uniforms = uniforms;
                 handle.introspected = srcs.introspected;
                 handle.vs = srcs.vs;
@@ -4739,11 +3150,9 @@ const createMtlxRenderView = async ({
                 renderer.render(scene, camera);
                 return renderer.domElement.toDataURL('image/png');
             },
-            // Wrapped (not disposePartial directly) so every disposal path
-            // — callers all go through this handle's dispose() (grepped:
-            // viewer-app.jsx, graph/preview.jsx, node-preview.jsx) — also
-            // deregisters the handle from LIVE_VIEWS, so setEnvOverride's
-            // broadcast never touches a torn-down view.
+            // Wrapped (not disposePartial directly) so dispose() also
+            // deregisters the handle from LIVE_VIEWS — otherwise
+            // setEnvOverride's broadcast could touch a torn-down view.
             dispose: () => {
                 LIVE_VIEWS.delete(handle);
                 disposePartial();
@@ -4759,34 +3168,9 @@ const createMtlxRenderView = async ({
 
 // ---- public API ----
 // ------------------------------------------------------------------
-// Fullscreen helpers (shared by the material viewer and the per-node
-// previewer). Standard + webkit-prefixed variants so Safari works.
-// The Fullscreen spec's UA stylesheet makes the fullscreened element
-// fill the viewport with !important rules, and the render view's
-// ResizeObserver picks up the canvas size change — so callers only
-// need to toggle and (optionally) restyle inner fixed-size elements.
-//
-// CSS-maximize fallback: some hosts never grant native fullscreen at
-// all. VS Code webviews report `document.fullscreenEnabled === false`
-// (the webview host doesn't wire up the platform fullscreen
-// transition) and reject any requestFullscreen() call outright; a
-// plain <iframe> embed without an `allowfullscreen` attribute is
-// blocked by the browser the same way. `nativeFullscreenAvailable()`
-// is checked at TOGGLE time rather than cached once at load, since a
-// host could in principle flip capability after this script runs.
-// When native isn't available, `toggleFullscreen` drives a hand-
-// rolled "CSS maximize" instead: the target element is pinned over
-// the viewport with `position:fixed` + inset 0 and an opaque
-// backdrop, any ancestor whose COMPUTED style would otherwise create
-// a new containing block or clip it (backdrop-filter, transform,
-// filter, perspective, will-change, contain — the graph editor's
-// right panel trips this via `backdrop-blur` + `overflow-hidden`, see
-// graph-app.jsx ~:4770-4778) is neutralized inline, and this module
-// synthesizes a 'fullscreenchange' event on `document` so
-// `watchFullscreen` below (left untouched) and every existing
-// consumer (useFullscreen in mtlx-ui.jsx, graph panel maximize,
-// viewer/node-preview/graph-preview fullscreen buttons) keep working
-// without any caller-side branching.
+// Fullscreen helpers: native requestFullscreen when available; else a
+// CSS-maximize fallback (position:fixed + synthesized 'fullscreenchange')
+// for hosts that never grant it (VS Code webviews, iframes).
 // ------------------------------------------------------------------
 
 // True only when the platform will actually grant a requestFullscreen()
@@ -4794,18 +3178,14 @@ const createMtlxRenderView = async ({
 const nativeFullscreenAvailable = () =>
     !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
 
-// Module-level state for the CSS-maximize fallback. null means
-// "nothing is CSS-maximized right now"; only one element can be
-// maximized at a time (mirrors native fullscreen semantics, and keeps
-// exit() unambiguous — there's exactly one thing to tear down).
-// Shape: { el, savedStyle, savedNeutralized[], savedBodyOverflow,
-//          savedHtmlOverflow, keyHandler, domObserver }
+// Module-level state for the CSS-maximize fallback. null = nothing
+// maximized; only one element can be maximized at a time (mirrors
+// native semantics — keeps exit() unambiguous).
 let cssMaxState = null;
 
 // Saves an element's literal `style` ATTRIBUTE — distinguishing "no
-// style attribute at all" from "style=''" — so enter/exit can restore
-// it exactly later even though el/ancestors may carry framework-
-// authored inline styles (e.g. React style props) we must not clobber.
+// attribute" from "style=''" — so enter/exit can restore it exactly
+// without clobbering framework-authored inline styles (React, etc.).
 const cssMaxSaveStyleAttr = (node) => ({
     node,
     hadAttr: node.hasAttribute('style'),
@@ -4818,14 +3198,9 @@ const cssMaxRestoreStyleAttr = (rec) => {
     } catch (e) { /* node may have been removed from the DOM meanwhile */ }
 };
 
-// Whether `cs` (a getComputedStyle() result) would make its element a
-// containing block for — or otherwise clip — a `position:fixed`
-// descendant. Checked property-by-property per the CSS spec: any
-// non-'none' backdrop-filter/transform/filter/perspective, a
-// will-change listing transform/filter/perspective, or a contain
-// value including paint/layout/strict/content all qualify (contain's
-// `size`/`style` keywords alone do not, so they're intentionally not
-// matched here).
+// Whether `cs` would make its element a containing block for — or
+// clip — a `position:fixed` descendant: checked per the CSS spec
+// (backdrop-filter/transform/filter/perspective/will-change/contain).
 const cssMaxComputedIsTrap = (cs) => {
     try {
         if (cs.backdropFilter && cs.backdropFilter !== 'none') return true;
@@ -4845,11 +3220,9 @@ const cssMaxComputedIsTrap = (cs) => {
 const exitCssMaximize = () => {
     const state = cssMaxState;
     if (!state) return;
-    // Null the module state FIRST, before any teardown work below. The
-    // MutationObserver's callback (and, in principle, a rapid double
-    // toggle) can re-enter this function while teardown is still
-    // running; with the state already null that re-entrant call is a
-    // harmless no-op instead of double-restoring styles or throwing.
+    // Null the module state FIRST, before any teardown below — a
+    // re-entrant call (MutationObserver, rapid double toggle) then
+    // sees null and is a harmless no-op instead of double-restoring.
     cssMaxState = null;
     try { state.domObserver.disconnect(); } catch (e) { /* already gone */ }
     try { document.removeEventListener('keydown', state.keyHandler); } catch (e) { /* ignore */ }
@@ -4869,9 +3242,8 @@ const enterCssMaximize = (el) => {
         const savedStyle = cssMaxSaveStyleAttr(el);
 
         // Ancestor neutralization walk: anything between el and <body>
-        // (inclusive) that would trap a fixed-position descendant gets
-        // its trapping properties inlined away, with its own style
-        // attribute saved first so this is fully reversible.
+        // that would trap a fixed-position descendant gets its trapping
+        // properties inlined away (style attribute saved first, reversible).
         const savedNeutralized = [];
         for (let node = el.parentElement; node; node = node.parentElement) {
             let trap = false;
@@ -4890,18 +3262,9 @@ const enterCssMaximize = (el) => {
             if (node === document.body) break;
         }
 
-        // Pin el over the viewport. zIndex 9990 stays below the 9999
-        // used by body-portaled overlays (mtlx-ui.jsx EnvDialog/popovers)
-        // so those remain usable while maximized. backgroundColor is
-        // needed because the graph/viewer preview containers have no
-        // opaque background of their own — without it, whatever used to
-        // be behind el would show through the gaps during the transition.
-        // The box starts below the site header (js/site-header.js renders
-        // a sticky <header> inside #site-header, a sibling of #root at
-        // z-40) instead of at the very top, so the header stays visible
-        // and clickable rather than being covered by el's z-index 9990.
-        // When the header is absent/hidden (embed-mode iframes hide it),
-        // its rect bottom is 0 and this collapses back to full-viewport.
+        // Pins el over the viewport. zIndex 9990 stays below 9999 (body-
+        // portaled overlays). Starts below the sticky site header so it
+        // stays visible; collapses to full-viewport when the header is hidden.
         try {
             const hdr = document.querySelector('#site-header header');
             const topPx = hdr ? Math.max(0, hdr.getBoundingClientRect().bottom) : 0;
@@ -4938,11 +3301,9 @@ const enterCssMaximize = (el) => {
         const keyHandler = (e) => { if (e.key === 'Escape') exitCssMaximize(); };
         document.addEventListener('keydown', keyHandler);
 
-        // Native fullscreen auto-exits when the fullscreened element
-        // leaves the document; CSS-maximize has no such built-in, so a
-        // MutationObserver stands in for it. Without this, switching
-        // shell views (graph -> docs) while maximized would unmount el
-        // but leave body/html stuck at overflow:hidden forever.
+        // Native fullscreen auto-exits when the element leaves the
+        // document; CSS-maximize has no built-in equivalent, so a
+        // MutationObserver stands in, else body/html get stuck hidden.
         const domObserver = new MutationObserver(() => {
             if (!document.body.contains(el)) exitCssMaximize();
         });
@@ -4967,10 +3328,7 @@ const toggleFullscreen = (el) => {
         if (!nativeFullscreenAvailable()) {
             // CSS-maximize fallback (VS Code webview / no-allowfullscreen
             // iframe). Same "exit whatever's active, else enter on el"
-            // shape as the native branch below, just against cssMaxState
-            // instead of the browser's real fullscreen element — so a
-            // toggle while a DIFFERENT element is maximized exits it
-            // (native parity: it never swaps targets, just closes).
+            // shape as the native branch — native parity: never swaps targets.
             if (cssMaxState) exitCssMaximize();
             else if (el) enterCssMaximize(el);
             return;
@@ -5012,11 +3370,9 @@ const watchFullscreen = (cb) => {
     document.head.appendChild(st);
 })();
 
-// Custom highlight.js theme for the XML shown in the "Document" dialog
-// (XmlDialog in js/graph-app.jsx), matching the site's dark gray-900/800
-// + blue-400-accent palette instead of a stock CDN theme. Background is
-// explicitly transparent so it doesn't paint its own box over the
-// dialog's existing bg-gray-800/95 panel.
+// Custom highlight.js theme for the XML "Document" dialog, matching the
+// site's dark gray-900/800 + blue-400 palette. Background is explicitly
+// transparent so it doesn't paint over the dialog's own panel.
 (() => {
     if (typeof document === 'undefined' || document.getElementById('mtlx-hljs-theme')) return;
     const st = document.createElement('style');

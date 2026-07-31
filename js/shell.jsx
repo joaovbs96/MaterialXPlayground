@@ -1,23 +1,11 @@
-// shell.jsx — the single-page shell for index.html.
+// shell.jsx — single-page shell for index.html.
 //
-// Implements a lazy-loading, keep-alive multi-view shell that hosts the
-// three formerly-standalone pages (docs / material viewer / node graph
-// editor) as views inside one app, switched via a lightweight hash router
-// (#!viewer, #!graph; anything else — including empty and legacy
-// #/lib/group/name docs permalinks — means docs).
-//
-// Each view's vendored + local script/CSS dependencies are fetched only
-// the first time that view becomes active, then the view is kept mounted
-// (hidden via CSS `display: none`, not unmounted) so switching back is
-// instant and preserves state. Each top-level view component
-// (App / MaterialViewerApp / NodeGraphApp, and Node3DPreview inside
-// docs) accepts an `active` boolean prop (default true) so it can pause
-// expensive work (e.g. render loops) while hidden — this shell always
-// passes `active={activeView === '<view>'}` explicitly.
-//
-// Embed mode renders a focused, docs-only view for the graph editor's
-// DocsDialog iframe (index.html?embed=1#/lib/group/name) — no header/
-// footer/other views, and the router is pinned to 'docs'. See EMBED below.
+// Lazy-loading, keep-alive multi-view shell hosting the three former
+// standalone pages (docs / material viewer / node graph editor) via a
+// hash router (#!viewer, #!graph; anything else means docs). Each
+// view's deps load once on first activation, then stay mounted (hidden
+// via CSS) so switching back is instant. Embed mode (?embed=1) renders
+// a focused docs-only view for the graph editor's DocsDialog iframe.
 
 // EMBED is set by index.html's <head> bootstrap script when this page is
 // loaded as ?embed=1 inside the graph editor's docs dialog iframe.
@@ -29,12 +17,7 @@ const EMBED = !!window.__MTLX_EMBED;
 const IN_VSCODE = !!window.__MTLX_VSCODE__;
 
 // ------------------------------------------------------------------
-// WebGL2 capability probe (module-scope, cached — a browser's WebGL2
-// support can't change over the lifetime of a page, so this only ever
-// touches the DOM/creates a throwaway canvas once). The viewer and graph
-// views hard-require WebGL2 for their 3D render loops; docs only uses it
-// for the embedded node-preview thumbnails, so its absence there is a
-// soft warning rather than a block. See Shell's renderView below.
+// WebGL2 capability probe, cached — a page's WebGL2 support is static.
 // ------------------------------------------------------------------
 let __hasWebGL2 = null;
 function hasWebGL2() {
@@ -49,12 +32,7 @@ function hasWebGL2() {
 }
 
 // ------------------------------------------------------------------
-// Script/CSS loading utilities (module scope, cached by URL so repeated
-// activations of a view are no-ops after the first).
-// Note: <script>/<link> tags have no fetch-cache-mode equivalent, so these
-// two loaders are left as-is; the vendored files they load are
-// version-pinned (see scripts/vendor.mjs), so browser cache staleness is
-// harmless there.
+// Script/CSS loaders, cached by URL; vendor files are version-pinned.
 // ------------------------------------------------------------------
 const __scriptCache = new Map();
 function loadScript(src) {
@@ -86,32 +64,15 @@ function loadCss(href) {
     return p;
 }
 
-// ------------------------------------------------------------------
-// Lazy JSX loading via fetch + Babel.transform. Shares the __scriptCache
-// map/dedup with loadScript (keyed by src) — safe since .jsx src strings
-// never collide with the CDN URLs used by loadScript.
-// ------------------------------------------------------------------
-// IMPORTANT: injected code below IS wrapped in an IIFE, and this is
-// REQUIRED, not dangerous. babel-standalone's own text/babel script
-// processing never shares global-lexical scope across files either — it
-// executes each script inside its own function scope, with cross-file
-// access flowing exclusively through each file's explicit window.*
-// exports (e.g. `window.X = X`). Two lazily-injected files can therefore
-// both declare a top-level `const EMBED` (js/node-preview.jsx and
-// js/docs-app.jsx) without colliding, exactly as they never collided when
-// served as separate text/babel tags. The module-flavored-output
-// assertion below plus the global-presence check in the view-loading
-// effect remain the correct mitigations for genuine parse/load failures.
+// Lazy JSX loading via fetch + Babel.transform, injected in an IIFE —
+// REQUIRED, not accidental: babel-standalone gives each script its own
+// function scope too, so lazy files can redeclare top-level consts.
 async function loadJsxApp(src) {
     if (__scriptCache.has(src)) return __scriptCache.get(src);
     const p = (async () => {
-        // These files are fetched lazily, well after page load (only on a
-        // view's first activation), so a browser hard-refresh never gets a
-        // chance to revalidate them — against static hosts with heuristic
-        // caching, a stale cached copy can persist indefinitely. `cache:
-        // 'no-cache'` forces a conditional request every time (sends
-        // If-Modified-Since/ETag, so an unchanged file is a cheap 304 and an
-        // edited one is a fresh 200) without disabling caching outright.
+        // Fetched lazily, after page load, so hard-refresh never
+        // revalidates these against heuristic caching. `cache:
+        // 'no-cache'` forces a conditional request each time instead.
         const res = await fetch(src, { cache: 'no-cache' });
         if (!res.ok) throw new Error('Failed to fetch ' + src + ': ' + res.status);
         const source = await res.text();
@@ -127,12 +88,9 @@ async function loadJsxApp(src) {
             throw new Error(src + ' transformed to module code (unexpected import/export) — cannot inject as a classic script');
         }
         const el = document.createElement('script');
-        // Execute inside a private function scope, replicating how
-        // babel-standalone runs each text/babel script: top-level const/let
-        // stay file-local (two files may declare the same identifier, e.g.
-        // EMBED in node-preview.jsx AND docs-app.jsx), and cross-file access
-        // flows exclusively through each file's explicit window.* exports —
-        // exactly as on the former standalone pages.
+        // Runs in a private function scope (mirrors babel-standalone's
+        // per-script scoping — see the IIFE note above), so top-level
+        // const/let here stay file-local, e.g. EMBED redeclared safely.
         el.textContent = ';(function () {\n' + code + '\n})();';
         document.head.appendChild(el);
     })();
@@ -145,29 +103,9 @@ async function loadJsxApp(src) {
 // becomes a no-op instead of a fatal duplicate-declaration injection.
 __scriptCache.set('js/mtlx-engine.js', Promise.resolve());
 
-// ------------------------------------------------------------------
-// Per-view dependency manifests (vendored + local scripts, IN ORDER). This
-// is the single source of truth for what each view needs — there's no
-// longer a separate standalone HTML page per view to keep in sync with.
-// The CDN URLs these scripts once loaded from now resolve to pinned copies
-// under vendor/ instead — see scripts/vendor.mjs.
-//
-// Every entry is split into `scripts` (plain JS, no Babel — loaded via
-// loadScript) and `babelScripts` (type="text/babel" JSX/ESNext files —
-// loaded via loadJsxApp, which fetches + Babel.transform()s + injects
-// them). This split is deliberate rather than inferring the loader from
-// the file extension: e.g. the JSZip and React Flow vendored bundles are
-// plain pre-built UMD/JS with a .js URL, so they belong in `scripts`,
-// while local JSX-adjacent/ESNext sources belong in `babelScripts`.
-//
-// js/mtlx-engine.js is NOT listed in any manifest below. index.html loads
-// it EAGERLY, exactly once, via its own <script type="text/babel"> tag
-// before the shell ever runs — all three views depend on the globals it
-// defines, but none of them may re-list it here: the lazy loader has no
-// visibility into that eager tag, so a manifest entry would inject a
-// second copy and crash with a duplicate top-level `let`/`const`
-// declaration (global-lexical scope, not module scope). See the
-// __scriptCache pre-seed right after loadJsxApp's definition above.
+// Per-view manifests (scripts: plain JS; babelScripts: JSX/ESNext, via
+// Babel). js/mtlx-engine.js is NOT listed: index.html loads it eagerly
+// once — re-listing it here would inject a duplicate const/let and crash.
 const VIEW_DEPS = {
     home: {
         css: [],
@@ -212,11 +150,9 @@ const VIEW_DEPS = {
             'vendor/jszip/jszip.min.js',
             'vendor/reactflow/index.js',
             'vendor/dagre/dagre.min.js',
-            // Lazy-loaded only because the "Document" dialog (XmlDialog in
-            // js/graph-app.jsx) wants XML syntax highlighting — not needed
-            // for the rest of the graph view. Core bundle + the xml language
-            // pack explicitly, so highlighting works even if a given
-            // vendored build's "common languages" set ever drops markup/xml.
+            // Only for XmlDialog's XML syntax highlighting. Core bundle
+            // + the xml language pack explicitly, so highlighting works
+            // even if the vendored build's "common languages" drops xml.
             'vendor/highlightjs/highlight.min.js',
             'vendor/highlightjs/xml.min.js',
         ],
@@ -235,29 +171,17 @@ const VIEW_DEPS = {
     },
 };
 
-// ------------------------------------------------------------------
-// Per-view dependency loader — fetches a view's CSS/scripts/babelScripts
-// then its app bundle, in VIEW_DEPS order (see loop below; logic moved
-// verbatim out of the view-mount effect, not rewritten). Memoized per
-// view in a module-level map so concurrent callers share one in-flight
-// load — the mount effect below AND, in part 2, the graph editor's
-// inline docs dialog (via window.mtlxLoadViewDeps) can both request the
-// same view without double-loading it. On failure the memo entry is
-// deleted so a later retry (e.g. re-opening the view) can re-attempt it.
+// Loads a view's CSS/scripts/babelScripts + app bundle, in VIEW_DEPS
+// order. Memoized per view so the mount effect and the graph editor's
+// docs dialog share one in-flight load; failures clear the memo to retry.
 const __viewDepsPromises = new Map();
 async function loadViewDeps(viewName) {
     if (__viewDepsPromises.has(viewName)) return __viewDepsPromises.get(viewName);
     const dep = VIEW_DEPS[viewName];
     const p = (async () => {
-        // js/mtlx-assets.js starts its local-vs-remote probe at parse
-        // time (before this shell even mounts), but resolves it
-        // asynchronously (a fetch). Awaiting it here, once, before any
-        // view's deps load, is what lets every lazily-loaded view below
-        // (docs/viewer/graph, and everything they in turn load) treat
-        // window.MtlxAssets's isLocal()/repoUrl()/resourcesRoot() as a
-        // plain SYNCHRONOUS API instead of each having to await
-        // readiness itself — this is the single choke
-        // point all lazy view loading passes through.
+        // MtlxAssets starts its local-vs-remote probe at parse time but
+        // resolves async; awaiting it once here lets every lazy view
+        // treat isLocal()/repoUrl()/resourcesRoot() as synchronous below.
         await window.MtlxAssets.ready;
         for (const href of dep.css) await loadCss(href);
         for (const src of dep.scripts) await loadScript(src);
@@ -288,18 +212,15 @@ function Shell() {
     // previews don't render). Not per-view state since it's docs-only.
     const [docsWebglBannerDismissed, setDocsWebglBannerDismissed] = React.useState(false);
 
-    // Hash router: '#!viewer' / '#!graph' select those views; '#!docs' or
-    // any hash starting with '#/' (legacy '#/lib/group/name' docs
-    // permalinks) means docs, left untouched for docs-app.jsx's own
-    // hash-based selection logic to consume unmodified; everything else
-    // (empty, '#', '#!home') means the home landing view.
+    // Hash router: '#!viewer'/'#!graph' select those views; '#!docs' or
+    // any '#/...' (legacy permalink) means docs, left untouched for
+    // docs-app.jsx's own hash logic; anything else means the home view.
     React.useEffect(() => {
         const parseHash = () => {
             if (EMBED) return 'docs';
-            // js/site-header.js (a synchronous plain script loaded before
-            // this one) is the single source of truth for hash->view
-            // routing; the inline fallback is defensive-only and should
-            // never actually run.
+            // js/site-header.js is the source of truth for hash->view
+            // routing; this inline fallback is defensive-only and
+            // should never actually run.
             return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
         };
         const onNav = () => setActiveView(parseHash());
@@ -318,11 +239,9 @@ function Shell() {
     React.useEffect(() => {
         setViewState((prev) => {
             if (prev[activeView].mounted) return prev;
-            // viewer/graph hard-require WebGL2 to render at all — skip
-            // fetching their (sometimes sizeable) dependency bundles for
-            // nothing and go straight to the blocking message below
-            // instead. Docs has no such requirement (see hasWebGL2 above)
-            // and still loads normally.
+            // viewer/graph hard-require WebGL2 — skip fetching their
+            // dependency bundles and go straight to the blocking
+            // message below instead. Docs works fine without it.
             if ((activeView === 'viewer' || activeView === 'graph') && !hasWebGL2()) {
                 return { ...prev, [activeView]: { mounted: true, status: 'no-webgl2' } };
             }
@@ -365,51 +284,9 @@ function Shell() {
         if (!st.mounted) return null;
         const dep = VIEW_DEPS[view];
         const isActive = activeView === view;
-        // Each view's own top-level markup expects a specific ancestor
-        // wrapper contract, built here by wrapClass below — index.html's
-        // sole DOM host is one #root div (class `flex-1 relative min-h-0`),
-        // and every view's padded/max-width wrapper lives inside it,
-        // constructed by renderView rather than authored in the HTML:
-        //   - home:   p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto
-        //             custom-scrollbar
-        //     -> HomeApp's content has no fixed height and can grow taller
-        //        than #root; md:min-h-0 lets this flex item shrink to
-        //        #root's definite height instead of overflowing it, and
-        //        md:overflow-y-auto scrolls the overflow internally (like
-        //        docs/viewer below) instead of painting over the footer
-        //        that follows #root. Below md the body page-scrolls
-        //        naturally (unchanged).
-        //   - docs:   p-2 sm:p-6 flex-1 md:min-h-0
-        //     -> App's own root div is `md:h-full md:flex md:flex-col
-        //        md:min-h-0`, i.e. it needs a percentage-height chain so it
-        //        can scroll its OWN panels internally instead of the page,
-        //        on md+ screens (mirrors index.html's <body> having
-        //        `md:h-screen`, which every view shares).
-        //   - viewer (browser): '' (no wrapper classes)
-        //     -> MaterialViewerApp's own root div is `absolute inset-0`,
-        //        positioning against the nearest `position: relative`
-        //        ancestor with a definite height — that's #root itself
-        //        (flex-1 relative min-h-0), NOT this wrapper (which stays
-        //        `position: static`, same rationale as the graph case
-        //        below). It's a full-bleed, graph-editor-style stage now;
-        //        the old padded/max-width column with natural whole-page
-        //        scroll is gone.
-        //   - viewer (VS Code): flex-1 min-h-0
-        //     -> MaterialViewerApp's own root switches to a percentage-
-        //        height chain (h-full min-h-0 flex flex-col, see
-        //        viewer-app.jsx) so the render viewport can fill all space
-        //        below the header — min-h-0 is REQUIRED so this flex item
-        //        shrinks to #root's definite height instead of overflowing
-        //        it. Unchanged by the browser redesign above.
-        //   - graph:  no wrapper classes.
-        //     -> NodeGraphApp's own root div is `absolute inset-0`, which
-        //        positions against the nearest `position: relative`
-        //        ancestor with a definite height — that's #root itself
-        //        (flex-1 relative min-h-0), NOT this wrapper, which
-        //        deliberately stays `position: static` so it doesn't hijack
-        //        that positioning context. The wrapper's own (collapsed,
-        //        since its child is taken out of flow) box size is
-        //        irrelevant to how NodeGraphApp paints.
+        // Wrapper classes mirror each view's own root element: absolute
+        // roots (viewer/graph) need #root as `relative` ancestor; flex
+        // roots (home/docs) need min-h-0 to shrink instead of overflowing.
         const wrapClass = {
             home: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             docs: EMBED ? 'p-2 flex-1 md:min-h-0' : 'p-2 sm:p-6 flex-1 md:min-h-0',
@@ -459,13 +336,9 @@ function Shell() {
                 // other views' wrapper contract.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else if (view === 'docs') {
-                // Gives App the wrapper contract its own root markup expects
-                // (`max-w-[1600px] mx-auto md:h-full`) so App's own
-                // `md:h-full` resolves correctly. Docs works fine without
-                // WebGL2 (unlike viewer/graph above) — just show a
-                // dismissible warning above content instead of blocking,
-                // since only the embedded node-preview 3D thumbnails are
-                // affected.
+                // Gives App the wrapper its root markup expects so its
+                // own `md:h-full` resolves. Docs works without WebGL2
+                // (only 3D previews are affected) — warn, don't block.
                 const webglBanner = !hasWebGL2() && !docsWebglBannerDismissed ? (
                     <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-amber-600/50 bg-amber-900/30 text-amber-200 text-xs px-3 py-2">
                         <span>WebGL2 is unavailable in this browser — node documentation works, but 3D previews won't render.</span>
@@ -480,11 +353,9 @@ function Shell() {
                     </div>
                 ) : null;
                 content = webglBanner ? (
-                    // Becomes a percentage-height flex column so the banner
-                    // takes its natural height and App gets the REMAINING
-                    // height via md:flex-1/md:min-h-0 on its own inner
-                    // wrapper, instead of App's md:h-full stealing space
-                    // from the banner (or vice versa).
+                    // Percentage-height flex column: banner takes its
+                    // natural height, App gets the rest via md:flex-1/
+                    // md:min-h-0, instead of md:h-full stealing space.
                     <div className="max-w-[1600px] mx-auto md:h-full md:flex md:flex-col md:min-h-0">
                         {webglBanner}
                         <div className="md:flex-1 md:min-h-0">{rendered}</div>
@@ -493,12 +364,9 @@ function Shell() {
                     <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>
                 );
             } else if (view === 'viewer') {
-                // Browser: no wrapper at all — MaterialViewerApp's own root
-                // is `absolute inset-0`, a full-bleed stage that positions
-                // directly against #root (mirrors the graph case below).
-                // Under VS Code: a height pass-through (w-full h-full
-                // min-h-0) so MaterialViewerApp's own percentage-height
-                // chain resolves against a definite size.
+                // Browser: no wrapper — MaterialViewerApp's `absolute
+                // inset-0` root positions directly against #root. VS
+                // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
             } else {
                 // graph: no extra container — NodeGraphApp fills #root
@@ -515,12 +383,9 @@ function Shell() {
     };
 
     return (
-        // Plays the role each view's real <body> (flex flex-col) played for
-        // its own wrapper below it, so `flex-1`/`md:min-h-0` on the docs and
-        // viewer wrappers above behave exactly as they did standalone. Fills
-        // #root exactly via h-full/w-full (percentage sizing off of #root's
-        // definite height from `flex-1` in the real <body>'s flex column).
-        // Deliberately NOT `position: relative` — see the graph case above.
+        // Plays the role each view's real <body> (flex flex-col) played,
+        // so flex-1/md:min-h-0 above behave as they did standalone; fills
+        // #root via h-full/w-full. Deliberately NOT position: relative.
         <div className="h-full w-full flex flex-col">
             {renderView('home')}
             {renderView('docs')}
@@ -531,10 +396,7 @@ function Shell() {
 }
 
 window.Shell = Shell;
-// Consumed by the graph editor's inline docs dialog (part 2) to preload a
-// view's deps before mounting its component directly (instead of routing
-// through this shell). Shares the module-level memo map with the mount
-// effect above, so calling it here is idempotent with the shell's own
-// view mounting — whichever caller asks first does the loading, the
-// other just awaits the same promise.
+// Lets the graph editor's docs dialog preload a view's deps directly
+// (bypassing the shell). Shares the mount effect's memo map, so
+// whichever caller asks first does the loading; the other just awaits.
 window.mtlxLoadViewDeps = loadViewDeps;

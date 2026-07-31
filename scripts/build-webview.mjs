@@ -1,39 +1,10 @@
 #!/usr/bin/env node
 // scripts/build-webview.mjs
-//
-// Generates vscode_extension/media/webview.html from index.html: the
-// webview needs the exact same <head>/<body> skeleton as the real site
-// (vendored library tags, inline embed-mode detection, the boot script,
-// every style block) PLUS a handful of webview-only insertions (a
-// Content-Security-Policy meta tag, a <base> tag so relative URLs resolve
-// against the webview-resource root, a bootstrap <script> tag, and a
-// :focus{outline:none} rule VS Code's Chromium needs but a real browser
-// doesn't). Before this script existed that combination was a
-// hand-maintained mirror a human had to remember to update every time
-// index.html changed — this script does the splice instead, so
-// `npm run build` (or `npm run build:webview`) regenerates the mirror and
-// `npm run check` (via `--check`) fails CI the moment it drifts.
-//
-// The fragments below (CSP_BLOCK / BASE_BLOCK / BOOTSTRAP_BLOCK /
-// FOCUS_CSS_BLOCK) are the webview-only insertions, copied verbatim from
-// the committed webview.html and kept here as the source of truth going
-// forward: index.html supplies the shared skeleton, this file supplies
-// the webview-only parts, and webview.html is pure generated output. To
-// change shared markup, edit index.html. To change a webview-only
-// insertion, edit the matching fragment constant below.
-//
-// Usage:
-//   node scripts/build-webview.mjs           (Re)generate
-//                                             vscode_extension/media/webview.html
-//                                             by splicing the fragments
-//                                             below into a copy of
-//                                             index.html.
-//   node scripts/build-webview.mjs --check   Verify only: rebuild in
-//                                             memory and byte-compare
-//                                             against the committed file.
-//                                             Writes nothing. Non-zero
-//                                             exit on drift (or on any
-//                                             anchor/sanity failure).
+// Regenerates vscode_extension/media/webview.html by splicing index.html's
+// shared skeleton with the webview-only fragments below (CSP/<base>/
+// bootstrap/focus CSS); `npm run check` (--check) fails CI on drift.
+// Usage: node scripts/build-webview.mjs [--check] — --check verifies only,
+// writes nothing.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -50,10 +21,9 @@ const RELATIVE_OUTPUT_PATH = path.relative(REPO_ROOT, OUTPUT_PATH);
 
 const CHECK_MODE = process.argv.includes("--check");
 
-// Canonicalize to LF so anchor matching and the --check byte-compare are
-// insensitive to how git checked the files out (autocrlf=true on a Windows
-// clone yields CRLF; .gitattributes now pins these to LF, but this keeps the
-// build correct regardless of local git config).
+// Canonicalize to LF so anchor matching and the --check byte-compare
+// are unaffected by git's autocrlf setting (.gitattributes pins these
+// files to LF regardless).
 const normalizeEol = (s) => s.replace(/\r\n/g, "\n");
 
 function log(...args) {
@@ -66,37 +36,25 @@ function fail(message) {
 }
 
 // ---------------------------------------------------------------------
-// Anchors: content-based splice points into index.html. Both are exact
-// literal strings verified (as of writing) to occur EXACTLY ONCE in
-// index.html — see the anchor-count guard in build() below, which
-// hard-fails rather than silently splicing into the wrong spot (or
-// spraying the insertion across multiple spots) if index.html is ever
-// restructured.
+// Anchors: exact literal strings that must occur exactly once in
+// index.html (enforced by the anchor-count guard in build() below).
 // ---------------------------------------------------------------------
 
-// The viewport meta tag: stable head boilerplate (unlike <title>, which
-// churns with SEO work) that sits right before where the webview-only
-// head insertions belong. CSP/<base> must precede every URL-bearing tag
-// below them (per the HTML spec, <base> only affects URLs parsed AFTER
-// it), so they're spliced in immediately after this anchor rather than at
-// the very top of <head>.
+// The viewport meta tag: stable boilerplate sitting right before the
+// webview-only head insertions. CSP/<base> must precede every URL-bearing
+// tag below them (HTML spec: <base> only affects URLs parsed after it).
 const HEAD_ANCHOR = '    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n';
 
-// The </style></body> boundary: there are TWO </style> tags in
-// index.html (one for the embed-mode style block near the top of <head>,
-// one closing the big style block at the end of <body>) so a bare
-// last-</style> heuristic is not safe here — this anchor pins to the one
-// immediately followed by </body>, which is unique.
+// The </style></body> boundary: index.html has TWO </style> tags (one in
+// the embed-mode style block, one ending body's style block), so this
+// anchor pins to the one immediately before </body> to stay unique.
 const STYLE_ANCHOR = '    </style>\n</body>';
 
 // ---------------------------------------------------------------------
-// Fragments: webview-only insertions, copied verbatim from the committed
-// webview.html (this file is now their source of truth — edit them here,
-// not in the generated output). Literal `${...}` sequences inside these
-// fragments are runtime placeholders substituted by
-// vscode_extension/src/editorProvider.js's buildHtml(), NOT things this
-// script should interpolate — they're escaped as `\${` below so the
-// template literals treat them as plain text.
+// Fragments: webview-only insertions, copied verbatim from committed
+// webview.html (now their source of truth). Literal `${...}` inside them
+// are runtime placeholders for editorProvider.js's buildHtml(), escaped
+// as `\${` below so the template literals keep them as plain text.
 // ---------------------------------------------------------------------
 
 // Banner: replaces the old hand-maintained-mirror notice with one
@@ -208,10 +166,9 @@ const BOOTSTRAP_BLOCK = `    <!-- Bootstrap: MUST be the first script to run, be
          vscode_extension/media/bootstrap.js. -->
     <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}"></script>`;
 
-// Webview-only :focus{outline:none} — VS Code's Chromium build shows a
-// native focus outline a regular browser's :focus-visible heuristics
-// would normally suppress; NOT mirrored back to index.html / the real
-// site.
+// Webview-only :focus{outline:none}: VS Code's Chromium shows a native
+// focus outline that a regular browser's :focus-visible heuristics
+// suppress; not mirrored back to index.html / the real site.
 const FOCUS_CSS_BLOCK = `
         /* WEBVIEW-ONLY — do NOT mirror this rule back to index.html / the
            real site. VS Code webview only (not in index.html / the real
@@ -238,11 +195,9 @@ function countOccurrences(haystack, needle) {
   return count;
 }
 
-/** Split `text` on `anchor`, asserting the anchor occurs exactly once
- * (hard-fails otherwise — see the module comment). Returns [before, after].
- * Uses split/indexOf, never String.replace: the fragments above contain
- * literal `$` sequences, and replace()'s replacement-string semantics
- * (`$&`, `$'`, ...) would silently corrupt them. */
+/** Split `text` on `anchor`; hard-fails unless it occurs exactly once.
+ * Uses indexOf, never String.replace — the fragments contain literal
+ * `$` sequences that replace()'s `$&`/`$'` semantics would corrupt. */
 function splitOnAnchor(text, anchor, label) {
   const count = countOccurrences(text, anchor);
   if (count !== 1) {

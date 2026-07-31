@@ -1,51 +1,23 @@
-// js/graph-app.jsx — the node graph editor's top-level view component
-// (NodeGraphApp), lazy-loaded by js/shell.jsx as the graph view's `app`
-// bundle (see VIEW_DEPS.graph there). Uses the same literal \uXXXX
-// escape-text convention as the rest of this codebase (e.g. an em-dash may
-// appear as the source text —, not an actual glyph) — do not normalize or
-// "fix" these.
-//
-// This file now holds only NodeGraphApp itself; the document model, layout/
-// color, node card, per-node preview, catalog, dialogs and panel pieces it
-// used to also define have been split out (pure move, no behavior change)
-// into js/graph/model.jsx, js/graph/style.jsx, js/graph/node-component.jsx,
-// js/graph/preview.jsx, js/graph/catalog.jsx, js/graph/dialogs.jsx and
-// js/graph/panels.jsx — all loaded before this file (see js/shell.jsx's
-// VIEW_DEPS.graph) and consumed here as window globals like the rest of the
-// shared engine API.
+// js/graph-app.jsx — node graph editor's top-level view (NodeGraphApp),
+// lazy-loaded by js/shell.jsx as the graph view's `app` bundle (see
+// VIEW_DEPS.graph). Uses the same literal \uXXXX escape-text convention
+// as the rest of the codebase — do not normalize these.
+// Holds only NodeGraphApp; the model/layout/style/node-card/preview/
+// catalog/dialogs/panels pieces it used to define now live in
+// js/graph/{model,style,node-component,preview,catalog,dialogs,panels}.jsx
+// as window globals, loaded first (js/shell.jsx VIEW_DEPS.graph).
 
-        // node-graph — drag & drop a MaterialX document and see its node
-        // tree laid out as an interactive React Flow graph. Accepts exactly
-        // what the material viewer accepts:
-        //   - a single .mtlx file
-        //   - a .mtlx plus loose files (xi:includes resolve against them)
-        //   - a .mtlx plus a (sub)folder      (directory drops)
-        //   - a .zip containing any of the above
-        // The graph is built from the REAL parsed document via the MaterialX
-        // JS API (getMxEnv / readFromXmlString) — not from regexing the XML —
-        // so connections resolve exactly the way MaterialX resolves them.
+        // node-graph — drag & drop a MaterialX document (file, folder, or
+        // zip; xi:includes resolve) and view it as an interactive React
+        // Flow graph built from the real parsed doc, not by regexing XML.
 
         const RF = window.ReactFlow;
         const ReactFlowComp = RF.ReactFlow || RF.default;
         const { Background, MiniMap, Panel, Handle, Position, MarkerType } = RF;
 
-        // Port-picker popover (item 2): offered when a connection drag ends
-        // on a NODE BODY instead of a precise handle (see onConnectEnd in
-        // NodeGraphApp below) — lets the user pick which compatible port on
-        // that node to wire up. Styled to match AddNodeSearch (js/graph/
-        // panels.jsx) — same container chrome, same row layout (name left,
-        // muted type tag right), same footer hint bar — plus a filter input
-        // since AddNodeSearch's type-filter dropdown doesn't apply here
-        // (every candidate is already type-compatible). A real component
-        // (not a plain render helper) because it owns its own filter-text
-        // and selection-index state across re-renders while it's open.
-        // portPicker: { x, y, candidates, targetName, replaceEdge? } —
-        // replaceEdge (set only when the picker was opened by dropping a
-        // GRABBED wire on a node body) is consumed by the parent's pickPort,
-        // not here; rootRef is forwarded
-        // so the parent's outside-pointerdown-closes effect keeps working;
-        // Escape is handled by the parent's useEscapeToClose (window-level),
-        // so this component doesn't need its own Escape handling.
+        // Port-picker popover (item 2): shown when a connection drag ends
+        // on a node body (not a precise handle) so the user can pick which
+        // compatible port to wire up; owns its own filter/selection state.
         const PORT_PICKER_ROW_H = 26;
         function PortPickerPopover({ portPicker, rootRef, onPick }) {
             const [q, setQ] = React.useState('');
@@ -128,15 +100,9 @@
             );
         }
 
-        // Types (legend) tristate segmented control — minimize / default
-        // (types used in the current scope) / show-all, in that fixed left-
-        // to-right order, each button jumping straight to its own target
-        // state rather than toggling relative to the current one. Rendered
-        // identically in both the open card's header and the minimized pill
-        // (to the right of its color dots) so the same three affordances are
-        // always on screen no matter which state the legend is in.
-        // stopPropagation matters inside the pill, which is itself a
-        // clickable container (clicking it anywhere else restores default).
+        // Types (legend) tristate control — minimize / default / show-all,
+        // each button jumping straight to its own target state. Rendered
+        // identically in the card header and the minimized pill.
         function LegendTriState({ legendOpen, legendShowAll, setLegendOpen, setLegendShowAll }) {
             const state = !legendOpen ? 'min' : (legendShowAll ? 'all' : 'default');
             const SEGMENTS = [
@@ -167,11 +133,9 @@
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
-            // True when hosted inside the VS Code extension's webview (set by
-            // its bootstrap before any site script runs). The editor is bound
-            // to a single opened .mtlx file, so browser-only / multi-document
-            // affordances (new/import/presets, drag-drop, send-to-viewer) are
-            // hidden. Always false in the plain browser.
+            // True when hosted in the VS Code extension's webview (set by
+            // its bootstrap before any script runs); bound to a single
+            // opened .mtlx file, so browser-only affordances are hidden.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
@@ -184,38 +148,26 @@
             const [error, setError] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
-            // Optimistic overlay for scope transitions (entering/leaving a
-            // nodegraph): buildScope + toFlow in the flow-rebuild effect
-            // below run synchronously and can take a beat on a big graph,
-            // with zero feedback otherwise. Set by changeScope() (below,
-            // after scopeRef is declared) and cleared unconditionally at
-            // the end of the flow-rebuild effect. Kept separate from
-            // `busy` (document load/import) — the two overlays are never
-            // meant to be shown for the same reason.
+            // Optimistic overlay for scope transitions (can take a beat on
+            // a big graph): set by changeScope(), cleared at the flow-
+            // rebuild effect's end. Separate from `busy` (doc load/import).
             const [scopeBusy, setScopeBusy] = React.useState(false);
-            // Generic busy overlay for heavy, doc-mutating keyboard actions
-            // that otherwise give zero feedback (Ctrl+G encapsulate,
-            // deleting a nodegraph) — a label string while deferred behind
-            // the same double-rAF idiom changeScope uses (below), null when
-            // idle. Kept separate from scopeBusy — the two never fire for
-            // the same reason (this one for edit actions, that one for
-            // scope navigation) — rendered as its own LoadingOverlay
-            // alongside scopeBusy's.
+            // Busy overlay for heavy doc-mutating keyboard actions (Ctrl+G
+            // encapsulate, deleting a nodegraph): a label string while
+            // deferred via the same double-rAF idiom as changeScope, else null.
             const [actionBusy, setActionBusy] = React.useState(null);
             // Compact-mode threshold (below Tailwind's `md` breakpoint):
-            // drives the HUD's label/chip hiding, panel auto-collapse, and
-            // minimap suppression. Declared here, ABOVE the panel-open
-            // states below, since their lazy initializers read it.
+            // drives HUD label hiding, auto-collapse, and minimap
+            // suppression; declared above panel states, which read it.
             const narrow = useNarrowPane();
             // The type-color legend (bottom left) can be collapsed to a chip.
             const [legendOpen, setLegendOpen] = React.useState(!narrow);
             // Legend "+" toggle: show every known TYPE_COLORS entry, not just
             // the types present in the current scope.
             const [legendShowAll, setLegendShowAll] = React.useState(false);
-            // MiniMap visibility toggle (bottom right). Plain ephemeral state,
-            // not stashed/restored across narrow-mode transitions like
-            // paramsOpen/legendOpen — narrow mode already hides the minimap
-            // outright (see `!narrow` below), so there's nothing to preserve.
+            // MiniMap visibility toggle (bottom right). Plain ephemeral
+            // state, unlike paramsOpen/legendOpen — narrow mode already
+            // hides the minimap outright, so nothing needs preserving.
             const [minimapOpen, setMinimapOpen] = React.useState(true);
             // Node input display: 'authored' ("set") or 'all'. The global
             // mode seeds every rebuild; individual nodes toggle in place via
@@ -242,59 +194,44 @@
             // Tab quick-add: whether the search palette is open, and the
             // stdlib node catalog once loaded.
             const [addOpen, setAddOpen] = React.useState(false);
-            // Set while the add-search palette was opened by double-clicking
-            // a port dot (item 4): { mode: 'in'|'out', type } pre-filters
-            // (and locks) AddNodeSearch's type dropdown so only compatible
-            // nodes show, and drives the auto-wire once one is picked.
+            // Set when the add-search palette was opened via double-
+            // clicking a port dot (item 4): { mode, type } pre-filters and
+            // locks AddNodeSearch's type dropdown, and drives auto-wire.
             const [portAddFilter, setPortAddFilter] = React.useState(null);
             // Port-picker popover (item 2): set when a connection drag ends
-            // on a NODE BODY (not a handle, not the empty pane) — offers
-            // every compatible port on that node instead of demanding
-            // pixel-precise aim. { x, y, candidates, targetName } or null;
-            // see onConnectEnd (candidate list) and the popover render
-            // below (portPickerRef, useEscapeToClose, outside-pointerdown).
+            // on a node body (not a handle) — offers every compatible port
+            // instead of demanding pixel-precise aim. See onConnectEnd.
             const [portPicker, setPortPicker] = React.useState(null);
             const portPickerRef = React.useRef(null);
             // Keybinds reference popup ("?" button, top-right).
             const [helpOpen, setHelpOpen] = React.useState(false);
-            // In-tab docs viewer (parameter panel "?" button): { hash, fullUrl, label }
-            // of the node whose docs are shown, and a separate open flag so the
-            // dialog (and the inline docs App it mounts) can stay mounted-but-hidden
-            // between opens.
+            // In-tab docs viewer (panel "?" button): { hash, fullUrl, label }
+            // of the shown node, plus a separate open flag so the dialog
+            // (and the inline docs App it mounts) can stay mounted-but-hidden.
             const [docsDialog, setDocsDialog] = React.useState(null);
             const [docsDialogOpen, setDocsDialogOpen] = React.useState(false);
             // View-only XML dialog ("Document" button): the XML is computed
             // once when the dialog opens (not on every render) and held here.
             const [xmlDialogOpen, setXmlDialogOpen] = React.useState(false);
             const [xmlDialogXml, setXmlDialogXml] = React.useState('');
-            // Validate popup + toolbar button: validateStatus is now a
-            // BACKGROUND status (see the docXmlRev-gated effect below),
-            // not a one-shot computed-on-open result — it's what colors
-            // the toolbar Validate button even before it's ever clicked.
-            // Opening the dialog (validateOpen) additionally forces an
-            // immediate, non-debounced refresh (see that effect too) so
-            // it never shows a stale pre-edit result.
+            // validateStatus is a BACKGROUND status (docXmlRev-gated effect
+            // below), not one-shot-on-open — it colors the toolbar Validate
+            // button pre-click. Opening the dialog forces an immediate refresh.
             const [validateOpen, setValidateOpen] = React.useState(false);
             const [validateStatus, setValidateStatus] = React.useState(null);
-            // Export dialog (toolbar "Export" button, item B1): holds
-            // { defaultName, textures } computed once when the dialog is
-            // opened (openExportDialog below), or null while closed — same
-            // "computed once by the caller, not on every render" contract
-            // as xmlDialogXml above.
+            // Export dialog: holds { defaultName, textures } computed once
+            // when opened (openExportDialog below), or null while closed —
+            // same "computed once, not per render" contract as xmlDialogXml.
             const [exportDialog, setExportDialog] = React.useState(null);
-            // Presets dialog (toolbar "Presets" button, item F3.2): a
-            // curated list of official MaterialX example documents (see
-            // MTLX_PRESETS in js/shared/mtlx-ui.jsx). `presetsBusyPath`
-            // tracks WHICH preset is fetching so the dialog can spin just
-            // that row while every row is disabled.
+            // Presets dialog: curated MaterialX examples (MTLX_PRESETS in
+            // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks which preset
+            // is fetching so only that row spins while all rows disable.
             const [presetsOpen, setPresetsOpen] = React.useState(false);
             const [presetsBusy, setPresetsBusy] = React.useState(false);
             const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
-            // Shader export dialog ("Shader Code" toolbar button): holds
-            // { renderables } computed once when the dialog is opened
-            // (openShaderExport below), or null while closed — same
-            // "computed once by the caller, not on every render" contract
-            // as exportDialog/xmlDialogXml above.
+            // Shader export dialog: holds { renderables } computed once
+            // when opened (openShaderExport below), null while closed —
+            // same one-shot-computed contract as exportDialog above.
             const [shaderExport, setShaderExport] = React.useState(null);
             // Freezes the preview panel to a specific node regardless of
             // what gets selected afterward (item 10's pin toggle) — same
@@ -304,45 +241,21 @@
             // Bumped on every committed edit that reached the MaterialX
             // document — the material preview regenerates from the live doc.
             const [docRev, setDocRev] = React.useState(0);
-            // Validate source-of-truth: the exact XML TEXT the Validate
-            // button/dialog checks — deliberately NOT `parsed`/parsedRef.
-            // Written via noteDocXml (below) at EVERY path that changes
-            // the effective document text: the raw as-opened text at
-            // ingest (loadDocument), the fresh-session literal
-            // (newDocument), the VS Code external-edit soft reload
-            // (externalReload), browser-side undo/redo (restoreSnapshot),
-            // and the canonical serialized XML flushUndoSnapshot (above
-            // the undo stack further down) just handed to
-            // window.__mtlxNotifyEdit. Never the live doc itself, because
-            // serializeDocXml heals connected-input faults IN PLACE on
-            // every snapshot — validating parsed.doc would silently mask
-            // exactly the faults this feature exists to surface (see
-            // validateMtlxXml, js/graph/model.jsx). `rev` is a cheap
-            // monotonic counter so an in-flight background validation
-            // that's since been superseded by a newer edit can detect
-            // it's stale and drop its result instead of clobbering a
-            // fresher one; docXmlRev is its render-triggering twin (a
-            // plain ref write doesn't cause an effect to re-run).
+            // Validate source-of-truth: the exact XML text Validate checks
+            // — never `parsed` itself, since serializeDocXml heals faults
+            // in place and would mask exactly what Validate should catch.
             const docXmlRef = React.useRef({ xml: null, rev: 0 });
             const [docXmlRev, setDocXmlRev] = React.useState(0);
-            // The ONE write path for docXmlRef — every document-text
-            // change goes through here so no path can bump the ref
-            // without also waking the docXmlRev-gated validation effect
-            // (or vice versa). Cheap by contract: callers hand in text
-            // they already have (raw file text, an undo snapshot's xml,
-            // the serialize flushUndoSnapshot just did) — never a
-            // serialization of this helper's own.
+            // The ONE write path for docXmlRef, so no path can bump it
+            // without waking the docXmlRev-gated validation effect. Cheap
+            // by contract: callers pass text they already have.
             const noteDocXml = (xml) => {
                 docXmlRef.current = { xml, rev: docXmlRef.current.rev + 1 };
                 setDocXmlRev((r) => r + 1);
             };
-            // Unsaved-changes tracking, deliberately SEPARATE from docRev:
-            // docRev only bumps for edits that need a preview recompile, but
-            // a dragged node's xpos/ypos or a freshly-added-but-unconnected
-            // node also change what Export would write, without needing a
-            // recompile. dirtyRev bumps at every docRev site PLUS those two
-            // spatial/structural ones; isDirty compares it against the
-            // revision last written out (export) or loaded (import).
+            // Unsaved-changes tracking, separate from docRev: docRev only
+            // bumps for edits needing a preview recompile, but e.g. a
+            // dragged node's position also affects Export without one.
             const [dirtyRev, setDirtyRev] = React.useState(0);
             const [savedRev, setSavedRev] = React.useState(0);
             const isDirty = dirtyRev !== savedRev;
@@ -357,11 +270,9 @@
             };
 
             // ---- Undo / redo: coarse XML-snapshot history --------------
-            // Every markDirty() edit schedules a debounced snapshot of the
-            // full document (minus transient __pv_* preview nodes, same
-            // guard exportMtlx uses — see serializeDocXml below). Snapshots
-            // exclude the stdlib (setDataLibrary keeps it separate from the
-            // owning doc), so they stay small even for big graphs.
+            // Every markDirty() edit schedules a debounced full-document
+            // snapshot (minus transient __pv_* preview nodes); excludes the
+            // stdlib (kept separate) so snapshots stay small on big graphs.
             const parsedRef = React.useRef(null);
             parsedRef.current = parsed;
             // Lets smartFitView (invoked from the F-key handler's stale
@@ -376,13 +287,9 @@
             legendOpenRef.current = legendOpen;
             const narrowRef = React.useRef(narrow);
             narrowRef.current = narrow;
-            // Lets this view's background work (WebGL render loop, global
-            // keydown/drag-drop) pause while another view is visible in the
-            // shell's multi-view layout, without unmounting (so undo
-            // history/parsed doc/dirty state survive switching away and
-            // back) — see js/shell.jsx's renderView, which passes
-            // `active={activeView === 'graph'}`. Defaults true so a caller
-            // that doesn't pass it sees no behavior change.
+            // Lets background work (render loop, keydown/drag-drop) pause
+            // while another view is visible in the shell's multi-view layout,
+            // without unmounting — undo/parsed/dirty state survive switching.
             const activeRef = React.useRef(active);
             activeRef.current = active;
             // The live preview's createMtlxRenderView() handle, kept in sync
@@ -391,38 +298,18 @@
             const previewViewRef = React.useRef(null);
             const scopeRef = React.useRef('');
             scopeRef.current = scope;
-            // Set right before setScope('') at a scope-EXIT call site (e.g.
-            // 'g:' + the nodegraph name just left) so the flow-rebuild
-            // effect below can select/highlight it in the parent scope and
-            // aim the preview at it, instead of the default "wipe selection
-            // on scope change" behavior. Consumed (and cleared) by that
-            // effect on the next run.
+            // Set right before setScope('') on scope EXIT (e.g. 'g:' +
+            // the nodegraph just left) so the flow-rebuild effect can
+            // select/highlight it instead of wiping the selection.
             const pendingScopeSelectRef = React.useRef(null);
-            // Single entry point for every scope transition (dblclick-enter
-            // a nodegraph — both the native listener below AND React Flow's
-            // own onNodeDoubleClick, which fires for the SAME double-click;
-            // Backspace scope-exit; breadcrumb click; scope dropdown) so
-            // the "flash the overlay, then defer the actual setScope"
-            // dance isn't duplicated at every call site. A no-op (no
-            // overlay flash) when the requested scope is already current —
-            // covers re-clicking the current breadcrumb crumb or
-            // reselecting the current option in the scope dropdown. Any
-            // companion state a call site needs to set (e.g.
-            // pendingScopeSelectRef) is a cheap ref write and stays at the
-            // call site, done BEFORE calling this, so its ordering relative
-            // to the (deferred) setScope is unchanged from before this
-            // overlay existed.
+            // Single entry point for every scope transition (dblclick-enter,
+            // Backspace exit, breadcrumb, scope dropdown) so the overlay-
+            // flash-then-deferred-setScope dance isn't duplicated per site.
             const changeScope = (next) => {
                 if (next === scopeRef.current) return;
-                // Entering/jumping into a nodegraph (non-empty target
-                // scope): aim the initial selection+preview at the graph's
-                // RESULT (its first output) instead of falling back to the
-                // last/global selection — mirrors the scope-EXIT convention
-                // above (Backspace/breadcrumb seed 'g:'+name into
-                // pendingScopeSelectRef before calling changeScope; here we
-                // seed 'o:'+name on the way IN). Skipped when a pin owns
-                // the preview, or when an exit call site already seeded the
-                // ref (that selection must win).
+                // Entering a nodegraph: aim initial selection/preview at
+                // its first output ('o:'+name) instead of the last one;
+                // skipped when a pin owns the preview, or the ref is preset.
                 if (next && !pendingScopeSelectRef.current && !pinnedTarget) {
                     const firstOutputName = mxSafe(() => {
                         const g = parsedRef.current && parsedRef.current.doc.getNodeGraph(next);
@@ -433,14 +320,9 @@
                 }
                 setScopeBusy(true);
                 (async () => {
-                    // A single requestAnimationFrame callback fires just
-                    // BEFORE the browser paints that frame, so scheduling
-                    // the heavy work after only one rAF can still run it in
-                    // the same frame the overlay was supposed to appear in
-                    // — the overlay would never actually hit the screen. A
-                    // second rAF lets the first frame (with scopeBusy=true
-                    // already committed and painted) land before the
-                    // rebuild-triggering setScope below runs.
+                    // A single rAF fires before paint, so one rAF could
+                    // still run the heavy work before the overlay actually
+                    // paints. A second rAF lets the overlay's frame land first.
                     await nextFrame();
                     await nextFrame();
                     setScope(next);
@@ -450,12 +332,9 @@
             // means an empty stack (no document loaded yet).
             const undoStateRef = React.useRef({ stack: [], index: -1, savedIndex: -1 });
             const snapshotTimerRef = React.useRef(null);
-            // Transient __pv_* preview nodes can be alive for hundreds of ms
-            // after a docRev bump (NodePreview cleans them up after an
-            // awaited render) — exactly when the debounced flush fires. So a
-            // failed serialize RETRIES on the same cadence instead of
-            // silently dropping the undo step; the budget is reset by every
-            // fresh pushUndoSnapshot.
+            // Transient __pv_* preview nodes can outlive the debounced
+            // flush's timer, so a failed serialize RETRIES on the same
+            // cadence instead of silently dropping the undo step.
             const snapshotRetryRef = React.useRef(0);
             // Set while a snapshot is being restored, so the restore itself
             // never schedules another snapshot (would corrupt the stack).
@@ -463,12 +342,9 @@
             const UNDO_CAP = 50;
             const UNDO_DEBOUNCE_MS = 350;
             const UNDO_RETRY_MAX = 10;
-            // Background document-text validation's own debounce (see the
-            // docXmlRev-gated effect further down) — slightly longer than
-            // UNDO_DEBOUNCE_MS since validating is the least urgent of the
-            // two and a burst of edits (each bumping docXmlRev right
-            // alongside an undo snapshot) shouldn't run doc.validate()
-            // once per settle either.
+            // Background validation's own debounce (docXmlRev-gated
+            // effect below) — longer than UNDO_DEBOUNCE_MS since it's the
+            // least urgent and shouldn't re-run on every edit burst.
             const VALIDATE_DEBOUNCE_MS = 500;
 
             // Flush a pending debounced snapshot immediately (synchronous
@@ -494,19 +370,13 @@
                     }
                     return;
                 }
-                // Notify the VS Code extension bridge (defined in
-                // vscode_extension/media/bootstrap.js; inert/undefined in the
-                // standalone browser) that a coalesced edit has settled, so it
-                // can sync this XML into the real .mtlx document buffer —
-                // reusing this function's existing debounce/coalescing
-                // instead of re-implementing it on the extension side.
+                // Notify the VS Code bridge (bootstrap.js; inert in the
+                // browser) that a coalesced edit settled, so it can sync
+                // this XML into the real .mtlx buffer, reusing this debounce.
                 if (typeof window.__mtlxNotifyEdit === 'function') window.__mtlxNotifyEdit(xml);
-                // Keep the Validate source-of-truth (noteDocXml, declared
-                // above near docRev) in lockstep with whatever XML just
-                // got handed to the VS Code bridge (or would have, in the
-                // standalone browser) — same `xml` value, so it's cheap
-                // (no serialization of our own; serializeDocXml already
-                // ran above).
+                // Keep the Validate source-of-truth (noteDocXml) in
+                // lockstep with the XML just handed to the VS Code bridge —
+                // same `xml` value, so it's cheap (no extra serialize).
                 noteDocXml(xml);
                 const u = undoStateRef.current;
                 u.stack.length = u.index + 1; // drop any redo branch
@@ -553,14 +423,9 @@
                     setParsed(p);
                     setScope(nextScope);
                     setDocRev((r) => r + 1);
-                    // Validate source-of-truth (noteDocXml, declared near
-                    // docRev above): browser-side undo/redo swaps the
-                    // effective document text WITHOUT any flushUndoSnapshot
-                    // firing (restoringRef above suppresses snapshots for
-                    // exactly this restore), so hand the snapshot's own
-                    // xml over here. In VS Code this path is moot — the
-                    // extension defers to native text undo/redo, which
-                    // arrives via externalReload (covered there).
+                    // Validate source-of-truth (noteDocXml): undo/redo
+                    // swaps doc text WITHOUT flushUndoSnapshot firing
+                    // (restoringRef suppresses it), so hand the xml here.
                     noteDocXml(entry.xml);
                     const u = undoStateRef.current;
                     if (u.index === u.savedIndex) markSaved();
@@ -578,10 +443,9 @@
                     clearTimeout(snapshotTimerRef.current);
                     snapshotTimerRef.current = null;
                     flushUndoSnapshot(null);
-                    // If that synchronous flush failed (transients alive), a
-                    // retry timer may have just been scheduled — kill it so a
-                    // stale snapshot can't land after the restore below. The
-                    // un-captured edit is being undone anyway.
+                    // If that synchronous flush failed (transients alive),
+                    // a retry timer may have been scheduled — kill it so a
+                    // stale snapshot can't land after the restore below.
                     if (snapshotTimerRef.current) {
                         clearTimeout(snapshotTimerRef.current);
                         snapshotTimerRef.current = null;
@@ -612,66 +476,17 @@
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
             ), []);
 
-            // Top toolbar clusters (both top-left and top-right): measured
-            // 3-tier collapse. At intermediate widths the labeled buttons
-            // no longer all fit on one line. Required tier order, for
-            // BOTH clusters, strictly in this priority:
-            //   1. labels visible, single row (fits as-is)
-            //   2. icon-only, single row (labels no longer fit)
-            //   3. icon-only, WRAPPED (even icon-only doesn't fit — last
-            //      resort only; a cluster must never wrap while its
-            //      labels are still showing)
-            // Rather than guess breakpoints, measure — same idea as the
-            // header nav's measure() in js/site-header.js (~line 328):
-            // force the full layout, check whether it actually fits,
-            // commit to the next tier down if it doesn't, check again.
-            // Toggled via classList directly (not React state) so the
-            // decision can't itself trigger a re-render/measure loop.
-            //
-            // This only works because each cluster's measured element has
-            // a FIXED width (the top-right cluster div itself is `w-*`;
-            // the top-left cluster's outer div is `w-*` and its inner
-            // button row — the actual measured element — is a block-level
-            // child of it, so ITS clientWidth is that same fixed width).
-            // An absolutely-positioned element with just a `max-w-*` cap
-            // is shrink-to-fit, so its clientWidth always equals whatever
-            // content is currently rendered (scrollWidth === clientWidth
-            // always, overflow undetectable) and a ResizeObserver on it
-            // never fires when the surrounding pane is resized (the
-            // content-sized box doesn't itself change size). A fixed
-            // width makes clientWidth the real available space and makes
-            // the element resize (so the RO fires) whenever the pane
-            // does. Toolbar buttons must also not flex-shrink or wrap
-            // their own label text under pressure (see BTN_TOOLBAR in
-            // js/shared/mtlx-ui.jsx and the custom-class buttons below,
-            // all `whitespace-nowrap shrink-0`) — otherwise squeezing
-            // would be absorbed as internal text wrap/compression instead
-            // of visible, measurable row overflow.
-            //
-            // measureToolbarCluster() is the shared routine both clusters'
-            // effects call (below) on the same element they toggle
-            // classes on.
+            // Top toolbar clusters: measured 3-tier collapse (labels ->
+            // icons -> wrapped), via classList (not state) to avoid a
+            // measure loop; needs FIXED-width elements so RO detects overflow.
             const measureToolbarCluster = (el) => {
                 if (!el) return;
                 // Start every pass from tier 1 (both classes off),
                 // regardless of the previous decision.
                 el.classList.remove('gtb-collapsed', 'gtb-wrap');
-                // Plain `el.scrollWidth > el.clientWidth` does NOT work
-                // here: these containers are `justify-content: flex-end`,
-                // so when content overflows a nowrap row it overflows
-                // toward the START (left) side, not the end. In LTR,
-                // scrollWidth only grows with END-side (right) overflow —
-                // start-side overflow is clipped off the scrollable area
-                // instead, so scrollWidth stays ≈ clientWidth and this
-                // would never detect the overflow. Fix: temporarily flip
-                // to `justify-content: flex-start` (so any overflow goes
-                // to the end side, where scrollWidth can see it) in
-                // addition to forcing a single row via `flex-wrap:
-                // nowrap`, take the reading(s), then restore both. This
-                // all happens synchronously within useLayoutEffect/the RO
-                // callback (one task, before paint), so the forced
-                // intermediate states are never actually painted — no
-                // flicker, same reasoning as site-header.js's measure().
+                // Plain scrollWidth>clientWidth fails here: flex-end rows
+                // clip overflow on the START side, so scrollWidth never
+                // grows. Flip to flex-start temporarily (pre-paint) to measure.
                 const prevWrap = el.style.flexWrap;
                 const prevJustify = el.style.justifyContent;
                 el.style.flexWrap = 'nowrap';
@@ -707,9 +522,8 @@
                 ro.observe(el);
                 return () => ro.disconnect();
                 // Intentionally no deps: must re-run after every render
-                // (e.g. Export/Shader Code appearing once a doc loads
-                // changes the row's natural width), and the measurement
-                // work itself is microseconds.
+                // (e.g. Export/Shader Code appearing changes the row's
+                // natural width); the measurement work itself is microseconds.
             });
 
             // Top-right cluster: the container itself is the measured
@@ -721,18 +535,9 @@
                 if (!el) return;
                 const measureAndPosition = () => {
                     measureToolbarCluster(el);
-                    // The params panel (expanded) and its collapsed chip
-                    // used to sit at a hardcoded top-20/top-12, which was
-                    // leftover compensation for a toolbar that could wrap
-                    // to two rows — with tiers 1/2 now guaranteed single-
-                    // row, that left a visible gap below the real (single-
-                    // row) toolbar. Instead, publish the toolbar's actual
-                    // bottom edge as a CSS var on the graph panel root
-                    // (panelRef is the offsetParent both this cluster and
-                    // the panel/chip are positioned against), so they
-                    // always sit snugly underneath — one row's worth
-                    // normally, taller only in tier 3 (wrapped). +6 keeps
-                    // the same gap the old fixed offsets left.
+                    // Publish the toolbar's actual bottom edge as a CSS
+                    // var on the panel root (shared offsetParent) so the
+                    // params panel/chip sit snugly beneath it (+6 = old gap).
                     if (panelRef.current) {
                         panelRef.current.style.setProperty(
                             '--gtb-offset',
@@ -741,14 +546,9 @@
                     }
                 };
                 measureAndPosition();
-                // Covers pane resizes (e.g. dragging the params panel
-                // wider, or the preview panel opening/closing) that
-                // change the cluster's available width without a React
-                // re-render. Because the container is a fixed-width
-                // strip rather than shrink-to-fit, resizing the pane
-                // actually resizes `el` itself, so this fires both ways —
-                // squeezing down collapses/wraps, growing back out
-                // restores labels/single-row and shrinks the offset back.
+                // Covers pane resizes (params panel width, preview panel
+                // toggling) that change available width without a React
+                // re-render — el resizes (fixed-width), firing both ways.
                 const ro = new ResizeObserver(measureAndPosition);
                 ro.observe(el);
                 return () => {
@@ -757,21 +557,14 @@
                     // renders against panelRef next.
                     if (panelRef.current) panelRef.current.style.removeProperty('--gtb-offset');
                 };
-                // Intentionally no deps: this must re-run after every
-                // render of the app (scope chip text length, Validate's
-                // status border, Fullscreen's label, etc. can all change
-                // the cluster's natural width), and the measurement work
-                // itself is microseconds.
+                // Intentionally no deps: re-runs every render (chip text,
+                // Validate border, Fullscreen label, etc. change width);
+                // the measurement itself costs microseconds.
             });
 
-            // Compact-mode auto-collapse: crossing wide->narrow stashes
-            // whatever open/closed state the params panel and legend were
-            // in and force-collapses both to chips; crossing narrow->wide
-            // restores that stash. A manual re-open while still narrow
-            // sticks (it's not restashed until the NEXT wide->narrow
-            // crossing) — this is the "sticky until next crossing"
-            // behavior called out in the plan. prevNarrowRef starts at
-            // `narrow` itself so mount never counts as a crossing.
+            // Compact-mode auto-collapse: wide->narrow stashes and force-
+            // collapses params/legend to chips; narrow->wide restores the
+            // stash. A manual re-open while narrow sticks until next crossing.
             const prevNarrowRef = React.useRef(narrow);
             const preNarrowOpenRef = React.useRef({ params: true, legend: true });
             React.useEffect(() => {
@@ -791,14 +584,9 @@
             // version badge right away).
             React.useEffect(() => { getMxEnv().catch(() => {}); }, []);
 
-            // Set (both flags) right before setParsed in externalReload below,
-            // so the two "parsed changed" reset effects that follow (this one
-            // and the [parsed, scope] selectedId effect further down) each
-            // skip ONE run. An external edit under VS Code that reloads the
-            // SAME document deliberately keeps the current selection/pin —
-            // every other setParsed call site (New, import, presets, undo/
-            // redo restore) leaves these flags false, so nothing changes for
-            // them.
+            // Set right before setParsed in externalReload so the two
+            // "parsed changed" reset effects each skip one run — an
+            // external VS Code reload of the SAME doc keeps the selection/pin.
             const softReloadSkipRef = React.useRef({ preview: false, selection: false });
 
             // A new document invalidates the remembered preview target —
@@ -809,24 +597,15 @@
                 setPreviewSel(null); setPinnedTarget(null);
             }, [parsed]);
 
-            // Connect-time literal stash (item 4a): the moment a wire is
-            // attached, the pre-existing literal on that input is destroyed
-            // (mxRemoveAttr(point, 'value') at every connect site below) so
-            // the document doesn't carry both a wire AND a stale value.
-            // Stashing it here lets severConnection (below) bring it
-            // straight back when the wire is later removed, instead of
-            // falling back to the nodedef default. Keyed by the input
-            // element's full document path (getNamePath) so the roundtrip
-            // survives whatever else changes meanwhile; cleared whenever
-            // the document itself is replaced — a stash from the previous
-            // document could never resolve to anything in the new one.
+            // Connect-time literal stash (item 4a): connecting a wire
+            // destroys the input's prior literal value; stashing it here
+            // lets severConnection restore it instead of the nodedef default.
             const stashedValuesRef = React.useRef({});
             React.useEffect(() => { stashedValuesRef.current = {}; }, [parsed]);
 
-            // Document-level colorspace (item 6 toolbar dropdown): the
-            // fallback colorspace for every input that doesn't author its
-            // own. Re-read from the doc whenever a new document loads or
-            // replaces the current one.
+            // Document-level colorspace (item 6 dropdown): fallback for
+            // every input without its own. Re-read whenever a new document
+            // loads or replaces the current one.
             const [docColorspace, setDocColorspace] = React.useState('');
             React.useEffect(() => {
                 setDocColorspace(parsed ? (mxSafe(() => parsed.doc.getColorSpace(), '') || '') : '');
@@ -846,10 +625,9 @@
             const parsedLiveRef = React.useRef(null);
             parsedLiveRef.current = parsed;
 
-            // Double-clicking a port dot (item 4): open the add-search
-            // pre-filtered to nodes that can plug into that port, then
-            // auto-wire once one is picked. pendingConnRef carries the
-            // { nodeId, port, portType, dir } across the async pick.
+            // Double-clicking a port dot (item 4): opens add-search pre-
+            // filtered to compatible nodes and auto-wires once picked;
+            // pendingConnRef carries the target info across the async pick.
             const pendingConnRef = React.useRef(null);
             const openPortAdd = (info) => {
                 if (!info || !info.nodeId || !info.port || !info.portType) return;
@@ -882,13 +660,9 @@
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
-            // Double-click ANYWHERE on a nodegraph node opens it. Handled
-            // natively on the stage — independent of React Flow's internal
-            // event plumbing — so the header, the port rows and the body all
-            // behave the same. Buttons/links inside the card keep their own
-            // meaning. (React Flow's onNodeDoubleClick stays wired too; both
-            // paths route through changeScope with the same name — the
-            // second call is a same-scope no-op once the first has fired.)
+            // Double-click anywhere on a nodegraph node opens it, handled
+            // natively on the stage so header/ports/body all behave the
+            // same; buttons/links inside the card keep their own meaning.
             React.useEffect(() => {
                 const host = panelRef.current;
                 if (!host) return;
@@ -905,10 +679,9 @@
                 return () => host.removeEventListener('dblclick', onDbl);
             }, []);
 
-            // Delete: disconnect the selected edge, or delete the selected
-            // node. Backspace: step up out of the current nodegraph scope
-            // (back to document root). Same focus rules as the Tab handler —
-            // typing in an input keeps its normal meaning.
+            // Delete: disconnect the selected edge or delete the selected
+            // node. Backspace: step up out of the current nodegraph scope.
+            // Same focus rules as the Tab handler (inputs keep normal meaning).
             const deleteSelectionRef = React.useRef(() => false);
             React.useEffect(() => {
                 const onKey = (e) => {
@@ -922,12 +695,9 @@
                         || (panelRef.current && t instanceof Node && panelRef.current.contains(t));
                     if (!inStage) return;
                     if (e.key === 'Backspace') {
-                        // Never delete on Backspace; just step up one scope
-                        // level. Always prevent default so it can't trigger
-                        // browser back-navigation. The pendingScopeSelectRef
-                        // write is a cheap ref — it stays immediate; only
-                        // the actual scope change (and its rebuild) waits
-                        // behind the overlay, via changeScope.
+                        // Backspace steps up one scope level (never
+                        // deletes); always preventDefault to block browser
+                        // back-navigation. Scope change waits behind changeScope's overlay.
                         if (scopeRef.current) {
                             pendingScopeSelectRef.current = 'g:' + scopeRef.current;
                             changeScope('');
@@ -970,18 +740,9 @@
                 setStatus('Parsing ' + path + ' \u2026');
                 try {
                     const { raw, resolved } = await readMtlxText(map[path], path, map);
-                    // Validate source-of-truth (noteDocXml, declared near
-                    // docRev above): the RAW, as-opened text of the picked
-                    // file — NOT the xi:include-resolved text the parse
-                    // below consumes, and well before parseMtlxDocument or
-                    // any healing ever touches it.
-                    // This is exactly what the VS Code extension's own
-                    // tier-2 validator (vscode_extension/src/mtlxNode.js's
-                    // validateSemantic) validates too — it readFromXmlString's
-                    // the raw buffer text verbatim, xi:include and all —
-                    // so capturing the resolved/merged text here instead
-                    // would let the graph's Validate button diverge from
-                    // what VS Code shows for any document using includes.
+                    // Validate source-of-truth (noteDocXml): the RAW,
+                    // as-opened text — before include-resolution/healing —
+                    // matching what VS Code's own tier-2 validator checks.
                     noteDocXml(raw);
                     const p = await parseMtlxDocument(resolved);
                     p.label = path;
@@ -1003,20 +764,18 @@
                 }
             };
 
-            // Start a brand-new, empty session: clears the file map and any
-            // loaded document, then seeds the undo stack exactly like
-            // loadDocument does for a freshly loaded file (so the very first
-            // edit has a baseline to diff against).
+            // Start a brand-new, empty session: clears the file map/doc,
+            // then seeds the undo stack like loadDocument does for a
+            // freshly loaded file, so the first edit has a baseline.
             const newDocument = async () => {
                 setError(null);
                 setBusy(true);
                 setStatus('Creating new document ' + '\u2026');
                 try {
                     const xml = '<?xml version="1.0"?>\n<materialx version="1.39">\n</materialx>\n';
-                    // Validate source-of-truth (noteDocXml, declared near
-                    // docRev above): a brand-new empty session should
-                    // validate this fresh literal (and show green), not
-                    // keep wearing the previous file's status.
+                    // Validate source-of-truth (noteDocXml): a brand-new
+                    // empty session should validate this fresh literal
+                    // (green), not keep wearing the previous file's status.
                     noteDocXml(xml);
                     const p = await parseMtlxDocument(xml);
                     p.label = 'untitled.mtlx';
@@ -1044,13 +803,8 @@
             };
 
             // `rootKey` (optional): when the caller already knows which
-            // .mtlx key is the document to load — e.g. loadPreset below,
-            // whose map may also contain xi:include dependency docs that
-            // are ALSO .mtlx-suffixed — skip the "ambiguous drop, ask the
-            // user to pick" heuristic below and load it directly. Omitted
-            // by every other caller (drag-drop, the default-document
-            // fetch), which keeps relying on that heuristic exactly as
-            // before.
+            // .mtlx is the document (loadPreset's map may hold .mtlx-
+            // suffixed includes too), skip the ambiguous-drop heuristic below.
             const ingest = async (map, rootKey) => {
                 setError(null);
                 try {
@@ -1097,44 +851,17 @@
             };
 
             // ---- VS Code external-edit soft reload ----------------------
-            // The host resends the FULL current document (bootstrap.js's
-            // 'both' mode) every time the open .mtlx changes OUTSIDE this
-            // webview (another editor, a script, a VCS checkout/pull, …).
-            // Routing that resend through ingest() above — which is what
-            // the very FIRST payload still does, see handleImport below —
-            // treats it like a brand-new document drop: ingest's replace
-            // branch synchronously does setParsed(null) + setFlow({nodes:
-            // [],edges:[]}) + an undo reset BEFORE the async parse in
-            // loadDocument finishes. Since graphKey (~:3990-ish, search
-            // "graphKey =") mixes in parsed.label, that null frame REMOUNTS
-            // <ReactFlowComp> — blank canvas, viewport reset — and unmounts
-            // GraphNodePreview (gated on `parsed`), tearing down its live GL
-            // view, for every single external save.
-            //
-            // externalReload avoids all of that by parsing FIRST and then
-            // swapping `setParsed` straight to the new object — same label,
-            // so graphKey doesn't change and ReactFlow never remounts —
-            // exactly the way restoreSnapshot (above) swaps in an undo/redo
-            // snapshot without a null intermediate frame.
+            // Routing external edits through ingest() would null setParsed
+            // first, remounting ReactFlow / killing the live GL preview on
+            // every save; this instead parses first, keeping the same label.
             const externalReload = async (map) => {
-                // Mirror ingest's REPLACE branch: a session already exists
-                // (externalReload is only ever reached once parsedRef.current
-                // is set — see the handleImport branch below), so the
-                // incoming map REPLACES fileMapRef wholesale rather than
-                // merging with the old one. The host resends every texture
-                // file the document currently needs, so one removed
-                // externally should disappear here too, same as a fresh
-                // ingest() replace would do.
+                // Mirrors ingest's REPLACE branch: the incoming map
+                // replaces fileMapRef wholesale (not merge) — the host
+                // resends every needed texture, so removed ones disappear.
                 const merged = Object.assign({}, map);
-                // Locally-picked textures (registerPickedFile) never round-trip
-                // through disk, so docScanner.js's on-disk scan — what `map` is
-                // built from — can never include them. Preserve them across this
-                // reload instead of silently dropping them (the wholesale-replace
-                // behavior above is otherwise correct/intended for anything that
-                // WAS on disk and got removed externally) — but only while the
-                // document still actually references them, and only until the
-                // host DOES find a same-named file on disk (its entry wins then,
-                // since it's now the authoritative source).
+                // Locally-picked textures never round-trip through disk,
+                // so docScanner's on-disk scan can't see them — preserve
+                // them here until the doc drops the ref or disk provides one.
                 for (const name of pickedFileNamesRef.current) {
                     if (merged[name]) { pickedFileNamesRef.current.delete(name); continue; }
                     const prior = fileMapRef.current[name];
@@ -1145,12 +872,9 @@
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) return; // shouldn't happen — the payload always carries the root .mtlx
-                // Prefer the previously-established root document key (set
-                // by the very first ingest() call for this session) when
-                // it's still present — the payload's own xi:include targets
-                // can also be .mtlx-suffixed, so a plain "only one .mtlx"
-                // heuristic isn't reliable here the way it is for a fresh
-                // drop.
+                // Prefer the previously-established root key when still
+                // present — xi:include targets can also be .mtlx-suffixed,
+                // so a plain "only one .mtlx" heuristic isn't reliable here.
                 const pick = (chosenMtlx && mtlx.indexOf(chosenMtlx) !== -1) ? chosenMtlx : mtlx[0];
                 if (!merged[pick]) return;
                 setChosenMtlx(pick);
@@ -1158,32 +882,22 @@
                 let p;
                 try {
                     const { raw, resolved } = await readMtlxText(merged[pick], pick, merged);
-                    // Validate source-of-truth (noteDocXml, declared near
-                    // docRev above): the raw external-edit text — not the
-                    // xi:include-resolved text (parity with loadDocument's
-                    // raw-text capture) — and critically noted BEFORE
-                    // either early return below: the parse-failure
-                    // return (a mid-edit broken file should still turn the
-                    // Validate button red with the parse error, exactly
-                    // what VS Code's own Problems panel shows for it) and
-                    // the sameAsCurrent return (see its own comment).
+                    // Validate source-of-truth: the raw external-edit
+                    // text (parity with loadDocument), noted BEFORE either
+                    // early return so a mid-edit broken file still turns Validate red.
                     noteDocXml(raw);
                     p = await parseMtlxDocument(resolved);
                 } catch (e) {
-                    // The live session must survive a mid-edit broken file
-                    // (e.g. the user is mid-keystroke on an unbalanced tag
-                    // in their own editor) — keep the current graph up
-                    // instead of blanking it.
+                    // The live session must survive a mid-edit broken
+                    // file (e.g. an unbalanced tag mid-keystroke) — keep
+                    // the current graph up instead of blanking it.
                     setError('External edit could not be parsed — keeping the current graph (' + errMsg(e) + ').');
                     return;
                 }
 
-                // Skip-identical guard: raw file text can't be string-
-                // compared to canonical output (whitespace/attribute order
-                // differ), so normalize BOTH sides through the same
-                // canonical serializer the undo snapshots use — this
-                // catches formatting-only / touch saves that don't actually
-                // change the document, without doing a full swap for them.
+                // Skip-identical guard: raw text can't be string-compared
+                // to canonical output, so normalize both sides through the
+                // same serializer — catches formatting-only/touch saves.
                 let sameAsCurrent = false;
                 try {
                     const newXml = serializeDocXml(p);
@@ -1193,17 +907,9 @@
                     sameAsCurrent = curXml != null && curXml === newXml;
                 } catch (e) { /* serializing the new doc failed — fall through to the full swap */ }
                 if (sameAsCurrent) {
-                    // NOTE: the noteDocXml(raw text) call up top must stay
-                    // BEFORE this return. "Canonically identical" is
-                    // measured AFTER serializeDocXml's healing pass, so it
-                    // is exactly what happens when the user fixes, in
-                    // their text editor, the very fault the healing
-                    // auto-fixes (e.g. removes a stale value="" from a
-                    // connected input): the fixed file serializes to the
-                    // same canonical XML as the live doc, this branch
-                    // returns early — and without that earlier write the
-                    // Validate button would stay red forever even though
-                    // the file is now clean.
+                    // NOTE: noteDocXml(raw) above must run before this
+                    // return, or a since-fixed file hitting this early
+                    // return leaves the Validate button stuck red.
                     markSaved(); // the file map above is already merged/updated
                     return;
                 }
@@ -1213,19 +919,15 @@
                 // is what keeps ReactFlow from remounting.
                 p.label = parsedRef.current ? parsedRef.current.label : pick;
 
-                // Preserve scope when it still resolves in the new document;
-                // reset to root otherwise — same check restoreSnapshot uses
-                // above. (The flow-rebuild effect below also degrades a
-                // stale scope gracefully on its own — see its try/catch —
-                // but resolving it here avoids landing the user inside a
-                // nodegraph that no longer exists.)
+                // Preserve scope when it still resolves in the new doc,
+                // reset to root otherwise (same check as restoreSnapshot) —
+                // avoids landing the user inside a nodegraph that's gone.
                 const nextScope = (scopeRef.current && p.nodegraphs && p.nodegraphs.indexOf(scopeRef.current) === -1)
                     ? '' : scopeRef.current;
 
-                // One-shot skip for the [parsed] / [parsed, scope] reset
-                // effects (softReloadSkipRef, defined further up) — an
-                // external reload of the SAME document keeps the current
-                // selection/pin, unlike every other setParsed call site.
+                // One-shot skip for the [parsed]/[parsed, scope] reset
+                // effects (softReloadSkipRef): an external reload of the
+                // SAME doc keeps the current selection/pin, unlike other setParsed sites.
                 softReloadSkipRef.current.preview = true;
                 softReloadSkipRef.current.selection = true;
 
@@ -1249,11 +951,8 @@
             externalReloadRef.current = externalReload;
 
             // ---- Unsaved-changes protection for actions that REPLACE the
-            // current document (Import, drag-drop of a new .mtlx, switching
-            // documents). The actual tab/window close is separately guarded
-            // by the native beforeunload prompt below — browsers don't allow
-            // a custom dialog or an async export in response to THAT one,
-            // but in-app actions like these are fully ours to gate.
+            // current document (Import, drag-drop, switching documents).
+            // Tab/window close is separately guarded by beforeunload below.
             const [confirmCloseOpen, setConfirmCloseOpen] = React.useState(false);
             const pendingActionRef = React.useRef(null);
             // `hasMtlx`: whether the pending action actually introduces a
@@ -1288,16 +987,10 @@
             // apply.
             useWindowFileDrop({ activeRef, onFiles: guardedIngest, onDragState: setDragOver, disabled: IN_VSCODE });
 
-            // ---- Receive a material handed off from another view (item 6's
-            // counterpart to the "Send to Editor" buttons in viewer-app.jsx
-            // and node-preview.jsx). Those buttons stash the payload on
-            // window.__mtlxPendingImport, dispatch 'mtlx-load-document', and
-            // jump the hash to #!graph — so on arrival here there may
-            // already be a pending payload (checked once on mount) and/or
-            // more may arrive later while this tab stays open (the event).
-            // Routed through the SAME guardedIngestRef the drag-drop handler
-            // above uses, so a dirty session still gets the unsaved-changes
-            // confirm dialog for free.
+            // ---- Receive a material handed off from another view (the
+            // "Send to Editor" buttons in viewer-app.jsx/node-preview.jsx,
+            // via window.__mtlxPendingImport + 'mtlx-load-document'), routed
+            // through guardedIngestRef so a dirty session still confirms.
             React.useEffect(() => {
                 const handleImport = (payload) => {
                     if (!payload) return;
@@ -1305,20 +998,9 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    // Under the VS Code extension, the open .mtlx FILE is the
-                    // source of truth: the host resends this exact payload on
-                    // every external edit (its live-reload), so gating THIS
-                    // path behind the unsaved-changes confirm would pop a
-                    // modal on every external save — unusable. Bypass ONLY
-                    // this external-document-import path; New/document-picker/
-                    // presets keep the confirm (window.__MTLX_VSCODE__ is set
-                    // only by the extension's bootstrap, so this branch is
-                    // dead — and thus inert — outside the webview). The very
-                    // FIRST payload for a session still goes through the
-                    // normal ingest() (there's no live graph yet to preserve);
-                    // every SUBSEQUENT external edit takes the soft reload
-                    // path instead (externalReload above) — no flicker, no
-                    // ReactFlow remount, no dropped GL preview view.
+                    // Under VS Code the .mtlx file is the source of truth
+                    // (resent on every edit), so this bypasses the confirm
+                    // dialog; first payload ingest()s, later edits use externalReload.
                     if (window.__MTLX_VSCODE__) {
                         if (parsedRef.current) externalReloadRef.current(map);
                         else ingestRef.current(map);
@@ -1342,20 +1024,9 @@
             }, []);
 
             // ------------------------------------------------------------
-            // VS Code extension bridge (vscode_extension/media/bootstrap.js)
-            // — inert in the browser, just an unused global. Exposes the
-            // current graph's serialized XML (Ctrl+S in the extension's
-            // webview pulls this to write the open .mtlx file) and a "mark
-            // this session saved" hook, so the extension can sync the app's
-            // own unsaved-changes state once the host confirms the write
-            // landed, the same way doExportMtlx's markSaved() does after a
-            // successful in-browser export. Undo/redo in the extension defer
-            // to VS Code's own native document undo/redo instead (the
-            // document buffer is kept continuously in sync via
-            // window.__mtlxNotifyEdit, called from flushUndoSnapshot above)
-            // — there's no separate JS-side graph undo hook exposed here.
-            // NOT gated behind IN_VSCODE — inert globals in the browser,
-            // same as __mtlxGetGraphXml/__mtlxMarkGraphSaved above.
+            // VS Code extension bridge (bootstrap.js) — inert in the
+            // browser. Exposes the graph's XML for Ctrl+S and a markSaved
+            // hook; undo/redo defers to VS Code's native document undo.
             React.useEffect(() => {
                 window.__mtlxGetGraphXml = async () => {
                     const { xml, error } = await resolveDocXmlRef.current();
@@ -1410,29 +1081,25 @@
             // Port-mode changes (per node or global) update nodes IN PLACE —
             // positions are preserved; the Arrange button re-lays out.
             React.useEffect(() => {
-                // Soft external reload (see softReloadSkipRef, set right
-                // before setParsed in externalReload above): same document,
-                // deliberately keep the current selection instead of
-                // wiping it.
+                // Soft external reload (softReloadSkipRef, set before
+                // setParsed in externalReload): same document, keep the
+                // current selection instead of wiping it.
                 if (softReloadSkipRef.current.selection) { softReloadSkipRef.current.selection = false; return; }
                 if (!parsed) return;
                 const pending = pendingScopeSelectRef.current;
                 if (pending) {
-                    // Just stepped out of a nodegraph via Backspace or the
-                    // breadcrumb — select/preview the nodegraph we left,
-                    // instead of wiping the selection (consumed below by
-                    // the flow-rebuild effect, which marks it .selected).
+                    // Just stepped out via Backspace/breadcrumb — select/
+                    // preview the nodegraph we left instead of wiping the
+                    // selection (consumed by the flow-rebuild effect below).
                     setSelectedId(pending);
                     setPreviewSel({ scope, id: pending });
                 } else {
                     setSelectedId(null); // the old selection belongs to the old scope
                 }
             }, [parsed, scope]);
-            // Where we came from: whether this rebuild is ENTERING or
-            // LEAVING a nodegraph (a scope change within the same document)
-            // rather than a new document load. With auto-layout ON, every
-            // rebuild re-runs the layout; with it OFF nothing is rearranged
-            // — a scope change just brings the kept layout into view.
+            // Where we came from: whether this rebuild is entering/leaving
+            // a nodegraph (scope change) vs. a new document load — used to
+            // decide whether to re-fit the viewport (see switchedScope).
             const lastScopeRef = React.useRef({ parsed: null, scope: '' });
             React.useEffect(() => {
                 // [mtlx-perf] flow rebuild timing (off unless MTLX_PERF_LOG).
@@ -1448,11 +1115,9 @@
                 }
                 const switchedScope = cameFrom.parsed === parsed
                     && cameFrom.scope !== scope;
-                // Consume the pending post-scope-exit selection (set by the
-                // Backspace handler / breadcrumb button) — the effect above
-                // already pointed selectedId/previewSel at it; this one
-                // needs to mark it .selected on the freshly built flow, the
-                // same way focusNode() does.
+                // Consume the pending post-scope-exit selection (set by
+                // Backspace/breadcrumb) — mark it .selected on the freshly
+                // built flow, the same way focusNode() does.
                 const pendingSelect = pendingScopeSelectRef.current;
                 pendingScopeSelectRef.current = null;
                 try {
@@ -1476,11 +1141,9 @@
                     setFlow({ nodes: [], edges: [] });
                     setError(errMsg(e));
                 } finally {
-                    // Unconditional on every exit path (success or error) so
-                    // the "Loading graph…" overlay set by changeScope() can
-                    // never get stuck on. A no-op re-render when it was
-                    // already false (e.g. a plain document load/import,
-                    // which never goes through changeScope).
+                    // Unconditional on every exit path so the "Loading
+                    // graph…" overlay (changeScope) can never get stuck on;
+                    // a no-op when already false (plain load/import).
                     setScopeBusy(false);
                     if (MTLX_PERF_LOG) {
                         console.log('[mtlx-perf] flow rebuild: '
@@ -1523,12 +1186,9 @@
                 }));
             };
 
-            // Re-run the automatic layout on the CURRENT node sizes (visible
-            // rows) — for after nodes were expanded/collapsed or dragged.
-            // Also SNAPSHOTS the freshly computed positions into the document
-            // as xpos/ypos (same element-resolution + mxSafe convention as
-            // onNodeDragStop), so the new layout survives reload/export and
-            // the "unsaved changes" indicator fires.
+            // Re-run auto-layout on current node sizes (after expand/
+            // collapse/drag), and snapshot the new positions as xpos/ypos
+            // so the layout survives reload/export and marks unsaved.
             const reorganize = () => {
                 const descsLike = flow.nodes.map((n) => ({
                     id: n.id,
@@ -1564,10 +1224,9 @@
                     edges: prev.edges,
                     nodes: prev.nodes.map((n) => Object.assign({}, n, { position: posOf[n.id] })),
                 }));
-                // Glide the viewport to the fresh layout once it's applied.
-                // fitView returns false while nodes have no measured size yet
-                // — which is the case for a couple of frames right after a
-                // scope change remounts the graph — so retry until it lands.
+                // Glide the viewport to the fresh layout once applied.
+                // fitView returns false while nodes are unmeasured (a few
+                // frames after a scope-change remount) — retry until it lands.
                 fitViewSoon({ padding: 0.15, duration: 350 });
             };
             // Kept current every render so the [] -dep 'A' keydown handler
@@ -1597,11 +1256,9 @@
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
-            // Best-effort native "leave site?" prompt for the actual tab/
-            // window close — the browser owns the wording and there is no
-            // way to run an async export or show custom buttons in response
-            // to it. In-app actions (Import, drag-drop, switching documents)
-            // get the full custom dialog instead — see confirmReplace above.
+            // Best-effort native "leave site?" prompt for tab/window
+            // close — browsers don't allow custom async logic there.
+            // In-app actions get the full custom dialog (confirmReplace).
             React.useEffect(() => {
                 const onBeforeUnload = (e) => {
                     if (!isDirty) return;
@@ -1613,18 +1270,8 @@
             }, [isDirty]);
 
             // Sidebar-aware replacement for inst.fitView(opts): the params
-            // panel is an absolutely-positioned overlay on the SAME stage
-            // the canvas fills (see panelRef), not a flex sibling that
-            // shrinks the canvas — so a plain fitView() has no idea part of
-            // the visible area is occluded on the right and centers nodes
-            // as if the full width were free, hiding them underneath the
-            // panel. Computes the fit by hand into the ACTUAL visible width
-            // instead — mirrors the MiniMap's own occlusion-width constant
-            // (304px open, 15px collapsed) a few hundred lines below.
-            // Returns false in the same "not measured yet" cases
-            // inst.fitView() itself signals, so fitViewSoon's retry loop
-            // keeps working unchanged. Falls back to plain fitView if this
-            // RF build doesn't expose what's needed.
+            // panel overlays the canvas (not a flex sibling), so plain
+            // fitView() doesn't account for it and hides nodes underneath.
             const smartFitView = (opts) => {
                 const inst = rfInstRef.current;
                 const host = panelRef.current;
@@ -1643,9 +1290,8 @@
                 const rect = host.getBoundingClientRect();
                 if (!rect.width || !rect.height) return false;
                 // Narrow-pane exception: an open params panel there is a
-                // transient overlay (see the minimap's own conditional a
-                // few hundred lines below), not a permanent occlusion —
-                // reserving 320 of a ~400px pane would floor visibleWidth.
+                // transient overlay, not permanent occlusion — reserving
+                // 320 of a ~400px pane would floor visibleWidth.
                 const sidebarWidth = (parsedRef.current && paramsOpenRef.current && !narrowRef.current) ? 320 : 15; // mirrors the MiniMap's own occlusion constant
                 const visibleWidth = Math.max(50, rect.width - sidebarWidth);
                 const bounds = getBounds(targetNodes);
@@ -1668,27 +1314,21 @@
 
             const onNodeDoubleClick = (evt, node) => {
                 // Fires for the same double-click the native host listener
-                // above already handles — routed through changeScope too
-                // (rather than setScope directly) so this path can't beat
-                // the overlay to the punch and rebuild synchronously.
+                // already handles — routed through changeScope (not
+                // setScope) so this can't beat the overlay's rebuild.
                 if (node.data && node.data.kind === 'nodegraph') changeScope(node.data.name);
             };
 
-            // Select a node — parameter panel + selection ring — and, for the
-            // panel's jump links, glide the viewport to it. Used by
-            // programmatic jump-to-node call sites (no pointer event behind
-            // them), so it forces exactly this one node selected — unlike
-            // onNodeClick below, which lets React Flow's own click handling
-            // (single-select on a plain click, toggle on Shift/Ctrl/Cmd)
-            // own the .selected flags for real pointer clicks.
+            // Select a node (panel + ring) and, for jump links, glide the
+            // viewport to it. For programmatic call sites — forces exactly
+            // one node selected, unlike onNodeClick's real pointer-click handling.
             const focusNode = (id, pan) => {
                 setSelectedId(id);
                 setSelectedEdgeId(null); // node and edge selection are exclusive
                 setParamsOpen(true);
                 // Real nodes, nodegraphs, and interface input/output
-                // pseudo-nodes all become the remembered preview target —
-                // buildPreviewRenderable knows how to tap an interface
-                // input's literal value or an output's upstream source.
+                // pseudo-nodes all become the preview target —
+                // buildPreviewRenderable knows how to tap each kind.
                 if (id && (id.indexOf('n:') === 0 || id.indexOf('g:') === 0
                         || id.indexOf('i:') === 0 || id.indexOf('o:') === 0)) {
                     setPreviewSel((prev) =>
@@ -1707,14 +1347,9 @@
                 }
             };
 
-            // Click a node in the graph → React Flow's own click handling
-            // has ALREADY updated .selected by the time this fires (plain
-            // click: only this node; Shift/Ctrl/Cmd-click: toggle it into/
-            // out of the current multi-selection — see multiSelectionKeyCode/
-            // selectionKeyCode on <ReactFlowComp>, and the widened
-            // onNodesChange above that lets those changes land). This only
-            // updates which node the parameter panel/preview targets — the
-            // "last-clicked" one, whether it just entered or left the set.
+            // React Flow's own click handling already updated .selected
+            // by the time this fires (plain click vs. Shift/Ctrl toggle);
+            // this just updates which node the panel/preview targets.
             const onNodeClick = (evt, node) => {
                 setSelectedId(node.id);
                 setSelectedEdgeId(null);
@@ -1756,21 +1391,14 @@
             };
 
             const FAST_UNIFORM_TYPES = { float: 1, integer: 1, boolean: 1, vector2: 1, vector3: 1, color3: 1, vector4: 1, color4: 1 };
-            // Push a committed value edit straight into the live preview view's
-            // uniforms (no shader rebuild). Codegen only exposes an instance-pathed
-            // uniform once the input was authored at generation time, so a first
-            // edit of a fresh input misses and rebuilds (self-correcting); any
-            // non-match falls back to the rebuild path — never wrong-but-fast.
-            // Two-pass match: precise instance path first, then — only while
-            // previewing the edited node itself, and only when unambiguous —
-            // a last-segment fallback, since codegen often drops the node
-            // prefix from surface-shader input paths.
+            // Push a committed value edit straight into the live preview's
+            // uniforms (no rebuild); any non-match falls back to a full
+            // rebuild — never wrong-but-fast.
             const tryFastUniformUpdate = (nodeId, inputName, newValue, type) => {
                 const view = previewViewRef.current;
-                // view.__outdated: an in-place material swap (the APPLY path
-                // in graph/preview.jsx) is currently in flight on this view —
-                // its uniforms are about to be superseded, so bail and let
-                // the docRev-triggered rebuild/apply pick up this edit instead.
+                // view.__outdated: an in-place material swap (APPLY path
+                // in graph/preview.jsx) is in flight — bail and let the
+                // docRev-triggered rebuild/apply pick up this edit instead.
                 if (!view || view.__outdated || !FAST_UNIFORM_TYPES[type]) return false;
                 const name = nodeId.slice(2);
                 const path = nodeId.indexOf('i:') === 0
@@ -1783,11 +1411,9 @@
                         && nodeId.indexOf('i:') !== 0
                         && previewTarget && previewTarget.id === nodeId
                         && (previewTarget.scope || '') === scope) {
-                    // Codegen often drops the node prefix from surface-shader input
-                    // paths (the docs previewer matches by last segment for the same
-                    // reason). Trusted only while previewing the edited node itself,
-                    // and only when the input name is unambiguous across the shader's
-                    // uniforms.
+                    // Codegen often drops the node prefix from surface-
+                    // shader input paths; trusted only while previewing the
+                    // edited node itself, and only when the name is unambiguous.
                     const loose = (view.introspected || []).filter((u) =>
                         u.path && u.path.split('/').pop() === inputName && view.uniforms[u.name]);
                     const distinct = new Set(loose.map((u) => u.name));
@@ -1814,13 +1440,9 @@
                 return true; // continuous rAF shows it next frame
             };
 
-            // Commit-time transparency re-check for edits that took the uniform fast
-            // path above (no regeneration): the hwTransparency verdict baked into the
-            // live shader may have gone stale (e.g. opacity dragged from 1.0 to 0.5 on
-            // an opaque-generated material). Re-runs isTransparentSurface via the
-            // engine helper and bumps docRev — the normal regeneration path — only
-            // when the verdict actually flipped. Name-agnostic by design: catches
-            // interface-forwarded/custom-named inputs a name heuristic would miss.
+            // Commit-time transparency re-check for uniform-fast-path edits:
+            // the baked hwTransparency verdict may go stale (e.g. opacity
+            // dragged 1.0->0.5); re-runs it and bumps docRev only if flipped.
             const transparencyRecheckRef = React.useRef({ running: false, queued: false });
             const scheduleTransparencyRecheck = () => {
                 const st = transparencyRecheckRef.current;
@@ -1831,8 +1453,8 @@
                         do {
                             st.queued = false;
                             const view = previewViewRef.current;
-                            // Verdict flips don't affect rendering while Force Transparency is
-                            // off — skip the recheck (the docRev regen on a flip would be wasted work).
+                            // Verdict flips don't matter while Force Transparency
+                            // is off — skip (a regen on flip would be wasted work).
                             if (!(window.getForceTransparency && window.getForceTransparency())) continue;
                             if (!parsed || !view || view.__outdated) continue;
                             const wasTransparent = !!view.isTransparent;
@@ -1854,12 +1476,9 @@
                 })();
             };
 
-            // Resolve a flow id ('n:'/'g:' prefixed) to its document
-            // element — a real node looked up on `container`, a nodegraph
-            // instance looked up on `doc` regardless of scope. Shared by
-            // applyParamEdit and applyColorspace; connectionPoint's own
-            // n:/g:/o: resolution is richer (it also falls back to
-            // getChild) and stays separate.
+            // Resolve a flow id ('n:'/'g:') to its document element — a
+            // real node via `container`, a nodegraph via `doc` regardless
+            // of scope. Shared by applyParamEdit/applyColorspace.
             const elForFlowId = (container, doc, id) => {
                 const name = id.slice(2);
                 if (id.indexOf('n:') === 0 && container) return mxSafe(() => container.getNode(name), null);
@@ -1867,10 +1486,9 @@
                 return null;
             };
 
-            // Shared repatch tail: re-derive a node's visible port list
-            // from an updated allInputs array — re-deriving (instead of
-            // caching `inputs`) is what makes a value landing back at its
-            // nodedef default drop the row out of "set inputs" mode.
+            // Shared repatch tail: re-derive visible ports from updated
+            // allInputs — re-deriving (not caching `inputs`) is what drops
+            // a value-restored-to-default row out of "set inputs" mode.
             const withPatchedInputs = (n, upd) => {
                 const allInputs = (n.data.allInputs || n.data.inputs || []).map(upd);
                 return Object.assign({}, n, {
@@ -1881,16 +1499,13 @@
                 });
             };
 
-            // Write a new literal value onto an input — into the real MaterialX
-            // document when the bindings allow it, and always into the on-screen
-            // flow. The flow is patched IN PLACE (no rebuild) so layout, viewport
-            // and any hand-dragged node positions survive the edit.
+            // Write a new literal value onto an input — into the real doc
+            // when bindings allow it, always into the on-screen flow. The
+            // flow is patched IN PLACE so layout/positions survive.
             const applyParamEdit = (nodeId, inputName, newValue) => {
-                // An edit that RESTORES the nodedef default un-sets the input:
-                // the authored <input> element is removed from the document
-                // and the row stops counting as "set". Any other value marks
-                // it set. (Interface-input pseudo nodes always keep their
-                // element — it IS the interface declaration.)
+                // An edit that RESTORES the nodedef default un-sets the
+                // input (element removed, row stops counting as "set");
+                // interface-input pseudo nodes always keep their element.
                 const fNode = flow.nodes.find((n) => n.id === nodeId);
                 const fMeta = (fNode && nodeId.indexOf('i:') !== 0)
                     ? (fNode.data.allInputs || fNode.data.inputs || []).find((i) => i.name === inputName)
@@ -1904,10 +1519,9 @@
                     let wrote = false;
                     let fastType = '';
                     if (nodeId.indexOf('i:') === 0) {
-                        // Interface-input pseudo node: the graph input itself
-                        // carries the value. mxWriteValue writes the raw
-                        // attribute — setValueString would RETYPE the input
-                        // to 'string' in this wasm build (see mtlx-engine).
+                        // Interface-input pseudo node: the graph input
+                        // carries the value; mxWriteValue writes the raw
+                        // attribute — setValueString would wrongly retype it.
                         const target = container ? mxSafe(() => container.getInput(name), null) : null;
                         wrote = !!target && mxSafe(() => { mxWriteValue(target, newValue, mxElType(target)); return true; }, false);
                         fastType = target ? mxSafe(() => mxElType(target), '') : '';
@@ -1921,10 +1535,8 @@
                             fastType = fMeta.type;
                         } else if (el) {
                             // Create-or-fetch with a GUARANTEED type, then
-                            // write the raw value attribute. The old
-                            // addInput(name, type) + setValueString pair
-                            // mistyped inputs and broke every recompile
-                            // ("Could not find a nodedef for node …").
+                            // write the raw attribute — the old addInput+
+                            // setValueString mistyped inputs, breaking recompiles.
                             const t = (fMeta && fMeta.type) || '';
                             const target = ensureTypedInput(parsed.doc, el, inputName, t);
                             wrote = !!target && mxSafe(() => { mxWriteValue(target, newValue, t || mxElType(target)); return true; }, false);
@@ -1958,10 +1570,9 @@
                 }));
             };
 
-            // Names added via registerPickedFile below — these never round-trip
-            // through disk, so externalReload's host-resent map can never
-            // include them. Tracked here so externalReload can preserve them
-            // instead of silently dropping them on the next live-reload.
+            // Names added via registerPickedFile never round-trip through
+            // disk, so externalReload's host-resent map can't include them —
+            // tracked here so externalReload can preserve them instead.
             const pickedFileNamesRef = React.useRef(new Set());
 
             // A texture picked from the parameter panel joins the session's
@@ -1974,13 +1585,9 @@
                 pickedFileNamesRef.current.add(file.name);
             };
 
-            // Tag an input with a COLORSPACE — or clear it back to the
-            // nodedef default. A codegen decision (the CMS bakes the
-            // transform into the generated shader), so it recompiles.
-            // `inputType` defaults to 'filename' (its original, only use)
-            // but must be passed for color3/color4 VALUE inputs — creating
-            // the input element with the wrong type would leave it
-            // type-mismatched against the nodedef.
+            // Tag an input with a COLORSPACE (or clear it) — a codegen
+            // decision that recompiles. `inputType` defaults to 'filename'
+            // but must be passed for color3/color4 inputs to avoid a mismatch.
             const applyColorspace = (nodeId, inputName, cs, inputType) => {
                 if (!parsed) return;
                 const type = inputType || 'filename';
@@ -2031,11 +1638,8 @@
             };
 
             // Serialize the CURRENT document with a retry against the
-            // transient '__pv_*' preview-tap race (see serializeDocXml):
-            // up to 8 retries, 250ms apart, before giving up. Shared by
-            // Export and the view-only Document XML dialog (item 8) so
-            // both cope with the identical race the same way. Resolves to
-            // { xml, error } — exactly one is set.
+            // transient '__pv_*' preview-tap race: up to 8 retries, 250ms
+            // apart. Shared by Export and the Document XML dialog (item 8).
             const resolveDocXml = async (attempt) => {
                 if (!parsed) return { xml: null, error: 'no document' };
                 try {
@@ -2052,31 +1656,20 @@
                 }
             };
 
-            // Kept current every render (same trick as ingestRef /
-            // dirtyRevRef) so the []-dep VS Code bridge effect above can
-            // serialize THIS render's document — capturing resolveDocXml
-            // directly in that effect pins the FIRST render's copy, whose
-            // `parsed` is still null, so every extension save / graph->
-            // viewer sync would fail with 'no document'.
+            // Kept current every render so the []-dep VS Code bridge
+            // effect can serialize THIS render's document — capturing
+            // resolveDocXml directly would pin the first render's null parsed.
             const resolveDocXmlRef = React.useRef(null);
             resolveDocXmlRef.current = resolveDocXml;
 
-            // Derives the default export base name (no extension) from the
-            // parsed document's label — shared by the direct one-click
-            // Export & Continue path (exportMtlx below) and the Export
-            // dialog's (item B1) prefilled filename field.
+            // Derives the default export base name (no extension) from
+            // the parsed document's label — shared by exportMtlx and the
+            // Export dialog's prefilled filename field.
             const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
 
-            // Hand the current document off to the material viewer — item
-            // F2.2's "Send to Viewer", the reverse of the receive-side
-            // machinery below (the 'mtlx-load-document' effect handles the
-            // viewer's own "Send to Editor" button the same way, in
-            // reverse). Serializes through the SAME resolveDocXml() the
-            // Export path uses just above, so it copes with the transient
-            // '__pv_*' preview-tap race identically rather than re-deriving
-            // that retry logic. `files` mirrors viewer-app.jsx's sendToEditor
-            // filter: every dropped session file that ISN'T a .mtlx (loose
-            // textures the graph carries alongside the document).
+            // Hand the current document off to the material viewer (item
+            // F2.2's "Send to Viewer"). Serializes through the same
+            // resolveDocXml() as Export; `files` excludes the .mtlx itself.
             const sendToViewer = async () => {
                 if (!parsed) return;
                 const { xml, error } = await resolveDocXml();
@@ -2088,17 +1681,9 @@
                 openInViewer({ xml, name: defaultExportBase(), files });
             };
 
-            // Serialize the CURRENT document — edits, connections, layout
-            // positions, everything — and write it out as .mtlx. The stdlib
-            // is attached via setDataLibrary (referenced, not contained), so
-            // the write emits exactly the user's graph. Prefers a native
-            // save-file picker (lets the user choose where the file goes /
-            // overwrite in place) and falls back to the anchor-download
-            // mechanism when the picker API is unavailable or fails for a
-            // reason other than the user canceling. `nameOverride` (item
-            // B1's Export dialog) supersedes the label-derived base name;
-            // every existing caller passes nothing, so behavior there is
-            // byte-identical.
+            // Serialize the CURRENT document (edits, connections, layout)
+            // and write it as .mtlx; prefers a native save-file picker,
+            // falling back to anchor-download when unavailable/failed.
             const doExportMtlx = async (nameOverride) => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
@@ -2136,19 +1721,9 @@
                 markSaved(); // the just-downloaded file matches the current document
                 return true;
             };
-            // Same document, packaged as a .zip alongside every texture the
-            // Export dialog (item B1) found a session-file match for.
-            // `resolvedTextures` is the { ref, key }[] list ExportDialog was
-            // opened with (scanExportTextures below) — reused as-is rather
-            // than rescanning, since the modal backdrop closes on any
-            // outside click, so the live doc can't drift out from under an
-            // open dialog. Each texture is stored under its AUTHORED
-            // reference path (forward slashes, no leading './') so
-            // re-dropping the zip later resolves textures through the
-            // normal import path (readDroppedItems -> expandZips ->
-            // findFileForRef, which suffix/basename-matches — see
-            // js/mtlx-engine.js) — not lowercased/renamed the way
-            // findFileForRef's own normPath would for MATCHING purposes.
+            // Same document packaged as a .zip alongside every matched
+            // texture (`resolvedTextures`, from scanExportTextures). Stored
+            // under its authored ref path so re-dropping the zip resolves normally.
             const doExportZip = async (name, resolvedTextures) => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
@@ -2181,12 +1756,9 @@
                 markSaved(); // the just-downloaded zip's document matches the current one
                 return true;
             };
-            // A second picker opening mid-export (e.g. a fast double-click)
-            // would race the first — guard exportMtlx/exportZip themselves
-            // so only one export runs at a time (shared across both
-            // formats, since only one export can meaningfully be in flight
-            // at once); the retry recursion in resolveDocXml above stays
-            // unguarded so it can keep looping inside that single run.
+            // A second picker opening mid-export would race the first —
+            // guard exportMtlx/exportZip so only one export runs at a time
+            // (shared across both formats); resolveDocXml's retry stays unguarded.
             const exportBusyRef = React.useRef(false);
             const exportMtlx = async (nameOverride) => {
                 if (exportBusyRef.current) return false;
@@ -2207,17 +1779,9 @@
                 }
             };
 
-            // Scan the WHOLE document (root nodes + every nodegraph's
-            // nodes — same one-level-deep container walk ungroupNodegraph's
-            // `connectables` helper uses below) for authored `filename`
-            // inputs, and resolve each ref against this session's dropped
-            // files (fileMapRef.current). Only run when opening the Export
-            // dialog (item B1), to preview what a "ZIP with textures"
-            // export would bundle. Reuses collectPorts (js/graph/model.jsx)
-            // for its existing filename-input + value resolution — the
-            // same helper copySelection relies on to capture a node's
-            // texture refs (see its comment above) — rather than
-            // re-deriving port types by hand.
+            // Scan the WHOLE document (root + every nodegraph's nodes)
+            // for authored `filename` inputs and resolve each against
+            // fileMapRef.current — run when opening the Export dialog.
             const scanExportTextures = () => {
                 const resolved = [];
                 const unresolved = [];
@@ -2241,22 +1805,9 @@
                 return { resolved, unresolved };
             };
 
-            // Toolbar "Presets" button (item F3.2): fetch a curated
-            // official example .mtlx and hand it to ingest() much like a
-            // drag-drop. The crawl that resolves a preset's xi:includes
-            // and fileprefix-scoped filename refs into a { relPath: Blob }
-            // map now lives in fetchPresetFiles (js/shared/mtlx-ui.jsx) —
-            // this wrapper just gates it behind the same confirmReplace
-            // unsaved-changes confirm as every other document-replacing
-            // action (guardedIngest, the document-picker <select>'s
-            // onChange) since a preset always introduces a new .mtlx,
-            // drives the dialog's busy/busyPath state through the fetch
-            // (`presetsOpen` deliberately stays open through it, so a
-            // failed fetch's setError leaves the dialog up for another
-            // pick), and hands the result to ingestRef.current with the
-            // crawl's own explicit root-doc key — see fetchPresetFiles'
-            // header comment for why that beats ingest()'s "auto-pick
-            // when exactly one .mtlx is in the map" heuristic here.
+            // Toolbar "Presets" button: fetches a curated example .mtlx
+            // (crawl lives in fetchPresetFiles) and hands it to ingest(),
+            // gated behind confirmReplace like every other doc-replacing action.
             const loadPreset = (preset) => {
                 confirmReplace(true, () => {
                     (async () => {
@@ -2284,12 +1835,9 @@
                 if (!parsed) return;
                 setExportDialog({ defaultName: defaultExportBase(), textures: scanExportTextures() });
             };
-            // Toolbar "Shader Code" button: lists the document's renderable
-            // materials/shaders and opens ShaderExportDialog (js/shared/
-            // mtlx-ui.jsx) over them. The mxExclusive wrap is deliberate:
-            // graph previews mutate the live doc with transient __pv_*
-            // wrappers strictly inside their own mxExclusive holds, so
-            // enumerating renderables inside a hold can never observe them.
+            // Toolbar "Shader Code" button: lists renderable materials
+            // and opens ShaderExportDialog. mxExclusive is deliberate —
+            // preview's transient __pv_* wrappers stay inside their own hold.
             const openShaderExport = async () => {
                 if (!parsed) return;
                 let rs = [];
@@ -2305,13 +1853,9 @@
                 }
                 setShaderExport({ renderables: rs });
             };
-            // Export dialog's onExport — routes to the .mtlx or .zip
-            // writer per the user's format choice, through the same
-            // exportBusyRef-guarded wrappers the toolbar/Export & Continue
-            // flows use. A thrown error here is caught by ExportDialog
-            // itself (js/graph/dialogs.jsx), which leaves the dialog open
-            // (the setError banner above already surfaces the reason) so
-            // the user can retry without re-entering the filename.
+            // Export dialog's onExport: routes to .mtlx/.zip through the
+            // same exportBusyRef-guarded wrappers as the toolbar. Errors
+            // thrown here are caught by ExportDialog, keeping it open to retry.
             const handleExportDialogSubmit = async ({ name, format }) => {
                 const ok = format === 'zip'
                     ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [])
@@ -2333,31 +1877,17 @@
                 setXmlDialogOpen(true);
             };
 
-            // Background document-text validation (item 9's "Validate"
-            // button/dialog, now source-of-truth-driven): recomputes
-            // validateStatus from docXmlRef's cached TEXT (declared near
-            // docRev above) whenever that text changes — NOT gated on the
-            // dialog being open, so the toolbar button itself can show a
-            // live green/red badge before Validate is ever clicked. Runs
-            // through validateMtlxXml (js/graph/model.jsx), which builds
-            // a THROWAWAY document from the raw XML instead of calling
-            // parsed.doc.validate() directly — the live doc gets healed
-            // (stripValuesFromConnectedInputs) by every serializeDocXml
-            // call, so validating it would mask exactly the faults this
-            // feature exists to surface. Debounced on the same idea as
-            // flushUndoSnapshot's own undo-snapshot debounce, just on a
-            // slightly longer cadence (VALIDATE_DEBOUNCE_MS) since a rapid
-            // burst of edits (each bumping docXmlRev) shouldn't run
-            // doc.validate() once per settle.
+            // Background validation: recomputes validateStatus from
+            // docXmlRef's cached text via validateMtlxXml, which builds a
+            // THROWAWAY doc — parsed.doc itself gets healed on serialize.
             React.useEffect(() => {
                 const { xml, rev } = docXmlRef.current;
                 if (!xml) { setValidateStatus(null); return; } // nothing loaded yet — don't spam validation attempts
                 const t = setTimeout(() => {
                     validateMtlxXml(xml).then((res) => {
-                        // Stale guard: a newer edit landed (docXmlRef.current.rev
-                        // bumped again) while this validation was in flight —
-                        // drop this result; the effect run it superseded
-                        // will produce (and apply) its own.
+                        // Stale guard: a newer edit landed (rev bumped)
+                        // while this validation was in flight — drop this
+                        // result; the superseding effect run applies its own.
                         if (docXmlRef.current.rev !== rev) return;
                         setValidateStatus(res);
                     });
@@ -2365,14 +1895,9 @@
                 return () => clearTimeout(t);
             }, [docXmlRev]);
 
-            // Validation popup (item 9's "Validate" button): consumes the
-            // background validateStatus above, but ALSO forces an
-            // immediate (non-debounced) validation pass right when the
-            // dialog opens — otherwise a dialog opened mid-debounce would
-            // show whatever the last SETTLED result was (or nothing, on
-            // the very first-ever open) for up to VALIDATE_DEBOUNCE_MS.
-            // Same staleness guard as the background effect above, so an
-            // edit landing mid-flight can't clobber a fresher result.
+            // Validation popup: forces an immediate (non-debounced) pass
+            // when the dialog opens, so it doesn't show a stale result for
+            // up to VALIDATE_DEBOUNCE_MS; same staleness guard as above.
             React.useEffect(() => {
                 if (!validateOpen) return;
                 const { xml, rev } = docXmlRef.current;
@@ -2384,19 +1909,17 @@
             }, [validateOpen]);
 
             // ---- Graph editing: connect / disconnect / delete ------------
-            // Same contract as applyParamEdit: every edit is written into
-            // the REAL MaterialX document (docRev bumps → the preview
-            // re-renders) and patched into the flow IN PLACE, so layout,
-            // viewport and hand-dragged positions survive.
+            // Same contract as applyParamEdit: every edit writes into the
+            // real doc (docRev bumps the preview) and patches the flow
+            // in place, so layout/viewport/positions survive.
 
             // The container the current scope's elements live in.
             const scopeContainer = () => !parsed ? null
                 : (scope ? mxSafe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc);
 
-            // The document ELEMENT that carries a connection's attributes —
-            // the target <input>, or the <output> element itself for output
-            // pseudo-nodes. `create` authors a nodedef-default input on
-            // first use (same trick as applyParamEdit).
+            // The document ELEMENT that carries a connection's attributes
+            // — the target <input>, or the <output> itself for output
+            // pseudo-nodes; `create` authors a default input on first use.
             const connectionPoint = (targetId, targetHandle, create) => {
                 const c = scopeContainer();
                 if (!c) return null;
@@ -2430,12 +1953,8 @@
             };
 
             // Stash a connection point's about-to-be-destroyed literal
-            // (item 4a) — called immediately before every mxRemoveAttr
-            // (…, 'value') below that runs as part of writing a NEW
-            // connection onto an input, so severConnection can bring it
-            // back later instead of falling back to the nodedef default. A
-            // no-op when the input carries no value, or its path can't be
-            // resolved.
+            // (item 4a), called before every mxRemoveAttr(...,'value') a
+            // new connection triggers, so severConnection can restore it.
             const stashValueBeforeRemoval = (point) => {
                 const val = mxElAttr(point, 'value');
                 if (!val) return;
@@ -2444,27 +1963,9 @@
                 stashedValuesRef.current[key] = val;
             };
 
-            // Fully sever a connection point: the connection attributes go,
-            // then — a stashed literal (item 4a) takes priority and is
-            // written straight back (the element is always kept in that
-            // case, since it now carries the restored value); otherwise a
-            // real node's OR a nodegraph-instance's <input> element left
-            // carrying NOTHING (no value either) is removed outright — the
-            // input reads as "default" again for set/all-input purposes.
-            // EXCEPT: a nodegraph's <input> child doubles as an interface
-            // DECLARATION — internal nodes (and the graph's own outputs)
-            // may bind to it via interfacename="<name>", so a pin that is
-            // referenced from inside the graph must survive severing (attrs
-            // cleared, element kept); only a pin nothing references is
-            // removed. Nodegraph interface inputs (i:) and <output>
-            // elements (o:) are declarations too: they always keep their
-            // element. Returns the point's final literal value string
-            // (restored stash, or a value it already carried) so flow-side
-            // callers can show it instead of guessing the nodedef default;
-            // '' when the element survives holding no value (a kept,
-            // still-referenced interface pin — the flow keeps its row
-            // visible); null when the element is gone (or was never
-            // removable).
+            // Fully sever a connection point: clears attrs, restores any
+            // stashed literal, else removes a now-empty <input> — EXCEPT an
+            // interface pin still interfacename-referenced, which must survive.
             const severConnection = (point, targetId) => {
                 clearConnAttrs(point);
                 const key = mxSafe(() => point.getNamePath(), '');
@@ -2483,15 +1984,9 @@
                 const nm = mxElName(point);
                 if (par && nm) {
                     if (kind === 'g:') {
-                        // The parent IS the <nodegraph>: scan its nodes'
-                        // inputs and its own outputs (same traversal as
-                        // renameElement's connectables) for interfacename
-                        // bindings to this pin — interface pins referenced
-                        // by interfacename must survive severing, so a
-                        // referenced pin keeps its (attr-cleared) element.
-                        // '' (not null) tells patchInputConn the element is
-                        // still there, just valueless — the row stays
-                        // visible, matching the kept declaration.
+                        // Scan the nodegraph's nodes/outputs (same
+                        // traversal as renameElement's connectables) for
+                        // interfacename refs — '' (not null) means kept-but-valueless.
                         for (const n of vecToArray(mxSafe(() => par.getNodes(), []))) {
                             for (const inp of vecToArray(mxSafe(() => n.getInputs(), []))) {
                                 if (mxElAttr(inp, 'interfacename') === nm) return '';
@@ -2529,19 +2024,9 @@
                 return !ts || !td || ts === td;
             };
 
-            // Patch ONE input's connected flag on a flow node, re-deriving
-            // the visible rows. Connecting SETS the input (it surfaces even
-            // in "set inputs" mode); disconnecting a real node's (or a
-            // nodegraph instance's) input reverts it to the nodedef default
-            // (severConnection removed the document element), so it stops
-            // counting as set — UNLESS severConnection restored a stashed
-            // literal (item 4c), in which case `restoredValue` is that
-            // string and the row shows it (still authored=true, since the
-            // document element still carries it) instead of the default.
-            // severConnection also returns '' (not null) for a KEPT but
-            // valueless element (a still-referenced interface pin) — same
-            // branch: the row stays visible, showing no value.
-            // Interface inputs and output pseudo nodes only flip the flag.
+            // Patch ONE input's connected flag, re-deriving visible rows.
+            // Connecting SETS the input; disconnecting reverts to default
+            // UNLESS restored (item 4c); interface/output nodes just flip the flag.
             const patchInputConn = (n, inputName, connected, restoredValue) => {
                 const reverts = !connected && (n.id.indexOf('n:') === 0 || n.id.indexOf('g:') === 0);
                 const upd = (i) => i.name !== inputName ? i
@@ -2550,30 +2035,18 @@
                         : (restoredValue != null
                             ? { connected: false, authored: true, value: restoredValue }
                             : (reverts
-                                // keepRow (flow-state only, never written to the
-                                // document): keeps the just-disconnected port
-                                // visible in 'authored' mode so the user can
-                                // immediately reconnect it — visiblePortsFor
-                                // would otherwise drop it the instant authored
-                                // flips false. The next full rebuild (scope
-                                // change/reload) re-derives visibility from
-                                // document truth and drops this flag.
+                                // keepRow (flow-state only): keeps a
+                                // just-disconnected port visible so the
+                                // user can reconnect it; a rebuild drops the flag.
                                 ? { connected: false, authored: false, keepRow: true,
                                     value: i.defValue !== undefined ? i.defValue : i.value }
                                 : { connected: false })));
                 return withPatchedInputs(n, upd);
             };
 
-            // Switch the displayed node to another SIGNATURE (a distinct
-            // input/output type set — add: float vs color3 vs …). The
-            // node's type follows the new signature's DEFAULT version.
-            // Authored inputs whose name AND type survive keep their values
-            // and wires UNLESS an input is both unconnected and still equal
-            // to the OLD signature's default — an input the user never
-            // touched tracks the new signature's default instead of staying
-            // pinned to the old one. Everything else (renamed, re-typed, or
-            // gone in the new signature) reverts. If the output type
-            // changed, everything this node fed is severed the same way.
+            // Switch the displayed node to another SIGNATURE (distinct
+            // input/output type set). Authored inputs surviving name+type
+            // keep values unless untouched (still at the OLD default).
             const applySignature = (flowId, group) => {
                 if (!parsed || !group || String(flowId).indexOf('n:') !== 0) return;
                 const c = scopeContainer();
@@ -2583,10 +2056,8 @@
                 const oldType = mxElType(el);
 
                 // The OLD nodedef's defaults, captured BEFORE retyping —
-                // collectPorts resolves el.getNodeDef() against the CURRENT
-                // type/version; once retyped it would report the NEW
-                // defaults instead, and the untouched-input check below
-                // needs the OLD ones to compare against.
+                // collectPorts resolves against the CURRENT type/version,
+                // so retyping first would report NEW defaults instead.
                 const oldDefault = {};
                 for (const i of collectPorts(el).inputs) oldDefault[i.name] = i.defValue;
 
@@ -2604,10 +2075,9 @@
                 else mxRemoveAttr(el, 'nodedef');
                 mxRemoveAttr(el, 'version');
 
-                // Authored inputs: name+type matches survive UNLESS they're
+                // Authored inputs: name+type matches survive UNLESS
                 // unconnected AND still equal the OLD default (untouched —
-                // revert so it resurfaces at the NEW default); everything
-                // else reverts too.
+                // reverts to resurface at the NEW default); else reverts too.
                 const wanted = {};
                 def.inputs.forEach((i) => { wanted[i.name] = i; });
                 const droppedInputs = new Set();
@@ -2631,8 +2101,7 @@
                         const point = connectionPoint(e.target, e.targetHandle, false);
                         // Tag the pushed copy with whatever severConnection
                         // restored (item 4c) — the nodes.map pass below
-                        // reads it back out to show it instead of guessing
-                        // the default.
+                        // reads it back to show it instead of guessing the default.
                         const restored = point ? severConnection(point, e.target) : null;
                         severedDownstream.push(Object.assign({}, e, { __restoredValue: restored }));
                     }
@@ -2685,13 +2154,8 @@
             };
 
             // Switch the displayed node to another VERSION of its CURRENT
-            // signature (standard_surface 1.0.1 default / 1.0.0 …). Ports
-            // are identical across versions (they share signature key by
-            // construction — see groupSignatures), so no input
-            // reconciliation is needed: only the version attribute changes,
-            // el.getNodeDef() resolves the rest, and unauthored inputs pick
-            // up the new version's defaults automatically through
-            // collectPorts.
+            // signature. Ports are identical across versions (shared
+            // signature key), so only the version attribute changes.
             const applyVersion = (flowId, versionDef) => {
                 if (!parsed || !versionDef || String(flowId).indexOf('n:') !== 0) return;
                 const c = scopeContainer();
@@ -2725,17 +2189,9 @@
                 });
             };
 
-            // Write a connection SOURCE onto a connection point — shared by
-            // onConnect and both wirePendingConnection branches (item 9):
-            // clear any stale connection attrs, then set interfacename (a
-            // nodegraph interface-input source), nodegraph (a nodegraph-
-            // instance source) or nodename (a real node source); output=
-            // only when the source really declares several outputs — the
-            // synthesized single "out" handle must not leak into the
-            // document. A connected input takes its value from the wire —
-            // a literal alongside it would make the document invalid, so
-            // it's stashed first (item 4a, so disconnecting later can
-            // bring it straight back) then stripped.
+            // Write a connection SOURCE onto a connection point (shared
+            // by onConnect and wirePendingConnection): sets interfacename/
+            // nodegraph/nodename + output=, then stashes/strips any literal.
             const writeConnSource = (point, srcId, outName, srcOutputs) => {
                 clearConnAttrs(point);
                 const srcName = srcId.slice(2);
@@ -2805,13 +2261,9 @@
                 setSelectedEdgeId((cur) => (cur === edge.id ? null : cur));
             };
 
-            // Where a connection/edge drag actually ended, as
-            // { el, client }. Mouse: the native event's own target and
-            // clientX/Y. Touch: touch events keep `target`/coordinates
-            // pinned to where the touch STARTED (not where it ended), so
-            // the drop point has to come from changedTouches +
-            // elementFromPoint instead. Shared by onConnectEnd and
-            // onEdgeUpdateEnd.
+            // Where a connection/edge drag actually ended, as { el,
+            // client }. Touch events keep `target`/coords pinned to where
+            // the touch STARTED, so the drop point needs elementFromPoint.
             const resolveDropPoint = (event) => {
                 const touchPoint = (event && event.changedTouches && event.changedTouches.length)
                     ? event.changedTouches[0] : null;
@@ -2825,25 +2277,16 @@
                 };
             };
 
-            // Dragging an edge END (the updater circle on the target
-            // endpoint), four outcomes: dropped back on the SAME port →
-            // keep (onEdgeUpdate's same-endpoints early return); dropped
-            // on another compatible port → reconnect (onEdgeUpdate);
-            // dropped on a NODE BODY → port-picker seeded with the wire's
-            // anchored source (picking a port MOVES the wire there via
-            // replaceEdge, dismissing keeps it); dropped in the void →
-            // disconnect. The ref tells the callbacks apart (the standard
-            // React Flow pattern).
+            // Dragging an edge END: same port keeps it, another compatible
+            // port reconnects, a node body opens a port-picker (moves the
+            // wire via replaceEdge), the void disconnects.
             const edgeUpdateDone = React.useRef(true);
             const onEdgeUpdateStart = () => { edgeUpdateDone.current = false; };
             const onEdgeUpdate = (oldEdge, conn) => {
                 edgeUpdateDone.current = true;
                 // Any onEdgeUpdate invocation means the drop landed on a
-                // handle (same-port keep, reconnect, or invalid) — mark the
-                // gesture handled so onConnectEnd's popup machinery stays
-                // out. Without this, a same-port drop-back leaked into the
-                // pane branch (the click-through occupied handle no longer
-                // intercepts the drop element) and spawned the add-search.
+                // handle — mark the gesture handled so onConnectEnd's popup
+                // machinery stays out (else a same-port drop-back spawned the add-search).
                 connectDidRunRef.current = true;
                 if (!isValidConnection(conn)) return;
                 if (oldEdge.source === conn.source && oldEdge.sourceHandle === conn.sourceHandle
@@ -2857,13 +2300,8 @@
                     const nodeEl = dropEl && dropEl.closest && dropEl.closest('.react-flow__node');
                     if (nodeEl) {
                         // Dropped the grabbed wire on a NODE BODY: offer
-                        // the same port-picker as a new-connection drag,
-                        // with the wire's anchored SOURCE as the origin.
-                        // NO disconnect here — dismissing the picker keeps
-                        // the wire; picking a port moves it (replaceEdge,
-                        // consumed in pickPort). Dropping on the wire's own
-                        // target node is fine: the original port shows up
-                        // as a candidate and picking it nets out unchanged.
+                        // the same port-picker as a new-connection drag.
+                        // NO disconnect here — dismissing keeps the wire; picking moves it (replaceEdge).
                         const targetId = nodeEl.getAttribute('data-id');
                         const targetNode = targetId ? flow.nodes.find((n) => n.id === targetId) : null;
                         const candidates = [];
@@ -2901,31 +2339,13 @@
                 edgeUpdateDone.current = true;
             };
 
-            // Drag a connection into EMPTY canvas (item 5): reuse the
-            // port-dot double-click add-node flow (openPortAdd) instead of
-            // just dropping the half-made connection on the floor. Also
-            // handles dropping onto a NODE BODY (not a precise handle) by
-            // offering a port-picker popover.
-            // onConnectStart stashes the drag's origin port; onConnectEnd
-            // resolves what the drag was actually dropped ON. Mouse: the
-            // native event's own target. Touch: touch events keep `target`
-            // pinned to wherever the touch STARTED (not where it ended), so
-            // the drop point has to be resolved via elementFromPoint
-            // instead. Dropped on a handle → onConnect already ran (or it
-            // was a zero-distance click), nothing to do here; dropped on a
-            // node body → open a port-picker popover; dropped on the pane
-            // (class "react-flow__pane", covering empty canvas and other
-            // non-node/non-handle descendants like the edges SVG) → open
-            // the add-search pre-filtered to what plugs into the origin
-            // port, exactly like a port-dot double-click.
+            // Drag a connection into EMPTY canvas (item 5): reuses the
+            // port-dot add-node flow (openPortAdd) instead of dropping it;
+            // a node-body drop offers a port-picker popover instead.
             const connectOriginRef = React.useRef(null);
-            // Tracks whether onConnect actually fired for this drag gesture.
-            // React Flow's connectionRadius (~20px) completes a connection
-            // when the drop lands NEAR a handle even though the DOM element
-            // under the cursor is the node body or the pane — so a DOM-only
-            // check in onConnectEnd can't distinguish "connected" from
-            // "dropped loose" and would wrongly pop up the port-picker/
-            // add-search on top of an already-made connection.
+            // Tracks whether onConnect actually fired: React Flow's
+            // connectionRadius (~20px) can complete a connection even when
+            // the DOM element under the cursor is the node body/pane.
             const connectDidRunRef = React.useRef(false);
             const onConnectStart = (event, params) => {
                 connectDidRunRef.current = false;
@@ -2934,37 +2354,25 @@
             const onConnectEnd = (event) => {
                 const origin = connectOriginRef.current;
                 connectOriginRef.current = null;
-                // This drag is an edge UPDATE (disconnect/reconnect) — React Flow runs
-                // the same handle-drag machinery for edge ends, so onConnectStart/End
-                // fire here too. onEdgeUpdateStart already flipped edgeUpdateDone false
-                // (and onEdgeUpdateEnd, which fires after us, will handle the
-                // disconnect); a new-connection drag never touches the flag.
+                // This drag is an edge UPDATE — React Flow runs the same
+                // handle-drag machinery, so onConnectStart/End fire too;
+                // onEdgeUpdateEnd (after us) handles the actual disconnect.
                 if (!edgeUpdateDone.current) return;
                 // The drag actually completed a connection (connectionRadius
                 // snapped it onto a nearby handle) — no popup either way.
                 if (connectDidRunRef.current) return;
                 if (!origin || !origin.nodeId) return;
-                // Touch-vs-mouse drop resolution — see resolveDropPoint
-                // above. dropClient (item A3) lets addNodeFromCatalog place
-                // the picked node so the newly wired handle lands under the
-                // cursor instead of the viewport center; also used to
-                // position the node-body port-picker popover below.
+                // Touch-vs-mouse drop resolution (resolveDropPoint above).
+                // dropClient lets addNodeFromCatalog place the new node
+                // under the cursor instead of the viewport center.
                 const { el: dropEl, client: dropClient } = resolveDropPoint(event);
                 // FIRST: dropped on a handle → React Flow already handled
-                // it (onConnect ran if the connection was valid); a plain
-                // click on a port is also a zero-distance drag that starts
-                // and ends on its own handle. Either way, nothing to do
-                // here — this also keeps port single-clicks inert so port
-                // DOUBLE-clicks reach the node-component dblclick handlers
-                // (openPortAdd) instead of being swallowed as a drag.
+                // it; nothing to do — this also keeps port single-clicks
+                // inert so DOUBLE-clicks reach openPortAdd instead of being swallowed.
                 if (dropEl && dropEl.closest && dropEl.closest('.react-flow__handle')) return;
                 // SECOND: dropped on a NODE BODY — checked before the pane
-                // below because in React Flow 11 nodes are DOM descendants
-                // of the pane, so closest('.react-flow__pane') would match
-                // every drop otherwise. Offers a port-picker popover
-                // instead of demanding pixel-precise aim at the exact
-                // handle dot. Same node-lookup pattern as the native
-                // dblclick-to-open-scope handler above.
+                // below since nodes are DOM descendants of the pane in RF 11
+                // (closest('.react-flow__pane') would match every drop).
                 const nodeEl = dropEl && dropEl.closest && dropEl.closest('.react-flow__node');
                 if (nodeEl) {
                     const targetId = nodeEl.getAttribute('data-id');
@@ -3006,11 +2414,9 @@
                     });
                     return;
                 }
-                // LAST: dropped on the pane (class "react-flow__pane").
-                // Handles and nodes are already ruled out above, so
-                // closest() is now safe here too and correctly covers pane
-                // descendants that aren't nodes/handles (e.g. the edges SVG
-                // layer, background) as an empty-canvas drop.
+                // LAST: dropped on the pane. Handles/nodes are ruled out
+                // above, so closest() is safe here and covers pane
+                // descendants (edges SVG, background) as an empty-canvas drop.
                 const paneEl = dropEl && dropEl.closest && dropEl.closest('.react-flow__pane');
                 if (paneEl) {
                     const node = flow.nodes.find((n) => n.id === origin.nodeId);
@@ -3033,10 +2439,8 @@
             };
 
             // Port-picker popover: Escape and outside-pointerdown both
-            // close it, same pattern as ColorSwatch (js/shared/mtlx-ui.jsx)
-            // — the popover itself stops propagation on its own
-            // pointerdown, so this effect only ever sees genuinely-outside
-            // clicks.
+            // close it (same pattern as ColorSwatch) — the popover stops
+            // propagation on its own pointerdown, so this only sees outside clicks.
             useEscapeToClose(() => setPortPicker(null), !!portPicker);
             React.useEffect(() => {
                 if (!portPicker) return undefined;
@@ -3050,27 +2454,17 @@
             // Commit a candidate pick: wire it exactly like a completed
             // drag-to-handle connection, then close the popover.
             const pickPort = (candidate) => {
-                // A picker opened by dropping a GRABBED wire on a node body
-                // (replaceEdge set in onEdgeUpdateEnd) — the pick MOVES the
-                // wire: remove the old edge, then wire the chosen port.
-                // When the pick happens to be the wire's original port,
-                // disconnect+reconnect nets out to the same edge —
-                // acceptable. Dismiss/Escape/outside-click never get here,
-                // which is exactly the "keep the wire" behavior.
+                // A picker opened by dropping a GRABBED wire (replaceEdge)
+                // MOVES the wire on pick: remove the old edge, then wire
+                // the chosen port. Dismiss/Escape never gets here — wire stays.
                 if (portPicker.replaceEdge) disconnectEdge(portPicker.replaceEdge);
                 onConnect(candidate.params);
                 setPortPicker(null);
             };
 
-            // Syntax validity of a candidate MaterialX element name: prefer
-            // the binding's own checker when one is exposed, else fall back
-            // to a conservative identifier regex mirroring MaterialX's
-            // naming rules (letters/digits/underscore, not leading with a
-            // digit) — empty names are always rejected either way. The
-            // native mx.isValidName does NOT enforce the no-leading-digit
-            // rule (confirmed empirically — it returns true for e.g.
-            // "8foo"), so that check always runs first regardless of the
-            // native checker's verdict.
+            // Syntax validity of a candidate name: prefers the binding's
+            // checker, else a conservative regex. mx.isValidName does NOT
+            // enforce no-leading-digit (confirmed empirically) — checked first regardless.
             const isValidMtlxName = (name) => {
                 if (!name) return false;
                 if (/^[0-9]/.test(name)) return false; // native mx.isValidName does NOT enforce this rule (confirmed empirically) — must always check it ourselves
@@ -3083,10 +2477,9 @@
                 return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
             };
 
-            // Human-readable reason a name fails isValidMtlxName — messaging
-            // only, never the validity decision itself (that stays solely
-            // isValidMtlxName's call, including the native mx.isValidName
-            // path). Only meaningful to call once isValidMtlxName === false.
+            // Human-readable reason a name fails isValidMtlxName —
+            // messaging only, never the validity decision itself. Only
+            // meaningful to call once isValidMtlxName === false.
             const describeInvalidMtlxName = (name) => {
                 if (!name) return 'Name cannot be empty';
                 if (/^[0-9]/.test(name)) return 'Names cannot start with a number';
@@ -3109,11 +2502,9 @@
                 return null;
             };
 
-            // Rename a node / nodegraph / interface input / output, then
-            // rewrite every reference to it — MaterialX's setName does NOT
-            // update referrers, so every "nodename"/"nodegraph"/
-            // "interfacename"/"output" attribute pointing at the old name
-            // has to be found and rewritten by hand.
+            // Rename a node/nodegraph/interface-input/output, then
+            // rewrite every reference — MaterialX's setName does NOT
+            // update referrers (nodename/nodegraph/interfacename/output).
             const renameElement = (flowId, newName) => {
                 if (!parsed || !flowId) return false;
                 if (renameIssue(flowId, newName)) return false;
@@ -3166,10 +2557,9 @@
                         if (mxElAttr(p, 'interfacename') === oldName) mxSetAttr(p, 'interfacename', newName);
                     }
                 } else if (kind === 'o:' && scope !== '') {
-                    // A nodegraph output — referenced from the doc root as
-                    // nodegraph=<scope> output=<name>. A root <output>
-                    // (scope === '') isn't referenced by name from inside
-                    // the document, so there's nothing to rewrite there.
+                    // A nodegraph output — referenced from the doc root
+                    // as nodegraph=<scope> output=<name>; a root <output>
+                    // isn't referenced by name, so nothing to rewrite there.
                     for (const p of connectables(parsed.doc)) {
                         if (mxElAttr(p, 'nodegraph') === scope && mxElAttr(p, 'output') === oldName) {
                             mxSetAttr(p, 'output', newName);
@@ -3197,19 +2587,17 @@
                 return true;
             };
 
-            // Delete a node of ANY kind — real nodes, collapsed nodegraphs,
-            // interface inputs and outputs are all real document elements.
-            // Inputs it fed lose their connection attributes so the document
-            // keeps no dangling references.
+            // Delete a node of ANY kind (real node, collapsed nodegraph,
+            // interface input/output — all real document elements). Inputs
+            // it fed lose their connection attrs to avoid dangling refs.
             const deleteNode = (id) => {
                 if (!id) return;
                 // [mtlx-perf] timing (item 3) — off unless MTLX_PERF_LOG.
                 const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
                 const name = id.slice(2);
-                // Values severConnection restored from the stash (item 4c),
-                // keyed by [targetFlowId][inputName] — read back below by
-                // the setFlow pass so a restored literal shows up instead
-                // of the guessed default.
+                // Values severConnection restored from the stash (item
+                // 4c), keyed by [targetFlowId][inputName] — read back below
+                // so a restored literal shows instead of the guessed default.
                 const restoredMap = {};
                 if (parsed) {
                     // Sever downstream references FIRST (the elements are
@@ -3280,17 +2668,9 @@
                 }
             };
 
-            // What Delete acts on (kept fresh via the ref the window key
-            // handler reads). Deleting a NODEGRAPH is the slow path (the
-            // docRev-driven preview effect regenerates the shader, often
-            // falling back to a new default target) — flash the shared
-            // actionBusy overlay and defer behind the same double-rAF
-            // idiom changeScope uses so it actually paints first. Plain
-            // node deletes (no nodegraph in the selection) stay fully
-            // synchronous — they're fast and don't need the flash.
-            // ids/targets are captured up front, before any deferral, so a
-            // theoretical selection change in the meantime can't retarget
-            // what gets deleted.
+            // What Delete acts on. Deleting a NODEGRAPH is the slow path
+            // (shader regen), so it flashes actionBusy and defers behind a
+            // double-rAF; plain node deletes stay synchronous.
             deleteSelectionRef.current = () => {
                 if (selectedEdgeId) {
                     const e = flow.edges.find((e2) => e2.id === selectedEdgeId);
@@ -3321,12 +2701,9 @@
                 return true;
             };
 
-            // A screen point (default: the panel's own center — "the
-            // current viewport center") converted to flow-space via the
-            // live RF instance, falling back to project() for older RF
-            // builds. Null when neither `inst` nor `host` is available (or
-            // RF exposes neither conversion method) — callers keep
-            // whatever default position they already had in that case.
+            // A screen point (default: viewport center) converted to
+            // flow-space via the live RF instance, falling back to
+            // project() for older RF builds; null when neither is available.
             const viewportCenterFlow = (inst, host, point) => {
                 if (!inst || !host) return null;
                 const r = host.getBoundingClientRect();
@@ -3344,10 +2721,9 @@
                 mxSetAttr(el, 'ypos', String(Math.round((y / 240) * 10000) / 10000));
             };
 
-            // Add a stdlib node (picked in the Tab palette) to the CURRENT
-            // scope: written into the real MaterialX document, then patched
-            // into the flow IN PLACE at the viewport center — layout and
-            // hand-dragged positions survive; Arrange re-lays out.
+            // Add a stdlib node (picked in the Tab palette) to the
+            // CURRENT scope, patched into the flow IN PLACE at the
+            // viewport center — layout/positions survive; Arrange re-lays out.
             const addNodeFromCatalog = (entry, typeHint) => {
                 setAddOpen(false);
                 if (!parsed) return null;
@@ -3357,11 +2733,9 @@
                 let def = (entry.defs && entry.defs[0]) || null;
                 let pinNodedef = false;
                 if (typeHint) {
-                    // A signature group's `versions` array is built from the
-                    // very same nodeDefInfo objects as entry.defs (see
-                    // groupSignatures/buildNodeCatalog), so versions[0] IS a
-                    // defs[] entry — the default (or first) version of the
-                    // matched signature.
+                    // A signature group's `versions` array is built from
+                    // the same nodeDefInfo objects as entry.defs, so
+                    // versions[0] IS a defs[] entry (default/first version).
                     const sig = (entry.signatures || []).find((sg) => sg.type === typeHint);
                     if (sig && sig.versions && sig.versions[0]) {
                         def = sig.versions[0];
@@ -3405,22 +2779,17 @@
                     onTogglePorts: () => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
                 };
-                // Drop position (item A3): when this pick resolves a
-                // drag-to-empty connection (onConnectEnd stashed a
-                // dropClient on the pending info), place the node so the
-                // handle that's about to be WIRED lands under the cursor,
-                // instead of the viewport center. Plain Tab-palette adds and
-                // port-dot double-clicks (no dropClient) keep the old
-                // center-of-viewport placement.
+                // Drop position (item A3): when resolving a drag-to-empty
+                // connection, place the node so the handle about to be
+                // WIRED lands under the cursor instead of viewport center.
                 let pos = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
                 const pending = pendingConnRef.current;
                 let placedAtDrop = false;
                 if (pending && pending.dropClient && inst) {
-                    // Mirror wirePendingConnection's own match (inMatch/
-                    // outMatch below) just far enough to predict which row
-                    // the wired port will render at — exact-pixel alignment
-                    // isn't required, landing the right row is.
+                    // Mirror wirePendingConnection's own match just far
+                    // enough to predict which row the wired port renders
+                    // at — exact-pixel alignment isn't required.
                     let wiredRowIndex;
                     if (pending.dir === 'in') {
                         // The new node's OUTPUT feeds the existing input —
@@ -3453,16 +2822,14 @@
                     }
                 }
                 if (!placedAtDrop && pending && pending.nodeId) {
-                    // Port-dblclick adds (no dropClient): put the new node beside the
-                    // node whose port was double-clicked — feeding nodes to the LEFT
-                    // (dir 'in': the new node's output feeds the clicked input), consumers
-                    // to the RIGHT (dir 'out'), with a fixed gap.
+                    // Port-dblclick adds (no dropClient): put the new
+                    // node beside the double-clicked node — feeding nodes
+                    // LEFT (dir 'in'), consumers RIGHT (dir 'out').
                     const origin = flow.nodes.find((n) => n.id === pending.nodeId);
                     if (origin && origin.position) {
-                        // Deliberately roomier than the auto-layout ranksep
-                        // (70, js/graph/style.jsx) so the new node reads as
-                        // a clearly separate column, as if it were placed by
-                        // a relative auto-layout pass around this node.
+                        // Deliberately roomier than the auto-layout
+                        // ranksep (70, js/graph/style.jsx) so the new node
+                        // reads as a clearly separate column.
                         const GAP = 120;
                         pos = {
                             x: pending.dir === 'in' ? origin.position.x - NODE_W - GAP : origin.position.x + NODE_W + GAP,
@@ -3497,13 +2864,8 @@
             };
 
             // Auto-wire the connection implied by a port-dot double-click
-            // (item 4), once the picked node has been created by
-            // addNodeFromCatalog. `pending` is the info captured by
-            // openPortAdd; `created` is addNodeFromCatalog's return value.
-            // Writes the connection attributes exactly the way onConnect
-            // does (ensureTypedInput + the shared writeConnSource), then
-            // applies the same setDocRev/markDirty/setFlow tail onConnect
-            // uses.
+            // (item 4), once addNodeFromCatalog creates the node. Writes
+            // connections like onConnect does (ensureTypedInput + writeConnSource).
             const wirePendingConnection = (created, pending) => {
                 if (!created || !pending || !parsed) return;
                 const doc = parsed.doc;
@@ -3570,11 +2932,9 @@
                 if (created && pending) wirePendingConnection(created, pending);
             };
 
-            // Add an interface input or output (picked in the Tab palette's
-            // synthetic rows, only offered while a nodegraph scope is open)
-            // to the CURRENT scope's <nodegraph>: written into the real
-            // document, then appended to the flow IN PLACE — same
-            // "no full rebuild" convention as addNodeFromCatalog.
+            // Add an interface input or output (Tab palette's synthetic
+            // rows, only while a nodegraph scope is open) — written into
+            // the doc, then appended to the flow IN PLACE like addNodeFromCatalog.
             const addInterfacePin = (kind, rawName, type) => {
                 if (!parsed || !scope) return;
                 const g = scopeContainer();
@@ -3641,15 +3001,9 @@
             };
 
             // ---- Copy / paste (in-page clipboard, Ctrl/Cmd+C / Ctrl/Cmd+V) --
-            // An in-memory snapshot of the selected REAL nodes' full
-            // parameter set (collectPorts already reads texture filenames
-            // and their colorspace, plus every connection attribute) plus
-            // any selected nodegraph INSTANCES (g: ids) — those are captured
-            // as just name+pos, their interior deep-copied via
-            // copyContentFrom on paste rather than replayed attribute by
-            // attribute. Interface/output pseudo-nodes still aren't copied
-            // as a unit, silently skipped. No system clipboard: in-page
-            // only, per the project's decision.
+            // Snapshots selected real nodes' full param set (collectPorts)
+            // plus selected nodegraph instances (name+pos, deep-copied via
+            // copyContentFrom on paste). No system clipboard — in-page only.
             const clipboardRef = React.useRef(null);
 
             const isCopyableId = (id) => id.indexOf('n:') === 0 || id.indexOf('g:') === 0;
@@ -3661,12 +3015,9 @@
                 const idSet = new Set(ids);
                 const container = scopeContainer();
                 if (!container) return;
-                // Prefer React Flow's live rendered position over the
-                // document's xpos/ypos attributes: nodes that were
-                // auto-laid-out (e.g. the initial default graph, or freshly
-                // imported nodes never dragged) have no xpos/ypos at all, so
-                // storedPos() would return null for every one of them and
-                // they'd all collapse onto { x: 0, y: 0 } on paste.
+                // Prefer React Flow's live position over xpos/ypos:
+                // auto-laid-out/never-dragged nodes have no xpos/ypos, so
+                // storedPos() would collapse them all onto { x:0, y:0 }.
                 const flowPosById = {};
                 flow.nodes.forEach((n) => {
                     if (n.selected && isCopyableId(n.id)) flowPosById[n.id] = n.position;
@@ -3676,9 +3027,8 @@
                     const name = id.slice(2);
                     if (id.indexOf('g:') === 0) {
                         // Nodegraph instance — g: ids only ever appear at
-                        // the document root (buildScope never emits them
-                        // for a nested scope), so the source is always
-                        // looked up on the doc, not scopeContainer().
+                        // the doc root (buildScope never emits them for a
+                        // nested scope), so the source is looked up on doc.
                         const gEl = mxSafe(() => parsed.doc.getNodeGraph(name), null);
                         if (!gEl) continue;
                         const pos = flowPosById[id] || storedPos(gEl) || { x: 0, y: 0 };
@@ -3688,11 +3038,9 @@
                     const el = mxSafe(() => container.getNode(name), null);
                     if (!el) continue;
                     const ports = collectPorts(el);
-                    // Only what's actually authored: an edge (nodename/
-                    // nodegraph) survives only when BOTH ends are in the
-                    // copied set; anything else — external wires included —
-                    // is dropped, keeping the input's literal value (if any)
-                    // instead so the paste doesn't dangle.
+                    // Only what's actually authored: an edge survives
+                    // only when BOTH ends are in the copied set; other
+                    // wires are dropped, keeping the input's literal value instead.
                     const inputs = ports.inputs
                         .filter((i) => i.authored !== false)
                         .map((i) => {
@@ -3726,14 +3074,8 @@
                 if (!container) return;
                 const doc = parsed.doc;
                 // First pass: create every node/nodegraph with a fresh
-                // unique name (the same mechanism addNodeFromCatalog uses)
-                // so the second pass can remap internal wires old-name →
-                // new-name. Nodegraph entries are handled separately below —
-                // they're always doc-root children (MaterialX nodegraphs
-                // don't nest, same restriction encapsulate/ungroup apply),
-                // so a nodegraph entry is skipped (with a warning) when
-                // pasting into a non-root scope, while any plain-node
-                // entries in the same clipboard still paste normally.
+                // unique name so the second pass can remap old->new wires.
+                // A nodegraph entry is skipped (with warning) outside root scope.
                 const nameMap = {};
                 const created = [];
                 const createdGraphs = [];
@@ -3783,11 +3125,9 @@
                 }
                 if (skippedNodegraphScope) setError('Pasting a nodegraph is only available at the document root.');
                 if (!created.length && !createdGraphs.length) return;
-                // Second pass: write every input now that every new name is
-                // known — internal wires remap to the pasted copies (same
-                // attrs onConnect writes), everything else (literal values,
-                // colorspace) is written as-is via the app's established
-                // non-retyping write pattern.
+                // Second pass: write every input now that new names are
+                // known — internal wires remap to the pasted copies, values
+                // and colorspace are written as-is via the non-retyping pattern.
                 for (const { el, entry } of created) {
                     for (const inp of entry.inputs) {
                         const target = ensureTypedInput(parsed.doc, el, inp.name, inp.type);
@@ -3856,20 +3196,9 @@
                 setParamsOpen(true);
             };
 
-            // Create input `name` on `container` (always a just-created node/
-            // nodegraph with no pre-existing inputs, in every caller below)
-            // and clone `srcEl` — a LIVE original <input> element, from
-            // collectPorts' new `el` field — onto it wholesale: type, value,
-            // colorspace, unit/unittype/channels/uniform/doc, connection
-            // attrs, anything else, present or future. Used by encapsulate/
-            // ungroup instead of hand-picking fields, so any authored
-            // attribute round-trips losslessly. No separate type-guessing
-            // needed here (unlike ensureTypedInput) — copyContentFrom crosses
-            // the type through C++ same as it does when ensureTypedInput
-            // seeds a bare input from a nodedef, sidestepping the
-            // addInput(name,type)/setType JS-boundary bugs documented there.
-            // Falls back to a raw type attribute if the copy itself fails
-            // (e.g. a stale/detached source element).
+            // Create input `name` on `container` and clone `srcEl` onto
+            // it wholesale (type, value, colorspace, connection attrs, ...)
+            // via copyContentFrom, so any authored attribute round-trips.
             const cloneInput = (container, name, srcEl) => {
                 const target = mxSafe(() => container.addInput(name), null);
                 if (!target || !srcEl) return target;
@@ -3879,21 +3208,9 @@
             };
 
             // ---- Encapsulate (Ctrl/Cmd+G) -----------------------------------
-            // Collapse the selected root-level nodes into a brand-new
-            // nodegraph, preserving every wire: internal edges (both ends
-            // selected) are recreated inside the new graph verbatim;
-            // inbound edges from outside the selection become graph
-            // interface inputs; outbound edges to outside the selection
-            // become graph outputs. Root-only — MaterialX nodegraphs don't
-            // nest, so this is unavailable once a scope is already open.
-            // Synchronously snapshotting/recreating/rewiring every selected
-            // node can take a beat on a big selection, then the docRev bump
-            // below triggers a full shader regen — so the actual body is
-            // deferred behind the same double-rAF idiom changeScope uses,
-            // flashing the shared actionBusy overlay first. Everything the
-            // body reads off the current selection (ids/idSet/names/
-            // nameSet) is captured up front, before the defer, same as
-            // deleteSelectionRef above.
+            // Collapses selected root-level nodes into a new nodegraph:
+            // internal edges recreate verbatim; inbound/outbound edges
+            // become interface inputs/outputs. Root-only; deferred (actionBusy).
             const encapsulateSelection = () => {
                 if (!parsed) return;
                 if (scope !== '') {
@@ -3926,9 +3243,8 @@
                         const el = mxSafe(() => doc.getNode(name), null);
                         if (!el) continue;
                         // authoredOnly (item A4.2): this snapshot filters
-                        // `i.authored !== false` right below anyway, so skip
-                        // collectPorts' unauthored-nodedef-input enumeration
-                        // altogether instead of building and discarding it.
+                        // `i.authored !== false` anyway, so skip collectPorts'
+                        // unauthored enumeration instead of building/discarding it.
                         const ports = collectPorts(el, { authoredOnly: true });
                         entries.push({
                             name, category: mxElCat(el), type: mxElType(el),
@@ -3962,13 +3278,9 @@
                         for (const inp of entry.inputs) {
                             const internalSrc = inp.nodename && nameSet.has(inp.nodename);
                             if (internalSrc) {
-                                // Inner nodes keep their original name inside
-                                // the new graph (step 3 above), so the clone's
-                                // nodename already points at the right
-                                // sibling — no overrides needed. (Any stray
-                                // value the clone might carry alongside it is
-                                // caught by the pre-export connected-input
-                                // sweep, same as everywhere else.)
+                                // Inner nodes keep their original name, so
+                                // the clone's nodename already points at the
+                                // right sibling — no overrides needed.
                                 cloneInput(el, inp.name, inp.el);
                                 continue;
                             }
@@ -3978,8 +3290,7 @@
                                 const pinName = mxSafe(() => g.createValidChildName(pinBase), pinBase);
                                 // Seed the new interface pin from the
                                 // connecting input itself (not hand-copied
-                                // fields), so any extra authored attribute on
-                                // it (unit, doc, ...) survives onto the pin.
+                                // fields), so extra authored attrs survive.
                                 const gin = cloneInput(g, pinName, inp.el);
                                 if (!gin) continue;
 
@@ -3999,21 +3310,9 @@
                         }
                     }
 
-                    // 5+6 (merged, item A4.1): outbound boundary AND the
-                    // rewrite of every external consumer, in one pass over
-                    // flow.edges instead of two. One graph output is still
-                    // created per distinct (source node, output name) pair
-                    // fed to something OUTSIDE the selection — on the FIRST
-                    // edge that needs it, exactly like the original two-pass
-                    // version's loop 5 (same iteration order over
-                    // flow.edges, so createValidChildName calls happen in
-                    // the same sequence/names as before); every edge that
-                    // shares that pair (including the one that just created
-                    // the pin) then immediately gets its consumer rewritten
-                    // to read from it, exactly like the original loop 6.
-                    // outPins doubling as a per-key cache is what makes the
-                    // single pass safe: a pin, once created, is reused by
-                    // every later edge with the same key, same as before.
+                    // 5+6 (merged, item A4.1): outbound boundary + rewrite
+                    // of external consumers in one pass. One graph output
+                    // per distinct (source, outname) pair; outPins caches it.
                     const nodesById = new Map(flow.nodes.map((n) => [n.id, n]));
                     const outPins = {}; // "srcName␟outname" -> pin name
                     for (const e of flow.edges) {
@@ -4107,18 +3406,9 @@
             };
 
             // ---- Ungroup (Ctrl/Cmd+Shift+G) — inverse of Encapsulate ---------
-            // Dissolve a collapsed nodegraph back into root-level nodes,
-            // preserving every wire — the mirror image of
-            // encapsulateSelection above: interface-pin connections/
-            // literals flow back onto the recreated nodes' inputs, sibling
-            // wires are recreated verbatim under the (reserved-up-front)
-            // new root names, and every root-level consumer that pointed at
-            // the graph is rewritten to read straight from the node that
-            // used to feed that pin. Root-only, same reason as encapsulate
-            // (MaterialX nodegraphs don't nest). Deferred behind the same
-            // double-rAF + actionBusy idiom for the same reason (the
-            // snapshot/recreate/rewire pass can take a beat on a big graph,
-            // then the docRev bump triggers a full shader regen).
+            // Dissolves a collapsed nodegraph back into root-level nodes,
+            // the mirror image of encapsulateSelection: pin connections
+            // flow back onto recreated inputs, consumers rewrite to the node.
             const ungroupNodegraph = (gName) => {
                 if (!parsed || !gName) return;
                 if (scope !== '') {
@@ -4157,11 +3447,8 @@
                         const innerNameSet = new Set(innerNodes.map((n) => mxElName(n)));
                         const entries = innerNodes.map((n) => {
                             // Full-mode collectPorts (no authoredOnly) —
-                            // this snapshot is filtered to authored inputs
-                            // right below anyway, but also needs `outputs`
-                            // for outputsCount (kept for diagnostics; step 5's
-                            // output= guard no longer conditions on it — see
-                            // 2c below).
+                            // filtered to authored inputs below anyway, but
+                            // also needs `outputs` for outputsCount (diagnostics).
                             const ports = collectPorts(n);
                             return {
                                 name: mxElName(n), category: mxElCat(n), type: mxElType(n),
@@ -4184,15 +3471,8 @@
                         if (!entries.length) { setError('This nodegraph has no nodes to ungroup.'); return; }
 
                         // 2: reserve every recreated node's new root-level
-                        // name BEFORE creating any of them, so collisions
-                        // with EXISTING root names resolve up front.
-                        // createValidChildName is called on the DOC — the
-                        // container the recreated nodes will actually live
-                        // in. It can't see names reserved-but-not-yet-
-                        // created in this very loop, so the `reserved` set
-                        // dedups those by hand (root has "foo", the graph
-                        // has both "foo" and "foo1" — both would otherwise
-                        // resolve to "foo1").
+                        // name BEFORE creating any — createValidChildName
+                        // can't see reserved-but-uncreated names, so `reserved` dedups by hand.
                         const nameMap = {};
                         const reserved = new Set();
                         for (const entry of entries) {
@@ -4206,8 +3486,7 @@
 
                         // Interior centroid of the inner nodes' stored
                         // positions — nodes missing a stored pos don't
-                        // contribute (and don't get a position written
-                        // below either; layout picks them up instead).
+                        // contribute (layout picks them up instead).
                         const posEntries = entries.filter((e) => e.pos);
                         const centroid = posEntries.length
                             ? {
@@ -4234,13 +3513,9 @@
                         }
                         if (!Object.keys(created).length) { setError('Could not recreate the grouped nodes.'); return; }
 
-                        // Apply a pin's resolved source — external
-                        // connection, else literal, else nothing — onto
-                        // `point`. Shared by step 4 (an interfacename=pin
-                        // input on a recreated node) and step 5's
-                        // pass-through <output> case (a graph output with
-                        // no nodename of its own, reading a pin straight
-                        // through).
+                        // Apply a pin's resolved source (external
+                        // connection, else literal, else nothing) onto
+                        // `point`. Shared by step 4 and step 5's pass-through case.
                         const applyPinSource = (point, pin) => {
                             clearConnAttrs(point);
                             if (pin.nodename || pin.nodegraph) {
@@ -4272,47 +3547,31 @@
                                         || (pin.value !== '' && pin.value != null);
                                     if (!hasSource) continue; // pin had neither -> leave input unauthored
                                     // Clone the original (carries
-                                    // interfacename=X plus any other
-                                    // locally-authored attributes), then
-                                    // replace the pin reference with whatever
-                                    // that pin itself resolved to.
+                                    // interfacename=X plus other authored
+                                    // attrs), then replace it with the pin's resolved source.
                                     const target = cloneInput(el, inp.name, inp.el);
                                     if (!target) continue;
                                     clearConnAttrs(target);
-                                    // A nodegraph interface pin can legally
-                                    // carry defaultgeomprop; a node-instance
-                                    // input never can. This is the one branch
-                                    // that can turn the former into the
-                                    // latter via a full clone, so strip it
-                                    // explicitly — clearConnAttrs above
-                                    // doesn't, defaultgeomprop isn't a
-                                    // CONN_ATTRS member.
+                                    // A nodegraph interface pin can carry
+                                    // defaultgeomprop; a node input never
+                                    // can — strip it (clearConnAttrs doesn't; not a CONN_ATTRS member).
                                     mxRemoveAttr(target, 'defaultgeomprop');
                                     applyPinSource(target, pin);
                                     continue;
                                 }
                                 if (!inp.nodegraph && inp.nodename && innerNameSet.has(inp.nodename)) {
-                                    // Sibling wire, kept verbatim except the
-                                    // nodename remap: siblings get renamed at
-                                    // root (nameMap), unlike encapsulate's
-                                    // inner nodes which keep their name.
+                                    // Sibling wire, kept verbatim except
+                                    // the nodename remap: siblings get
+                                    // renamed at root, unlike encapsulate's inner nodes.
                                     const target = cloneInput(el, inp.name, inp.el);
                                     if (!target) continue;
                                     mxSetAttr(target, 'nodename', nameMap[inp.nodename]);
                                     continue;
                                 }
                                 if (inp.nodegraph) {
-                                    // Interior input wired DIRECTLY to another
-                                    // (sibling) nodegraph — outside the graph
-                                    // being dissolved, so its name doesn't
-                                    // change; the clone already carries the
-                                    // nodegraph=/nodename=/output= reference
-                                    // verbatim, no nameMap remapping needed
-                                    // (mirrors applyPinSource above, which
-                                    // also writes nodename + nodegraph
-                                    // together — MaterialX allows nodegraph=
-                                    // with nodename= to select a node WITHIN
-                                    // that graph).
+                                    // Interior input wired directly to a
+                                    // sibling nodegraph — outside the graph
+                                    // being dissolved, so the clone's reference needs no remapping.
                                     cloneInput(el, inp.name, inp.el);
                                     continue;
                                 }
@@ -4322,11 +3581,9 @@
                             }
                         }
 
-                        // 5: rewrite every ROOT-level consumer that pointed
-                        // at g (nodegraph=gName) to read straight from the
-                        // recreated node instead — same "connectables"
-                        // traversal renameElement uses to find every
-                        // element that can carry a reference attribute.
+                        // 5: rewrite every ROOT-level consumer pointed at
+                        // g (nodegraph=gName) to read from the recreated
+                        // node — same "connectables" traversal as renameElement.
                         const connectables = (container) => {
                             const out = [];
                             for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
@@ -4334,11 +3591,8 @@
                             }
                             out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
                             // Also recurse into every OTHER nodegraph's
-                            // interior — a node inside a sibling <nodegraph>
-                            // can legally reference this graph too (nodegraph=
-                            // is not restricted to root-level consumers), and
-                            // once this graph is deleted (step 6) any such
-                            // reference left unrewritten would dangle.
+                            // interior — a sibling nodegraph's node can
+                            // legally reference this graph too, else it'd dangle after deletion.
                             for (const sib of vecToArray(mxSafe(() => container.getNodeGraphs(), []))) {
                                 if (mxElName(sib) === gName) continue; // the graph being dissolved itself
                                 for (const n of vecToArray(mxSafe(() => sib.getNodes(), []))) {
@@ -4348,14 +3602,9 @@
                             }
                             return out;
                         };
-                        // Consumers whose `output` attribute is empty AND the
-                        // dissolved graph has more than one output — which
-                        // output they meant can't be resolved, so the
-                        // reference is left as-is (would otherwise dangle
-                        // once the graph is deleted in step 6). Collected
-                        // here and surfaced as a single warning after the
-                        // operation completes, without blocking the rest of
-                        // the ungroup.
+                        // Consumers with an empty `output` attr when the
+                        // dissolved graph has multiple outputs can't be
+                        // resolved — left as-is, surfaced as a single warning after.
                         const ambiguousConsumers = [];
                         for (const point of connectables(doc)) {
                             if (mxElAttr(point, 'nodegraph') !== gName) continue;
@@ -4364,10 +3613,9 @@
                                 ? outputsSnapshot.find((o) => o.name === outAttr)
                                 : (outputsSnapshot.length === 1 ? outputsSnapshot[0] : null);
                             if (!outSnap) {
-                                // Identify the consumer as parent.self (e.g.
-                                // a node's "in1" input, or a graph's own
-                                // <output>) — same getParent() pattern used
-                                // elsewhere in this file to name a point.
+                                // Identify the consumer as parent.self
+                                // (e.g. a node's "in1" input) — same
+                                // getParent() pattern used elsewhere to name a point.
                                 const par = mxSafe(() => point.getParent(), null);
                                 const parName = par ? mxElName(par) : '';
                                 const ptName = mxElName(point) || '(unnamed)';
@@ -4379,31 +3627,24 @@
                                 if (!newName) continue;
                                 clearConnAttrs(point);
                                 mxSetAttr(point, 'nodename', newName);
-                                // output= whenever the ORIGINAL graph output
-                                // snapshot explicitly named a port — even if
-                                // the recreated source's own outputsCount
-                                // came back 0 (unresolved nodedef), that
-                                // still doesn't mean the source isn't
-                                // multi-output; only omit output= when the
-                                // original never had one to disambiguate.
+                                // output= whenever the ORIGINAL graph
+                                // output explicitly named a port, even if
+                                // outputsCount reads 0 (unresolved nodedef).
                                 if (outSnap.output) {
                                     mxSetAttr(point, 'output', outSnap.output);
                                 }
                             } else if (outSnap.interfacename) {
-                                // Pass-through output: the graph's <output>
-                                // has no nodename of its own — it reads an
-                                // interface pin straight through, so the
-                                // consumer inherits THAT pin's own external
-                                // connection or literal instead.
+                                // Pass-through output: the graph's
+                                // <output> reads an interface pin straight
+                                // through, so the consumer inherits that pin's source.
                                 const pin = pinsByName[outSnap.interfacename];
                                 if (pin) applyPinSource(point, pin);
                             }
                         }
 
-                        // 6: remove the emptied graph RAW — NOT deleteNode(),
-                        // which would sever the very references just
-                        // rewired above (same reasoning as encapsulate's
-                        // raw removeNode for the originals, step 7 there).
+                        // 6: remove the emptied graph RAW — NOT
+                        // deleteNode(), which would sever the references
+                        // just rewired above (same as encapsulate's step 7).
                         mxSafe(() => { doc.removeNodeGraph(gName); return true; }, false)
                             || mxSafe(() => { doc.removeChild(gName); return true; }, false);
                         if (parsed.nodegraphs) { // scope dropdown
@@ -4414,9 +3655,8 @@
                         markDirty();
 
                         // 7: full scope rebuild — same reason encapsulate/
-                        // pasteClipboard/renameElement all do this: the
-                        // simplest correct way to pick up every recreated
-                        // node and rewritten reference.
+                        // pasteClipboard/renameElement do this: simplest
+                        // correct way to pick up every recreated/rewritten reference.
                         const { descs, edges } = buildScope(parsed, scope);
                         const rebuilt = toFlow(descs, edges, {
                             portMode: globalPortsRef.current,
@@ -4454,9 +3694,8 @@
             };
 
             // No-arg entry point for the Ctrl/Cmd+Shift+G keybind: applies
-            // to the single selected g: node (selectedId — this trigger is
-            // inherently single-target, unlike encapsulate's multi-select),
-            // no-op otherwise.
+            // to the single selected g: node (inherently single-target,
+            // unlike encapsulate's multi-select); no-op otherwise.
             const ungroupSelection = () => {
                 if (!selectedId || selectedId.indexOf('g:') !== 0) return;
                 ungroupNodegraph(selectedId.slice(2));
@@ -4475,9 +3714,8 @@
             ungroupRef.current = ungroupSelection;
 
             // Ctrl/Cmd+C / Ctrl/Cmd+V: copy / paste the selected nodes.
-            // Same focus rules as the other global shortcuts — typing in an
-            // input (including a value field) keeps the browser's own
-            // copy/paste on the TEXT, never the graph selection.
+            // Same focus rules as other global shortcuts — typing in an
+            // input keeps the browser's own copy/paste on the TEXT.
             React.useEffect(() => {
                 const onKey = (e) => {
                     if (!activeRef.current) return;
@@ -4497,10 +3735,9 @@
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
-            // Ctrl/Cmd+G: encapsulate the current multi-selection into a
-            // new nodegraph. Ctrl/Cmd+Shift+G: the inverse — ungroup the
-            // selected nodegraph. preventDefault is required here — the
-            // browser binds Ctrl/Cmd+G to "find again" otherwise.
+            // Ctrl/Cmd+G: encapsulate the current multi-selection.
+            // Ctrl/Cmd+Shift+G: ungroup instead. preventDefault is required
+            // — the browser binds Ctrl/Cmd+G to "find again" otherwise.
             React.useEffect(() => {
                 const onKey = (e) => {
                     if (!activeRef.current) return;
@@ -4551,15 +3788,9 @@
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
-            // ReactFlow toggles a `.dragging` class (grab/grabbing cursor via its
-            // vendored stylesheet) during node/pane drags and clears it on mouseup —
-            // but a release OUTSIDE the window never delivers that mouseup, leaving
-            // the class (and the grabbing cursor) stuck until the next interaction.
-            // Self-heal: if the pointer moves with NO buttons held right after a
-            // drag might have been interrupted, or the window loses focus, strip any
-            // orphaned `dragging` classes. dragMayBeStuckRef keeps the mousemove
-            // path a no-op in the common case (no DOM queries unless a mousedown
-            // happened whose mouseup we never saw).
+            // ReactFlow's `.dragging` class (grab cursor) sticks if the
+            // mouseup happens OUTSIDE the window. Self-heal: strip it when
+            // the pointer moves with no buttons held, or on window blur.
             const dragMayBeStuckRef = React.useRef(false);
             React.useEffect(() => {
                 const onMouseDown = (e) => {
@@ -4600,10 +3831,9 @@
             // the drop zone is the whole stage now, so it explains itself.
             const emptyHint = !parsed && !busy;
 
-            // Legend: exactly the types present in the CURRENT scope — every
-            // port and edge of the flow on screen, root or nodegraph interior
-            // alike. Alphabetical; each type's color is intrinsic to its name
-            // (see typeColor), so it never changes between scopes or sessions.
+            // Legend: exactly the types present in the CURRENT scope —
+            // every port/edge on screen. Alphabetical; each type's color
+            // is intrinsic to its name (typeColor), never changes between sessions.
             const legendTypes = React.useMemo(() => {
                 const s = new Set();
                 for (const n of flow.nodes) {
@@ -4627,77 +3857,25 @@
                     a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
             }, [legendTypes, legendShowAll]);
 
-            // MiniMap / legend collision cascade (the MiniMap itself is
-            // md+ only — below that threshold it's hidden outright
-            // regardless of these booleans, same as before; the PILL,
-            // however, now renders in narrow mode too — disabled rather
-            // than hidden, see the pill's own comment below). Two
-            // independent geometric checks, both re-measured from the live
-            // DOM on every render/resize:
-            //
-            //   Stage 1 (minimapBlocked): the MiniMap is pinned bottom-
-            //   right at a fixed 200x150 (see its own style below), offset
-            //   from the pane's right edge by minimapMarginRight. Does
-            //   that box's left edge reach past whatever the legend is
-            //   CURRENTLY showing (open card or collapsed chip — either
-            //   way, legendBoxRef wraps both)? If so there's no room for
-            //   the real minimap at all — hide it and fall back to the
-            //   pill, overriding minimapOpen.
-            //
-            //   Stage 2 (legend auto-collapse): even once the minimap has
-            //   shrunk to its pill, would a FULLY OPEN legend card still
-            //   reach far enough right to collide with THAT? If crossing
-            //   into overlap, force the legend to its chip — but only on
-            //   the crossing (prevPillOverlapRef mirrors the prevNarrowRef
-            //   idiom above): a manual reopen while still in the blocked
-            //   range leaves the ref already `true`, so it's a no-op —
-            //   not fought — until geometry clears and then re-crosses.
-            //   Symmetric: the OPPOSITE crossing (overlap clearing) restores
-            //   the legend, but only if autoCollapsedLegendRef says GEOMETRY
-            //   (not the user) was the one that closed it — a legend the
-            //   user minimizes stays minimized even after room opens back
-            //   up. This matters because the pane's very first layout
-            //   frames often measure transiently narrow, before flexbox/
-            //   ResizeObserver settle — minimapBlocked flips true, the Map
-            //   pill appears, stage-2 crosses and auto-collapses the legend
-            //   — and without the symmetric restore, a legend closed during
-            //   that transient squeeze (or any other transient one, e.g. a
-            //   fullscreen transition) would stay closed forever once the
-            //   pane actually settles back to a width with room.
-            //   Uses the pill's OWN margin (pillMarginRightNow, computed
-            //   just below) rather than minimapMarginRight — the two
-            //   diverge whenever the params panel is collapsed to its
-            //   chip, since the pill then tucks left of THAT chip instead
-            //   of sitting flush in the corner the bare MiniMap would use.
-            //
-            // Shared by the MiniMap's own style, its corner minimize
-            // button, and this effect (all need the SAME value in the SAME
-            // render) — mirrors smartFitView's sidebarWidth constant above
-            // (same ternary, same 320/15 split).
+            // MiniMap/legend collision, re-measured every render: Stage 1
+            // hides the MiniMap for the pill on legend overlap; Stage 2
+            // auto-collapses the legend (see legendOpenRightEdge below).
             const minimapMarginRight = (parsed && paramsOpen && !narrow) ? 320 : 15;
             const legendBoxRef = React.useRef(null);
             const pillRef = React.useRef(null);
-            // The collapsed params chip (bottom-2 right-2, see below) —
-            // its rendered width (the selected node's name varies) is what
-            // the pill's own margin has to clear now that both live in the
-            // same corner (item 3). Only meaningful while the chip is
-            // actually showing (!paramsOpen); null the rest of the time.
+            // The collapsed params chip's rendered width (name varies)
+            // is what the pill's own margin has to clear now both live in
+            // the same corner (item 3); null while the chip isn't showing.
             const paramsChipRef = React.useRef(null);
             const prevPillOverlapRef = React.useRef(false);
             // True only while the legend is minimized BECAUSE stage-2's
-            // geometry check closed it (not because the user clicked the
-            // minimize segment themselves) — see the symmetric-restore note
-            // above.
+            // geometry check closed it, not because the user minimized it
+            // — drives the symmetric restore once room opens back up.
             const autoCollapsedLegendRef = React.useRef(false);
             const [minimapBlocked, setMinimapBlocked] = React.useState(false);
-            // The Map pill's own right-margin: 320 to clear the EXPANDED
-            // params panel (mirrors minimapMarginRight's own ternary
-            // exactly), or — panel collapsed to its chip — just far enough
-            // to clear THAT chip's live width plus a small gap, so the
-            // pill sits immediately to its left regardless of narrow (the
-            // chip renders in narrow mode too, forced there by the
-            // compact-mode auto-collapse effect above). Recomputed in the
-            // same measurement pass as minimapBlocked, just below.
+            // The Map pill's own right-margin: 320 while the params
+            // panel is expanded (mirrors minimapMarginRight), else just
+            // enough to clear the collapsed chip's live width plus a gap.
             const [pillMarginRight, setPillMarginRight] = React.useState(15);
             React.useLayoutEffect(() => {
                 const host = panelRef.current;
@@ -4714,13 +3892,9 @@
                     const blocked = minimapLeftEdge < legendRightEdge + GAP;
                     setMinimapBlocked((prev) => (prev === blocked ? prev : blocked));
 
-                    // The pill's own margin (item 3): mirror minimapMarginRight's
-                    // 320 while the params panel is expanded (same corner
-                    // reserve, just for the pill instead of the MiniMap);
-                    // otherwise clear the collapsed chip's live width —
-                    // right-2 (8px) + its measured width + GAP — so the two
-                    // sit with a small gap between them, both right-2
-                    // aligned like every other bottom-right control.
+                    // The pill's own margin (item 3): mirrors
+                    // minimapMarginRight's 320 while expanded, else clears
+                    // the collapsed chip's live width (8px + width + GAP).
                     const chipRect = (!paramsOpen && paramsChipRef.current)
                         ? paramsChipRef.current.getBoundingClientRect() : null;
                     const chipWidth = chipRect ? chipRect.width : 0;
@@ -4748,27 +3922,14 @@
                     const pillWidth = pillRef.current ? pillRef.current.getBoundingClientRect().width : 0;
                     const pillLeftEdge = paneRect.width - pillMarginRightNow - pillWidth;
                     const pillOverlap = !!pillRef.current && (pillLeftEdge < legendOpenRightEdge + GAP);
-                    // Comfortable clearance, not just "not overlapping" —
-                    // hysteresis so any residual jitter (a scrollbar
-                    // appearing, a fractional-pixel width) right at the
-                    // collapse threshold can't immediately re-trigger the
-                    // restore crossing below and oscillate.
+                    // Comfortable clearance, not just "not overlapping"
+                    // — hysteresis so residual jitter at the collapse
+                    // threshold can't immediately re-trigger and oscillate.
                     const pillClear = pillLeftEdge > legendOpenRightEdge + GAP + 16;
 
-                    // Collapse: transition-edge only, same idiom as
-                    // prevNarrowRef's stash effect further up (fires once,
-                    // on the crossing INTO overlap, not on every frame
-                    // that's still overlapping). Remembers that GEOMETRY
-                    // (not the user) closed the legend.
-                    //
-                    // Restore: level-triggered on autoCollapsedLegendRef
-                    // itself rather than another edge — the ref is already
-                    // a single-fire latch (true only until the restore
-                    // below clears it), so checking pillClear on every
-                    // frame is safe and simpler than tracking a second
-                    // "was it clear last frame" ref. A legend the user
-                    // minimizes themselves (ref already false) is never
-                    // reopened out from under them.
+                    // Collapse: fires once on the crossing INTO overlap
+                    // (prevPillOverlapRef), remembering GEOMETRY closed it.
+                    // Restore: level-triggered on that same latch — safe since it self-clears.
                     if (pillOverlap && !prevPillOverlapRef.current && legendOpen) {
                         setLegendOpen(false);
                         autoCollapsedLegendRef.current = true;
@@ -4779,28 +3940,23 @@
                     prevPillOverlapRef.current = pillOverlap;
                 };
                 measure();
-                // Covers pane resizes (dragging the params panel, preview
-                // panel opening/closing, window resize) without a React
-                // re-render — same rationale as the toolbar clusters' own
-                // ResizeObservers above.
+                // Covers pane resizes (params panel drag, preview panel
+                // toggle, window resize) without a React re-render — same
+                // rationale as the toolbar clusters' own ResizeObservers.
                 const ro = new ResizeObserver(measure);
                 ro.observe(host);
                 return () => ro.disconnect();
                 // Intentionally no deps: paramsOpen/legendOpen/narrow/
-                // minimapOpen are all render-triggering already (and
-                // minimapMarginRight/pillMarginRight derive from them), so
-                // this re-runs whenever any of them change — same "no deps,
-                // re-run every render, the math is microseconds" reasoning as the
-                // toolbar measurement effects above.
+                // minimapOpen already trigger renders, so this re-runs
+                // whenever any change — math is microseconds, like the toolbar effects.
             });
 
             const selectedNode = selectedId
                 ? flow.nodes.find((n) => n.id === selectedId) || null
                 : null;
-            // Every currently-selected node id — React Flow's own .selected
-            // flags, now that 'select' changes pass through onNodesChange
-            // (see below), are the single source of truth for multi-select
-            // (shift-click toggle, shift-drag box-select).
+            // Every currently-selected node id — React Flow's own
+            // .selected flags (via onNodesChange below) are the single
+            // source of truth for multi-select (shift-click, shift-drag).
             const selectedIds = flow.nodes.filter((n) => n.selected).map((n) => n.id);
 
             // What React Flow renders: the flow edges, with the selection
@@ -4810,15 +3966,9 @@
                     ? Object.assign({}, e, { selected: true }) : e),
                 [flow.edges, selectedEdgeId]);
 
-            // Controlled React Flow needs position changes applied by US or
-            // node dragging is inert. Position/dimension changes pass
-            // through, and so do 'select' changes — React Flow's OWN
-            // click/box-select logic already computes the right .selected
-            // flags (plain click: only this node; Shift/Ctrl/Cmd-click:
-            // toggle; Shift-drag: box-select), so letting them through here
-            // is what makes multi-select actually stick (onNodeClick below
-            // no longer re-derives .selected itself). Removal has its own
-            // handler (deleteSelectionRef).
+            // Controlled React Flow needs position changes applied by us
+            // or dragging is inert. 'select' changes also pass through —
+            // React Flow's own click/box-select logic sets .selected.
             const onNodesChange = (changes) => {
                 const relevant = changes.filter((c) =>
                     c.type === 'position' || c.type === 'dimensions' || c.type === 'select');
@@ -4829,13 +3979,9 @@
                 }));
             };
 
-            // A finished drag SNAPSHOTS the whole on-screen layout into the
-            // document as xpos/ypos (the MaterialX Graph Editor convention,
-            // 1 unit = 240px — see layoutScope). Writing every element makes
-            // the stored-layout path kick in on the next rebuild, so dragged
-            // layouts survive scope changes, reloads and exports. Purely
-            // spatial: no docRev bump (nothing recompiles), but it DOES
-            // change what Export would write, so it still marks dirty.
+            // A finished drag SNAPSHOTS the whole on-screen layout into
+            // the document as xpos/ypos (1 unit = 240px). Purely spatial —
+            // no docRev bump, but it changes Export's output, so it marks dirty.
             const onNodeDragStop = () => {
                 const c = scopeContainer();
                 if (!c || !parsed) return;
@@ -4874,9 +4020,8 @@
             }, [parsed, scope, flow]);
 
             // What the ALWAYS-ON preview renders: the selection, else the
-            // last selection (any scope), else the document default. Keyed
-            // so the target object keeps its identity across content-equal
-            // transitions (deselecting must not re-render the same node).
+            // last selection, else the document default. Keyed so the
+            // target keeps identity across content-equal transitions.
             const previewTargetKey = React.useMemo(() => {
                 // A pin (item 10) wins over everything else \u2014 the panel
                 // stays frozen on it no matter what gets selected next.
@@ -4895,15 +4040,9 @@
                 return { scope: previewTargetKey.slice(0, i), id: previewTargetKey.slice(i + 1) };
             }, [previewTargetKey]);
 
-            // Idle-warm: once a build settles, silently pre-compile the
-            // preview shaders of the document's OTHER nodes in the
-            // background (window.prewarmPreviewTarget, mtlx-engine.js) so
-            // actually clicking one later hits the warm path (~0.3s)
-            // instead of paying a fresh driver compile (~3s for a heavy
-            // standard_surface/OpenPBR shader). Walks at low priority
-            // (requestIdleCallback) and defers around anything that
-            // actually needs the wasm queue / warm GL context right now —
-            // it must never make a real edit feel slower.
+            // Idle-warm: once a build settles, silently pre-compile OTHER
+            // nodes' preview shaders in the background (~0.3s warm vs ~3s
+            // cold) at low priority, deferring to any real edit in flight.
             const idleWarmTokenRef = React.useRef(null);
             React.useEffect(() => {
                 // Cancel whatever walk the PREVIOUS parsed/docRev/scope
@@ -4915,26 +4054,15 @@
                 const token = { cancelled: false };
                 idleWarmTokenRef.current = token;
 
-                // The current selection/preview target is read ONCE, right
-                // here at effect start, and is DELIBERATELY NOT a
-                // dependency of this effect (only [parsed, docRev, scope]
-                // are). If it were a dep, every click would cancel and
-                // restart the whole idle walk from scratch — a user
-                // clicking around the graph would mean the walk never
-                // gets anywhere. [parsed, docRev, scope] already cover
-                // every event that actually invalidates the queued
-                // targets (a new/changed document, or a different scope's
-                // node list); starting the BFS below from wherever the
-                // selection happened to be at that moment is good enough
-                // — it doesn't need to track it live.
+                // The current selection is read ONCE, DELIBERATELY NOT a
+                // dep of this effect — if it were, every click would
+                // restart the idle walk from scratch and it'd never finish.
                 const startTarget = previewTarget;
                 const startId = (startTarget && startTarget.scope === scope) ? startTarget.id : null;
 
                 // Candidate targets: every previewable node in the
-                // CURRENT scope (same id kinds setPreviewSel accepts —
-                // n:/g:/i:/o:, see onNodeClick/handleSelect above) other
-                // than the one the main build that just settled already
-                // warmed.
+                // CURRENT scope (n:/g:/i:/o:) other than the one the main
+                // build that just settled already warmed.
                 const VALID_PREFIXES = ['n:', 'g:', 'i:', 'o:'];
                 const candidateIds = [];
                 const candidateSet = new Set();
@@ -4946,21 +4074,16 @@
                 }
 
                 // Order by BFS distance from the current selection over
-                // flow.edges (treated as UNDIRECTED — a node one hop
-                // upstream is just as likely to be clicked next as one
-                // downstream), so whatever is closest to what the user is
-                // already looking at warms first; remaining nodes follow
-                // in flow order. Capped so one huge document can't queue
-                // an unbounded background walk.
+                // flow.edges (UNDIRECTED), so nodes closest to what the
+                // user is looking at warm first; capped to avoid an unbounded walk.
                 const IDLE_WARM_MAX = 40;
                 const ordered = [];
                 if (startId && candidateSet.size) {
                     const adjacency = new Map();
                     const link = (a, b) => {
-                        // `a` may be the start id itself (not in
-                        // candidateSet, since it's excluded above) or any
-                        // other candidate; `b` must be a real candidate to
-                        // be worth visiting.
+                        // `a` may be the start id itself (excluded from
+                        // candidateSet above) or any other candidate; `b`
+                        // must be a real candidate to be worth visiting.
                         if (a !== startId && !candidateSet.has(a)) return;
                         if (!candidateSet.has(b)) return;
                         if (!adjacency.has(a)) adjacency.set(a, []);
@@ -5014,10 +4137,9 @@
                     // A backgrounded tab: don't burn the idle budget on
                     // warm compiles nobody can see yet.
                     if (document.hidden) { setTimeout(() => runTarget(idx), 1000); return; }
-                    // An in-flight material swap (graph/preview.jsx's
-                    // APPLY path) owns the warm context/wasm queue right
-                    // now for a build the user IS looking at — defer
-                    // rather than contend with it.
+                    // An in-flight material swap (preview.jsx's APPLY
+                    // path) owns the warm context/wasm queue for a build
+                    // the user IS looking at — defer rather than contend.
                     if (previewViewRef.current && previewViewRef.current.__outdated) {
                         setTimeout(() => runTarget(idx), 500);
                         return;
@@ -5045,13 +4167,9 @@
                     })();
                 };
 
-                // Let the main build that just triggered this effect (the
-                // one that bumped docRev) get the wasm queue and warm GL
-                // context to itself first — idle-warm only ever contends
-                // for scraps. Cleared on cleanup too, though token.cancelled
-                // alone is already enough to make a fired callback a no-op
-                // — belt-and-suspenders against the timer firing in the
-                // gap between cleanup running and the callback executing.
+                // Let the main build that triggered this effect get the
+                // wasm queue/warm GL context first — idle-warm only
+                // contends for scraps. Cleared on cleanup as belt-and-suspenders.
                 const kickoffTimer = setTimeout(() => runTarget(0), 1500);
 
                 return () => {
@@ -5060,11 +4178,9 @@
                 };
             }, [parsed, docRev, scope]);
 
-            // The node the panel DISPLAYS (header + parameters): the
-            // selection, else the preview target when it lives in the
-            // current view. Interface-input pseudo nodes carry their value
-            // on the node itself — surfaced as a single editable field.
-            // Output pseudo nodes have no literal parameters: read-only.
+            // The node the panel DISPLAYS: the selection, else the
+            // preview target when it lives in the current view. Interface-
+            // input pseudo nodes surface their value as a single field; outputs are read-only.
             const displayNode = React.useMemo(() => {
                 if (selectedNode) return selectedNode;
                 if (previewSel && previewSel.scope === scope) {
@@ -5085,26 +4201,13 @@
                     ? [{ name: 'value', type: displayNode.data.type,
                          value: displayNode.data.value || '', connected: false }]
                     : (displayNode.data.allInputs || displayNode.data.inputs || []));
-            // Group panelInputs by uifolder (item F2.3): inputs without a
-            // uifolder render first, ungrouped, exactly as before; foldered
-            // ones are bucketed under a collapsible header, preserving the
-            // FIRST-appearance order of each folder name. A node with no
-            // uifolder attrs anywhere yields an empty `folders` array, so
-            // the render below falls back to the old flat list untouched.
+            // Group panelInputs by uifolder (item F2.3): ungrouped inputs
+            // render first; foldered ones bucket under a collapsible
+            // header, preserving first-appearance folder order.
             const panelParamGroups = React.useMemo(() => {
                 // Sort by nodedef declaration order (item F3.0) before
-                // grouping, so a uifolder declared late in the nodedef
-                // (e.g. OpenPBR's "Geometry") doesn't render early just
-                // because its inputs happened to be authored/appended
-                // first in collectPorts' returned array (model.jsx) — that
-                // array's own order is left untouched since node cards,
-                // wiredRowIndex drop placement, and visiblePortsFor all
-                // consume it directly; this sorted COPY is only for the
-                // panel's grouping below. Array.prototype.sort is a stable
-                // sort in all modern engines, so inputs sharing a defIndex
-                // (or both lacking one) keep their relative order. Inputs
-                // absent from the nodedef (defIndex undefined — custom or
-                // legacy attrs) sink to the end via the Infinity fallback.
+                // grouping, on a COPY only — collectPorts' own array order
+                // stays untouched (node cards/layout consume it directly).
                 const sortedInputs = panelInputs.slice().sort((a, b) => {
                     const ai = a.defIndex === undefined ? Infinity : a.defIndex;
                     const bi = b.defIndex === undefined ? Infinity : b.defIndex;
@@ -5121,17 +4224,14 @@
                 }
                 return { ungrouped, folders: folderOrder.map((name) => ({ name, inputs: byFolder.get(name) })) };
             }, [panelInputs]);
-            // Open/closed state per folder name, default expanded (a name
-            // absent from this map reads as open — see `!== false` below).
-            // Reset whenever the displayed node changes, same key as the
-            // rename-edit reset above, so a folder collapsed on one node
-            // doesn't leak its state onto an unrelated node reusing a name.
+            // Open/closed state per folder name, default expanded (absent
+            // reads as open, see `!== false` below). Reset per displayed
+            // node so a collapsed folder doesn't leak onto another node.
             const [panelFoldersOpen, setPanelFoldersOpen] = React.useState({});
             React.useEffect(() => { setPanelFoldersOpen({}); }, [displayNode && displayNode.id]);
-            // One ParamRow, shared by the ungrouped list and every folder
-            // below so the markup doesn't drift between the two — only
-            // called once displayNode is known truthy (both call sites are
-            // inside the `displayNode ? [...] : (...)` branch).
+            // One ParamRow, shared by the ungrouped list and every
+            // folder so markup doesn't drift — only called once displayNode
+            // is known truthy (both call sites are inside that branch).
             const renderParamRow = (inp) => (
                 <ParamRow
                     key={displayNode.id + '/' + inp.name}
@@ -5151,13 +4251,9 @@
             );
 
             // ---- Signature / version picker -------------------------------
-            // Every nodedef sharing the displayed node's category is grouped
-            // into SIGNATURES (distinct input/output type sets — add: float,
-            // color3, …) each carrying its own VERSIONS (standard_surface:
-            // 1.0.1 default, 1.0.0 — same ports, different defaults). See
-            // groupSignatures. getMatchingNodeDefs covers the stdlib and
-            // document-local nodedefs alike. Only real nodes are overloaded —
-            // pseudo nodes and collapsed nodegraphs have neither.
+            // Every nodedef sharing the category groups into SIGNATURES
+            // (distinct type sets) each with its own VERSIONS. Only real
+            // nodes are overloaded — pseudo nodes/nodegraphs have neither.
             const panelSigGroups = React.useMemo(() => {
                 if (!parsed || !displayNode || displayNode.id.indexOf('n:') !== 0) return null;
                 const cat = displayNode.data.category;
@@ -5174,10 +4270,8 @@
             }, [parsed, displayNode, docRev]);
 
             // The exact nodedef the node currently RESOLVES to — the
-            // explicit nodedef="…" attribute when pinned, MaterialX's own
-            // resolution (which also honors an authored version="…")
-            // otherwise — then the SIGNATURE group and VERSION within it
-            // that nodedef belongs to.
+            // explicit nodedef= when pinned, else MaterialX's own
+            // resolution (honoring an authored version=) — then its SIGNATURE/VERSION.
             const currentDefName = React.useMemo(() => {
                 if (!panelSigGroups) return '';
                 const c = scopeContainer();
@@ -5190,10 +4284,9 @@
                 if (!panelSigGroups || !currentDefName) return null;
                 return panelSigGroups.find((g) => g.versions.some((v) => v.name === currentDefName)) || null;
             }, [panelSigGroups, currentDefName]);
-            // Per the editor's design: show a Signature picker only when the
-            // category has more than one signature, a Version picker only
-            // when the resolved signature has more than one version — never
-            // clutter the panel with a single-option dropdown.
+            // Show a Signature picker only when the category has more
+            // than one signature, a Version picker only when the resolved
+            // signature has more than one version — never a single-option dropdown.
             const showSigPicker = !!panelSigGroups && panelSigGroups.length > 1;
             const showVersionPicker = !!currentSigGroup && currentSigGroup.versions.length > 1;
 
@@ -5218,15 +4311,9 @@
                 setNameEditing(false);
             };
 
-            // Port-picker popover content (item 2) — portaled straight onto
-            // <body> below via ReactDOM.createPortal, same rationale as
-            // ColorSwatch's popover (js/shared/mtlx-ui.jsx): several
-            // ancestors here use `backdrop-blur`, which establishes a new
-            // containing block for `position: fixed` descendants, so a
-            // plain in-place fixed popover would land off-target. The
-            // popover itself (filter input, row list, footer hint) is the
-            // PortPickerPopover component defined above, styled to match
-            // AddNodeSearch (js/graph/panels.jsx).
+            // Port-picker popover (item 2) — portaled onto <body> since
+            // ancestor `backdrop-blur` establishes a containing block for
+            // `position: fixed`, which would land an in-place popover off-target.
             const portPickerPopover = portPicker
                 ? <PortPickerPopover portPicker={portPicker} rootRef={portPickerRef} onPick={pickPort} />
                 : null;
@@ -5274,17 +4361,12 @@
                             proOptions={{ account: '', hideAttribution: false }}
                         >
                             <Background color="#374151" gap={18} size={1.5} />
-                            {/* Zoom + fit controls: a custom cluster docked to
-                                the TOP of the Types window instead of React
-                                Flow's own bottom-left <Controls> — see the
-                                Types window below, which renders them. */}
-                            {/* Hidden below the compact-mode threshold — there's
-                                no room for it, and it would sit under the
-                                (now transient/overlay) params panel anyway.
-                                Also hidden (in favor of the pill further
-                                below) whenever minimapBlocked says there
-                                isn't room for it even in wide mode — see the
-                                geometry effect above. */}
+                            {/* Zoom + fit controls: a custom cluster docked
+                                to the TOP of the Types window instead of
+                                React Flow's own bottom-left <Controls>. */}
+                            {/* Hidden below the compact-mode threshold (no
+                                room; would sit under the overlay params panel),
+                                and whenever minimapBlocked says there's no room even in wide mode. */}
                             {!narrow && minimapOpen && !minimapBlocked && (
                                 <MiniMap
                                     pannable zoomable
@@ -5292,14 +4374,9 @@
                                     nodeColor={(n) => getNodeColor(n.data)}
                                     nodeStrokeColor="#111827"
                                     maskColor="rgba(17, 24, 39, 0.75)"
-                                    // Sit to the LEFT of the preview panel (right-2
-                                    // + w-[19rem] = 312px) while it's open; slide back
-                                    // to the corner when it collapses to a chip.
-                                    // Explicit width/height (RF's own defaults) turn
-                                    // this into a KNOWN box — the geometry effect
-                                    // above and the corner button just below both do
-                                    // fixed arithmetic against it instead of
-                                    // measuring the rendered SVG panel themselves.
+                                    // Sits LEFT of the preview panel while
+                                    // open, sliding to the corner when
+                                    // collapsed. Explicit width/height make this a KNOWN box for fixed-arithmetic sizing.
                                     style={{
                                         background: '#1f2937',
                                         width: 200,
@@ -5309,36 +4386,9 @@
                                     }}
                                 />
                             )}
-                            {/* Minimize button, pinned to the MiniMap's own
-                                top-right corner. <Panel> (same component RF's
-                                MiniMap wraps itself in) gives it the exact
-                                same position:absolute/z-index/margin plumbing
-                                as the MiniMap — we only override marginRight/
-                                marginBottom, precisely how the MiniMap's own
-                                style overrides marginRight above, so the two
-                                stay in lockstep with no separate positioning
-                                system to keep in sync.
-
-                                Visually-by-math (.react-flow__panel's default
-                                margin is 15px on every side — see vendor/
-                                reactflow/style.css — and "bottom right"
-                                positions via `bottom:0; right:0`, so a plain
-                                marginRight/marginBottom override IS the pixel
-                                offset from the pane's edges, same as the
-                                MiniMap's own marginRight above):
-                                  minimap right edge (from pane right) = minimapMarginRight
-                                  minimap top edge   (from pane bottom) = 15 + 150 = 165
-                                A 20px (w-5 h-5) button inset 4px from that
-                                corner therefore needs:
-                                  marginRight  = minimapMarginRight + 4
-                                  marginBottom = 165 - 4 - 20 = 141
-                                i.e. tucked 4px in from the minimap's right
-                                edge and 4px down from its top edge — a
-                                corner badge overlapping the box, not a
-                                floating button beside it. Rendered right
-                                after <MiniMap> (same z-index:5 from the
-                                shared .react-flow__panel class), so DOM
-                                order alone puts it on top. */}
+                            {/* Minimize button, pinned to the MiniMap's
+                                corner via <Panel>. marginRight = minimapMarginRight+4;
+                                marginBottom = 15+150-20-4 = 141 (see below). */}
                             {!narrow && minimapOpen && !minimapBlocked && (
                                 <Panel
                                     position="bottom-right"
@@ -5356,31 +4406,8 @@
                                 </Panel>
                             )}
                             {/* Collapsed pill: shown instead of the MiniMap
-                                whenever the MiniMap itself isn't visible —
-                                minimized (!minimapOpen), blocked for room
-                                (minimapBlocked), or narrow (no MiniMap at
-                                all below the compact-mode threshold). Never
-                                hidden outright: narrow used to gate this
-                                away entirely, which meant there was no way
-                                back to the minimap after widening past a
-                                stale minimapOpen=false — now it just stays
-                                put and DISABLED (dimmed, no-op, explanatory
-                                title) whenever expanding is actually
-                                impossible (narrow or minimapBlocked).
-                                Styled like the legend's own collapsed
-                                "Types" chip below. Sits immediately to the
-                                LEFT of whichever bottom-right control is
-                                showing right now — the collapsed params
-                                chip normally, or the expanded params panel
-                                (see pillMarginRight above, same "shared
-                                constant, same render" pattern as
-                                minimapMarginRight). marginBottom is pinned
-                                to 8 (Tailwind's bottom-2) rather than
-                                <Panel>'s own default 15, so the pill lines
-                                up with the Types window and the sidebar
-                                (item 2) instead of sitting 7px higher.
-                                pillRef feeds the geometry effect's stage-2
-                                (legend-collision) check above. */}
+                                when minimized/blocked/narrow. Never hidden
+                                outright (disabled instead, else no way back after a stale minimapOpen=false). */}
                             {(narrow || !minimapOpen || minimapBlocked) && (
                                 <Panel
                                     position="bottom-right"
@@ -5405,12 +4432,9 @@
                         </ReactFlowComp>
                     </div>
 
-                    {/* Presets dialog ("Presets" button). Rendered BEFORE the
-                        unsaved-changes dialog below (same z-50 overlay class,
-                        but earlier in the DOM) so that dialog — which
-                        loadPreset's confirmReplace can pop up while this one
-                        is still open mid-fetch — paints on top instead of
-                        being hidden behind it. */}
+                    {/* Presets dialog. Rendered BEFORE the unsaved-changes
+                        dialog below (same z-50 class, earlier in the DOM)
+                        so that dialog paints on top during a mid-fetch confirmReplace. */}
                     <PresetsDialog
                         open={presetsOpen}
                         onClose={() => setPresetsOpen(false)}
@@ -5495,25 +4519,15 @@
 
                     {/* Scope-transition overlay: entering/leaving a
                         nodegraph (changeScope) rebuilds the flow
-                        synchronously and can take a beat on a big graph.
-                        Same wrapper/z-index approach as the `busy` overlay
-                        just above (kept separate — the two never fire for
-                        the same reason), reusing the shared LoadingOverlay
-                        component (js/shared/mtlx-ui.jsx) instead of
-                        hand-rolling the markup again. */}
+                        synchronously; reuses the shared LoadingOverlay component. */}
                     <LoadingOverlay show={scopeBusy} label={'Loading graph' + '\u2026'}
                         className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
                         labelClassName="text-sm text-gray-300 animate-pulse"
                         barWidthClass="w-56" />
 
                     {/* Action-busy overlay (items 2 & 3): a heavy,
-                        doc-mutating keyboard action (Ctrl+G encapsulate,
-                        deleting a nodegraph) is in flight \u2014 same wrapper/
-                        z-index approach as scopeBusy just above (kept
-                        separate \u2014 the two never fire for the same
-                        reason). actionBusy already carries its own
-                        trailing \u2026, so it's passed straight through as
-                        the label. */}
+                        doc-mutating action (Ctrl+G, deleting a nodegraph)
+                        is in flight; actionBusy already carries a trailing ellipsis as the label. */}
                     <LoadingOverlay show={!!actionBusy} label={actionBusy || ''}
                         className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
                         labelClassName="text-sm text-gray-300 animate-pulse"
@@ -5546,36 +4560,13 @@
                         </div>
                     )}
 
-                    {/* Top-left cluster: document/session toolbar (New,
-                        Import, Export, Undo, Redo) stacked above the
-                        breadcrumb (document \u25B8 scope) and its scope
-                        dropdown, when a document is loaded. Same measured
-                        3-tier collapse as the top-right cluster (see
-                        measureToolbarCluster / topLeftRowRef above): the
-                        FIXED width (`w-*`, not `max-w-*`) on THIS outer
-                        div is required so the inner button row's
-                        clientWidth is real available space rather than
-                        shrink-to-fit content width \u2014 see the shared
-                        comment above for why. `pointer-events-none` +
-                        `[&>*]:pointer-events-auto` keep the strip's empty
-                        space from stealing clicks meant for the canvas
-                        while leaving the button row/breadcrumb/scope
-                        select (its direct children) interactive. */}
+                    {/* Top-left cluster: document/session toolbar above
+                        the breadcrumb + scope dropdown. Same measured
+                        3-tier collapse as the top-right cluster (FIXED width required, see measureToolbarCluster above). */}
                     <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 w-[48%] md:w-[45%] pointer-events-none [&>*]:pointer-events-auto">
-                        {/* `w-full` here is load-bearing, not decorative:
-                            the parent is `flex-col items-start`, and
-                            `items-start` governs the cross axis (horizontal,
-                            for a column) sizing of this row \u2014 without
-                            `w-full` the row shrinks to its own content
-                            width (clientWidth === scrollWidth always, the
-                            same shrink-to-fit trap the fixed-width outer
-                            container was introduced to avoid, reintroduced
-                            one level down), so measureToolbarCluster's
-                            overflow check could never fire and the row
-                            would silently spill past the 45%/48% strip
-                            into the right cluster. `w-full` forces it to
-                            span the fixed-width parent, making its
-                            clientWidth the real available width. */}
+                        {/* `w-full` here is load-bearing: `items-start`
+                            (flex-col parent) would otherwise shrink this
+                            row to content width, reintroducing the shrink-to-fit trap and hiding overflow. */}
                         <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full">
                             {/* New/Import/Presets are browser-only, multi-
                                 document affordances — the VS Code editor is
@@ -5606,11 +4597,9 @@
                                 title="Load a curated official MaterialX example document"
                                 className={BTN_TOOLBAR}
                             >
-                                {/* 'presets' renders as a framed photo/landscape glyph
-                                    (see MTLX_ICON_PATHS in mtlx-engine.js) — reads as
-                                    "browse a gallery of ready-made looks". Its own glyph,
-                                    no longer shared with the unrelated env-map-background
-                                    toggle in the preview panel (js/shared/mtlx-ui.jsx). */}
+                                {/* 'presets' renders as a framed photo
+                                    glyph (MTLX_ICON_PATHS) — its own icon,
+                                    no longer shared with the env-map-background toggle. */}
                                 <MtlxIcon name="presets" className="w-3.5 h-3.5" />
                                 <span className="gtb-label">Presets</span>
                             </button>
@@ -5683,36 +4672,9 @@
                         )}
                     </div>
 
-                    {/* Top-right cluster: document picker (when several),
-                        view toggles, add-node, fullscreen. Import/Export
-                        live in the top-left toolbar now, alongside New
-                        Material and Undo/Redo. Labels in this cluster
-                        (`.gtb-label`) are hidden as a unit, and the row
-                        allowed to wrap as a last resort (`.gtb-wrap`),
-                        once the measured 3-tier collapse effect above
-                        (measureToolbarCluster via topRightClusterRef)
-                        decides tier 1/2 no longer fit — see the shared
-                        comment near that effect for the full tier order
-                        and why plain flex-wrap can't do this alone.
-
-                        FIXED width (`w-*`, not `max-w-*`): this container
-                        is absolutely positioned, so with only a max-width
-                        cap its size is shrink-to-fit — clientWidth just
-                        tracks whatever content currently renders, so it
-                        always equals scrollWidth and the overflow check in
-                        the measurement effect could never fire. A fixed
-                        percentage width makes clientWidth the actual
-                        available space, so squeezing the pane really does
-                        make content overflow it (detectable) and growing
-                        the pane really does resize this element (so the
-                        ResizeObserver below fires and labels come back).
-                        Because the strip now always spans that width over
-                        the canvas — including empty space to the left of
-                        its (right-aligned) content — `pointer-events-none`
-                        keeps that empty area from eating clicks meant for
-                        the canvas underneath, while `[&>*]:pointer-events-auto`
-                        restores interactivity to the actual buttons/select
-                        inside it. */}
+                    {/* Top-right cluster: document picker, view toggles,
+                        add-node, fullscreen. FIXED width (not max-width)
+                        keeps clientWidth real for the 3-tier collapse (measureToolbarCluster); pointer-events-none guards empty space. */}
                     <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; }'}</style>
                     <div ref={topRightClusterRef} className="absolute top-2 right-2 z-30 flex items-center gap-1.5 flex-nowrap justify-end w-[48%] md:w-[54%] pointer-events-none [&>*]:pointer-events-auto">
                         {mtlxPaths.length > 1 && (
@@ -5817,10 +4779,9 @@
                     {/* Keybinds reference popup. */}
                     {helpOpen && <KeybindsHelp onClose={() => setHelpOpen(false)} active={active} />}
 
-                    {/* Port-picker popover (item 2): a connection dragged onto
-                        a node body (not a specific handle) opens this instead
-                        of silently dropping. Portaled onto <body> — see
-                        portPickerPopover above for why. */}
+                    {/* Port-picker popover (item 2): a connection dragged
+                        onto a node body opens this instead of silently
+                        dropping. Portaled onto <body> — see portPickerPopover above. */}
                     {portPicker && ReactDOM.createPortal(portPickerPopover, document.body)}
 
                     {/* View-only XML dialog ("Document" button, item 8). */}
@@ -5844,10 +4805,9 @@
                         />
                     )}
 
-                    {/* In-tab docs viewer, opened from the parameter panel's
-                        "?" button. Mounted whenever a node's docs have ever
-                        been requested this session; docsDialogOpen just
-                        toggles visibility so the inline docs App stays warm. */}
+                    {/* In-tab docs viewer (panel's "?" button). Mounted
+                        once a node's docs have been requested this session;
+                        docsDialogOpen just toggles visibility to stay warm. */}
                     {docsDialog && (
                         <DocsDialog
                             hash={docsDialog.hash}
@@ -5859,22 +4819,17 @@
                         />
                     )}
 
-                    {/* Preview + parameter panel (right): ALWAYS shown while a
-                        document is loaded. The preview renders the selected
-                        node — or the last selected one, or the document
-                        default — and the rows below edit the displayed node.
-                        Values edit the in-memory MaterialX document;
-                        connected inputs are read-only since their value
-                        comes from the wire. */}
+                    {/* Preview + parameter panel (right): always shown
+                        while a document is loaded, editing the in-memory
+                        doc; connected inputs are read-only (value from the wire). */}
                     {parsed && (paramsOpen ? (
                         <div
                             className="absolute bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono"
                             style={{ top: 'var(--gtb-offset, 3rem)' }}
                         >
-                            {/* The preview target on a shaderball — the same
-                                render pipeline as the docs page. Square, and
-                                framed to fill. Re-renders on every committed
-                                parameter edit and on every target change. */}
+                            {/* The preview target on a shaderball — same
+                                render pipeline as the docs page. Re-renders
+                                on every committed param edit and target change. */}
                             <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
                                 overlay={
                                     <button
@@ -6025,14 +4980,9 @@
                                         </div>
                                     ) : null}
 
-                                    {/* Signature row: switch to a different TYPE
-                                        signature (add: float vs color3 vs …).
-                                        Only shown when the category actually has
-                                        more than one. Swatch-led, output-type
-                                        labels (LookdevX-style) — an input
-                                        summary is appended only when two
-                                        signatures share an output type and the
-                                        swatch alone can't disambiguate them. */}
+                                    {/* Signature row: switch to a different
+                                        TYPE signature, shown only when the
+                                        category has more than one; swatch-led, with an input summary when types are ambiguous. */}
                                     {selectedIds.length <= 1 && displayNode && showSigPicker ? (
                                         <div className="flex items-center gap-2 px-3 py-1">
                                             <span
@@ -6064,12 +5014,9 @@
                                         </div>
                                     ) : null}
 
-                                    {/* Version row: switch to a different VERSION
-                                        of the CURRENT signature (standard_surface
-                                        1.0.1 default / 1.0.0 …) — same ports,
-                                        only defaults may differ. Only shown when
-                                        the resolved signature actually has more
-                                        than one version. */}
+                                    {/* Version row: switch to a different
+                                        VERSION of the CURRENT signature (same
+                                        ports, defaults may differ); shown only when more than one exists. */}
                                     {selectedIds.length <= 1 && displayNode && showVersionPicker ? (
                                         <div className="flex items-center gap-2 px-3 py-1">
                                             <span
@@ -6156,14 +5103,9 @@
                             </div>
                         </div>
                     ) : (
-                        // Bottom-right corner now (item 3), same bottom-2
-                        // offset as the Types window and the expanded panel
-                        // above — no longer parked under the top toolbar
-                        // (--gtb-offset stays a THIS-panel-only, top-edge
-                        // concern; see the expanded branch above). paramsChipRef
-                        // feeds the geometry effect above, which measures this
-                        // chip's live width to position the Map pill just left
-                        // of it (pillMarginRight).
+                        // Bottom-right corner (item 3), same bottom-2
+                        // offset as the Types window; paramsChipRef feeds
+                        // the geometry effect that positions the Map pill (pillMarginRight).
                         <button
                             ref={paramsChipRef}
                             onClick={() => setParamsOpen(true)}
@@ -6191,13 +5133,9 @@
                         />
                     )}
 
-                    {/* Types window (bottom left): a custom zoom/fit cluster
-                        docked to its TOP, followed by the type color legend
-                        card (or its collapsed chip). Both live in one
-                        bottom-anchored flex column, so the controls always
-                        sit immediately above the legend — riding up with it
-                        when it's maximized (legendShowAll) and sliding down
-                        to sit just above the chip when it's minimized. */}
+                    {/* Types window (bottom left): zoom/fit cluster docked
+                        above the type-color legend card (or its chip), in
+                        one flex column so it rides up/down with legendShowAll. */}
                     <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1.5">
                         <div className="flex items-center gap-0.5 bg-gray-800/80 backdrop-blur border border-gray-600 rounded-lg p-0.5">
                             <button
@@ -6216,10 +5154,9 @@
                                 className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
                             ><MtlxIcon name="zoom-in-area" className="w-3.5 h-3.5" /></button>
                         </div>
-                        {/* Wrapped so the geometry effect above can measure
-                            legendBoxRef.getBoundingClientRect() regardless of
-                            which branch (open card or collapsed chip) is
-                            currently rendered inside it. */}
+                        {/* Wrapped so the geometry effect above can
+                            measure legendBoxRef regardless of which branch
+                            (open card or chip) is currently rendered inside. */}
                         <div ref={legendBoxRef}>
                         {legendOpen ? (
                             // w-80 (not w-60): the longest type name (displacementshader,
@@ -6262,19 +5199,9 @@
                                 )}
                             </div>
                         ) : (
-                            // Label first, dots after (item 5) — same bold
-                            // uppercase treatment as the open card's own
-                            // "Types" header just above, copied verbatim so
-                            // the chip reads as the same label, just
-                            // collapsed — followed by the same tristate
-                            // control as the open card, to the right of the
-                            // dots. A <div role="button"> rather than a real
-                            // <button>: it hosts the tristate's own buttons,
-                            // and nested <button>s are invalid HTML. Clicking
-                            // the container anywhere outside the segments
-                            // (which stopPropagation their own clicks)
-                            // restores the DEFAULT state; Enter/Space mirror
-                            // that for keyboard users.
+                            // Label first, dots after (item 5), same
+                            // treatment as the open card's header. A <div
+                            // role="button"> not a real <button> — it hosts the tristate's own nested buttons.
                             <div
                                 role="button"
                                 tabIndex={0}
