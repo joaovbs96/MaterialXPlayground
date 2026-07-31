@@ -750,7 +750,11 @@
                                    should sit flush against the doc pane rather than
                                    gapped from it. */
                                 ? 'grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:gap-0 md:flex-1 md:min-h-[20rem] md:-m-6'
-                                : 'grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
+                                // Expanded: size the sidebar (first) column to its min-content
+                                // — exactly wide enough for DocsSidebar's filter tri-state +
+                                // "3D Preview" row on one line, and no wider. The doc pane's
+                                // three columns stay minmax(0,1fr) and absorb all remaining width.
+                                : 'grid grid-cols-1 md:grid-cols-[min-content_repeat(3,minmax(0,1fr))] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
 
                             {/* Vertical twin of the footer's collapsed "Disclaimer" strip: a slim
                                 full-height in-flow bar in the grid's auto column; click re-opens

@@ -82,12 +82,13 @@
                                 </span>
                             </div>
                         )}
-                        {/* flex-wrap: both controls below are now intrinsically
-                            sized (invisible-sizer technique, not flex-1), so if
-                            the sidebar is ever narrower than their combined width
-                            they wrap to a second line as a graceful fallback
-                            instead of clipping or squeezing labels. */}
-                        <div className="flex items-center flex-wrap gap-1.5 pb-2">
+                        {/* Both controls below are intrinsically sized (invisible-sizer
+                            technique, not flex-1). The sidebar's grid column is sized to
+                            its min-content width (js/docs-app.jsx's
+                            md:grid-cols-[min-content_...]), which this row drives, so the
+                            filter tri-state and "3D Preview" toggle always sit on one line —
+                            no flex-wrap fallback needed, and the column never grows wider. */}
+                        <div className="flex items-center gap-1.5 pb-2">
                             <div className="inline-flex shrink-0 rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
                                 {[
                                     { mode: 'all', icon: 'file-infinity', label: 'All Nodes' },
