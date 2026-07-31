@@ -234,6 +234,13 @@
             const n = Number(x);
             return isFinite(n) ? String(parseFloat(n.toFixed(6))) : '0';
         };
+        // Display-only rounding so the picker, spinner steps, and blur all read
+        // consistently; the committed value keeps numStr's fuller precision.
+        // Decimals: 3 for the tighter 4-component rows (color4/vector4), else 4.
+        const numDec = (x, dec) => {
+            const n = Number(x);
+            return isFinite(n) ? String(parseFloat(n.toFixed(dec))) : '0';
+        };
         const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter((x) => x.length);
 
         // One row per param: connected inputs jump to their source node;
@@ -242,14 +249,17 @@
         function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
             const [draft, setDraft] = React.useState(inp.value || '');
             React.useEffect(() => { setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
+            // Displayed decimals: 4-component rows (color4/vector4) are tighter,
+            // so round to 3; color3/vector2/3 round to 4.
+            const compDec = (VEC_SIZE[inp.type] || 0) === 4 ? 3 : 4;
             // Raw per-component TEXT for vector/color inputs, kept apart
             // from the numeric `comps` below so each <input>'s value is
             // exactly what was typed (see control()'s vecN branch).
             const [compText, setCompText] = React.useState(
-                () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr)
+                () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec))
             );
             React.useEffect(() => {
-                setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map(numStr));
+                setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec)));
             }, [nodeId, inp.name, inp.value]);
             const onCommitRef = React.useRef(onCommit);
             onCommitRef.current = onCommit;
@@ -400,7 +410,7 @@
                         if (spin) flush();
                     };
                     const chan = isColor ? 'RGBA' : 'XYZW';
-                    const fmt = (n) => Math.round(Number(n) * 1000) / 1000; // display only
+                    const fmt = (n) => numDec(n, compDec); // display only (3dp for 4-comp rows, else 4dp)
                     return (
                         <div>
                             <div className="flex items-center gap-1">
@@ -415,11 +425,11 @@
                                 {isColor && (
                                     <ColorSwatch
                                         rgb={comps.slice(0, 3)}
-                                        className="w-full self-stretch h-6 min-w-0 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
+                                        className="flex-none w-6 h-6 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
                                         title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
                                         onChange={(nv) => {
                                             if (vecN === 4) nv.push(comps[3]);
-                                            setCompText(nv.map(numStr));
+                                            setCompText(nv.map((x) => numDec(x, compDec)));
                                             commitSoon(nv.map(numStr).join(', '));
                                         }}
                                     />
@@ -550,7 +560,7 @@
                             {inp.value !== '' ? inp.value : '\u2014'}
                         </div>
                     ) : (
-                        <div className="mt-1 ml-3.5">{control()}</div>
+                        <div className={'mt-1' + (isColor ? '' : ' ml-3.5')}>{control()}</div>
                     )}
                 </div>
             );
