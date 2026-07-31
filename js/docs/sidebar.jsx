@@ -33,7 +33,13 @@
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
             return (
-                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar'}>
+                // [scrollbar-gutter:stable]: this element is the overflow-y scroll
+                // container AND (at md+) the sidebar's min-content grid column
+                // (js/docs-app.jsx). The 8px custom scrollbar (index.html's
+                // .custom-scrollbar) takes real layout width, so it appearing/
+                // disappearing as docFilter changes the tree height would nudge the
+                // whole sidebar's width. Reserving the gutter always keeps it constant.
+                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
                     {/* Sticky header: title (+ help + collapse chevron),
                         intro line, counter pills, filter/3D row, and search
                         (+ expand/collapse-all) stay visible while the tree
