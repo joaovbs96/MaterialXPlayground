@@ -550,17 +550,17 @@
                             <button
                                 onClick={() => onJump(sourceId)}
                                 title="Select and show the node this input is connected to"
-                                className="mt-1 ml-3.5 max-w-[calc(100%-0.875rem)] inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate"
+                                className="mt-1 max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate"
                             ><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> from {sourceId.slice(2)}</button>
                         ) : (
-                            <div className="mt-1 ml-3.5 inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono"><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
+                            <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono"><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
                         )
                     ) : readOnly ? (
-                        <div className="mt-1 ml-3.5 text-[11px] text-gray-400 font-mono truncate" title={inp.value}>
+                        <div className="mt-1 text-[11px] text-gray-400 font-mono truncate" title={inp.value}>
                             {inp.value !== '' ? inp.value : '\u2014'}
                         </div>
                     ) : (
-                        <div className={'mt-1' + (isColor ? '' : ' ml-3.5')}>{control()}</div>
+                        <div className="mt-1">{control()}</div>
                     )}
                 </div>
             );
