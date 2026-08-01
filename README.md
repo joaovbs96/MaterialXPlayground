@@ -125,6 +125,10 @@ Have a feature request or idea? File it on the [issue tracker](https://github.co
 
 Issues and pull requests are welcome. Please file bugs and feature requests via the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues).
 
+## Versioning
+
+Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.8.0` is the first release of August 2026, and a second release that month would be `2026.8.1`. The playground's version is independent of the MaterialX library version it ships (shown in the badge at the top of this page). See the [changelog](CHANGELOG.md) for what each release contains.
+
 ## Asset credits
 
 **Shader ball.** `models/shaderball.glb` and `models/shaderball_simple.glb` are GLB conversions of the ["Standard Shader Ball"](https://github.com/usd-wg/assets) by Chris Rydalch and André Mazzone (USD Working Group; original scene concept by Thomas Anagnostou), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE.txt`](models/LICENSE.txt) for the full attribution and modification notice.
