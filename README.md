@@ -2,7 +2,7 @@
 
 [![Build, verify & deploy](https://github.com/joaovbs96/MaterialXPlayground/actions/workflows/deploy.yml/badge.svg)](https://github.com/joaovbs96/MaterialXPlayground/actions/workflows/deploy.yml) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![MaterialX](https://img.shields.io/badge/MaterialX-v1.39.5-blue.svg)](https://github.com/AcademySoftwareFoundation/MaterialX)
 
-MaterialX Playground is a set of in-browser tools to explore the standard MaterialX node library, preview materials in real-time 3D, and build node graphs visually, all without installing anything. Everything runs 100% client-side: no data leaves your browser. Shaders are generated and compiled live through the MaterialX WebAssembly modules.
+MaterialX Playground is a set of in-browser tools to explore the standard MaterialX node library, preview materials in real-time 3D, and build node graphs visually, all without installing anything. Everything runs 100% client-side: no data leaves your browser. Shaders are generated and compiled live through the MaterialX v1.39.5 WebAssembly modules.
 
 > This is an independent community project. It is **not affiliated with, endorsed by, or sponsored by** the [MaterialX](https://materialx.org/) project, the Academy Software Foundation, or the Linux Foundation. In case of any discrepancy, the [MaterialX specification](https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification) is the definitive source of truth. See [Trademarks](#trademarks) below.
 
