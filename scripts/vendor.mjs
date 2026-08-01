@@ -8,9 +8,11 @@
 // CI-verified source of truth (--check gates drift); vendor/materialx/
 // is touched only by --with-materialx, else CDN fallback at runtime.
 
-import { readFile, writeFile, mkdir, rm, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm, readdir, stat, mkdtemp } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readVersionMeta, checkStamps } from "./lib/version.mjs";
@@ -34,15 +36,11 @@ const WITH_MATERIALX = process.argv.includes("--with-materialx");
 // ---------------------------------------------------------------------------
 const MTLX_TAG = (await readVersionMeta()).tag;
 const MTLX_REPO = "AcademySoftwareFoundation/MaterialX";
-const MTLX_TREE_API_URL = `https://api.github.com/repos/${MTLX_REPO}/git/trees/${MTLX_TAG}?recursive=1`;
-const MTLX_RAW_BASE = `https://raw.githubusercontent.com/${MTLX_REPO}/${MTLX_TAG}/`;
+const MTLX_GIT_URL = `https://github.com/${MTLX_REPO}.git`;
 // Directory prefixes (POSIX git-tree paths). Whole directories are
 // vendored, not just the files read today, because the preset crawler
 // resolves xi:include siblings and relative texture paths at runtime.
 const MTLX_INCLUDE_PREFIXES = ["documents/Specification/", "resources/Materials/Examples/", "resources/Images/"];
-const MTLX_CONCURRENCY = 8;
-const MTLX_RETRIES = 2;
-const MTLX_RETRY_BASE_DELAY_MS = 500;
 
 const MATERIALX_ROOT = path.join(VENDOR_ROOT, MATERIALX_DIR_NAME);
 const MATERIALX_MANIFEST_PATH = path.join(MATERIALX_ROOT, "manifest.json");
@@ -136,45 +134,11 @@ function sha256Of(buffer) {
 }
 
 /** git's own blob hashing scheme: sha1("blob <byteLength>\0" + content). Pure function of the
- * bytes — needs no git binary and no network call, so it can be used to compare local files
- * against a GitHub git-trees API `sha` field for free. */
+ * bytes — needs no git binary, so the manifest's per-file `sha` fields stay comparable against
+ * any git tree of the upstream repo without shelling out per file. */
 function gitBlobSha1(buffer) {
   const header = Buffer.from(`blob ${buffer.length}\0`);
   return createHash("sha1").update(Buffer.concat([header, buffer])).digest("hex");
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Run `fn` up to `retries + 1` times with exponential backoff between attempts. */
-async function withRetries(fn, retries = MTLX_RETRIES, baseDelayMs = MTLX_RETRY_BASE_DELAY_MS) {
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries) {
-        await sleep(baseDelayMs * Math.pow(2, attempt));
-      }
-    }
-  }
-  throw lastErr;
-}
-
-/** Run `worker` over `items` with at most `concurrency` in flight at once. */
-async function pooledMap(items, worker, concurrency) {
-  let nextIndex = 0;
-  async function runNext() {
-    for (;;) {
-      const i = nextIndex++;
-      if (i >= items.length) return;
-      await worker(items[i], i);
-    }
-  }
-  const poolSize = Math.max(1, Math.min(concurrency, items.length));
-  await Promise.all(Array.from({ length: poolSize }, runNext));
 }
 
 async function readPkgVersion(pkgName) {
@@ -359,91 +323,23 @@ async function writeManifest(entries) {
 // --with-materialx: populates vendor/materialx/ from the MaterialX repo.
 // Entirely separate code path from the lib-vendoring above — never invoked
 // unless the --with-materialx flag is present.
+//
+// Acquisition is a shallow, blobless, sparse git clone at the pinned tag:
+// the git protocol is anonymous for public repos and not subject to the
+// GitHub REST API rate limit (the previous git-trees API approach could
+// 403 on shared CI runner IPs), and only blobs under MTLX_INCLUDE_PREFIXES
+// are ever downloaded. Integrity comes from git's own object hashing.
 // ---------------------------------------------------------------------------
 
-/** Fetch the recursive git tree for MTLX_TAG (one unauthenticated GitHub API call). */
-async function fetchMaterialxTree() {
-  log(`fetching MaterialX repo tree @ ${MTLX_TAG} (git-trees API) ...`);
-  const res = await fetch(MTLX_TREE_API_URL, {
-    headers: {
-      "User-Agent": "MaterialXPlayground-vendor-script",
-      Accept: "application/vnd.github+json",
-    },
-  });
-  if (!res.ok) {
-    fail(
-      [
-        `error: failed to fetch MaterialX git tree — HTTP ${res.status} ${res.statusText}`,
-        `  ${MTLX_TREE_API_URL}`,
-        res.status === 403
-          ? "  (this is likely an unauthenticated GitHub API rate limit — wait and retry)"
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
+/** Run git with the given args, throwing (not exiting) on failure so callers can clean up. */
+function runGit(args) {
+  const res = spawnSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (res.error) {
+    throw new Error(`failed to run git (${res.error.message}) — git is required for --with-materialx`);
   }
-  const data = await res.json();
-  if (data.truncated) {
-    fail(
-      "error: MaterialX git tree response was truncated by the GitHub API (too many entries for a " +
-        "single non-paginated request) — scripts/vendor.mjs's --with-materialx needs a paginated tree " +
-        "fetch to handle this; it currently assumes the whole tree fits in one response."
-    );
+  if (res.status !== 0) {
+    throw new Error(`\`git ${args.join(" ")}\` exited ${res.status}:\n${(res.stderr || "").trim()}`);
   }
-  return data.tree; // [{ path, mode, type, sha, size, url }, ...] — path is always POSIX.
-}
-
-/** Select every blob whose path falls under one of MTLX_INCLUDE_PREFIXES. */
-function selectMaterialxBlobs(tree) {
-  return tree.filter((entry) => entry.type === "blob" && MTLX_INCLUDE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)));
-}
-
-/** Download one tree blob into vendor/materialx/<path>, skipping the network if the local file's
- * git-blob-sha1 already matches the tree's recorded sha (idempotent resume). */
-async function downloadMaterialxBlob(entry) {
-  const destRel = entry.path.split("/").join(path.sep);
-  const destAbs = path.join(MATERIALX_ROOT, destRel);
-
-  if (existsSync(destAbs)) {
-    const existing = await readFile(destAbs);
-    if (gitBlobSha1(existing) === entry.sha) {
-      return { path: entry.path, bytes: existing.length, sha: entry.sha, skipped: true };
-    }
-  }
-
-  const url = MTLX_RAW_BASE + entry.path;
-  const data = await withRetries(async () => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    return Buffer.from(await res.arrayBuffer());
-  });
-  const actualSha = gitBlobSha1(data);
-  if (actualSha !== entry.sha) {
-    throw new Error(`sha mismatch for ${entry.path}: tree says ${entry.sha}, downloaded content hashes to ${actualSha}`);
-  }
-  await mkdir(path.dirname(destAbs), { recursive: true });
-  await writeFile(destAbs, data);
-  return { path: entry.path, bytes: data.length, sha: actualSha, skipped: false };
-}
-
-/** Download every selected blob through a small concurrency pool; collects per-file errors rather
- * than aborting on the first one, so a single flaky file doesn't hide problems with the rest. */
-async function downloadAllMaterialxBlobs(blobs) {
-  const results = [];
-  const errors = [];
-  await pooledMap(
-    blobs,
-    async (entry) => {
-      try {
-        results.push(await downloadMaterialxBlob(entry));
-      } catch (err) {
-        errors.push(`  - ${entry.path}: ${err.message}`);
-      }
-    },
-    MTLX_CONCURRENCY
-  );
-  return { results, errors };
 }
 
 export async function runMaterialx() {
@@ -458,43 +354,62 @@ export async function runMaterialx() {
   }
   await mkdir(MATERIALX_ROOT, { recursive: true });
 
-  const tree = await fetchMaterialxTree();
-  const blobs = selectMaterialxBlobs(tree);
-  log(`selected ${blobs.length} file(s) from the tree under: ${MTLX_INCLUDE_PREFIXES.join(", ")}`);
+  const cloneRoot = await mkdtemp(path.join(tmpdir(), "mtlx-vendor-"));
+  let caught = null;
+  try {
+    log(`sparse-cloning ${MTLX_GIT_URL} @ ${MTLX_TAG} (shallow, blobs fetched on demand) ...`);
+    runGit(["clone", "--quiet", "--depth=1", "--filter=blob:none", "--sparse", "--branch", MTLX_TAG, MTLX_GIT_URL, cloneRoot]);
+    runGit(["-C", cloneRoot, "sparse-checkout", "set", ...MTLX_INCLUDE_PREFIXES.map((p) => p.replace(/\/$/, ""))]);
 
-  const { results: blobResults, errors: blobErrors } = await downloadAllMaterialxBlobs(blobs);
+    // Copy everything under the include prefixes into vendor/materialx/, hashing each file for
+    // the manifest. (The clone also materializes the repo's root-level files — cone-mode sparse
+    // checkouts always include them — but they are simply not copied.)
+    const files = [];
+    for (const prefix of MTLX_INCLUDE_PREFIXES) {
+      const srcDir = path.join(cloneRoot, ...prefix.split("/").filter(Boolean));
+      if (!existsSync(srcDir)) {
+        throw new Error(`${prefix} is missing from the ${MTLX_TAG} clone — did the upstream repo layout change?`);
+      }
+      for (const rel of await listFilesRecursive(srcDir)) {
+        const posixPath = prefix + rel.split(path.sep).join("/");
+        const data = await readFile(path.join(srcDir, rel));
+        const destAbs = path.join(MATERIALX_ROOT, ...posixPath.split("/"));
+        await mkdir(path.dirname(destAbs), { recursive: true });
+        await writeFile(destAbs, data);
+        files.push({ path: posixPath, bytes: data.length, sha: gitBlobSha1(data) });
+      }
+    }
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    const totalBytes = files.reduce((sum, f) => sum + f.bytes, 0);
+    log(`copied ${files.length} file(s) from the sparse checkout under: ${MTLX_INCLUDE_PREFIXES.join(", ")}`);
 
-  const allErrors = [...blobErrors];
-  if (allErrors.length > 0) {
+    const manifest = {
+      tag: MTLX_TAG,
+      generatedAt: new Date().toISOString(),
+      fileCount: files.length,
+      totalBytes,
+      files,
+    };
+    // Written LAST, only now that the clone and every copy above succeeded.
+    await writeFile(MATERIALX_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
+
+    log("");
+    log(`vendor/materialx/manifest.json written: ${files.length} file(s), ${totalBytes} bytes total.`);
+  } catch (err) {
+    caught = err;
+  } finally {
+    await rm(cloneRoot, { recursive: true, force: true });
+  }
+  if (caught) {
     fail(
       [
-        `error: --with-materialx failed to download ${allErrors.length} file(s) — manifest.json NOT written, app stays in remote mode:`,
-        ...allErrors,
+        `error: --with-materialx failed — manifest.json NOT written, app stays in remote mode:`,
+        `  ${caught.message}`,
         "",
-        "Re-run `npm run vendor:offline` to retry — files already downloaded with matching content are skipped (fast resume).",
+        "Re-run `npm run vendor:offline` to retry.",
       ].join("\n")
     );
   }
-
-  const allResults = [...blobResults];
-  const skippedCount = allResults.filter((r) => r.skipped).length;
-  log(`downloaded ${allResults.length - skippedCount} file(s), skipped ${skippedCount} already-up-to-date file(s).`);
-
-  const files = allResults.map((r) => ({ path: r.path, bytes: r.bytes, sha: r.sha })).sort((a, b) => a.path.localeCompare(b.path));
-  const totalBytes = files.reduce((sum, f) => sum + f.bytes, 0);
-
-  const manifest = {
-    tag: MTLX_TAG,
-    generatedAt: new Date().toISOString(),
-    fileCount: files.length,
-    totalBytes,
-    files,
-  };
-  // Written LAST, only now that every download above has succeeded.
-  await writeFile(MATERIALX_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
-
-  log("");
-  log(`vendor/materialx/manifest.json written: ${files.length} file(s), ${totalBytes} bytes total.`);
 }
 
 export async function runCollect() {

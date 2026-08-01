@@ -1,0 +1,142 @@
+# -----------------------------------------------------------------------------
+# Release offline package
+# -----------------------------------------------------------------------------
+# Builds a fully-offline package of the site (the servable tree plus the
+# vendor/materialx/ snapshot, so the app performs zero network access) and
+# attaches it to the GitHub release that triggered the run.
+#
+# Security shape (mirrors deploy.yml's build/deploy split):
+#   - The `package` job runs all project code (npm ci, build, checks) with a
+#     read-only token that is not persisted into .git/config. The MaterialX
+#     snapshot is fetched over anonymous git (no token, no API rate limit).
+#   - The `upload` job is the only place `contents: write` exists. It runs
+#     zero project code — no checkout, just artifact download + `gh release
+#     upload` — so the write token never shares a job with npm dependencies.
+#   - Actions are pinned to full commit SHAs (kept fresh by Dependabot).
+#
+# Failure modes worth knowing:
+#   - The stale-artifact gate re-runs deploy.yml's guarantee against the
+#     tagged commit. If a release is cut from a commit that fails it, this
+#     job fails BEFORE packaging — fix the commit, re-tag, re-publish.
+#   - `workflow_dispatch` runs the full pipeline but skips the upload job
+#     (there is no release to attach to); grab the workflow artifact instead.
+#
+# Note: the site header's runtime fetch of GitHub release info (a soft-failing
+# badge) is intentionally outside the offline guarantee.
+# -----------------------------------------------------------------------------
+
+name: Release offline package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-package-${{ github.event.release.tag_name || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.pkg.outputs.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify committed artifacts match a clean rebuild
+        run: |
+          git diff --exit-code || { echo "::error::Committed artifacts are stale — the tagged commit does not reproduce its own build. Fix, re-tag, re-publish."; exit 1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::Build produced files not in the commit."; git status --porcelain; exit 1; }
+
+      - name: Check
+        run: npm run check
+
+      - name: Determine package name
+        id: pkg
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then TAG="manual-$(git rev-parse --short HEAD)"; fi
+          echo "name=materialx-playground-$TAG-offline" >> "$GITHUB_OUTPUT"
+
+      - name: Stage offline site
+        run: |
+          DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"
+          mkdir -p "$DEST"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            --exclude='.claude' \
+            --exclude='.vscode' \
+            --exclude='.vscodeignore' \
+            --exclude='node_modules' \
+            --exclude='tutorials-src' \
+            --exclude='scripts' \
+            ./ "$DEST"/
+
+      - name: Sanity-check staged tree
+        run: |
+          DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"
+          test -f "$DEST/index.html" || { echo "::error::index.html missing from staged tree"; exit 1; }
+          test -f "$DEST/vendor/materialx/manifest.json" || { echo "::error::vendor/materialx/manifest.json missing — the package would NOT be offline"; exit 1; }
+          node -e '
+            const m = require(process.argv[1]);
+            console.log(`MaterialX snapshot: tag=${m.tag} files=${m.fileCount} bytes=${m.totalBytes}`);
+          ' "$DEST/vendor/materialx/manifest.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create zip
+        run: |
+          cd "$RUNNER_TEMP/package"
+          zip -r -q "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" "${{ steps.pkg.outputs.name }}"
+          unzip -l "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" | grep -q 'vendor/materialx/manifest.json' \
+            || { echo "::error::manifest.json missing from zip"; exit 1; }
+          ls -lh "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.zip
+          if-no-files-found: error
+
+  upload:
+    needs: package
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.name }}
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ needs.package.outputs.name }}.zip" --clobber

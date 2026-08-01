@@ -1,0 +1,14 @@
+# Keeps GitHub Actions references (including the SHA-pinned ones in
+# release.yml) up to date via PRs.
+#
+# Deliberately NO npm entry: npm dependency bumps regenerate committed
+# vendored artifacts, so they must go through the manual flow instead
+# (bump package.json, `npm run vendor` / `npm run build`, commit the
+# regenerated files) — an automated version-only PR would always fail
+# CI's stale-artifact gate.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
