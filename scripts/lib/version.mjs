@@ -82,12 +82,6 @@ export const STAMP_TABLE = [
   },
   {
     path: "README.md",
-    describe: "intro line's WebAssembly version",
-    re: /Built on the MaterialX (v[\d.]+) WebAssembly/,
-    replacement: (meta) => `Built on the MaterialX ${meta.tag} WebAssembly`,
-  },
-  {
-    path: "README.md",
     describe: "MaterialX version badge",
     re: /MaterialX-(v[\d.]+)-/,
     replacement: (meta) => `MaterialX-${meta.tag}-`,
