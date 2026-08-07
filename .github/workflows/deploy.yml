@@ -1,18 +1,19 @@
 # -----------------------------------------------------------------------------
 # Build, verify & deploy
 # -----------------------------------------------------------------------------
-# This is the single gate between a commit on `main` and what's live on
-# GitHub Pages. It guarantees:
+# This is the single gate between a published release's tagged commit and
+# what's live on GitHub Pages. It guarantees:
 #
 #   - A broken or stale build never deploys. `npm run build` must reproduce
 #     the committed tree byte-for-byte (checked via `git diff` / `git status`
 #     against the freshly rebuilt tree), and `npm run check` (every
 #     deterministic drift check) must pass — both gates run *before* the
 #     Pages artifact is staged or uploaded.
-#   - Pull requests only get verification. The `build-verify` job runs for
-#     both push and pull_request events, but the Pages-artifact staging/
-#     upload steps and the `deploy` job are restricted to pushes on `main` —
-#     a PR can never deploy.
+#   - Pushes to `main`, pull requests, and manual dispatch only get
+#     verification. Deployment to GitHub Pages happens exclusively when a
+#     GitHub release is published — the `build-verify` job re-runs against
+#     the tagged commit, and only release events stage/upload the Pages
+#     artifact and run the `deploy` job.
 #
 # Tutorials subsite (mkdocs): the Python/mkdocs setup steps below are gated
 # on `tutorials-src/mkdocs.yml` existing. That file lives on another branch
@@ -28,6 +29,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -79,7 +82,7 @@ jobs:
         run: npm run check
 
       - name: Stage Pages artifact
-        if: github.event_name == 'push'
+        if: github.event_name == 'release'
         run: |
           mkdir -p "$RUNNER_TEMP/site"
           rsync -a \
@@ -91,14 +94,14 @@ jobs:
             ./ "$RUNNER_TEMP/site"/
 
       - name: Upload Pages artifact
-        if: github.event_name == 'push'
+        if: github.event_name == 'release'
         uses: actions/upload-pages-artifact@v5
         with:
           path: ${{ runner.temp }}/site
 
   deploy:
     needs: build-verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       pages: write
