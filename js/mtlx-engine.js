@@ -1137,6 +1137,14 @@ const buildPreviewGeometry = async (which) => {
     if (which === 'cube') {
         return normalizeGeometry(new THREE.BoxGeometry(1.3, 1.3, 1.3));
     }
+    if (which === 'buffer2d') {
+        // Fullscreen quad for the flat2d ortho frustum: already exactly
+        // framed, so no normalizeGeometry (it would shrink the quad to
+        // bounding radius 1, off the viewport edges). +Z normal faces
+        // the camera; positions and UVs get refit to the canvas aspect
+        // by fitQuadToAspect (screen-proportional Shadertoy convention).
+        return new THREE.PlaneGeometry(2, 2);
+    }
     return new THREE.SphereGeometry(1, 64, 64);
 };
 
@@ -2296,6 +2304,10 @@ const createMtlxRenderView = async ({
     // (ball-only) GLB; anything else -> null (ordinary sphere/cube path).
     const sceneMode = geomName === 'shaderball-scene' ? 'full'
         : geomName === 'shaderball' ? 'simple' : null;
+    // 'buffer2d': Shadertoy-style fullscreen quad — fixed ortho camera,
+    // no controls/spin, no visible backdrop. Orthogonal to sceneMode
+    // (null there, so the ordinary buildPreviewGeometry path runs).
+    const flat2d = geomName === 'buffer2d';
     let reqId = null;
     let renderer = null;
     let resizeObs = null;
@@ -2473,11 +2485,23 @@ const createMtlxRenderView = async ({
                 // re-aims at (0,0,0)), and resetCamera() returns to it.
                 let sceneAuthoredPose = null;
 
-                const camera = new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
-                // Slightly elevated three-quarter framing; elevation
-                // scales with distance so the viewing angle stays constant.
-                // (fullScene overrides this wholesale immediately below.)
-                camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+                // flat2d: ortho frustum whose x extent tracks the canvas
+                // aspect (fitQuadToAspect rewrites left/right plus the
+                // quad's positions/UVs), so the quad stays edge-to-edge
+                // while pattern scale stays square in pixels. Head-on at
+                // (0,0,1): the default camera orientation already faces
+                // -Z, so no lookAt, and u_viewPosition becomes (0,0,1).
+                const camera = flat2d
+                    ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
+                    : new THREE.PerspectiveCamera(45, cw / ch, 0.1, 100);
+                if (flat2d) {
+                    camera.position.set(0, 0, 1);
+                } else {
+                    // Slightly elevated three-quarter framing; elevation
+                    // scales with distance so the viewing angle stays constant.
+                    // (fullScene overrides this wholesale immediately below.)
+                    camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+                }
 
                 if (fullScene && sceneInst.glbCamera) {
                     const gc = sceneInst.glbCamera;
@@ -2510,7 +2534,7 @@ const createMtlxRenderView = async ({
                 // the mesh) lets orbit/zoom/pause compose naturally.
                 // Full-scene mode is FIXED by default; opt in with sceneOrbit.
                 controls = null;
-                if (THREE.OrbitControls && (!fullScene || sceneOrbit)) {
+                if (THREE.OrbitControls && !flat2d && (!fullScene || sceneOrbit)) {
                     controls = new THREE.OrbitControls(camera, canvas);
                     controls.enableDamping = true;
                     controls.dampingFactor = 0.08;
@@ -2524,9 +2548,9 @@ const createMtlxRenderView = async ({
                     controls.autoRotateSpeed = 1.5;
                 }
                 // No-OrbitControls fallback spin must also stay off in
-                // full-scene mode — no controls instance exists to gate
-                // it, so force it here explicitly.
-                if (fullScene) fallbackSpin = false;
+                // full-scene mode and for the fixed 2D buffer — no
+                // controls instance exists to gate it, so force it here.
+                if (fullScene || flat2d) fallbackSpin = false;
 
                 // Fullscreen "fit to ball": keeps the ball's bounding
                 // sphere inside the frame, only ever WIDENING the fov on
@@ -2602,6 +2626,39 @@ const createMtlxRenderView = async ({
                     camera.fov = fov;
                 };
 
+                // flat2d screen-proportional fit (Shadertoy's
+                // fragCoord/iResolution.y convention): one unit of UV or
+                // object-space position covers the same pixel count on
+                // both axes, so resizing the canvas REVEALS more pattern
+                // instead of stretching it. Height keeps v 0..1 / y
+                // -1..1; the frustum, quad positions (x ±aspect), and
+                // UVs (u 0..aspect) all track the width. This must touch
+                // POSITION too, not just UV — 3D-procedural nodes (noise/
+                // fractal) sample i_position and would stretch otherwise.
+                // prepGeometry aliases i_position/i_texcoord_0 to the
+                // SAME BufferAttributes as position/uv, so these writes
+                // update what the MaterialX shader reads. The 4-vert
+                // quad's x/u values are strictly signed/zero-or-positive,
+                // so re-fitting at any previous aspect is idempotent.
+                const fitQuadToAspect = (aspect) => {
+                    camera.left = -aspect;
+                    camera.right = aspect;
+                    camera.updateProjectionMatrix();
+                    if (!geometry) return;
+                    const pos = geometry.getAttribute('position');
+                    const uv = geometry.getAttribute('uv');
+                    if (!pos || !uv) return;
+                    for (let i = 0; i < pos.count; i++) {
+                        pos.setX(i, pos.getX(i) > 0 ? aspect : -aspect);
+                        uv.setX(i, uv.getX(i) > 0 ? aspect : 0);
+                    }
+                    pos.needsUpdate = true;
+                    uv.needsUpdate = true;
+                    // Frustum culling reads the bounding sphere; keep it
+                    // in sync with the rewritten positions.
+                    geometry.computeBoundingSphere();
+                };
+
                 // Keeps the drawing buffer + aspect in sync with layout
                 // (panel reflow, mobile rotation/resize) — without this
                 // the sphere stretches on any reflow.
@@ -2609,6 +2666,13 @@ const createMtlxRenderView = async ({
                     const w = canvas.clientWidth || cw;
                     const h = canvas.clientHeight || ch;
                     renderer.setSize(w, h, false);
+                    if (flat2d) {
+                        // OrthographicCamera has no .aspect/.fov — the
+                        // frustum/quad/UV fit tracks the aspect instead
+                        // (fitQuadToAspect updates the projection itself).
+                        fitQuadToAspect(w / h);
+                        return;
+                    }
                     camera.aspect = w / h;
                     // fullScene only: resize can flip which side of the
                     // canvasAspect >= authoredAspect comparison we're on,
@@ -2650,16 +2714,22 @@ const createMtlxRenderView = async ({
                         // Shell-owned skybox mesh (see bgMesh's declaration
                         // above). depthWrite:false + a low renderOrder draws
                         // it first, so draw order alone keeps it behind everything.
-                        const bgGeometry = new THREE.SphereGeometry(50, 64, 32);
-                        bgGeometry.scale(-1, 1, 1);
-                        bgMesh = new THREE.Mesh(
-                            bgGeometry,
-                            new THREE.MeshBasicMaterial({ map: envBgTexture, depthWrite: false })
-                        );
-                        bgMesh.renderOrder = -1000;
-                        bgMesh.rotation.y = BG_BASE + BG_SIGN * envRotationRad;
-                        bgMesh.visible = !!envBackground;
-                        scene.add(bgMesh);
+                        // flat2d: never created — the quad occupies the whole
+                        // viewport and must have no backdrop. bgMesh stays
+                        // null, which setEnvBackground/setEnvironment already
+                        // guard, while the env textures above keep IBL lit.
+                        if (!flat2d) {
+                            const bgGeometry = new THREE.SphereGeometry(50, 64, 32);
+                            bgGeometry.scale(-1, 1, 1);
+                            bgMesh = new THREE.Mesh(
+                                bgGeometry,
+                                new THREE.MeshBasicMaterial({ map: envBgTexture, depthWrite: false })
+                            );
+                            bgMesh.renderOrder = -1000;
+                            bgMesh.rotation.y = BG_BASE + BG_SIGN * envRotationRad;
+                            bgMesh.visible = !!envBackground;
+                            scene.add(bgMesh);
+                        }
                     }
                     if (sceneInst) {
                         // Scene-mode lighting: bakes radianceSrc into a
@@ -2683,6 +2753,10 @@ const createMtlxRenderView = async ({
                     sceneGroup.updateMatrixWorld(true);
                 } else {
                     geometry = prepGeometry(await buildPreviewGeometry(geomName));
+                    // Initial screen-proportional fit for the 2D buffer —
+                    // don't rely on the ResizeObserver's first fire
+                    // ordering against the first rendered frame.
+                    if (flat2d) fitQuadToAspect((canvas.clientWidth || cw) / (canvas.clientHeight || ch));
                 }
                 if (!isMounted()) { disposePartial(); return null; }
 
@@ -2981,8 +3055,10 @@ const createMtlxRenderView = async ({
             // Live auto-orbit toggle (no regen needed). No-op in
             // full-scene mode by contract: every caller hides the rotate
             // button there, and fallbackSpin would rotate the authored scene.
+            // Same contract for flat2d: no controls, and fallbackSpin
+            // would spin the fullscreen quad.
             setAutoRotate: (on) => {
-                if (fullScene) return;
+                if (fullScene || flat2d) return;
                 fallbackSpin = !!on;
                 if (controls) controls.autoRotate = !!on;
             },
@@ -2997,10 +3073,11 @@ const createMtlxRenderView = async ({
             },
             // Resets the camera to this view's default. With OrbitControls,
             // saveState/reset does it uniformly. The graph's fixed-camera
-            // full scene has controls === null — nothing to do there.
+            // full scene and the fixed-ortho 2D buffer have controls ===
+            // null — nothing to do there.
             resetCamera: () => {
                 if (controls) { controls.reset(); return; }
-                if (fullScene) return;
+                if (fullScene || flat2d) return;
                 camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
                 camera.lookAt(0, 0, 0);
             },

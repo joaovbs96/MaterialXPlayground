@@ -3959,6 +3959,11 @@
             // source of truth for multi-select (shift-click, shift-drag).
             const selectedIds = flow.nodes.filter((n) => n.selected).map((n) => n.id);
 
+            // Mirrors deleteSelectionRef.current()'s own target resolution
+            // (the selected edge, the multi-selection, or the single
+            // selected node) — gates the Delete Nodes toolbar button.
+            const canDelete = !!selectedEdgeId || selectedIds.length > 0 || !!selectedId;
+
             // What React Flow renders: the flow edges, with the selection
             // flag layered on (the .selected CSS turns the edge blue).
             const rfEdges = React.useMemo(() => !selectedEdgeId ? flow.edges
@@ -4228,7 +4233,18 @@
             // reads as open, see `!== false` below). Reset per displayed
             // node so a collapsed folder doesn't leak onto another node.
             const [panelFoldersOpen, setPanelFoldersOpen] = React.useState({});
-            React.useEffect(() => { setPanelFoldersOpen({}); }, [displayNode && displayNode.id]);
+            // Downstream Connections group: its own boolean (not a
+            // reserved panelFoldersOpen key — a real uifolder named
+            // "Downstream Connections" would collide), same per-node reset.
+            const [downstreamOpen, setDownstreamOpen] = React.useState(true);
+            React.useEffect(() => { setPanelFoldersOpen({}); setDownstreamOpen(true); }, [displayNode && displayNode.id]);
+            // Edges leaving the displayed element — feeds the Downstream
+            // Connections group. Empty for o: pseudo-nodes (no outputs)
+            // and unconnected nodes, which hides the group entirely.
+            const downstreamEdges = React.useMemo(
+                () => (displayNode ? flow.edges.filter((e) => e.source === displayNode.id) : []),
+                [flow.edges, displayNode]
+            );
             // One ParamRow, shared by the ungrouped list and every
             // folder so markup doesn't drift — only called once displayNode
             // is known truthy (both call sites are inside that branch).
@@ -4719,6 +4735,20 @@
                         )}
                         {parsed && (
                             <button
+                                onClick={() => deleteSelectionRef.current()}
+                                disabled={!canDelete}
+                                title={canDelete
+                                    ? 'Delete the selected node(s), or disconnect the selected edge (Del)'
+                                    : 'Select a node or edge to delete'}
+                                className={BTN_TOOLBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
+                            >
+                                <MtlxIcon name="trash" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Delete Nodes</span>
+                                <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Del</span>
+                            </button>
+                        )}
+                        {parsed && (
+                            <button
                                 onClick={() => reorganize()}
                                 title="Re-run the automatic layout once (A)"
                                 className={BTN_TOOLBAR}
@@ -5094,6 +5124,42 @@
                                                 </div>
                                             );
                                         })
+                                    ),
+                                    // Downstream Connections: links to the
+                                    // nodes this element's outputs feed —
+                                    // the directional mirror of ParamRow's
+                                    // "from …" parent links. Hidden when
+                                    // nothing is connected downstream.
+                                    downstreamEdges.length > 0 && (
+                                        <div key="downstream" className="py-1 border-t border-gray-700/70 mt-1 pt-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => setDownstreamOpen((o) => !o)}
+                                                className="w-full flex items-center gap-1.5 py-1 text-[11px] font-mono text-gray-300 hover:text-gray-100"
+                                            >
+                                                <MtlxIcon name={downstreamOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                <span className="truncate">Downstream Connections</span>
+                                                <span className="ml-auto flex-none text-[9px] text-gray-500">{downstreamEdges.length}</span>
+                                            </button>
+                                            {downstreamOpen && downstreamEdges.map((e) => {
+                                                const outName = e.sourceHandle.slice(4);
+                                                const inName = e.targetHandle.slice(3);
+                                                const multiOut = ((displayNode.data.outputs) || []).length > 1;
+                                                return (
+                                                    <div key={e.id} className="pl-5 py-0.5 flex items-center gap-1.5">
+                                                        <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(e.type) }} />
+                                                        <button
+                                                            onClick={() => focusNode(e.target, true)}
+                                                            title="Select and show the node this output feeds"
+                                                            className="max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate"
+                                                        >
+                                                            <MtlxIcon name="arrow-right" className="w-3 h-3 shrink-0" />
+                                                            <span className="truncate">{multiOut ? outName + ' → ' : 'to '}{e.target.slice(2)} ({inName})</span>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     ),
                                 ] : (
                                     <div className="text-[11px] text-gray-500 py-2">

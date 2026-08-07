@@ -7,6 +7,35 @@
         // load; in that ~1000px iframe, viewport/panel go side-by-side at
         // the md: breakpoint instead of lg:, which the iframe never reaches.
         const EMBED = !!window.__MTLX_EMBED;
+        // Geometry choices for the docs node preview (labels come from
+        // the shared GEOM_LABELS map): the default list plus 'buffer2d',
+        // which is deliberately absent from ViewportControls' default so
+        // the material viewer doesn't grow the option.
+        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'sphere', 'cube', 'buffer2d'];
+        // ONE global geometry choice for every docs node preview, shared by
+        // the preview dropdowns and the Settings popup, in one localStorage
+        // slot. Whitelist-validated on read so a corrupt/stale value falls
+        // back to 'shaderball-scene' — the out-of-the-box choice — rather
+        // than reaching the engine. 'default' = experimental per-node-type
+        // auto pick (defaultGeomFor); anything else applies as-is.
+        // Fresh key on purpose: earlier iterations of this feature stored
+        // 'default' under other keys with DIFFERENT semantics (it used to
+        // be the fallback, not an explicit pick) — reusing them would make
+        // stale values silently opt users into the experiment.
+        const GEOM_CHOICE_KEY = 'mtlx_preview_geom_choice';
+        const GEOM_LEGACY_KEYS = ['mtlx_preview_geom_override', 'mtlx_preview_geom_by_node', 'mtlx_preview_geom'];
+        const GEOM_CHOICES = ['default'].concat(PREVIEW_GEOM_LIST);
+        // Row badges for every geometry dropdown instance: Auto is the
+        // experimental part; the scene is the out-of-the-box default.
+        const GEOM_BADGES = { 'default': 'Experimental', 'shaderball-scene': 'Default' };
+        const readGeomChoice = () => {
+            try {
+                // Best-effort cleanup of the superseded slots.
+                for (const k of GEOM_LEGACY_KEYS) localStorage.removeItem(k);
+                const v = localStorage.getItem(GEOM_CHOICE_KEY);
+                return GEOM_CHOICES.indexOf(v) !== -1 ? v : 'shaderball-scene';
+            } catch (e) { return 'shaderball-scene'; }
+        };
         // Some heavy nodegraphs blow the wasm shadergen stack (deterministic
         // — stack size is baked in at link time, so retrying never helps).
         // Once a node+signature hits this, remember it for a neutral notice.
@@ -85,10 +114,16 @@
             // geometry/pause controls overlay stays usable; the canvas is
             // h-full and the engine's ResizeObserver handles the buffer.
             const viewportRef = React.useRef(null);
-            // Persisted preview geometry + the viewport-controls cluster
-            // (rotation, env background, view-epoch, fullscreen) from
-            // js/shared/mtlx-ui.jsx — also used by viewer-app.jsx/graph.
-            const [geom, pickGeom] = usePersistedGeom('shaderball-scene');
+            // ONE global geometry choice for every docs node preview (the
+            // preview dropdown and the Settings popup expose the same
+            // state). 'default' resolves per node type (experimental);
+            // anything else applies as-is.
+            const [geomChoice, setGeomChoiceState] = React.useState(readGeomChoice);
+            const setGeomChoice = (v) => {
+                setGeomChoiceState(v);
+                try { localStorage.setItem(GEOM_CHOICE_KEY, v); } catch (e) { /* best-effort */ }
+            };
+            const geom = geomChoice === 'default' ? defaultGeomFor(nodegroup) : geomChoice;
             const {
                 rotating, toggleRotating,
                 envBg, toggleEnvBg,
@@ -819,9 +854,10 @@
                             label: nodeName,
                             needsLighting,
                             geomName: geom,
-                            // Constrained orbit for the full scene; ignored
-                            // for other geoms.
-                            sceneOrbit: geom === 'shaderball-scene',
+                            // Fixed authored camera for the full scene
+                            // (no orbit/zoom), matching the graph
+                            // editor's preview. Ignored for other geoms.
+                            sceneOrbit: false,
                             autoRotate: rotating,
                             envBackground: envBg,
                             isMounted: () => mounted,
@@ -1155,6 +1191,11 @@
             // reads as open). Reset on identKey change so a folder collapsed
             // on one node doesn't leak onto an unrelated one reusing the name.
             const [paramFoldersOpen, setParamFoldersOpen] = React.useState({});
+            // Fullscreen-only parameters sidebar (overlaid on the
+            // viewport, since fullscreen shows just that element and the
+            // normal side card is a sibling). Open by default; the state
+            // survives entering/leaving fullscreen on purpose.
+            const [fsParamsOpen, setFsParamsOpen] = React.useState(true);
             React.useEffect(() => { setParamFoldersOpen({}); }, [identKey]);
 
             // Disabled state: cheap placeholder instead of canvas/panel. No
@@ -1362,6 +1403,160 @@
             // it below. Notice/error render as a slim row, hiding (not
             // unmounting) the viewport so the canvas ref survives.
             const suppressed = !!(notice || error);
+            // Viewport controls (geometry picker, rotate pause, env
+            // settings, screenshot, fullscreen), always overlaid on the
+            // viewport. Fullscreen and no-params nodes get the default
+            // strip (top-right, geometry select included). Otherwise
+            // `compact`: the buttons sit top-right (maximize is the
+            // strip's last button, so everything else is to its left),
+            // sized/colored like the params-card buttons, and the
+            // geometry select is a separate top-LEFT element.
+            const renderViewportControls = (compact) => (
+                <ViewportControls
+                    geomList={['default'].concat(PREVIEW_GEOM_LIST)}
+                    geom={geomChoice}
+                    onGeomChange={setGeomChoice}
+                    geomBadges={GEOM_BADGES}
+                    showGeomSelect={!compact}
+                    rotating={rotating}
+                    onToggleRotating={toggleRotating}
+                    // Engine no-ops auto-rotate for the full scene
+                    // (fixed camera, see sceneOrbit below) and for
+                    // the fixed 2D buffer (no bgMesh at all) —
+                    // hide both controls while either is selected.
+                    showRotate={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
+                    showBackgroundToggle={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
+                    // No reset button for the fixed cameras — the 2D
+                    // buffer and the full scene (engine's resetCamera
+                    // no-ops for both anyway).
+                    onCameraReset={(geom === 'buffer2d' || geom === 'shaderball-scene') ? undefined : () => {
+                        const v = viewRef.current;
+                        if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
+                    }}
+                    envBg={envBg}
+                    onToggleEnvBg={toggleEnvBg}
+                    envAvail={envAvail}
+                    viewRef={viewRef}
+                    viewEpoch={viewEpoch}
+                    onScreenshot={takeScreenshot}
+                    isFullscreen={isFullscreen}
+                    onToggleFullscreen={toggleFullscreenView}
+                    containerClassName={compact ? 'absolute top-2 right-2 z-20 flex items-center gap-1.5' : undefined}
+                    buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')) : undefined}
+                    settingsChildren={
+                        <div>
+                            {/* Dropdown on its OWN line: label + trigger
+                                can't share the popup's 288px row without
+                                overflowing its edge. The Experimental
+                                badge sits on the Auto ROW (via badges) —
+                                picking a geometry isn't the experiment,
+                                the Auto mode is. */}
+                            <div className="text-gray-200">Preview Geometry</div>
+                            <GeomSelect
+                                value={geomChoice}
+                                options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                badges={GEOM_BADGES}
+                                onChange={setGeomChoice}
+                                title="Global preview-geometry choice (all docs previews)"
+                                className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                            />
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Applies to all node docs previews. "Auto (by node type)"
+                                is experimental: it picks a geometry per node type.
+                            </div>
+                        </div>
+                    }
+                />
+            );
+            // Parameters panel header/body, shared between the normal
+            // side card and the fullscreen overlay sidebar. Only one of
+            // the two is mounted at a time; the remount on a fullscreen
+            // toggle is harmless since all values live in state here.
+            const renderParamsHeader = (extraButtons) => (
+                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-none">
+                    <span className="text-sm font-semibold text-gray-200">Parameters</span>
+                    <div className="flex items-center gap-1.5">
+                        <button
+                            onClick={onExportMtlx}
+                            disabled={loading}
+                            title="Download this node with the current values as a .mtlx document"
+                            className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
+                        </button>
+                        {!IN_VSCODE && (
+                        <button
+                            onClick={sendToEditor}
+                            disabled={loading}
+                            title="Open this node in the node graph editor"
+                            className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                        </button>
+                        )}
+                        <button
+                            onClick={onResetDefaults}
+                            disabled={loading}
+                            title="Reset to default"
+                            className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            <MtlxIcon name="restore" className="w-3.5 h-3.5" />
+                        </button>
+                        {extraButtons}
+                    </div>
+                </div>
+            );
+            // `wide` (the side card, which now takes all leftover row
+            // width): lay params out in responsive columns so the space
+            // is used; the fullscreen sidebar stays single-column.
+            const renderParamsBody = (wide) => (
+                <div className={'overflow-y-auto p-3 flex-1 custom-scrollbar'
+                    + (wide ? ' grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-x-4 gap-y-3 content-start' : ' space-y-3')
+                    + (loading ? ' pointer-events-none opacity-50 select-none' : '')}>
+                    {paramGroups.ungrouped.map((p) => (
+                        // Key includes nodeName: different nodes
+                        // share input names (e.g. `file`), and a
+                        // reused file input won't re-fire on repick
+                        <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
+                            <label className="block text-xs text-gray-400 mb-1">
+                                {p.label} <span className="text-gray-600">({p.type})</span>
+                            </label>
+                            {renderControl(p)}
+                        </div>
+                    ))}
+                    {paramGroups.folders.map((f, fi) => {
+                        const open = paramFoldersOpen[f.name] !== false;
+                        // A folder that opens the body (no ungrouped
+                        // params above it) gets no divider/top gap — the
+                        // border-t is a separator BETWEEN sections only.
+                        const firstItem = fi === 0 && paramGroups.ungrouped.length === 0;
+                        return (
+                            <div key={'folder:' + f.name} className={(firstItem ? '' : 'border-t border-gray-700/70 mt-2 pt-2') + (wide ? ' col-span-full' : '')}>
+                                <button
+                                    type="button"
+                                    onClick={() => setParamFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
+                                    className="w-full flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200"
+                                >
+                                    <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5" />
+                                    <span className="truncate">{f.name}</span>
+                                </button>
+                                {open && (
+                                    <div className={wide ? 'mt-2 grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-x-4 gap-y-3' : 'mt-2 space-y-3'}>
+                                        {f.params.map((p) => (
+                                            <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
+                                                <label className="block text-xs text-gray-400 mb-1">
+                                                    {p.label} <span className="text-gray-600">({p.type})</span>
+                                                </label>
+                                                {renderControl(p)}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            );
             return (
                 <div className="my-6">
                 {notice && (
@@ -1377,113 +1572,74 @@
                 <div className={(embed ? 'flex flex-col md:flex-row gap-4' : 'flex flex-col lg:flex-row gap-4') + (suppressed ? ' hidden' : '')}>
                     <div
                         ref={viewportRef}
-                        className={embed ? "relative w-full md:flex-1 md:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"}
-                        style={isFullscreen ? { height: '100%' } : undefined}
+                        // With params, the viewport is a fixed 24rem square
+                        // and the params card takes the remaining width;
+                        // without params (nothing to give the space to) it
+                        // keeps the old full-width flex-1 sizing. Stacked
+                        // (below md/lg) layouts are unchanged either way.
+                        className={params.length > 0
+                            ? (embed ? "relative w-full md:w-96 md:flex-none h-64 sm:h-80 md:h-96 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:w-96 lg:flex-none h-64 sm:h-80 lg:h-96 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden")
+                            : (embed ? "relative w-full md:flex-1 md:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden")}
+                        // width too: the md/lg:w-96 author style would
+                        // otherwise pin native fullscreen at 24rem wide
+                        // (the CSS-maximize fallback inlines its own).
+                        style={isFullscreen ? { height: '100%', width: '100%' } : undefined}
                     >
                         <LoadingOverlay show={loading} label="Generating 3D Preview..." />
-                        {/* Viewport controls: geometry picker + rotation pause.
-                            Drag orbits, wheel/pinch zooms (OrbitControls). */}
-                        <ViewportControls
-                            geom={geom}
-                            onGeomChange={pickGeom}
-                            rotating={rotating}
-                            onToggleRotating={toggleRotating}
-                            // Engine no-ops auto-rotate for the full scene,
-                            // and the backdrop box occludes the env sky —
-                            // hide both controls while it's selected.
-                            showRotate={geom !== 'shaderball-scene'}
-                            showBackgroundToggle={geom !== 'shaderball-scene'}
-                            onCameraReset={() => {
-                                const v = viewRef.current;
-                                if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
-                            }}
-                            envBg={envBg}
-                            onToggleEnvBg={toggleEnvBg}
-                            envAvail={envAvail}
-                            viewRef={viewRef}
-                            viewEpoch={viewEpoch}
-                            onScreenshot={takeScreenshot}
-                            isFullscreen={isFullscreen}
-                            onToggleFullscreen={toggleFullscreenView}
-                        />
+                        {/* Controls overlay: default full strip when
+                            fullscreen or no params exist; otherwise the
+                            compact strip top-right (maximize last) with
+                            the geometry select at the top-LEFT. */}
+                        {(isFullscreen || params.length === 0) ? renderViewportControls(false) : (
+                            <React.Fragment>
+                                {renderViewportControls(true)}
+                                <GeomSelect
+                                    value={geomChoice}
+                                    options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                    badges={GEOM_BADGES}
+                                    onChange={setGeomChoice}
+                                    title="Preview geometry"
+                                    className="absolute top-2 left-2 z-20 h-7 text-[11px] px-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                />
+                            </React.Fragment>
+                        )}
                         {/* object-contain, not 'fill': on a node switch the
                             canvas buffer briefly holds the OLD aspect while
                             the CSS box reflows, causing a "smeared" stretch. */}
-                        <canvas ref={canvasRef} className="w-full h-full block object-contain cursor-grab active:cursor-grabbing" />
+                        <canvas ref={canvasRef} className={'w-full h-full block object-contain' + ((geom === 'buffer2d' || geom === 'shaderball-scene') ? '' : ' cursor-grab active:cursor-grabbing')} />
+                        {/* Fullscreen-only collapsible parameters sidebar:
+                            rendered INSIDE the viewport container because
+                            native fullscreen top-layers only this element
+                            (the side card below is a sibling and would be
+                            invisible). top-12 clears the controls strip. */}
+                        {isFullscreen && params.length > 0 && (fsParamsOpen ? (
+                            <div className="absolute top-12 right-2 bottom-2 w-80 z-20 flex flex-col bg-gray-900/95 backdrop-blur border border-gray-700 rounded-lg overflow-hidden">
+                                {renderParamsHeader(
+                                    <button
+                                        onClick={() => setFsParamsOpen(false)}
+                                        title="Collapse the parameters sidebar"
+                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                    >
+                                        <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                                {renderParamsBody()}
+                            </div>
+                        ) : (
+                            <button
+                                onClick={() => setFsParamsOpen(true)}
+                                title="Show the parameters sidebar"
+                                className="absolute top-12 right-2 z-20 h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap"
+                            >
+                                <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
+                                Parameters
+                            </button>
+                        ))}
                     </div>
-                    {params.length > 0 && (
-                        <div className={embed ? "w-full md:w-80 md:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 md:h-80 md:max-h-none" : "w-full lg:w-80 lg:flex-none bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 lg:h-80 lg:max-h-none"}>
-                            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-none">
-                                <span className="text-sm font-semibold text-gray-200">Parameters</span>
-                                <div className="flex items-center gap-1.5">
-                                    <button
-                                        onClick={onExportMtlx}
-                                        disabled={loading}
-                                        title="Download this node with the current values as a .mtlx document"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                    >
-                                        <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
-                                    </button>
-                                    {!IN_VSCODE && (
-                                    <button
-                                        onClick={sendToEditor}
-                                        disabled={loading}
-                                        title="Open this node in the node graph editor"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                    >
-                                        <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                    </button>
-                                    )}
-                                    <button
-                                        onClick={onResetDefaults}
-                                        disabled={loading}
-                                        title="Reset to default"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                    >
-                                        <MtlxIcon name="restore" className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-                            </div>
-                            <div className={'overflow-y-auto p-3 space-y-3 flex-1 custom-scrollbar' + (loading ? ' pointer-events-none opacity-50 select-none' : '')}>
-                                {paramGroups.ungrouped.map((p) => (
-                                    // Key includes nodeName: different nodes
-                                    // share input names (e.g. `file`), and a
-                                    // reused file input won't re-fire on repick
-                                    <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
-                                        <label className="block text-xs text-gray-400 mb-1">
-                                            {p.label} <span className="text-gray-600">({p.type})</span>
-                                        </label>
-                                        {renderControl(p)}
-                                    </div>
-                                ))}
-                                {paramGroups.folders.map((f) => {
-                                    const open = paramFoldersOpen[f.name] !== false;
-                                    return (
-                                        <div key={'folder:' + f.name} className="border-t border-gray-700/70 mt-2 pt-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => setParamFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
-                                                className="w-full flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200"
-                                            >
-                                                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5" />
-                                                <span className="truncate">{f.name}</span>
-                                            </button>
-                                            {open && (
-                                                <div className="mt-2 space-y-3">
-                                                    {f.params.map((p) => (
-                                                        <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
-                                                            <label className="block text-xs text-gray-400 mb-1">
-                                                                {p.label} <span className="text-gray-600">({p.type})</span>
-                                                            </label>
-                                                            {renderControl(p)}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
+                    {params.length > 0 && !isFullscreen && (
+                        <div className={embed ? "w-full md:flex-1 md:min-w-0 bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 md:h-96 md:max-h-none" : "w-full lg:flex-1 lg:min-w-0 bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 lg:h-96 lg:max-h-none"}>
+                            {renderParamsHeader(null)}
+                            {renderParamsBody(true)}
                         </div>
                     )}
                 </div>

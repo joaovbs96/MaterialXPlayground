@@ -721,6 +721,64 @@
                                                     )}
                                                 </button>
                                                 )}
+                                                {/* Signature + Version pickers live up here in
+                                                    the badge row — they drive the preview AND
+                                                    the port table below, so they shouldn't be
+                                                    buried next to the tables. Right-aligned via
+                                                    ml-auto; the sub-container is itself a
+                                                    wrappable flex row, so on narrow widths it
+                                                    drops to its own line(s) instead of
+                                                    squeezing the badges. Gated on sigCount
+                                                    alone (not the tables): multi-signature
+                                                    nodes deserve the picker even when only the
+                                                    auto-generated ports table renders. */}
+                                                {(sigCount > 1 || showVersionPicker) && (
+                                                    <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                                                        {sigCount > 1 && (
+                                                            <React.Fragment>
+                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="sig-select">
+                                                                    Signature
+                                                                </label>
+                                                                <select
+                                                                    id="sig-select"
+                                                                    value={sig}
+                                                                    onChange={(e) => setSigIndex(Number(e.target.value))}
+                                                                    title="This node has several signatures — pick which one to document and preview"
+                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
+                                                                >
+                                                                    {sigGroups.map((g, i) => {
+                                                                        const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
+                                                                        return (
+                                                                            <option key={g.key || i} value={i}>
+                                                                                {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
+                                                                            </option>
+                                                                        );
+                                                                    })}
+                                                                </select>
+                                                            </React.Fragment>
+                                                        )}
+                                                        {showVersionPicker && (
+                                                            <React.Fragment>
+                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="version-select">
+                                                                    Version
+                                                                </label>
+                                                                <select
+                                                                    id="version-select"
+                                                                    value={versionIdx}
+                                                                    onChange={(e) => setVersionIndex(Number(e.target.value))}
+                                                                    title="This node has several nodedef versions — same ports, different defaults"
+                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
+                                                                >
+                                                                    {selectedGroup.versions.map((v, i) => (
+                                                                        <option key={v.name || i} value={i}>
+                                                                            {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                            </React.Fragment>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
 
@@ -776,49 +834,6 @@
                                                             node definition. Descriptions are unavailable and the
                                                             details may differ from an official write-up.
                                                         </span>
-                                                    </div>
-                                                )}
-                                                {sigCount > 1 && (
-                                                    <div className="flex items-center gap-2 flex-wrap">
-                                                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="sig-select">
-                                                            Signature
-                                                        </label>
-                                                        <select
-                                                            id="sig-select"
-                                                            value={sig}
-                                                            onChange={(e) => setSigIndex(Number(e.target.value))}
-                                                            title="This node has several signatures — pick which one to document and preview"
-                                                            className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs sm:text-sm font-mono text-gray-200 max-w-full"
-                                                        >
-                                                            {sigGroups.map((g, i) => {
-                                                                const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
-                                                                return (
-                                                                    <option key={g.key || i} value={i}>
-                                                                        {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
-                                                                    </option>
-                                                                );
-                                                            })}
-                                                        </select>
-                                                    </div>
-                                                )}
-                                                {showVersionPicker && (
-                                                    <div className="flex items-center gap-2 flex-wrap">
-                                                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="version-select">
-                                                            Version
-                                                        </label>
-                                                        <select
-                                                            id="version-select"
-                                                            value={versionIdx}
-                                                            onChange={(e) => setVersionIndex(Number(e.target.value))}
-                                                            title="This node has several nodedef versions — same ports, different defaults"
-                                                            className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs sm:text-sm font-mono text-gray-200 max-w-full"
-                                                        >
-                                                            {selectedGroup.versions.map((v, i) => (
-                                                                <option key={v.name || i} value={i}>
-                                                                    {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
-                                                                </option>
-                                                            ))}
-                                                        </select>
                                                     </div>
                                                 )}
                                                 {displayTables.map((table, i) => (

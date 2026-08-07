@@ -69,6 +69,119 @@
             return pick ? { type: mxElType(pick), name: mxElName(pick) } : { type: '', name: null };
         };
 
+        // Default preview geometry for one live node instance. The nodedef is
+        // resolved HERE, not from flow-node data — root-scope node descriptors
+        // carry no lib/group (see model.jsx buildScope). Library-sourced defs
+        // follow the shared per-nodegroup mapping; document-defined custom
+        // nodes (no def, or a def authored outside libraries/) keep the full
+        // scene for now.
+        const defaultGeomForNode = (el) => {
+            const def = mxSafe(() => resolveVersionedNodeDef(el), null);
+            if (!def) return 'shaderball-scene';
+            const uri = String(mxSafe(() => def.getSourceUri(), '') || '').replace(/\\/g, '/');
+            if (!/libraries\//i.test(uri)) return 'shaderball-scene';
+            return defaultGeomFor(mxSafe(() => def.getNodeGroup(), ''));
+        };
+
+        // Flatness closure walk: true when every node reachable UPSTREAM
+        // (including the seeds themselves) classifies as 'buffer2d' per
+        // defaultGeomForNode. Crosses the nodegraph boundary via interface
+        // inputs so external producers count. Conservative: any
+        // unresolvable connection or walk overflow reports non-flat.
+        //
+        // stepToNode chases nodename/nodegraph/interfacename hops from a
+        // connectable element (a node's <input>, a nodegraph's <output>,
+        // or a nodegraph's own interface <input>) to the single upstream
+        // NODE it draws from, plus the scope (doc or nodegraph) that node
+        // lives in. `scope` is where `el`'s OWN nodename/nodegraph
+        // attributes resolve — the same graph as `el` for a node's input
+        // or a nodegraph's output, but the graph's PARENT for the graph's
+        // own interface input (its external wiring is authored one scope
+        // up, in the doc). Returns { node, scope } (found), null (nothing
+        // connected — vacuous), or 'FAIL' (dangling/unresolvable).
+        const stepToNode = (doc, el, scope, depth) => {
+            if (!el || !scope || depth > 32) return 'FAIL';
+            const nn = mxElAttr(el, 'nodename');
+            if (nn) {
+                const node = mxSafe(() => scope.getNode(nn), null);
+                return node ? { node, scope } : 'FAIL';
+            }
+            const ngName = mxElAttr(el, 'nodegraph');
+            if (ngName) {
+                const ng = mxSafe(() => doc.getNodeGraph(ngName), null);
+                if (!ng) return 'FAIL';
+                const outName = mxElAttr(el, 'output');
+                let outEl = null;
+                if (outName) {
+                    outEl = mxSafe(() => ng.getOutput(outName), null);
+                } else {
+                    // No output named: only unambiguous with exactly
+                    // one candidate — else this connection can't be
+                    // resolved reliably.
+                    const outs = vecToArray(mxSafe(() => ng.getOutputs(), []));
+                    outEl = outs.length === 1 ? outs[0] : null;
+                }
+                return outEl ? stepToNode(doc, outEl, ng, depth + 1) : 'FAIL';
+            }
+            const ifn = mxElAttr(el, 'interfacename');
+            if (ifn) {
+                // `el` lives inside `scope` (a nodegraph); interfacename
+                // names ONE OF ITS OWN interface inputs, whose external
+                // wiring (if any) is authored one scope up.
+                const parentScope = mxSafe(() => scope.getParent(), null);
+                const ifInput = mxSafe(() => scope.getInput(ifn), null);
+                return (ifInput && parentScope) ? stepToNode(doc, ifInput, parentScope, depth + 1) : 'FAIL';
+            }
+            return null; // plain value / nothing connected — vacuous
+        };
+        const closureAllBuffer2d = (doc, initial) => {
+            const visited = new Set(); // scope+name keys — dedupes cycles/diamonds
+            const queue = initial.slice();
+            let visits = 0;
+            while (queue.length) {
+                if (++visits > 500) return false; // walk overflow — conservative
+                const { node, scope } = queue.shift();
+                const key = mxElName(scope) + '\x00' + mxElName(node);
+                if (visited.has(key)) continue;
+                visited.add(key);
+                if (defaultGeomForNode(node) !== 'buffer2d') return false;
+                for (const inp of vecToArray(mxSafe(() => node.getInputs(), []))) {
+                    const next = stepToNode(doc, inp, scope, 0);
+                    if (next === 'FAIL') return false;
+                    if (next) queue.push(next);
+                }
+            }
+            return true;
+        };
+        // For port-like targets (a nodegraph's <output> / interface
+        // <input>): flat iff everything UPSTREAM of the port is flat.
+        // Empty upstream (pure value) is vacuously flat.
+        const upstreamAllBuffer2d = (seedEl, seedScope, doc) => {
+            const seed = stepToNode(doc, seedEl, seedScope, 0);
+            if (seed === 'FAIL') return false;
+            if (seed === null) return true;
+            return closureAllBuffer2d(doc, [seed]);
+        };
+        // For node targets: the node ITSELF counts too — a flat-class
+        // node fed by a geometry-dependent chain (e.g. anything downstream
+        // of `position`) must keep the 3D preview.
+        const nodeAndUpstreamAllBuffer2d = (nodeEl, scope, doc) =>
+            closureAllBuffer2d(doc, [{ node: nodeEl, scope }]);
+
+        // Global graph-preview geometry mode (Settings popup, experimental):
+        // 'shaderball-scene' (the default — every preview uses the full scene,
+        // pre-experiment behavior), 'buffer2d' (everything flat), or 'pernode'
+        // (flat only when the target AND its whole upstream closure are
+        // flat-class — the experimental system).
+        const GRAPH_GEOM_KEY = 'mtlx_graph_preview_geom';
+        const GRAPH_GEOM_MODES = ['shaderball-scene', 'buffer2d', 'pernode'];
+        const readGraphGeomMode = () => {
+            try {
+                const v = localStorage.getItem(GRAPH_GEOM_KEY);
+                return GRAPH_GEOM_MODES.indexOf(v) !== -1 ? v : 'shaderball-scene';
+            } catch (e) { return 'shaderball-scene'; }
+        };
+
         // Resolves WHAT the preview renders, building transient '__pv_*'
         // wrapper nodes as needed — callers MUST call cleanup() when done.
         // Returns { renderable, label, cleanup, notice }.
@@ -274,25 +387,42 @@
                 return wrapAsSurface({ nodename: mxElName(constEl) }, type, name);
             };
 
+            // Tags a successful ok(...) result with its default preview
+            // geometry, read by NodePreview to pick the render-view shell;
+            // stale-target/doc-default results are left untagged on purpose
+            // (see the two call sites below) so the consumer's fallback of
+            // 'shaderball-scene' preserves today's whole-document look.
+            const withGeom = (r, g) => { r.defaultGeom = g; return r; };
+
             if (target && target.id) {
                 const tScope = target.scope || '';
                 const name = target.id.slice(2);
                 if (target.id.indexOf('g:') === 0) {
                     const g = mxSafe(() => doc.getNodeGraph(name), null);
-                    if (g) return previewNodegraph(g);
+                    if (g) return withGeom(previewNodegraph(g), 'shaderball-scene');
                 } else if (target.id.indexOf('n:') === 0) {
                     const container = tScope ? mxSafe(() => doc.getNodeGraph(tScope), null) : doc;
                     const el = container ? mxSafe(() => container.getNode(name), null) : null;
-                    if (el) return previewNode(container, tScope, el);
+                    if (el) return withGeom(previewNode(container, tScope, el),
+                        nodeAndUpstreamAllBuffer2d(el, container, doc) ? 'buffer2d' : 'shaderball-scene');
                 } else if (target.id.indexOf('o:') === 0) {
                     const container = tScope ? mxSafe(() => doc.getNodeGraph(tScope), null) : doc;
                     const o = container ? mxSafe(() => container.getOutput(name), null) : null;
-                    if (o) return previewOutput(container, tScope, o);
+                    // Buffer2d default iff the WHOLE upstream closure (the
+                    // node this output taps, and everything feeding it,
+                    // crossing nodegraph boundaries via interface inputs)
+                    // is flat pattern/operator nodes — else the full scene.
+                    if (o) return withGeom(previewOutput(container, tScope, o),
+                        upstreamAllBuffer2d(o, container, doc) ? 'buffer2d' : 'shaderball-scene');
                 } else if (target.id.indexOf('i:') === 0) {
                     // Interface inputs only exist inside a nodegraph scope.
                     const g = tScope ? mxSafe(() => doc.getNodeGraph(tScope), null) : null;
                     const inp = g ? mxSafe(() => g.getInput(name), null) : null;
-                    if (inp) return previewInterfaceInput(g, tScope, inp);
+                    // Same rule as 'o:' above; the interface input's own
+                    // external wiring (if any) resolves one scope up, in
+                    // the doc — see upstreamAllBuffer2d's seedScope contract.
+                    if (inp) return withGeom(previewInterfaceInput(g, tScope, inp),
+                        upstreamAllBuffer2d(inp, doc, doc) ? 'buffer2d' : 'shaderball-scene');
                 }
                 // Stale target (new document, renamed scope, ...) → default.
                 return buildPreviewRenderable(parsed, null);
@@ -336,6 +466,14 @@
             // applyMaterial()) runs against the live view; the old material
             // keeps rendering, so this just drives a small "Updating..." badge.
             const [updating, setUpdating] = React.useState(false);
+            // Global graph-preview geometry mode (Settings popup,
+            // experimental) — persisted across reloads; see
+            // readGraphGeomMode/GRAPH_GEOM_KEY above.
+            const [geomMode, setGeomModeState] = React.useState(readGraphGeomMode);
+            const setGeomMode = (mode) => {
+                setGeomModeState(mode);
+                try { localStorage.setItem(GRAPH_GEOM_KEY, mode); } catch (e) { /* best-effort */ }
+            };
             // Liveness flag for the PERSISTENT render-view shell (distinct
             // from this run's `mounted`), passed as createMtlxRenderView's
             // `isAlive` so its rAF loop survives reuse via applyMaterial().
@@ -367,6 +505,11 @@
             // persists across docRev re-runs so a fast refresh or in-place
             // APPLY swap can reuse it instead of tearing it down.
             const liveViewRef = React.useRef(null);
+            // Default geometry the LIVE shell was built with — createMtlxRenderView
+            // has no setGeometry handle, so a target whose default geometry
+            // differs forces a teardown+rebuild (see the FIRST-BUILD fallthrough
+            // check below) instead of a fast-refresh/APPLY reuse.
+            const liveGeomRef = React.useRef(null);
 
             // Mount-once: disposes whatever view is still live when this
             // component actually UNMOUNTS (not per-docRev — that's handled
@@ -381,6 +524,7 @@
                         try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                     }
                     liveViewRef.current = null;
+                    liveGeomRef.current = null;
                     if (viewRef) viewRef.current = null;
                 };
             }, []);
@@ -428,6 +572,7 @@
                                 try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             }
                             liveViewRef.current = null;
+                            liveGeomRef.current = null;
                             if (viewRef) viewRef.current = null;
                             if (canvasRef.current) {
                                 const c = canvasRef.current;
@@ -436,6 +581,25 @@
                                 c.width = w; c.height = h;
                             }
                             return;
+                        }
+
+                        // Geometry is baked into the render-view shell at creation
+                        // (createMtlxRenderView has no setGeometry handle), so when the
+                        // new target's default geometry differs from the live shell's,
+                        // dispose it here and fall through to the FIRST-BUILD path
+                        // below. Same-geometry target/doc changes keep taking the
+                        // cheap refresh/apply paths.
+                        // Mode resolution: the per-node tags computed by buildPreviewRenderable
+                        // are only consulted in 'pernode' mode; the two fixed modes apply to
+                        // every target uniformly.
+                        const wantGeom = geomMode === 'pernode'
+                            ? (built.defaultGeom || 'shaderball-scene')
+                            : geomMode;
+                        if (liveViewRef.current && liveGeomRef.current !== wantGeom) {
+                            try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                            liveViewRef.current = null;
+                            liveGeomRef.current = null;
+                            if (viewRef) viewRef.current = null;
                         }
 
                         // FAST PATH (item F3c): before any teardown, try
@@ -537,6 +701,7 @@
                             // returns before falling through here.
                             try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             liveViewRef.current = null;
+                            liveGeomRef.current = null;
                             if (viewRef) viewRef.current = null;
                         }
                         setLabel(built.label || '');
@@ -554,10 +719,12 @@
                                 canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                 label: built.label || parsed.label,
                                 needsLighting: true,
-                                geomName: 'shaderball-scene',
-                                // The full shaderball scene carries its own
-                                // authored, detached camera — it isn't orbit/
-                                // mouse-interactive, so auto-rotation stays off.
+                                geomName: wantGeom,
+                                // The full shaderball SCENE carries its own authored,
+                                // detached camera and isn't orbit/mouse-interactive, so
+                                // auto-rotation stays off; other geometries (plain
+                                // shaderball, buffer2d, ...) share that same fixed,
+                                // non-interactive preview camera here too.
                                 autoRotate: false,
                                 envBackground: envBg,
                                 isMounted: () => mounted,
@@ -577,6 +744,7 @@
                         if (!view) return;
                         if (!mounted) { view.dispose(); return; }
                         liveViewRef.current = view;
+                        liveGeomRef.current = wantGeom;
                         if (viewRef) viewRef.current = view;
                         setViewEpoch((n) => n + 1);
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
@@ -607,7 +775,7 @@
                 return () => {
                     mounted = false;
                 };
-            }, [parsed, target, docRev, fileMap]);
+            }, [parsed, target, docRev, fileMap, geomMode]);
 
             return (
                 <div
@@ -644,6 +812,32 @@
                         // justify-center) while allowing wrap — no right-align.
                         showLabels={isFullscreen}
                         labelsClass="flex-wrap"
+                        settingsChildren={
+                            <div>
+                                {/* Dropdown on its OWN line: label + trigger
+                                    can't share the popup's 288px row without
+                                    overflowing its edge. The Experimental
+                                    badge sits on the Auto ROW (via badges) —
+                                    picking a geometry isn't the experiment,
+                                    the Auto mode is. */}
+                                <div className="text-gray-200">Preview Geometry</div>
+                                <GeomSelect
+                                    value={geomMode}
+                                    options={['shaderball-scene', 'buffer2d', 'pernode']}
+                                    labels={Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' })}
+                                    badges={{ pernode: 'Experimental', 'shaderball-scene': 'Default' }}
+                                    onChange={setGeomMode}
+                                    title="Global graph-preview geometry"
+                                    className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                />
+                                <div className="mt-1 text-[11px] text-gray-400">
+                                    Applies to every preview in the graph editor. "Auto (by node
+                                    type)" previews an element flat only when it and everything
+                                    upstream of it are flat (patterns/math); anything touching
+                                    geometry or shading keeps the 3D scene.
+                                </div>
+                            </div>
+                        }
                     />
                     <div
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}

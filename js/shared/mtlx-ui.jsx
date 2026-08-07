@@ -268,14 +268,16 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
 const fullscreenPortalRoot = () => (document.fullscreenElement || document.body);
 
 // Approx SettingsDialog popover footprint (px) for the edge-clamp/flip
-// math below. Height is a safe over-estimate; the cog sits at the top
-// of the strip so the flip branch effectively never fires.
-const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 180;
+// math below. Height is a safe over-estimate covering the built-in
+// Force Transparency block plus one caller-supplied `children` block;
+// the cog sits at the top of the strip so the flip branch effectively
+// never fires.
+const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 260;
 
 // Settings popover (cogwheel button in ViewportControls): mounted once
 // there so it's shared across docs/viewer/graph with zero per-app wiring.
 // Anchored below the cog and edge-clamped, mirroring EnvDialog.
-function SettingsDialog({ anchorRef, open, onClose }) {
+function SettingsDialog({ anchorRef, open, onClose, children }) {
     useEscapeToClose(onClose, open);
     // Re-read from the engine's persisted value on every open (not just
     // mount) — window.getForceTransparency is the single source of truth,
@@ -350,6 +352,7 @@ function SettingsDialog({ anchorRef, open, onClose }) {
                         Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                     </div>
                 </div>
+                {children}
             </div>
         </div>,
         fullscreenPortalRoot()
@@ -659,24 +662,6 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
     };
 };
 
-// `mtlx_preview_geom` localStorage read/validate/write pattern (only
-// caller: node-preview.jsx). Falls back to `defaultGeom` if the stored
-// value is missing/invalid, guarding against a stale value.
-const usePersistedGeom = (defaultGeom) => {
-    const [geom, setGeom] = React.useState(() => {
-        const valid = ['shaderball', 'shaderball-scene', 'sphere', 'cube'];
-        try {
-            const g = localStorage.getItem('mtlx_preview_geom');
-            return valid.indexOf(g) !== -1 ? g : defaultGeom;
-        } catch (e) { return defaultGeom; }
-    });
-    const pickGeom = (g) => {
-        try { localStorage.setItem('mtlx_preview_geom', g); } catch (e) { /* best-effort */ }
-        setGeom(g);
-    };
-    return [geom, pickGeom];
-};
-
 // Hand a document off to the node graph editor: stash it (plus any loose
 // files) where js/graph-app.jsx's 'mtlx-load-document' listener expects
 // it, fire that event, then hash-route to the graph view.
@@ -932,11 +917,36 @@ const GEOM_LABELS = {
     'shaderball-scene': 'Shaderball w/ Backdrop',
     'sphere': 'Sphere',
     'cube': 'Cube',
+    // Only offered where a caller passes an explicit geomList including
+    // it (node-preview) — deliberately absent from the default list
+    // above so the material viewer doesn't grow the option.
+    'buffer2d': '2D Buffer',
+    // 'default' = the experimental per-node-type auto pick (see
+    // defaultGeomFor). Only used by callers whose geomList includes
+    // 'default' (the docs previewer) — the viewer's never does.
+    'default': 'Auto (by node type)',
 };
+
+// Per-node-type default preview geometry (docs previewer + graph
+// editor's preview). Groups whose output depends on geometry/lighting
+// (BXDF closures, materials, shaders, lights), view-dependent npr
+// nodes, geometry-data nodes, and triplanar projection get the
+// shaderball WITH backdrop (never the plain shaderball — that one is
+// manual-pick only); every flat pattern/operator group renders as a
+// 2D buffer. Group strings are lowercase nodedef getNodeGroup()
+// values (the same strings as js/gen/nodelib.json's group keys).
+const SHADERBALL_GROUPS = ['pbr', 'translation', 'material', 'shader', 'light', 'npr', 'geometric', 'texture3d'];
+const defaultGeomFor = (nodegroup) => (
+    SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d'
+);
 
 const ViewportControls = ({
     geomList = ['shaderball', 'shaderball-scene', 'sphere', 'cube'],
     geom, onGeomChange,
+    // Optional { value: badge text } for the geometry dropdown's rows
+    // (see GeomSelect) — e.g. marking the docs previewer's Auto entry
+    // as experimental.
+    geomBadges,
     showGeomSelect = true,
     rotating, onToggleRotating,
     showRotate = true,
@@ -950,6 +960,10 @@ const ViewportControls = ({
     isFullscreen, onToggleFullscreen,
     children,
     trailingChildren,
+    // Extra blocks for the settings popover, appended after the built-in
+    // Force Transparency block. Node or render prop; docs previewer is
+    // the only consumer today.
+    settingsChildren,
     envDialogPlacement,
     containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
     selectClassName = 'h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300',
@@ -1026,14 +1040,14 @@ const ViewportControls = ({
     <div ref={panelEdgeRef} className={stripClassName}>
         {children}
         {showGeomSelect && (
-            <select
+            <GeomSelect
                 value={geom}
-                onChange={(e) => onGeomChange(e.target.value)}
+                options={geomList}
+                badges={geomBadges}
+                onChange={onGeomChange}
                 title="Preview geometry"
                 className={selectClassName}
-            >
-                {geomList.map((g) => <option key={g} value={g}>{GEOM_LABELS[g] || g}</option>)}
-            </select>
+            />
         )}
         {showRotate && (
             <button
@@ -1115,6 +1129,7 @@ const ViewportControls = ({
             <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
             {showLabels && <span className="ml-1.5 whitespace-nowrap">Settings</span>}
         </button>
+        {onToggleFullscreen && (
         <button
             onClick={onToggleFullscreen}
             title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
@@ -1123,15 +1138,14 @@ const ViewportControls = ({
             <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
             {showLabels && <span className="ml-1.5 whitespace-nowrap">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>}
         </button>
+        )}
     </div>
     {/* Anchored popover (portaled to the fullscreen root, like EnvDialog)
         rather than a full-screen modal, so it stays visible in native
         fullscreen without exiting it. */}
-    <SettingsDialog
-        anchorRef={settingsBtnRef}
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-    />
+    <SettingsDialog anchorRef={settingsBtnRef} open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        {typeof settingsChildren === 'function' ? settingsChildren() : settingsChildren}
+    </SettingsDialog>
     </React.Fragment>
     );
 };
@@ -1403,6 +1417,123 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
     );
 };
 
+// Custom dropdown replacing the native geometry <select>: macOS draws
+// the native menu checkmark at system size, which misaligns against
+// 11px option text (option CSS can't reach the native menu). Portaled
+// to fullscreenPortalRoot() — required both for native fullscreen and
+// because ancestor backdrop-blur creates a containing block that
+// silently mispositions position:fixed (see ColorSwatch).
+const GEOM_POP_W = 190, GEOM_POP_ROW_H = 26;
+// `badges`: optional { value: text } — renders a small amber pill after
+// that option's ROW label (popover only, never the trigger), for calling
+// out e.g. an experimental entry without branding the whole control.
+const GeomSelect = ({ value, options, labels = GEOM_LABELS, badges, onChange, title, className }) => {
+    const [open, setOpen] = React.useState(false);
+    const [pos, setPos] = React.useState(null);
+    const [hi, setHi] = React.useState(0);
+    const btnRef = React.useRef(null);
+    const popRef = React.useRef(null);
+    // Wider popover when badge pills share the rows with the labels.
+    const popW = badges ? 240 : GEOM_POP_W;
+
+    const openPopover = () => {
+        setHi(Math.max(0, options.indexOf(value)));
+        const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;
+        if (rect) {
+            // Left-aligned to the trigger (ColorSwatch precedent),
+            // clamped to the viewport and flipped above when it would
+            // overflow the bottom (SettingsDialog math).
+            const h = options.length * GEOM_POP_ROW_H + 8;
+            const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+            setPos(rect.bottom + h > window.innerHeight
+                ? { left, bottom: window.innerHeight - rect.top + 4 }
+                : { left, top: rect.bottom + 4 });
+        }
+        setOpen(true);
+    };
+
+    // Outside-pointerdown close (SettingsDialog pattern); the popover
+    // stops propagation on its own pointerdown.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (popRef.current && popRef.current.contains(e.target)) return;
+            if (btnRef.current && btnRef.current.contains(e.target)) return;
+            setOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
+    // Keyboard nav. CAPTURE phase on purpose: when hosted inside the
+    // SettingsDialog, Escape must close only THIS popover — stopping
+    // propagation here keeps the dialog's bubble-phase Escape listener
+    // (useEscapeToClose) from also firing.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => {
+            if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, options.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+            else if (e.key === 'Enter') { e.preventDefault(); if (options[hi] != null) onChange(options[hi]); setOpen(false); }
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [open, hi, options]);
+
+    const popover = open ? (
+        <div
+            ref={popRef}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={Object.assign({ position: 'fixed', zIndex: 9999, width: popW }, pos || {})}
+            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1"
+        >
+            {options.map((g, i) => (
+                <button
+                    key={g}
+                    type="button"
+                    onMouseEnter={() => setHi(i)}
+                    onClick={() => { onChange(g); setOpen(false); }}
+                    className={'w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors '
+                        + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300')}
+                >
+                    {/* Fixed check gutter so labels align selected or not. */}
+                    <span className="w-3.5 flex-none">
+                        {g === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
+                    </span>
+                    <span className="flex-1 truncate">{labels[g] || g}</span>
+                    {badges && badges[g] && (
+                        // Amber only for the warning-flavored Experimental
+                        // tag; informational badges (e.g. Default) stay
+                        // neutral so they don't read as a caution.
+                        <span className={'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border '
+                            + (badges[g] === 'Experimental'
+                                ? 'bg-amber-600/30 border-amber-500/50 text-amber-300'
+                                : 'bg-gray-700/60 border-gray-500/50 text-gray-300')}>{badges[g]}</span>
+                    )}
+                </button>
+            ))}
+        </div>
+    ) : null;
+
+    return (
+        <React.Fragment>
+            <button
+                type="button"
+                ref={btnRef}
+                title={title}
+                onClick={() => (open ? setOpen(false) : openPopover())}
+                className={(className || 'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300')
+                    + ' inline-flex items-center gap-1'}
+            >
+                <span className="truncate">{labels[value] || value}</span>
+                <MtlxIcon name="chevron-down" className="w-3 h-3 flex-none opacity-70" />
+            </button>
+            {popover && ReactDOM.createPortal(popover, fullscreenPortalRoot())}
+        </React.Fragment>
+    );
+};
+
 // The site ships production React with no error boundaries — one render
 // throw anywhere unmounts the ENTIRE app. This wraps the docs page's 3D
 // preview so a crash degrades to an inline error card instead.
@@ -1423,13 +1554,14 @@ class PreviewErrorBoundary extends React.Component {
 
 Object.assign(window, {
     BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
+    GEOM_LABELS, defaultGeomFor,
     errMsg,
     useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
     downloadSnapshot, downloadBlob, downloadXml,
-    useViewportControls, usePersistedGeom,
+    useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
-    ColorSwatch, PreviewErrorBoundary,
+    ColorSwatch, GeomSelect, PreviewErrorBoundary,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     fetchPresetFiles, copyTextToClipboard, ShaderExportDialog,
 });
