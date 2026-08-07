@@ -1273,7 +1273,7 @@ const makeEnvTexture = (w, h, blurred) => {
 // Path to the app's default equirect environment: a studio EXR, parsed
 // via EXRLoader and routed through prepareEnv/padToRGBA. No paired
 // irradiance file — diffuse irradiance is always SH-synthesized (below).
-const ENV_MAP_URL = './env_maps/studio_kontrast_04_1k.exr';
+const ENV_MAP_URL = './env_maps/standard_shader_ball_env_512.exr';
 
 // Load the environment ONCE and reuse across previews. Resolves to
 // { radiance, irradiance, mips } or null if no file is present, in
@@ -1325,7 +1325,7 @@ const prepareEnv = (tex) => {
 const makeBackgroundTexture = (src) => {
     const img = src.image;
     const bg = new THREE.DataTexture(img.data, img.width, img.height, src.format, src.type);
-    bg.flipY = true; // correct for the mirrored skybox sphere — see header comment above
+    bg.flipY = false; // correct for the mirrored skybox sphere — see header comment above
     bg.mapping = THREE.EquirectangularReflectionMapping;
     bg.wrapS = THREE.RepeatWrapping;
     bg.wrapT = THREE.ClampToEdgeWrapping;
@@ -1488,7 +1488,10 @@ const parseEnvBuffer = (buf, ext) => {
             // encoded data only built-in materials can decode);
             // HalfFloatType makes it decode to linear float at parse.
             const d = new THREE.RGBELoader().setDataType(THREE.HalfFloatType).parse(buf);
-            return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
+            if (!d || !d.data) return null;
+            const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+            tex.flipY = true;
+            return tex;
         }
         if (ext === '.exr') {
             if (typeof THREE.EXRLoader === 'undefined') return null;
@@ -1496,7 +1499,10 @@ const parseEnvBuffer = (buf, ext) => {
             // sampler use above): RGBA16F is core mip-able on WebGL2,
             // while RGBA32F needs optional extensions.
             const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
-            return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
+            if (!d || !d.data) return null;
+            const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+            tex.flipY = true;
+            return tex;
         }
         return null; // unrecognized extension
     } catch (e) {
@@ -2159,7 +2165,7 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 // tracks the highlight but 180 degrees out of phase, adjust BG_BASE;
 // if it counter-rotates instead of co-rotating, flip BG_SIGN's -1.
 // ------------------------------------------------------------------
-const BG_BASE = -Math.PI / 2;
+const BG_BASE = Math.PI;
 const BG_SIGN = -1;
 
 // ------------------------------------------------------------------
