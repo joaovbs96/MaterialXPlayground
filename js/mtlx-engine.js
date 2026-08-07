@@ -40,6 +40,11 @@ const getMxEnv = () => {
                 // viewer (raw linear output here; ACES + sRGB applied
                 // unconditionally in encodeDisplay() below — see its header).
                 try { genContext.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
+                // Textures are uploaded flipY=false (V0 = image top row),
+                // so generated shaders must sample file textures at
+                // (u, 1-v) for MaterialX's lower-left UV origin — without
+                // this, every image renders upside down.
+                try { genContext.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
 
                 // Direct light, like the official viewer's registerLights():
                 // binds directional_light (id 1) from any <directional_light>
@@ -962,9 +967,11 @@ const getDefaultTexture = () => {
             ctx.fillRect(x * sz, y * sz, sz, sz);
         }
     }
-    // Orientation markers so UV flips are visible at a glance.
-    ctx.fillStyle = '#d33'; ctx.fillRect(0, 0, sz, sz);                    // U0 V0
-    ctx.fillStyle = '#36c'; ctx.fillRect((n - 1) * sz, 0, sz, sz);         // U1 V0
+    // Orientation markers so UV flips are visible at a glance. Shaders
+    // sample files at (u, 1-v) (fileTextureVerticalFlip), so UV origin
+    // reads the canvas BOTTOM row — draw the V0 markers there.
+    ctx.fillStyle = '#d33'; ctx.fillRect(0, (n - 1) * sz, sz, sz);         // U0 V0
+    ctx.fillStyle = '#36c'; ctx.fillRect((n - 1) * sz, (n - 1) * sz, sz, sz); // U1 V0
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.flipY = false; // MaterialX image convention; keep loads consistent
@@ -1917,6 +1924,9 @@ const getExportGen = (mx, target) => {
     }
     const gen = Cls.create();
     const ctx = new mx.GenContext(gen);
+    // Match the render context's file-texture V flip (see getMxEnv) so
+    // exported shader source samples images the same way up.
+    try { ctx.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
     // loadStandardLibraries here only registers the source-code search
     // path on `ctx` — its returned stdlib document is discarded, since
     // callers' documents already carry the shared stdlib.

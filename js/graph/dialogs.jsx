@@ -28,7 +28,7 @@
             { keys: '+ / − badge on a node', desc: "Show or hide that node's default-valued inputs", group: 'mouse' },
             { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page', group: 'mouse', browserOnly: true },
             // Keyboard
-            { keys: 'Delete', desc: 'Delete the selected node(s), or disconnect the selected edge', group: 'keyboard' },
+            { keys: 'Delete', desc: 'Delete the selected node(s) and disconnect the selected edge(s)', group: 'keyboard' },
             { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)', group: 'keyboard' },
             { keys: 'Esc', desc: 'Close the open search, picker, or dialog (browsers also exit full screen)', group: 'keyboard' },
             { keys: 'F', desc: 'Fit the whole graph in view', group: 'keyboard' },

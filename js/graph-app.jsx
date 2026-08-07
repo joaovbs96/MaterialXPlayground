@@ -186,6 +186,11 @@
             // The selected EDGE (single selection, mutually exclusive with
             // the node selection) — Delete disconnects it.
             const [selectedEdgeId, setSelectedEdgeId] = React.useState(null);
+            // Box-selected edges (geometric hit test on the selection
+            // rect — see onSelectionEnd). Coexists with node selection:
+            // a box over nodes AND edges selects both. Click selection
+            // stays exclusive via selectedEdgeId.
+            const [selectedEdgeIds, setSelectedEdgeIds] = React.useState([]);
             const [paramsOpen, setParamsOpen] = React.useState(!narrow);
             // The LAST node the preview showed — { scope, id } — so the
             // preview stays on it when the selection is cleared. Reset per
@@ -1325,6 +1330,7 @@
             const focusNode = (id, pan) => {
                 setSelectedId(id);
                 setSelectedEdgeId(null); // node and edge selection are exclusive
+                setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
                 setParamsOpen(true);
                 // Real nodes, nodegraphs, and interface input/output
                 // pseudo-nodes all become the preview target —
@@ -1353,6 +1359,7 @@
             const onNodeClick = (evt, node) => {
                 setSelectedId(node.id);
                 setSelectedEdgeId(null);
+                setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
                 setParamsOpen(true);
                 if (node.id.indexOf('n:') === 0 || node.id.indexOf('g:') === 0
                         || node.id.indexOf('i:') === 0 || node.id.indexOf('o:') === 0) {
@@ -1366,6 +1373,7 @@
             const onEdgeClick = (evt, edge) => {
                 evt.stopPropagation();
                 setSelectedEdgeId(edge.id);
+                setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
                 setSelectedId(null);
                 setFlow((prev) => ({
                     edges: prev.edges,
@@ -1376,6 +1384,7 @@
             const clearSelection = () => {
                 setSelectedId(null);
                 setSelectedEdgeId(null);
+                setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
                 setFlow((prev) => ({
                     edges: prev.edges,
                     nodes: prev.nodes.map((n) =>
@@ -2259,6 +2268,7 @@
                     nodes: prev.nodes.map((n) => n.id === edge.target ? patchInputConn(n, inputName, false, restored) : n),
                 }));
                 setSelectedEdgeId((cur) => (cur === edge.id ? null : cur));
+                setSelectedEdgeIds((cur) => (cur.indexOf(edge.id) !== -1 ? cur.filter((id) => id !== edge.id) : cur));
             };
 
             // Where a connection/edge drag actually ended, as { el,
@@ -2672,14 +2682,24 @@
             // (shader regen), so it flashes actionBusy and defers behind a
             // double-rAF; plain node deletes stay synchronous.
             deleteSelectionRef.current = () => {
-                if (selectedEdgeId) {
-                    const e = flow.edges.find((e2) => e2.id === selectedEdgeId);
-                    if (e) { disconnectEdge(e); return true; }
-                    return false;
-                }
+                // Everything currently selected acts at once: nodes (box or
+                // click) are deleted, edges (box or click) are disconnected.
                 const ids = flow.nodes.filter((n) => n.selected).map((n) => n.id);
-                const targets = ids.length > 1 ? ids : (selectedId ? [selectedId] : null);
-                if (!targets) return false;
+                // ANY React Flow selection wins (a box-select of a single
+                // node leaves selectedId null — it must still delete);
+                // selectedId is only the fallback for click-selection.
+                const targets = ids.length > 0 ? ids : (selectedId ? [selectedId] : []);
+                const edgeIdSet = new Set(selectedEdgeIds);
+                if (selectedEdgeId) edgeIdSet.add(selectedEdgeId);
+                const nodeSet = new Set(targets);
+                // Edges whose endpoint is being deleted anyway are skipped —
+                // deleteNode already removes them from doc and flow.
+                const edgeTargets = flow.edges.filter((e) =>
+                    edgeIdSet.has(e.id) && !nodeSet.has(e.source) && !nodeSet.has(e.target));
+                if (!targets.length && !edgeTargets.length) return false;
+                edgeTargets.forEach(disconnectEdge);
+                setSelectedEdgeIds([]);
+                if (!targets.length) return true;
                 const hasNodegraph = targets.some((id) => id.indexOf('g:') === 0);
                 if (hasNodegraph) {
                     setActionBusy('Deleting' + '\u2026');
@@ -3960,16 +3980,133 @@
             const selectedIds = flow.nodes.filter((n) => n.selected).map((n) => n.id);
 
             // Mirrors deleteSelectionRef.current()'s own target resolution
-            // (the selected edge, the multi-selection, or the single
-            // selected node) — gates the Delete Nodes toolbar button.
-            const canDelete = !!selectedEdgeId || selectedIds.length > 0 || !!selectedId;
+            // (selected edges — click or box — the multi-selection, or the
+            // single selected node) — gates the Delete Nodes toolbar button.
+            const canDelete = !!selectedEdgeId || selectedEdgeIds.length > 0 || selectedIds.length > 0 || !!selectedId;
+
+            // Box select also marks every edge touching the selected nodes
+            // in React Flow's INTERNAL store (cloned objects — swallowing
+            // the change events isn't enough). Edge selection in this app
+            // is exclusively the click-selected selectedEdgeId, so each
+            // such attempt bumps this epoch, forcing rfEdges below to
+            // re-emit fresh objects whose explicit selected:false
+            // overwrites the store's clones on the prop resync.
+            const [edgeDeselectEpoch, setEdgeDeselectEpoch] = React.useState(0);
+            const onEdgesChange = (changes) => {
+                if (changes.some((c) => c.type === 'select' && c.selected)) {
+                    setEdgeDeselectEpoch((n) => n + 1);
+                }
+            };
 
             // What React Flow renders: the flow edges, with the selection
-            // flag layered on (the .selected CSS turns the edge blue).
-            const rfEdges = React.useMemo(() => !selectedEdgeId ? flow.edges
-                : flow.edges.map((e) => e.id === selectedEdgeId
-                    ? Object.assign({}, e, { selected: true }) : e),
-                [flow.edges, selectedEdgeId]);
+            // flag layered on (the .selected CSS turns the edge blue) —
+            // the click-selected edge plus any box-selected ones.
+            // Always fresh objects with an explicit boolean — see
+            // edgeDeselectEpoch above for why identity must change.
+            const rfEdges = React.useMemo(() => flow.edges.map((e) =>
+                Object.assign({}, e, { selected: e.id === selectedEdgeId || selectedEdgeIds.indexOf(e.id) !== -1 })),
+                [flow.edges, selectedEdgeId, selectedEdgeIds, edgeDeselectEpoch]);
+
+            // Geometric edge box-selection. React Flow's box only selects
+            // NODES (its every-edge-touching-a-selected-node auto-selection
+            // is suppressed above); edges are instead hit-tested against
+            // the drag rectangle itself: points sampled along each rendered
+            // edge path, mapped to screen space, tested against the rect.
+            // A box over just edges selects just edges; over just a node,
+            // just that node; over both, both.
+            // Containment rule: a box snugly drawn around a NODE always
+            // clips the tips of its edges at the handles — geometrically
+            // "intersecting", humanly not selected. So when the box
+            // fully contains at least one node, edges must be FULLY
+            // inside to count; a box containing no node (an edge-only
+            // sweep, however thin) selects on any intersection.
+            const edgesInRect = (rect) => {
+                const nodeInBox = [...document.querySelectorAll('.react-flow__node')].some((el) => {
+                    const r = el.getBoundingClientRect();
+                    return r.left >= rect.left && r.right <= rect.right && r.top >= rect.top && r.bottom <= rect.bottom;
+                });
+                const hits = [];
+                for (const g of document.querySelectorAll('.react-flow__edge')) {
+                    const path = g.querySelector('path');
+                    if (!path || !path.getTotalLength) continue;
+                    let m = null;
+                    try { m = path.getScreenCTM(); } catch (e) { m = null; }
+                    if (!m) continue;
+                    const len = path.getTotalLength();
+                    if (!isFinite(len) || len <= 0) continue;
+                    // ~6px sampling, capped so huge zoomed-out paths stay
+                    // cheap; the exact endpoint is always sampled so the
+                    // full-containment test can't miss a protruding tip.
+                    const step = Math.max(6, len / 200);
+                    let anyIn = false, allIn = true;
+                    for (let d = 0; d <= len + step; d += step) {
+                        const p = path.getPointAtLength(Math.min(d, len));
+                        const sxp = m.a * p.x + m.c * p.y + m.e;
+                        const syp = m.b * p.x + m.d * p.y + m.f;
+                        const inside = sxp >= rect.left && sxp <= rect.right && syp >= rect.top && syp <= rect.bottom;
+                        anyIn = anyIn || inside;
+                        allIn = allIn && inside;
+                        if (anyIn && !allIn && !nodeInBox) break; // any-mode already decided
+                    }
+                    if (!(nodeInBox ? allIn : anyIn)) continue;
+                    // React Flow stamps the edge id on data-testid="rf__edge-<id>".
+                    const tid = g.getAttribute('data-testid') || '';
+                    if (tid.indexOf('rf__edge-') === 0) hits.push(tid.slice('rf__edge-'.length));
+                }
+                return hits;
+            };
+            // Replace-only-if-changed so the per-frame live preview below
+            // doesn't churn renders while the hit set is stable.
+            const applyEdgeHits = (hits) => setSelectedEdgeIds((cur) =>
+                (cur.length === hits.length && cur.every((id, i) => id === hits[i])) ? cur : hits);
+            const selStartRef = React.useRef(null);
+            const selMoveCleanupRef = React.useRef(null);
+            const onSelectionStart = (evt) => {
+                selStartRef.current = { x: evt.clientX, y: evt.clientY };
+                // A fresh box supersedes a click-selected edge.
+                setSelectedEdgeId(null);
+                // LIVE preview while the box is being dragged: nodes
+                // already highlight live (React Flow's own selection);
+                // edges get the same treatment via a rAF-throttled
+                // pointermove hit test, detached again in onSelectionEnd.
+                if (selMoveCleanupRef.current) selMoveCleanupRef.current();
+                let raf = null;
+                const onMove = (e) => {
+                    const pt = { x: e.clientX, y: e.clientY };
+                    if (raf) return;
+                    raf = requestAnimationFrame(() => {
+                        raf = null;
+                        const start = selStartRef.current;
+                        if (!start) return;
+                        applyEdgeHits(edgesInRect({
+                            left: Math.min(start.x, pt.x), right: Math.max(start.x, pt.x),
+                            top: Math.min(start.y, pt.y), bottom: Math.max(start.y, pt.y),
+                        }));
+                    });
+                };
+                window.addEventListener('pointermove', onMove);
+                selMoveCleanupRef.current = () => {
+                    window.removeEventListener('pointermove', onMove);
+                    if (raf) { cancelAnimationFrame(raf); raf = null; }
+                    selMoveCleanupRef.current = null;
+                };
+            };
+            const onSelectionEnd = (evt) => {
+                if (selMoveCleanupRef.current) selMoveCleanupRef.current();
+                const start = selStartRef.current;
+                selStartRef.current = null;
+                if (!start) return;
+                const rect = {
+                    left: Math.min(start.x, evt.clientX), right: Math.max(start.x, evt.clientX),
+                    top: Math.min(start.y, evt.clientY), bottom: Math.max(start.y, evt.clientY),
+                };
+                // Degenerate drag (a plain click) — clears, selects nothing.
+                if (rect.right - rect.left < 4 && rect.bottom - rect.top < 4) {
+                    setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
+                    return;
+                }
+                applyEdgeHits(edgesInRect(rect));
+            };
 
             // Controlled React Flow needs position changes applied by us
             // or dragging is inert. 'select' changes also pass through —
@@ -4346,6 +4483,9 @@
                             nodeTypes={NODE_TYPES}
                             onInit={(inst) => { rfInstRef.current = inst; fitViewSoon({ padding: 0.15 }); }}
                             onNodesChange={onNodesChange}
+                            onEdgesChange={onEdgesChange}
+                            onSelectionStart={onSelectionStart}
+                            onSelectionEnd={onSelectionEnd}
                             onNodeDragStop={onNodeDragStop}
                             onSelectionDragStop={onNodeDragStop}
                             onNodeDoubleClick={onNodeDoubleClick}
@@ -4738,8 +4878,8 @@
                                 onClick={() => deleteSelectionRef.current()}
                                 disabled={!canDelete}
                                 title={canDelete
-                                    ? 'Delete the selected node(s), or disconnect the selected edge (Del)'
-                                    : 'Select a node or edge to delete'}
+                                    ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
+                                    : 'Select nodes or edges to delete'}
                                 className={BTN_TOOLBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
                             >
                                 <MtlxIcon name="trash" className="w-3.5 h-3.5" />
