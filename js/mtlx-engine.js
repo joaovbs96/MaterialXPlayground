@@ -3237,6 +3237,18 @@ const createMtlxRenderView = async ({
                 renderer.render(scene, camera);
                 return renderer.domElement.toDataURL('image/png');
             },
+            // Reads back the current view at caller-chosen dimensions:
+            // syncs a render first, then resamples through a 2D canvas
+            // so two compare views can be read at identical sizes.
+            snapshotPixels: (w, h) => {
+                setUniforms();
+                renderer.render(scene, camera);
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                const ctx = c.getContext('2d');
+                ctx.drawImage(renderer.domElement, 0, 0, w, h);
+                return ctx.getImageData(0, 0, w, h);
+            },
             // Wrapped (not disposePartial directly) so dispose() also
             // deregisters the handle from LIVE_VIEWS — otherwise
             // setEnvOverride's broadcast could touch a torn-down view.

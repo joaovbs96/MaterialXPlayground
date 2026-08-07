@@ -81,7 +81,7 @@
     var ICON_OCTOCAT =
         '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>';
 
-    // Mobile-hamburger-only nav icons: 'docs'/'viewer'/'graph' are
+    // Mobile-hamburger-only nav icons: 'docs'/'viewer'/'graph'/'compare' are
     // copied verbatim from MTLX_ICON_PATHS in js/shared/ui-commons.js
     // (kept in sync by hand); 'viewer' alone is filled, no stroke.
     var ICON_NAV_HOME =
@@ -109,14 +109,21 @@
             '<path d="M8.7 10.7l6.6 -3.4" />' +
             '<path d="M8.7 13.3l6.6 3.4" />' +
         '</svg>';
+    var ICON_NAV_COMPARE =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" />' +
+            '<path d="M12 4l0 16" />' +
+        '</svg>';
 
     // Pages of the site, in nav order. shellHref-only now that the old
-    // standalone pages are gone: docs/viewer/graph live behind hash routes
-    // (#!docs/#!viewer/#!graph). `icon` is consumed by the mobile panel only.
+    // standalone pages are gone: docs/viewer/graph/compare live behind hash
+    // routes (#!docs/#!viewer/#!graph/#!compare). `icon` is consumed by the
+    // mobile panel only.
     var NAV = [
         { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME },
         { id: 'docs', label: 'Node Library & Documentation', shellHref: '#!docs', icon: ICON_NAV_DOCS },
         { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
+        { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
         { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
     ];
 
@@ -126,6 +133,7 @@
     function shellRouteFor(hash) {
         if (hash === '#!viewer') { return 'viewer'; }
         if (hash === '#!graph') { return 'graph'; }
+        if (hash === '#!compare') { return 'compare'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
     }
@@ -146,7 +154,9 @@
             if (window.__MTLX_DOCS_ONLY__) {
                 return t.id === 'docs';
             }
-            return t.id !== 'docs';
+            // Compare is a browser-only feature (drag-and-drop of two
+            // documents at once) — excluded here same as docs.
+            return t.id !== 'docs' && t.id !== 'compare';
         })
         : NAV;
 
