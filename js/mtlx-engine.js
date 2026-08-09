@@ -197,8 +197,10 @@ const DEBUG_SHADERS = (() => {
 const mtlxWarn = (...args) => { if (DEBUG_SHADERS) console.warn(...args); };
 
 // "Force Transparency" (Settings dialog, default off). Off = official-
-// viewer parity (opaque previews); on = real alpha blending in
-// applyMaterialInternal. Persisted; setter dispatches 'mtlx-settings-changed'.
+// viewer parity (opaque previews); on = transparent materials render via
+// front-to-back depth-peeled order-independent transparency (see the NOTE
+// below, and renderFrame()/syncMeshMaterialMode() in createMtlxRenderView
+// for the render graph). Persisted; setter dispatches 'mtlx-settings-changed'.
 let FORCE_TRANSPARENCY = (() => {
     try { return localStorage.getItem('mtlxForceTransparency') === '1'; } catch (e) { return false; }
 })();
@@ -208,9 +210,46 @@ const setForceTransparency = (v) => {
     try { localStorage.setItem('mtlxForceTransparency', FORCE_TRANSPARENCY ? '1' : '0'); } catch (e) { /* best-effort */ }
     // Only caller: Settings dialog toggle (js/shared/mtlx-ui.jsx), fired
     // well after LIVE_VIEWS is populated (no load-time TDZ concern).
-    // Mutates each live view's flags in place — see refreshTransparencyFlags.
-    LIVE_VIEWS.forEach((view) => { try { view.refreshTransparencyFlags && view.refreshTransparencyFlags(); } catch (e) { /* view mid-teardown */ } });
+    // Mutates each live view's flags in place — see refreshRenderMode.
+    LIVE_VIEWS.forEach((view) => { try { view.refreshRenderMode && view.refreshRenderMode(); } catch (e) { /* view mid-teardown */ } });
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'forceTransparency', value: FORCE_TRANSPARENCY } })); } catch (e) { /* best-effort */ }
+};
+
+// NOTE: no separate "depth peeling" setting exists — Force Transparency
+// always means front-to-back depth-peeled OIT now (a naive single-pass
+// blended mode was collapsed into this one flag). renderFrame()/
+// syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
+// (this material's hwTransparency verdict) — see PEEL_LAYERS/getDummyTex.
+
+// Nearest transparent layers the peel loop resolves before giving up on
+// farther fragments — ample for the single-mesh shaderball preview this
+// targets. Each layer costs a full extra raster+composite pass, so this
+// is a fixed small constant rather than "peel until empty".
+const PEEL_LAYERS = 8;
+
+// Shared 1x1 opaque-black dummy texture: the DEFAULT binding for the
+// peel-depth samplers declared by injectPeelDiscard() below, so those
+// uniforms always have SOME bound texture even though they're only
+// sampled while u_peelMode != 0. Module-scope + lazily created.
+let MTLX_DUMMY_TEX = null;
+const getDummyTex = () => {
+    if (!MTLX_DUMMY_TEX) {
+        MTLX_DUMMY_TEX = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat);
+        MTLX_DUMMY_TEX.needsUpdate = true;
+    }
+    return MTLX_DUMMY_TEX;
+};
+
+// White counterpart, depth==1.0 (far plane): the fail-safe default for
+// u_opaqueDepth (see bindMaterialUniforms/renderFrame) so a stale/missing
+// binding reads as "nothing there", never triggering the peel discard.
+let MTLX_DUMMY_TEX_WHITE = null;
+const getDummyTexWhite = () => {
+    if (!MTLX_DUMMY_TEX_WHITE) {
+        MTLX_DUMMY_TEX_WHITE = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
+        MTLX_DUMMY_TEX_WHITE.needsUpdate = true;
+    }
+    return MTLX_DUMMY_TEX_WHITE;
 };
 
 // Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
@@ -332,6 +371,107 @@ const encodeDisplay = (src) => {
         '        ' + v + ' = vec4(mix(_hi, _lo, step(_c, vec3(0.0031308))), ' + v + '.a);\n' +
         '    }\n';
     return src.slice(0, idx) + inject + src.slice(idx);
+};
+
+// Deliberate energy-compromise constant for the peel-mode env-refraction
+// return below: a FLAT scale (not re-weighted by transmission/color — the
+// closure result is already weight-scaled downstream) applied to keep
+// transmission hue alive in depth-peel mode, at the cost of some
+// double-counting against the real scene now showing through via the
+// alpha-composited background. Tune here.
+const PEEL_REFRACTION_SCALE = 0.5;
+
+// Folds transmission into peel-pass alpha (ESSL only writes it to RGB) and
+// attenuates (rather than zeroes) the env-refraction term while peeling, so
+// transmission_color/transmission tint survives instead of washing out to
+// neutral gray. Fail-soft.
+const patchTransmissionAlpha = (fs) => {
+    let weightName = null;
+    if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';
+    else if (/uniform\s+float\s+transmission\s*;/.test(fs)) weightName = 'transmission';
+    if (!weightName) return fs;
+    const colorExpr = /uniform\s+vec3\s+transmission_color\s*;/.test(fs) ? 'transmission_color' : 'vec3(1.0)';
+
+    const transFnIdx = fs.indexOf('vec3 mx_surface_transmission');
+    if (transFnIdx === -1) return fs;
+    const returnAnchor = 'return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;';
+    const returnIdx = fs.indexOf(returnAnchor, transFnIdx);
+    if (returnIdx === -1) return fs;
+
+    const outAlphaMatch = fs.match(/float outAlpha = clamp\([^;]*\.transparency,\s*vec3\(0\.3333\)\),\s*0\.0,\s*1\.0\);/);
+    if (!outAlphaMatch || outAlphaMatch.index <= returnIdx) return fs;
+    const alphaInsertAt = outAlphaMatch.index + outAlphaMatch[0].length;
+
+    // T = (1-a) + a*tT => alpha' = a*(1-tT); 0.05 floor keeps clear-glass sheen above u_alphaThreshold (default 0.001).
+    const alphaFold =
+        '\n    if (u_peelMode != 0) {\n' +
+        '        float _tT = ' + weightName + ' * dot(' + colorExpr + ', vec3(0.3333));\n' +
+        '        outAlpha = max(clamp(outAlpha * (1.0 - _tT), 0.0, 1.0), 0.05);\n' +
+        '    }';
+    let out = fs.slice(0, alphaInsertAt) + alphaFold + fs.slice(alphaInsertAt);
+
+    const gatedReturn =
+        'if (u_peelMode != 0) {\n' +
+        '        return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * ' + PEEL_REFRACTION_SCALE + ';\n' +
+        '    }\n    ' + returnAnchor;
+    out = out.slice(0, returnIdx) + gatedReturn + out.slice(returnIdx + returnAnchor.length);
+    out = out.slice(0, transFnIdx) + 'uniform int u_peelMode;\n' + out.slice(transFnIdx);
+
+    return out;
+};
+
+// injectPeelDiscard(src) — bakes the depth-peel OIT machinery into
+// EVERY generated fragment shader unconditionally, gated behind a
+// runtime uniform (u_peelMode, default 0 = no-op) so toggling Force
+// Transparency never needs a regen/recompile. Inserts four uniform
+// decls immediately above void main() (top-level, after any
+// #version/#extension directives) and splices a guarded discard block
+// right after main()'s opening brace: u_opaqueDepth rejects anything
+// behind the opaque scene, u_peelPrevDepth (+eps slop) rejects
+// anything at/in-front-of the previous peeled layer — mode 1 (regular
+// peel) and mode 2 (tail pass) share this same guard. Mode 2 also gets
+// a premultiply epilogue (see below) so its output can under-blend
+// into accumRT. Fail-loud (throws) if main() can't be found, same
+// contract as encodeDisplay() above.
+const injectPeelDiscard = (src) => {
+    // Skip decls patchTransmissionAlpha may have already inserted.
+    const declIfAbsent = (line) => (src.indexOf(line) === -1 ? line + '\n' : '');
+    const decls =
+        declIfAbsent('uniform int u_peelMode;') +
+        declIfAbsent('uniform int u_peelHasPrev;') +
+        declIfAbsent('uniform highp sampler2D u_peelPrevDepth;') +
+        declIfAbsent('uniform highp sampler2D u_opaqueDepth;');
+    const block =
+        '\n    if (u_peelMode != 0) {\n' +
+        '        ivec2 _pc = ivec2(gl_FragCoord.xy);\n' +
+        '        float _opaqueZ = texelFetch(u_opaqueDepth, _pc, 0).r;\n' +
+        '        if (gl_FragCoord.z >= _opaqueZ) discard;\n' +
+        '        if (u_peelHasPrev != 0) {\n' +
+        '            float _prevZ = texelFetch(u_peelPrevDepth, _pc, 0).r;\n' +
+        '            // PEEL_EPS: ~17 quanta of 24-bit depth precision; constant across cameras/near-far (revisit if coplanar shells misrender).\n' +
+        '            if (gl_FragCoord.z <= _prevZ + 1e-6) discard;\n' +
+        '        }\n' +
+        '    }\n';
+    const mainIdx = src.indexOf('void main');
+    if (mainIdx === -1) throw new Error('injectPeelDiscard: no main() found (MaterialX output format may have changed)');
+    const braceIdx = src.indexOf('{', mainIdx);
+    if (braceIdx === -1) throw new Error('injectPeelDiscard: no main() body found (MaterialX output format may have changed)');
+    let out = src.slice(0, mainIdx) + decls + src.slice(mainIdx, braceIdx + 1) + block + src.slice(braceIdx + 1);
+
+    // Tail pass (u_peelMode==2) writes premultiplied color so it can
+    // under-blend into accumRT; injected right before main()'s closing
+    // brace (same anchor encodeDisplay() uses for its own epilogue,
+    // which by now already ran and is the last thing before that brace).
+    const outMatch = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
+    if (outMatch) {
+        const v = outMatch[1];
+        const closeIdx = out.lastIndexOf('}');
+        const premult = '\n    if (u_peelMode == 2) { ' + v + '.rgb *= ' + v + '.a; }\n';
+        out = out.slice(0, closeIdx) + premult + out.slice(closeIdx);
+    } else {
+        mtlxWarn('mtlx-engine: injectPeelDiscard could not locate the fragment output variable — tail-pass premultiply skipped.');
+    }
+    return out;
 };
 
 // Emscripten throws C++ exceptions as raw NUMBER pointers, not Error
@@ -2152,6 +2292,15 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     } else {
         fs = encodeDisplay(fs);
     }
+    // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
+    fs = patchTransmissionAlpha(fs);
+    // Depth-peel machinery: baked into every fragment shader
+    // UNCONDITIONALLY (not just when Force Transparency is on) — see
+    // injectPeelDiscard's header comment above for why this keeps
+    // toggling the setting a pure uniform flip (no regen/recompile) and
+    // is a byte-for-byte no-op whenever u_peelMode is left at its default
+    // 0 (the normal, non-peeling path).
+    fs = injectPeelDiscard(fs);
 
     // Uniform introspection, still fully inside the mxExclusive lock:
     // plainizeMxUniformData converts every vector/matrix/color `data`
@@ -2532,6 +2681,27 @@ const createMtlxRenderView = async ({
     // path guards with `if (sceneGroup)`). sceneGroup: instantiated GLB
     // root. sceneOwnedMaterials/pmremRT: disposed by disposePartial below.
     let sceneGroup = null, sceneOwnedMaterials = [], pmremRT = null;
+    // Depth-peel shell state (see the FORCE_TRANSPARENCY flag's header
+    // comment above and renderFrame()/allocPeel()/freePeel() further down).
+    // viewIsTransparent: a shell-local MIRROR of the handle's
+    // isTransparent (raw srcs.transparent from generation) — needed
+    // because renderFrame() is invoked synchronously by the FIRST
+    // animate() call below, which runs BEFORE `handle` exists (the
+    // object literal is constructed further down, after animate() has
+    // already been called once) — renderFrame can't read
+    // handle.isTransparent yet, so it reads this instead. Kept in sync
+    // with handle.isTransparent at every point that field is set.
+    // peel: null until the depth-peel render targets/materials are
+    // actually needed (lazily allocated by allocPeel, on the first
+    // peeling frame or after a resize); holds { w, h, opaqueRT, peelA,
+    // peelB, accumRT, quadScene, quadCam, quadMesh, underMat, finalMat }
+    // while allocated. freePeel() releases it back to null.
+    let viewIsTransparent = false;
+    let peel = null;
+    // Outer-scope binding for freePeel (declared `const` deep inside the
+    // try block below, out of disposePartial's reach): every call site
+    // resolves this instead, assigned once right after that const.
+    let freePeelFn = null;
     // The radiance texture, kept so the caller can toggle it as the
     // visible backdrop (setEnvBackground) via bgMesh below — the IBL
     // uniforms are bound regardless.
@@ -2612,6 +2782,10 @@ const createMtlxRenderView = async ({
         // Do NOT dispose the PMREMGenerator instance itself: r128 shares
         // its LOD-plane geometries at MODULE scope across all instances.
         try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
+        // Depth-peel render targets/quad materials (see freePeel's
+        // declaration further down) — this view's OWN GPU resources,
+        // same disposal rationale as pmremRT immediately above.
+        try { if (peel) freePeelFn && freePeelFn(); } catch (e) { /* already disposed/invalid */ }
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -2881,6 +3055,12 @@ const createMtlxRenderView = async ({
                     const w = canvas.clientWidth || cw;
                     const h = canvas.clientHeight || ch;
                     renderer.setSize(w, h, false);
+                    // Depth-peel render targets are sized to the drawing
+                    // buffer (see allocPeel further down) — just free them
+                    // here; renderFrame() lazily reallocates at the new
+                    // size on its next peeling frame, so a resize with
+                    // peeling OFF costs nothing extra.
+                    if (peel) freePeelFn();
                     if (flat2d) {
                         // OrthographicCamera has no .aspect/.fov — the
                         // frustum/quad/UV fit tracks the aspect instead
@@ -3075,6 +3255,27 @@ const createMtlxRenderView = async ({
                         u_viewProjectionMatrix: { value: new THREE.Matrix4() },
                         u_worldInverseTransposeMatrix: { value: new THREE.Matrix4() },
                         u_viewPosition: { value: new THREE.Vector3() },
+                        // Depth-peel uniforms (see injectPeelDiscard's header
+                        // comment above) — declared on EVERY material
+                        // regardless of FORCE_TRANSPARENCY/hwTransparency, since
+                        // the shader itself always declares them now.
+                        // u_peelMode defaults to 0 (normal path, discard
+                        // block inert); renderFrame() (createMtlxRenderView)
+                        // flips these per-pass when peeling is active. The
+                        // two sampler uniforms default to a dummy texture so
+                        // they're never left pointing at "nothing" even
+                        // though they're only ever sampled while
+                        // u_peelMode != 0. u_opaqueDepth defaults to WHITE
+                        // (depth==1.0/far) — a stale/missing binding then
+                        // reads as "nothing there", so `z >= _opaqueZ` never
+                        // spuriously discards (see getDummyTexWhite's header
+                        // comment). u_peelPrevDepth keeps the BLACK default
+                        // (depth==0.0) for the same fail-safe reason on its
+                        // own `z <= _prevZ + eps` comparison.
+                        u_peelMode: { value: 0 },
+                        u_peelHasPrev: { value: 0 },
+                        u_peelPrevDepth: { value: getDummyTex() },
+                        u_opaqueDepth: { value: getDummyTexWhite() },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
@@ -3156,6 +3357,40 @@ const createMtlxRenderView = async ({
                     return newUniforms;
                 };
 
+                // syncMeshMaterialMode — derives the mesh material's
+                // blend/depth flags from viewIsTransparent/
+                // FORCE_TRANSPARENCY, in place (no shader rebuild — the
+                // peel discard block is baked into every shader
+                // unconditionally, see injectPeelDiscard). Called at the
+                // end of every applyMaterialInternal and from the
+                // handle's refreshRenderMode. `material.transparent`
+                // stays FALSE either way: Force Transparency ON drives
+                // translucency entirely through renderFrame()'s
+                // peel/composite passes, never three.js's own blend
+                // state (mixing the two would double-blend and corrupt
+                // the peel discard's depth comparisons). u_peelMode is
+                // left at 0 here; renderFrame() raises it only for the
+                // duration of its peel loop.
+                // Tracks the last blending mode APPLIED to the CURRENT
+                // material (reset to null on every material swap below, see
+                // applyMaterialInternal) so needsUpdate only fires on an
+                // actual change, not on every call (e.g. every animate() tick).
+                let lastAppliedBlendingMode = null;
+                const syncMeshMaterialMode = () => {
+                    if (!material) return;
+                    const peelOn = viewIsTransparent && FORCE_TRANSPARENCY;
+                    const blending = peelOn ? THREE.NoBlending : THREE.NormalBlending;
+                    material.blending = blending;
+                    material.transparent = false;
+                    material.depthTest = true;
+                    material.depthWrite = true;
+                    if (material.uniforms && material.uniforms.u_peelMode) material.uniforms.u_peelMode.value = 0;
+                    if (lastAppliedBlendingMode !== blending) {
+                        material.needsUpdate = true;
+                        lastAppliedBlendingMode = blending;
+                    }
+                };
+
                 // ------------------------------------------------------
                 // applyMaterialInternal: builds a new RawShaderMaterial
                 // from `srcs` and swaps it onto the shell's mesh IN PLACE
@@ -3166,17 +3401,26 @@ const createMtlxRenderView = async ({
                 const applyMaterialInternal = (srcs, applyLabel) => {
                     const newUniforms = bindMaterialUniforms(srcs);
                     // Transparency verdict is srcs.transparent, gated on
-                    // FORCE_TRANSPARENCY. STRAIGHT alpha (MaterialX's own
-                    // epilogue) — do NOT set premultipliedAlpha here.
-                    const isTransparent = !!srcs.transparent && FORCE_TRANSPARENCY;
+                    // FORCE_TRANSPARENCY. When on, translucency is produced
+                    // by renderFrame()'s depth-peel passes (syncMeshMaterialMode,
+                    // above), not three.js blend state — STRAIGHT alpha
+                    // (MaterialX's own epilogue) either way, so do NOT set
+                    // premultipliedAlpha here.
+                    // Mirror the raw (pre-FORCE_TRANSPARENCY-gated) verdict
+                    // onto the shell — see viewIsTransparent's declaration
+                    // above for why renderFrame() needs this shell-local
+                    // copy rather than reading handle.isTransparent.
+                    viewIsTransparent = !!srcs.transparent;
                     const newMaterial = new THREE.RawShaderMaterial({
                         vertexShader: srcs.vs,
                         fragmentShader: srcs.fs,
                         glslVersion: THREE.GLSL3,
                         uniforms: newUniforms,
                         side: THREE.DoubleSide,
-                        transparent: isTransparent,
-                        depthWrite: !isTransparent,
+                        // Neutral literals: syncMeshMaterialMode() below is the
+                        // real source of truth and overwrites both immediately.
+                        transparent: false,
+                        depthWrite: true,
                     });
 
                     // Stash the outgoing material/uniforms so a compile
@@ -3186,6 +3430,10 @@ const createMtlxRenderView = async ({
                     const oldUniforms = uniforms;
                     material = newMaterial;
                     uniforms = newUniforms;
+                    // Fresh material object — no blending mode has been
+                    // applied to it yet, so syncMeshMaterialMode() below
+                    // must treat this as a first application.
+                    lastAppliedBlendingMode = null;
 
                     if (!mesh) {
                         // First call for this shell: create the mesh and
@@ -3234,12 +3482,404 @@ const createMtlxRenderView = async ({
                     // is no longer needed (null on the very first build,
                     // when there's nothing to dispose).
                     if (oldMaterial) oldMaterial.dispose();
+
+                    // Land the new material in the correct render mode
+                    // (opaque vs. depth-peel raw-write) right away — this
+                    // runs on the VERY FIRST build too (see this
+                    // function's header comment on why first-build and
+                    // every later edit share this one code path), which
+                    // is what makes an already-persisted Force
+                    // Transparency setting take effect immediately
+                    // without waiting for a toggle event from the
+                    // Settings dialog.
+                    syncMeshMaterialMode();
                 };
 
                 // First build: routes through the exact same helper every
                 // later applyMaterial() call uses, throwing the same styled
                 // Error on failure — identical to today's first-build path.
                 applyMaterialInternal({ vs, fs, introspected, transparent }, label);
+
+                // ------------------------------------------------------
+                // freePeel — release this view's depth-peel GPU resources
+                // (render targets, their depth textures, the fullscreen-
+                // quad geometry, and the two composite materials) and
+                // null out `peel`. Idempotent-safe to call whenever `peel`
+                // might or might not be allocated — every call site below
+                // guards with `if (peel)` first. Called by allocPeel
+                // (below, to free a stale size before reallocating), by
+                // syncSize on every resize, by the handle's
+                // refreshRenderMode when peeling turns off, and by
+                // disposePartial at final teardown.
+                // ------------------------------------------------------
+                const freePeel = () => {
+                    if (!peel) return;
+                    [peel.opaqueRT, peel.peelA, peel.peelB, peel.accumRT].forEach((rt) => {
+                        if (!rt) return;
+                        rt.dispose();
+                        if (rt.depthTexture) rt.depthTexture.dispose();
+                    });
+                    if (peel.quadMesh && peel.quadMesh.geometry) peel.quadMesh.geometry.dispose();
+                    if (peel.underMat) peel.underMat.dispose();
+                    if (peel.finalMat) peel.finalMat.dispose();
+                    peel = null;
+                };
+                // Publish to the outer-scope binding (see its declaration
+                // above `peel`) so disposePartial and every other call
+                // site resolve the SAME function, regardless of scope.
+                freePeelFn = freePeel;
+
+                // ------------------------------------------------------
+                // allocPeel(w, h) — (re)build every GPU resource the
+                // depth-peel render graph (renderFrame, below) needs at
+                // drawing-buffer size (w, h):
+                //   - opaqueRT: depth-only target holding the OPAQUE
+                //     scene's depth (its color output is never read —
+                //     only .depthTexture matters, see renderFrame step 2)
+                //     so peeled fragments can be rejected against solid
+                //     geometry (u_opaqueDepth in injectPeelDiscard).
+                //   - peelA/peelB: a ping-ponged pair, each with its OWN
+                //     depth texture, used to rasterize one transparent
+                //     layer at a time (renderFrame step 4) — ping-ponging
+                //     is what lets layer N's discard compare against
+                //     layer N-1's depth (u_peelPrevDepth) without the two
+                //     layers fighting over one shared depth buffer.
+                //   - accumRT: the running under-composite accumulation
+                //     buffer (rgb = premultiplied color, a = remaining
+                //     transmittance) — see renderFrame's header comment
+                //     for the exact blend-factor math.
+                //   - a minimal fullscreen-quad scene/camera/mesh, reused
+                //     for BOTH the per-layer under-composite and the
+                //     final accum-over-opaque composite (quadMesh.material
+                //     is swapped between underMat/finalMat per use).
+                // NearestFilter everywhere: these targets are sampled
+                // via texelFetch at the exact source pixel (see
+                // injectPeelDiscard/underMat/finalMat), never
+                // interpolated, so linear filtering would be wasted GPU
+                // work at best. Always frees any existing `peel` first —
+                // this is the ONLY allocation path, called from
+                // renderFrame on a size mismatch.
+                // ------------------------------------------------------
+                const allocPeel = (w, h) => {
+                    freePeelFn();
+                    const mkColorDepthTarget = (opts) => {
+                        const rt = new THREE.WebGLRenderTarget(w, h, Object.assign({
+                            minFilter: THREE.NearestFilter,
+                            magFilter: THREE.NearestFilter,
+                            depthBuffer: true,
+                            stencilBuffer: false,
+                        }, opts));
+                        rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
+                        rt.depthTexture.minFilter = THREE.NearestFilter;
+                        rt.depthTexture.magFilter = THREE.NearestFilter;
+                        return rt;
+                    };
+                    // Color targets are plain RGBA8 (three's default
+                    // WebGLRenderTarget type/format — no explicit
+                    // type/format override below), NOT HalfFloat: the
+                    // MaterialX preview shader already emits DISPLAY-
+                    // ENCODED [0,1] color (encodeDisplay's ACES+sRGB
+                    // epilogue runs before this ever gets here), so 8-bit
+                    // storage loses nothing perceptible while completely
+                    // sidestepping EXT_color_buffer_float — float-format
+                    // render-target COLOR attachments aren't
+                    // unconditionally renderable in WebGL2 (renderability
+                    // depends on that extension), and a silent failure
+                    // there would show as "peeling looks broken" with no
+                    // error anywhere. Depth textures are unaffected —
+                    // still UnsignedIntType (a depth format, not a color
+                    // float format, so this dependency never applied to
+                    // them).
+                    const opaqueRT = mkColorDepthTarget({});
+                    const peelA = mkColorDepthTarget({});
+                    const peelB = mkColorDepthTarget({});
+                    // accumRT alone gets HalfFloat (when supported): unlike
+                    // the display-encoded peel layers above, it accumulates
+                    // premultiplied color/transmittance across many under-
+                    // composites, where 8-bit banding is visible.
+                    const accumHasFloat = !!renderer.extensions.get('EXT_color_buffer_float');
+                    const accumRT = new THREE.WebGLRenderTarget(w, h, Object.assign({
+                        minFilter: THREE.NearestFilter,
+                        magFilter: THREE.NearestFilter,
+                        depthBuffer: false,
+                        stencilBuffer: false,
+                    }, accumHasFloat ? { type: THREE.HalfFloatType } : {}));
+
+                    const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+                    const quadScene = new THREE.Scene();
+                    const quadMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+                    quadScene.add(quadMesh);
+
+                    // underMat: under-composites ONE peeled layer into
+                    // accum. accum starts at (0,0,0,1) — a==1 means "100%
+                    // transmittance, nothing occluded yet". Blend factors
+                    // (see renderFrame's header comment for the full
+                    // derivation): RGB=(DstAlpha,One) adds T*a*color to
+                    // accum.rgb; ALPHA=(Zero,OneMinusSrcAlpha) multiplies
+                    // accum.a by (1-a), i.e. T *= (1-a). Do NOT change
+                    // these factors without re-deriving the math.
+                    const underMat = new THREE.RawShaderMaterial({
+                        glslVersion: THREE.GLSL3,
+                        vertexShader:
+                            'in vec3 position;\n' +
+                            'in vec2 uv;\n' +
+                            'out vec2 vUv;\n' +
+                            'void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }\n',
+                        fragmentShader:
+                            'precision highp float;\n' +
+                            'in vec2 vUv;\n' +
+                            'out vec4 o;\n' +
+                            'uniform sampler2D tLayer;\n' +
+                            'void main(){ vec4 c = texture(tLayer, vUv); o = vec4(c.rgb * c.a, c.a); }\n',
+                        uniforms: { tLayer: { value: null } },
+                        transparent: true,
+                        depthTest: false,
+                        depthWrite: false,
+                        blending: THREE.CustomBlending,
+                        blendEquation: THREE.AddEquation,
+                        blendSrc: THREE.DstAlphaFactor,
+                        blendDst: THREE.OneFactor,
+                        blendEquationAlpha: THREE.AddEquation,
+                        blendSrcAlpha: THREE.ZeroFactor,
+                        blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+                    });
+
+                    // finalMat: composites the finished accum buffer over
+                    // whatever is already on screen (the opaque pass from
+                    // renderFrame step 1). RGB=(One,SrcAlpha) yields
+                    // screen' = accum.rgb + T*screen (accum.a IS the
+                    // remaining transmittance T at this point); ALPHA=
+                    // (OneMinusSrcAlpha,SrcAlpha) writes DESTINATION alpha
+                    // as (1-T) + T*dstA, so the canvas itself ends up with
+                    // correct coverage — without this the browser
+                    // composites the transparent object away over the
+                    // page since the canvas's own alpha stayed at 0.
+                    const finalMat = new THREE.RawShaderMaterial({
+                        glslVersion: THREE.GLSL3,
+                        vertexShader:
+                            'in vec3 position;\n' +
+                            'in vec2 uv;\n' +
+                            'out vec2 vUv;\n' +
+                            'void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }\n',
+                        fragmentShader:
+                            'precision highp float;\n' +
+                            'in vec2 vUv;\n' +
+                            'out vec4 o;\n' +
+                            'uniform sampler2D tAccum;\n' +
+                            'void main(){ vec4 a = texture(tAccum, vUv); o = vec4(a.rgb, a.a); }\n',
+                        uniforms: { tAccum: { value: null } },
+                        transparent: true,
+                        depthTest: false,
+                        depthWrite: false,
+                        blending: THREE.CustomBlending,
+                        blendEquation: THREE.AddEquation,
+                        blendSrc: THREE.OneFactor,
+                        blendDst: THREE.SrcAlphaFactor,
+                        blendEquationAlpha: THREE.AddEquation,
+                        blendSrcAlpha: THREE.OneMinusSrcAlphaFactor,
+                        blendDstAlpha: THREE.SrcAlphaFactor,
+                    });
+
+                    peel = {
+                        w, h, opaqueRT, peelA, peelB, accumRT,
+                        quadScene, quadCam, quadMesh, underMat, finalMat,
+                    };
+                    // Precompiles both composite-quad programs (quadMesh
+                    // starts with material=null, so each must be attached
+                    // before its own compile() call) — first peeling frame
+                    // then never hitches on lazy shader compilation.
+                    quadMesh.material = underMat;
+                    renderer.compile(quadScene, quadCam);
+                    quadMesh.material = finalMat;
+                    renderer.compile(quadScene, quadCam);
+                };
+
+                // ------------------------------------------------------
+                // renderFrame — the ONE render entry point for this view,
+                // called by animate() below and by the handle's
+                // snapshot(). Byte-identical to the pre-feature
+                // `renderer.render(scene, camera)` whenever depth peeling
+                // isn't active for this frame (peelActive false) — no
+                // extra render targets, no visibility churn, nothing —
+                // so the feature being OFF (this material's own
+                // hwTransparency verdict is opaque, or Force Transparency
+                // itself is off) costs nothing beyond this one extra
+                // boolean check.
+                //
+                // When peeling IS active, this runs a 6-pass
+                // front-to-back order-independent-transparency graph.
+                // Isolation between the opaque scene and the transparent
+                // `mesh` is done with plain `.visible` toggling —
+                // NOT three.js render layers (camera.layers/
+                // object.layers). An earlier version used layers and it
+                // was NOT reliable at excluding `mesh` from the opaque
+                // pass (root-caused as the reason a Force-Transparency
+                // material was rendering fully solid — layers apparently
+                // weren't isolating it the way object-visibility does);
+                // `.visible` is a hard, unambiguous per-object skip in
+                // r128's render-list build, so it's used everywhere below
+                // instead.
+                //   1. opaque scene -> screen (mesh.visible forced false
+                //      for this pass only, then restored to whatever it
+                //      was).
+                //   2. the SAME opaque scene -> opaqueRT (mesh still
+                //      hidden), so its depthTexture can gate the peel
+                //      passes (a peeled fragment behind solid geometry
+                //      must never show).
+                //   3. clear accumRT to (0,0,0,1) — a=1 means "nothing
+                //      occluded yet" (full transmittance).
+                //   4. every OTHER mesh in the scene is hidden (mesh
+                //      itself restored to visible first), isolating
+                //      `mesh` alone; for each of PEEL_LAYERS nearest
+                //      layers: render `mesh` with u_peelMode=1 —
+                //      injectPeelDiscard's guard rejects anything behind
+                //      the opaque scene AND anything at/in-front-of the
+                //      PREVIOUS peeled layer, so each pass resolves
+                //      exactly the next-nearest surface — then
+                //      under-composite that layer's color into accumRT
+                //      (see underMat's header comment for the
+                //      blend-factor derivation).
+                //   4.5. tail pass: everything deeper than the LAST peel
+                //      layer (u_peelMode=2) is captured in one extra draw,
+                //      still isolated from other meshes, straight into
+                //      accumRT (not through underMat's quad — the shader's
+                //      own mode-2 epilogue premultiplies instead, see
+                //      injectPeelDiscard). `mesh`'s material is temporarily
+                //      switched to underMat's exact under-blend factors,
+                //      then restored. Without this, anything past
+                //      PEEL_LAYERS silently vanishes instead of just
+                //      losing precision. Every hidden mesh is restored
+                //      afterward and u_peelMode dropped back to 0 (see
+                //      syncMeshMaterialMode's header comment on why it's
+                //      kept inert outside this loop).
+                //   5. composite accumRT over the already-opaque screen
+                //      (see finalMat's header comment).
+                // GL state (autoClear, clear color/alpha, render target,
+                // u_peelMode, hidden-mesh visibility) is saved before and
+                // restored in a finally block, so a peeling frame leaves
+                // no observable side effect on anything downstream even if
+                // a pass above throws.
+                // ------------------------------------------------------
+                // Reused every peeling frame instead of a fresh array per
+                // call — reset via .length=0 below.
+                const __peelHidden = [];
+                const renderFrame = () => {
+                    const peelActive = FORCE_TRANSPARENCY && viewIsTransparent && !!mesh;
+                    if (!peelActive) { renderer.render(scene, camera); return; } // byte-identical to the old path
+
+                    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+                    if (!peel || peel.w !== size.x || peel.h !== size.y) allocPeel(size.x, size.y);
+
+                    const prevAutoClear = renderer.autoClear;
+                    const prevClearColor = renderer.getClearColor(new THREE.Color());
+                    const prevClearAlpha = renderer.getClearAlpha();
+                    renderer.autoClear = false;
+                    __peelHidden.length = 0;
+
+                    try {
+                        const meshVis = mesh.visible;
+
+                        // 1. opaque -> screen (MSAA), transparent mesh hidden
+                        mesh.visible = false;
+                        renderer.setRenderTarget(null);
+                        renderer.setClearColor(prevClearColor, prevClearAlpha);
+                        renderer.clear(true, true, true);
+                        renderer.render(scene, camera);
+
+                        // 2. opaque depth -> opaqueRT (mesh still hidden; only .depthTexture is used later)
+                        renderer.setRenderTarget(peel.opaqueRT);
+                        renderer.setClearColor(0x000000, 1);
+                        renderer.clear(true, true, true);
+                        renderer.render(scene, camera);
+                        mesh.visible = meshVis;
+
+                        // 3. clear accum to (0,0,0,1): rgb = premultiplied color, a = running transmittance T
+                        renderer.setRenderTarget(peel.accumRT);
+                        renderer.setClearColor(0x000000, 1);
+                        renderer.clear(true, false, false);
+
+                        // 4. peel PEEL_LAYERS nearest layers of the transparent mesh ONLY.
+                        //    Isolate it by hiding every OTHER mesh (bulletproof vs. render layers).
+                        scene.traverse((o) => { if (o.isMesh && o !== mesh && o.visible) { o.visible = false; __peelHidden.push(o); } });
+                        const mu = mesh.material.uniforms;
+                        mu.u_peelMode.value = 1;
+                        mu.u_opaqueDepth.value = peel.opaqueRT.depthTexture;
+                        let prev = null;
+                        for (let i = 0; i < PEEL_LAYERS; i++) {
+                            const curr = (i % 2 === 0) ? peel.peelA : peel.peelB;
+                            mu.u_peelHasPrev.value = (i > 0) ? 1 : 0;
+                            mu.u_peelPrevDepth.value = prev ? prev.depthTexture : getDummyTex();
+                            renderer.setRenderTarget(curr);
+                            renderer.setClearColor(0x000000, 0);
+                            renderer.clear(true, true, true);
+                            renderer.render(scene, camera);
+                            // under-composite this layer's color into accum
+                            peel.quadMesh.material = peel.underMat;
+                            peel.underMat.uniforms.tLayer.value = curr.texture;
+                            renderer.setRenderTarget(peel.accumRT);
+                            renderer.render(peel.quadScene, peel.quadCam);
+                            prev = curr;
+                        }
+
+                        // 4.5 tail pass: capture everything deeper than the
+                        // last peel layer directly (mode 2's shader epilogue
+                        // premultiplies), under-blended into accumRT with
+                        // the SAME factors as underMat.
+                        mu.u_peelMode.value = 2;
+                        mu.u_peelHasPrev.value = 1;
+                        mu.u_peelPrevDepth.value = prev ? prev.depthTexture : getDummyTex();
+                        const tailMat = mesh.material;
+                        const savedBlending = tailMat.blending;
+                        const savedBlendEquation = tailMat.blendEquation;
+                        const savedBlendEquationAlpha = tailMat.blendEquationAlpha;
+                        const savedBlendSrc = tailMat.blendSrc;
+                        const savedBlendDst = tailMat.blendDst;
+                        const savedBlendSrcAlpha = tailMat.blendSrcAlpha;
+                        const savedBlendDstAlpha = tailMat.blendDstAlpha;
+                        const savedDepthTest = tailMat.depthTest;
+                        tailMat.blending = THREE.CustomBlending;
+                        tailMat.blendEquation = THREE.AddEquation;
+                        tailMat.blendEquationAlpha = THREE.AddEquation;
+                        tailMat.blendSrc = THREE.DstAlphaFactor;
+                        tailMat.blendDst = THREE.OneFactor;
+                        tailMat.blendSrcAlpha = THREE.ZeroFactor;
+                        tailMat.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
+                        // accumRT has no depth attachment (depthBuffer:false
+                        // in allocPeel), so depth test is a no-op either way
+                        // — disabled explicitly anyway for defensiveness.
+                        tailMat.depthTest = false;
+                        renderer.setRenderTarget(peel.accumRT);
+                        renderer.render(scene, camera);
+                        tailMat.blending = savedBlending;
+                        tailMat.blendEquation = savedBlendEquation;
+                        tailMat.blendEquationAlpha = savedBlendEquationAlpha;
+                        tailMat.blendSrc = savedBlendSrc;
+                        tailMat.blendDst = savedBlendDst;
+                        tailMat.blendSrcAlpha = savedBlendSrcAlpha;
+                        tailMat.blendDstAlpha = savedBlendDstAlpha;
+                        tailMat.depthTest = savedDepthTest;
+                        mu.u_peelMode.value = 0; // leave the material inert outside the peel/tail passes
+
+                        __peelHidden.forEach((o) => { o.visible = true; });
+                        __peelHidden.length = 0;
+
+                        // 5. composite accum over the on-screen opaque image
+                        renderer.setRenderTarget(null);
+                        peel.quadMesh.material = peel.finalMat;
+                        peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
+                        renderer.render(peel.quadScene, peel.quadCam);
+                    } finally {
+                        // restore GL state even if a pass above threw
+                        renderer.setRenderTarget(null);
+                        renderer.autoClear = prevAutoClear;
+                        renderer.setClearColor(prevClearColor, prevClearAlpha);
+                        if (mesh.material.uniforms && mesh.material.uniforms.u_peelMode) mesh.material.uniforms.u_peelMode.value = 0;
+                        if (__peelHidden.length) {
+                            __peelHidden.forEach((o) => { o.visible = true; });
+                            __peelHidden.length = 0;
+                        }
+                    }
+                };
 
                 const animate = () => {
                     if (stopped || !aliveFn()) return;
@@ -3264,7 +3904,7 @@ const createMtlxRenderView = async ({
                         (sceneGroup || mesh).rotation.y += 0.005;
                     }
                     setUniforms();
-                    renderer.render(scene, camera);
+                    renderFrame();
                 };
                 animate();
 
@@ -3357,15 +3997,18 @@ const createMtlxRenderView = async ({
                     });
                 }
             },
-            // Re-derives the material's blend flags from the stored
+            // Re-derives the material's blend/depth flags from the stored
             // hwTransparency verdict + CURRENT FORCE_TRANSPARENCY, in
-            // place — no shader change, so a toggle never needs a rebuild.
-            refreshTransparencyFlags: () => {
-                if (!material) return;
-                const on = !!handle.isTransparent && FORCE_TRANSPARENCY;
-                material.transparent = on;
-                material.depthWrite = !on;
-                material.needsUpdate = true;
+            // place — no shader change (syncMeshMaterialMode), so a
+            // toggle never needs a rebuild. Broadcast to all live views
+            // by setForceTransparency. Also frees this view's depth-peel
+            // GPU resources the moment peeling is no longer active —
+            // renderFrame() lazily reallocates them (allocPeel) next
+            // time they're needed.
+            refreshRenderMode: () => {
+                syncMeshMaterialMode();
+                const peelOn = viewIsTransparent && FORCE_TRANSPARENCY;
+                if (!peelOn && peel) freePeelFn();
             },
             // Live-swaps the environment without a shader rebuild — used
             // by the Environment dialog's Import/Reset. Also regenerates
@@ -3454,7 +4097,7 @@ const createMtlxRenderView = async ({
             // render synchronously right before reading it back.
             snapshot: () => {
                 setUniforms();
-                renderer.render(scene, camera);
+                renderFrame();
                 return renderer.domElement.toDataURL('image/png');
             },
             // Reads back the current view at caller-chosen dimensions:
@@ -3464,7 +4107,7 @@ const createMtlxRenderView = async ({
             // resized when w/h change, instead of allocated per call.
             snapshotPixels: (w, h) => {
                 setUniforms();
-                renderer.render(scene, camera);
+                renderFrame();
                 if (!__snapshotCanvas) {
                     __snapshotCanvas = document.createElement('canvas');
                     __snapshotCtx = __snapshotCanvas.getContext('2d');
@@ -3477,7 +4120,7 @@ const createMtlxRenderView = async ({
             },
             // Cheap same-frame render (no readback) — used by camera sync
             // to remove one-frame lag between two mirrored views.
-            renderNow: () => { setUniforms(); renderer.render(scene, camera); },
+            renderNow: () => { setUniforms(); renderFrame(); },
             // Wrapped (not disposePartial directly) so dispose() also
             // deregisters the handle from LIVE_VIEWS — otherwise
             // setEnvOverride's broadcast could touch a torn-down view.

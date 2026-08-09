@@ -121,7 +121,7 @@ const useCameraSync = (getHandles, epoch) => {
 
 // Methods that must fan out to every compare view instead of just the
 // primary — camera/env/rotate state that all stacked canvases should share.
-const FANOUT_METHODS = ['setAutoRotate', 'setEnvBackground', 'setEnvRotation', 'setEnvExposure', 'resetCamera', 'refreshTransparencyFlags'];
+const FANOUT_METHODS = ['setAutoRotate', 'setEnvBackground', 'setEnvRotation', 'setEnvExposure', 'resetCamera', 'refreshRenderMode'];
 
 // Ref-like object for code that calls `viewRef.current.someMethod(...)`
 // without knowing it's driving N stacked canvases. FANOUT_METHODS run on
