@@ -28,7 +28,7 @@ const HOME_CARDS = [
         icon: 'compare',
         title: 'Compare Materials',
         desc: 'Load two MaterialX documents and compare their renders side by side, with a swipe slider, or as a difference heatmap — with SSIM/RMSE statistics.',
-        img: 'images/preview-material.jpg',
+        img: 'images/preview-compare.jpg',
         cta: 'Open Material Comparison',
     },
     {
