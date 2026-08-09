@@ -121,6 +121,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/compare-ui.jsx',
             'js/docs/doc-links.jsx',
             'js/docs/rich-text.jsx',
             'js/docs/port-tables.jsx',
@@ -169,6 +170,13 @@ const VIEW_DEPS = {
         app: 'js/graph-app.jsx',
         globalName: 'NodeGraphApp',
     },
+    compare: {
+        css: [],
+        scripts: ['vendor/jszip/jszip.min.js', 'js/shared/image-metrics.js'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/compare-ui.jsx'],
+        app: 'js/compare-app.jsx',
+        globalName: 'MaterialCompareApp',
+    },
 };
 
 // Loads a view's CSS/scripts/babelScripts + app bundle, in VIEW_DEPS
@@ -206,6 +214,7 @@ function Shell() {
         docs: { mounted: false, status: 'idle' },
         viewer: { mounted: false, status: 'idle' },
         graph: { mounted: false, status: 'idle' },
+        compare: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -239,10 +248,10 @@ function Shell() {
     React.useEffect(() => {
         setViewState((prev) => {
             if (prev[activeView].mounted) return prev;
-            // viewer/graph hard-require WebGL2 — skip fetching their
-            // dependency bundles and go straight to the blocking
+            // viewer/graph/compare hard-require WebGL2 — skip fetching
+            // their dependency bundles and go straight to the blocking
             // message below instead. Docs works fine without it.
-            if ((activeView === 'viewer' || activeView === 'graph') && !hasWebGL2()) {
+            if ((activeView === 'viewer' || activeView === 'graph' || activeView === 'compare') && !hasWebGL2()) {
                 return { ...prev, [activeView]: { mounted: true, status: 'no-webgl2' } };
             }
             return { ...prev, [activeView]: { mounted: true, status: 'loading' } };
@@ -275,6 +284,7 @@ function Shell() {
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
+            compare: 'MaterialX Playground — Material Compare',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -295,6 +305,7 @@ function Shell() {
             // past it (see the comment block above).
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
+            compare: '',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -324,7 +335,7 @@ function Shell() {
             content = (
                 <div className="flex items-center justify-center h-40 text-center text-gray-300 text-sm px-4">
                     {'WebGL2 is not available. The '
-                        + (view === 'viewer' ? 'Material Viewer' : 'Node Graph Editor')
+                        + (view === 'viewer' ? 'Material Viewer' : view === 'compare' ? 'Material Compare' : 'Node Graph Editor')
                         + ' needs a WebGL2-capable browser. Try a current Chrome, Firefox, Edge, or Safari, and make sure hardware acceleration is enabled.'}
                 </div>
             );
@@ -369,8 +380,8 @@ function Shell() {
                 // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
             } else {
-                // graph: no extra container — NodeGraphApp fills #root
-                // directly via its own `absolute inset-0`.
+                // graph/compare: no extra container — both fill #root
+                // directly via their own `absolute inset-0` root.
                 content = rendered;
             }
         }
@@ -391,6 +402,7 @@ function Shell() {
             {renderView('docs')}
             {renderView('viewer')}
             {renderView('graph')}
+            {renderView('compare')}
         </div>
     );
 }

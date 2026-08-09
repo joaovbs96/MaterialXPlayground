@@ -496,6 +496,7 @@
                                         }`}
                                         geom={geom}
                                         onGeomChange={setGeom}
+                                        geomBadges={{ 'shaderball-scene': 'Default' }}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Engine no-ops auto-rotate for the full scene, and the
@@ -677,7 +678,7 @@
                                     </div>
                                 )}
 
-                                {texReport && (texReport.bound.length > 0 || texReport.missing.length > 0) && (
+                                {texReport && texReport.missing.length > 0 && (
                                     <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2">
                                         <div className="font-semibold text-gray-400 uppercase tracking-wider">Textures</div>
                                         {texReport.bound.map((b, i) => (

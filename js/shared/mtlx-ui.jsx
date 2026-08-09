@@ -789,6 +789,28 @@ const EnvDialog = ({
     const popRef = React.useRef(null);
     const [pos, setPos] = React.useState(null);
     const fileInputRef = React.useRef(null);
+    // Key-light extraction toggle: window.getKeyLightEnabled/setKeyLightEnabled
+    // live in js/mtlx-engine.js and may be absent (standalone/older builds),
+    // so the control degrades to disabled rather than throwing.
+    const keyLightAvail = typeof window.getKeyLightEnabled === 'function'
+        && typeof window.setKeyLightEnabled === 'function';
+    const [keyLightOn, setKeyLightOn] = React.useState(() => (
+        keyLightAvail ? window.getKeyLightEnabled() : true
+    ));
+
+    // Re-read the global whenever the dialog opens, so an external change
+    // (or the engine script loading after this component mounted) stays
+    // reflected in the UI.
+    React.useEffect(() => {
+        if (!open) return;
+        setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+    }, [open]);
+
+    const handleToggleKeyLight = () => {
+        const next = !keyLightOn;
+        setKeyLightOn(next);
+        if (keyLightAvail) window.setKeyLightEnabled(next);
+    };
 
     // Right-align to the anchor and clamp both axes, flipping above if it
     // would overflow the bottom. `placement="left"` (graph preview only)
@@ -852,6 +874,19 @@ const EnvDialog = ({
                     </button>
                 </div>
             )}
+            <div className="flex items-center justify-between">
+                <span>Extract key light</span>
+                <button
+                    onClick={handleToggleKeyLight}
+                    disabled={!keyLightAvail}
+                    title="Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment)"
+                    className={`h-5 px-2 rounded border transition-colors disabled:opacity-40 ${
+                        keyLightOn ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                    }`}
+                >
+                    {keyLightOn ? 'On' : 'Off'}
+                </button>
+            </div>
             <div>
                 <div className="flex items-center justify-between mb-0.5">
                     <span>Rotation</span>
@@ -915,6 +950,7 @@ const EnvDialog = ({
 const GEOM_LABELS = {
     'shaderball': 'Shaderball',
     'shaderball-scene': 'Shaderball w/ Backdrop',
+    'shaderball-mtlx': 'MaterialX Shader Ball',
     'sphere': 'Sphere',
     'cube': 'Cube',
     // Only offered where a caller passes an explicit geomList including
@@ -941,7 +977,7 @@ const defaultGeomFor = (nodegroup) => (
 );
 
 const ViewportControls = ({
-    geomList = ['shaderball', 'shaderball-scene', 'sphere', 'cube'],
+    geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube'],
     geom, onGeomChange,
     // Optional { value: badge text } for the geometry dropdown's rows
     // (see GeomSelect) — e.g. marking the docs previewer's Auto entry

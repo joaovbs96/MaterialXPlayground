@@ -4,8 +4,8 @@
 // `active`. Written in classic JSX like the other view apps (see
 // js/viewer-app.jsx) — the shell Babel-transforms it on first activation.
 
-// The three feature cards, in nav order (mirrors js/site-header.js's NAV
-// entries for docs/viewer/graph).
+// The four feature cards, in nav order (mirrors js/site-header.js's NAV
+// entries for docs/viewer/compare/graph).
 const HOME_CARDS = [
     {
         href: '#!docs',
@@ -22,6 +22,14 @@ const HOME_CARDS = [
         desc: 'Load materials by drag-and-drop (.mtlx with textures, a folder, or a .zip) or from curated presets — rendered in real time with image-based lighting, custom HDRI environments, selectable preview geometry, and PNG export.',
         img: 'images/preview-material.jpg',
         cta: 'Open the Material Viewer',
+    },
+    {
+        href: '#!compare',
+        icon: 'compare',
+        title: 'Compare Materials',
+        desc: 'Load two MaterialX documents and compare their renders side by side, with a swipe slider, or as a difference heatmap — with SSIM/RMSE statistics.',
+        img: 'images/preview-compare.jpg',
+        cta: 'Open Material Comparison',
     },
     {
         href: '#!graph',
@@ -65,7 +73,7 @@ function HomeApp({ active } = {}) {
             </div>
 
             {/* Feature cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
                 {HOME_CARDS.map((card) => (
                     <a
                         key={card.href}

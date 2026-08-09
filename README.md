@@ -2,7 +2,7 @@
 
 [![Build, verify & deploy](https://github.com/joaovbs96/MaterialXPlayground/actions/workflows/deploy.yml/badge.svg)](https://github.com/joaovbs96/MaterialXPlayground/actions/workflows/deploy.yml) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![MaterialX](https://img.shields.io/badge/MaterialX-v1.39.5-blue?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGEAAAA4CAMAAADaWWauAAAAQlBMVEVHcEz%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F1bZCPAAAAFXRSTlMAeOfxAQIF%2FfX6jMizHjJGENqdWGkkbYMPAAADoElEQVRYw7VY23LjIAzFwY6Q06ZJGv3%2Fry43YwRIdjqznT40oeggHd2N2X%2BWxVyn248x19n85We%2BGvNzm65B0PB8CedE8Pr2YH8A8He%2BXwgU3rjMw%2FP7FxE6Ijc9It5n8hfzmCyRRaKve%2F9G%2F%2FmxOgIAJCB6%2FhpJVSMa4PfpDQDOyyC3PjiGF7a8w7n%2FxfBvJKoqEhAMEC46iHIu74qORFA6jwjpz%2FN0RAIg3Y8IzRvjeZa%2FIcSP9hwd0QMv8eEFIYkrdASCsvwdgQod80kCiCHEbyIdZvl9FnyGUJ6hRMe87AS0CIUOfl4jpGdodAQDr8ju1wiJDmNd%2FR1HILSOLlKQBgLel9oALULAAHPxQeaGViIIB1ago6QADtAg%2BAj0CCGQsUfw8kNs2DEdPQECgvMIsEljCBkVbBSDK6MjpgAcyPdv5t9BRsgW2RGK5QJC8oqdjjEBug5Z6IYAOzMJIXlFokMiYIwAFUIyTMh8zlVBYdvokAg41iGTi7X8CqHQkXKwID%2Fk1t6XWDjY5nqFkOhYnwIB%2BR90HbwSsK5QYzAEii9UFCBa1zYCGYLzZE%2FczAzBEwWqfJ%2Bx34QiQnAmoGlLlj0PXj6RYqAY%2B5OIkDwUvQ7XXHGB%2B5JzmvxcTq5GQtjuR4S6KG0I6FCVn0uiiFDuJ4SqsCaEQ%2FlbyRwj5GiuEVKnEehAe4aA95wzyhCBGbggxCc9JuczGWoEBBnrXs%2BHCOx9FULuEaxmoJDHWBEcIjgVYUVVAW%2FgAwSrWCl0KVa1T7iKrAntEMAmprFDmHngCQr4e8ia0KEOMV0NvFXN0bsHI%2Bt6xjoIEYeq%2FGJbTBEBUsTt2RvrrFG3iap8yvL8p5A1FjlrlBKXMt%2FtlIEqhDOZL72sy959igCeQrBpQrXsvVUg1GtME%2BLITuGgAqUqqhbJroriR1U0dgKaAsFjml6YIyCqCLmbkQ006maQyYeDjgxIRNjnlZk7GzL5ipVKyKEgP7r70s9Vpc%2FNKfJ8Zzwsknw4T661KaD0fDz1oVQkWXe%2FJy5k8scI4oTCCFiEEdFtBIgIzZTV6KANvbmANP7ZT1kHkyIdTYqvw0mxmTUQdQLkdUM%2FA%2BVp1%2FB2nU%2FspUvRNgK8FvYTezPzIbLzM1uHmW0V2q3D3M6t1ebk%2FtHmhOTNCR%2F9%2Frz92d442v4MNliX9%2FLZBmunI26wmuGY7UDiFq7dcJ3CmOMbyxZu4IEbHcMt3flFFmoG%2Fj%2Fb0H%2BoyQV84EOiGQAAAABJRU5ErkJggg%3D%3D)](https://github.com/AcademySoftwareFoundation/MaterialX)
 
-MaterialX Playground is a set of in-browser tools to explore the standard MaterialX node library, preview materials in real-time 3D, and build node graphs visually, all without installing anything. Everything runs 100% client-side: no data leaves your browser. Shaders are generated and compiled live through the MaterialX WebAssembly modules.
+MaterialX Playground is a set of in-browser tools to explore the standard MaterialX node library, preview materials in real-time 3D, compare them side by side, and build node graphs visually, all without installing anything. Everything runs 100% client-side: no data leaves your browser. Shaders are generated and compiled live through the MaterialX WebAssembly modules.
 
 > This is an independent community project. It is **not affiliated with, endorsed by, or sponsored by** the [MaterialX](https://materialx.org/) project, the Academy Software Foundation, or the Linux Foundation. In case of any discrepancy, the [MaterialX specification](https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/documents/Specification) is the definitive source of truth. See [Trademarks](#trademarks) below.
 
@@ -21,7 +21,7 @@ A searchable, browsable reference for the entire MaterialX standard node library
 - **Every standard node**, organized by library (`stdlib`, `pbrlib`, `bxdf`, and more) and group (`npr`, `pbr`, etc.).
 - **Per-signature documentation.** Nodes with multiple type signatures are documented individually, with the exact inputs, outputs, and defaults of each variant.
 - **Port tables** generated directly from the node definitions (names, types, defaults), with descriptions pulled from the MaterialX specification where available and reconstructed from the `nodedef`s otherwise.
-- **Live 3D preview** of each node, with editable parameters so you can see how inputs affect the result in real time.
+- **Live 3D preview** of each node, with editable parameters so you can see how inputs affect the result in real time; translation nodes preview a swipe comparison against their source shading model.
 - **Implementation-target matrix** showing which render targets (GLSL, ESSL, MSL, Slang, OSL, MDL) each node supports, distinguishing explicit per-target implementations from ones inherited from GLSL, with a view of nodegraph implementation sources.
 - **Shareable permalinks.** Every node has its own URL (`index.html#/<library>/<group>/<node>`), so you can link straight to a specific node's docs, e.g. [`#/bxdf/pbr/standard_surface`](https://joaovbs96.github.io/MaterialXPlayground/index.html#/bxdf/pbr/standard_surface).
 - **Export and hand-off.** Export any node (with your edited values) as a `.mtlx` document, or send it straight into the Node Graph Editor.
@@ -32,11 +32,23 @@ A searchable, browsable reference for the entire MaterialX standard node library
 
 Load and inspect MaterialX materials in 3D.
 
-- **Image-based lighting** from a built-in HDR environment, with a toggle to show or hide it as the visible backdrop (the lighting stays on either way).
+- **Image-based lighting** from a built-in HDR environment, with automatic key-light extraction (a strong sun in the image becomes a sharp analytic directional light, toggleable) and a toggle to show or hide the environment as the visible backdrop (the lighting stays on either way).
 - **Drag-and-drop loading.** Drop a `.mtlx` document anywhere on the page, alone or with loose textures, a folder of textures, or a `.zip`. Textures are matched by relative path, with a UV-checker fallback for anything unresolved.
 - **Curated examples.** Load official MaterialX example materials, textures included, from a built-in presets list.
-- **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (shaderball / sphere / cube), a material picker when a document defines several, save-as-PNG, and fullscreen.
+- **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, or a cube), a material picker when a document defines several, save-as-PNG, and fullscreen.
 - **Send to Graph Editor** to keep working on the current material in the Node Graph Editor.
+
+### 🔀 Material Compare
+
+![Material Compare](images/preview-compare.jpg)
+
+Render two MaterialX materials side by side and see exactly where they differ.
+
+- **Two independent documents**, loaded the same way as the Material Viewer — drag-and-drop (a single `.mtlx`, a `.zip`, or loose files) or file/folder pickers — one per side, with identical camera and lighting.
+- **Three display modes**: side by side, a swipe slider, and a difference heatmap. A **Show difference** checkbox adds the difference as a third pane in side-by-side mode, or into either half of the slider (**Switch Views** swaps which side it takes).
+- **GPU difference rendering** that updates live while orbiting: a per-pixel absolute color difference, log-scaled through a false-color ramp.
+- **Live statistics** — SSIM, RMSE, PSNR, and mean absolute difference — recomputed automatically as the camera, documents, or environment change.
+- **Synced cameras** and shared environment controls (import `.hdr`/`.exr`, rotation, exposure, background) and geometry selection, so both renders stay lit and framed identically.
 
 ### 🕸️ Node Graph Editor
 
@@ -83,6 +95,7 @@ The app is a hash-routed single page:
 | Home | `index.html` (or `#!home`) |
 | Node Library & Documentation | `index.html#!docs` (deep links: `#/<library>/<group>/<node>`) |
 | Material Viewer | `index.html#!viewer` |
+| Material Compare | `index.html#!compare` |
 | Node Graph Editor | `index.html#!graph` |
 
 ### Debugging
@@ -115,9 +128,9 @@ Some files in this repo are produced by scripts rather than written by hand: the
 
 ## Roadmap
 
+- Custom geometry load support as GLB/GLTF/OBJ for all tools (USD/USDZ TBD).
 - **Interactive tutorials subsite**: a guided, hands-on set of MaterialX tutorials, served alongside the app (in progress).
 - **VS Code extension**: a custom `.mtlx` editor with live preview, validation, and hover docs, built on the same engine as the web app (in progress).
-- **Rendering comparison**: render two documents side by side to easily visualize any differences between them.
 
 Have a feature request or idea? File it on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues).
 
@@ -131,9 +144,9 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 
 ## Asset credits
 
-**Shader ball.** `models/shaderball.glb` and `models/shaderball_simple.glb` are GLB conversions of the ["Standard Shader Ball"](https://github.com/usd-wg/assets) by Chris Rydalch and André Mazzone (USD Working Group; original scene concept by Thomas Anagnostou), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE.txt`](models/LICENSE.txt) for the full attribution and modification notice.
+**Shader Ball.** `models/shaderball.glb` and `models/shaderball_simple.glb` are GLB conversions of the ["Standard Shader Ball"](https://github.com/usd-wg/assets) by Chris Rydalch and André Mazzone (USD Working Group; original scene concept by Thomas Anagnostou), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE.txt`](models/LICENSE.txt) for the full attribution and modification notice.
 
-**HDRI.** The built-in environment lighting is ["Studio Kontrast 04"](https://polyhaven.com/a/studio_kontrast_04) by Grzegorz Wronkowski, via [Poly Haven](https://polyhaven.com/), licensed [CC0](https://polyhaven.com/license). See [`env_maps/LICENSE.txt`](env_maps/LICENSE.txt).
+**HDRI.** The default environment lighting (`env_maps/standard_shader_ball_env_512.exr`) is a studio environment built to match the Standard Shader Ball scene's geometry, see license above. The repo also ships ["Studio Kontrast 04"](https://polyhaven.com/a/studio_kontrast_04) by Grzegorz Wronkowski, via [Poly Haven](https://polyhaven.com/), licensed [CC0](https://polyhaven.com/license). See [`env_maps/LICENSE.txt`](env_maps/LICENSE.txt).
 
 **UV checker texture.** `images/CustomUVChecker_byValle_2K.png` was generated with the ["UV Checker Map Maker"](https://uvchecker.atlux.one) tool by Valle, whose [EULA](https://uvchecker.atlux.one/EULA.html) grants free use of the images it produces.
 

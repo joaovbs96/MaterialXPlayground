@@ -11,7 +11,7 @@
         // the shared GEOM_LABELS map): the default list plus 'buffer2d',
         // which is deliberately absent from ViewportControls' default so
         // the material viewer doesn't grow the option.
-        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'sphere', 'cube', 'buffer2d'];
+        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'buffer2d'];
         // ONE global geometry choice for every docs node preview, shared by
         // the preview dropdowns and the Settings popup, in one localStorage
         // slot. Whitelist-validated on read so a corrupt/stale value falls
@@ -110,6 +110,32 @@
             // Live render-view handle (turntable toggle, env background,
             // snapshot). Set by the preview effect, cleared on dispose.
             const viewRef = React.useRef(null);
+            // Compare mode: SOURCE (pre-translation) shading model,
+            // rendered on its own canvas/view and overlaid via a swipe
+            // divider. Only ever populated for kind==='translation' —
+            // every ref/state below stays null/false otherwise, so
+            // non-translation nodes take none of this code.
+            const sourceCanvasRef = React.useRef(null);
+            const sourceViewRef = React.useRef(null);
+            const sourceUniformsRef = React.useRef(null);
+            const sourceUniformByInputRef = React.useRef(null);
+            // Resolved node kind, lifted to state so the JSX (compare
+            // toggle, overlay) can react to it; the effect keeps using
+            // its own local `kind` for everything else.
+            const [kindState, setKindState] = React.useState(null);
+            // Compare mode default ON for translation nodes. The ref
+            // mirror lets the build effect's synchronous Island A read
+            // the CURRENT choice (state isn't visible in that closure
+            // until next render).
+            const [compareOn, setCompareOn] = React.useState(true);
+            const compareOnRef = React.useRef(true);
+            compareOnRef.current = compareOn;
+            // True once the SOURCE view has actually rendered a frame
+            // this build — gates the overlay so the divider/labels never
+            // appear over a dead/failed source canvas.
+            const [sourceViewLive, setSourceViewLive] = React.useState(false);
+            // Swipe divider position, percent from the left.
+            const [sliderPos, setSliderPos] = React.useState(50);
             // Fullscreen: the viewport CONTAINER goes fullscreen so the
             // geometry/pause controls overlay stays usable; the canvas is
             // h-full and the engine's ResizeObserver handles the buffer.
@@ -124,6 +150,10 @@
                 try { localStorage.setItem(GEOM_CHOICE_KEY, v); } catch (e) { /* best-effort */ }
             };
             const geom = geomChoice === 'default' ? defaultGeomFor(nodegroup) : geomChoice;
+            // Fans rotate/env/reset out to both the target and source
+            // views; screenshot/snapshot still delegate to the target
+            // (primary) alone — see makeFanoutViewRef.
+            const controlsViewRef = React.useMemo(() => makeFanoutViewRef(viewRef, sourceViewRef), []);
             const {
                 rotating, toggleRotating,
                 envBg, toggleEnvBg,
@@ -131,7 +161,10 @@
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
                 takeScreenshot: takeScreenshotRaw,
-            } = useViewportControls(viewRef, viewportRef, () => nodeName + '_' + geom);
+            } = useViewportControls(controlsViewRef, viewportRef, () => nodeName + '_' + geom);
+            // Keeps the source canvas's OrbitControls locked to the
+            // target's framing whenever either view (re)builds.
+            useCameraSync(() => [viewRef.current, sourceViewRef.current], viewEpoch);
             // PNG snapshot named after the node + geometry — best-effort,
             // same as before (the hook's takeScreenshot has no internal
             // try/catch).
@@ -144,10 +177,12 @@
             const exportDocRef = React.useRef(null);
 
             // Write a plain JS value (number / bool / array) into the matching
-            // three.js uniform. Arrays map onto Vector2/3/4 via .set(...).
-            const setUniformFromPlain = (p, v) => {
-                const store = uniformsRef.current;
-                const u = store ? store[p.uniform] : null;
+            // three.js uniform of ONE store. Arrays map onto Vector2/3/4 via
+            // .set(...). Factored out of setUniformFromPlain so the same
+            // conversion drives both live edits and the one-time defaults
+            // replay into a freshly built compare-mode source view.
+            const writeUniformPlain = (store, uniformName, p, v) => {
+                const u = store ? store[uniformName] : null;
                 if (!u) return;
                 if (Array.isArray(v)) {
                     if (u.value && u.value.set) u.value.set.apply(u.value, v);
@@ -157,6 +192,13 @@
                     const n = Number(v);
                     if (!isNaN(n)) u.value = n;
                 }
+            };
+            const setUniformFromPlain = (p, v) => {
+                writeUniformPlain(uniformsRef.current, p.uniform, p, v);
+                // Compare mode: fan the same value out to the SOURCE
+                // shader's matching uniform (if this input exists there).
+                const su = sourceUniformByInputRef.current && sourceUniformByInputRef.current[p.input];
+                if (su) writeUniformPlain(sourceUniformsRef.current, su.name, p, v);
             };
             const onParamChange = (p, v) => {
                 if (loadingRef.current) return;
@@ -200,6 +242,12 @@
                     pickedTexRef.current[p.uniform] = tex;
                     const store = uniformsRef.current;
                     if (store && store[p.uniform]) store[p.uniform].value = tex;
+                    // Compare mode: assign the same picked texture to the
+                    // SOURCE shader's matching sampler uniform.
+                    const su = sourceUniformByInputRef.current && sourceUniformByInputRef.current[p.input];
+                    if (su && sourceUniformsRef.current && sourceUniformsRef.current[su.name]) {
+                        sourceUniformsRef.current[su.name].value = tex;
+                    }
                     URL.revokeObjectURL(url);
                 }, undefined, () => URL.revokeObjectURL(url));
                 valuesRef.current = Object.assign({}, valuesRef.current, { [p.uniform]: file.name });
@@ -289,6 +337,13 @@
                 // from connected inputs, but this sweep catches stragglers
                 // (older builds, loaded docs) — never both value and link.
                 mxSafe(() => stripValuesFromConnectedInputs(ed.doc), 0);
+                // Compare-mode's SOURCE nodes are preview-only scaffolding
+                // (a second surface shader driven by the same params, for
+                // the swipe overlay) — never part of the exported graph.
+                // Safe post-generation: the doc only serves export from
+                // here, removal is idempotent across repeat exports, and
+                // any regen rebuilds the doc from scratch.
+                mxSafe(() => { ed.doc.removeChild('preview_source_material'); ed.doc.removeChild('preview_source'); }, 0);
                 // 2) Serialize the DOCUMENT itself, no options/predicate. The
                 // standard library is only REFERENCED (setDataLibrary), so
                 // the plain write emits exactly the preview graph.
@@ -328,6 +383,7 @@
 
             React.useEffect(() => {
                 let viewHandle = null;
+                let sourceViewHandle = null;
                 let mounted = true;
 
                 // Global kill-switch: skip ALL WASM + WebGL work so slow
@@ -338,6 +394,8 @@
                     setNotice(null);
                     setParams([]);
                     setValues({});
+                    setKindState(null);
+                    setSourceViewLive(false);
                     uniformsRef.current = null;
                     return () => { mounted = false; };
                 }
@@ -346,6 +404,10 @@
                     setLoading(true);
                     setError(null);
                     setNotice(null);
+                    // Reset every build — set again once/if the source view
+                    // actually renders below (or stays false for
+                    // non-translation nodes / compare off / a failed build).
+                    setSourceViewLive(false);
                     // Same node re-initializing (geometry/string/colorspace
                     // regen)? Keep the panel populated and edits preserved;
                     // only an actual NODE change clears it for a fresh fill.
@@ -356,6 +418,7 @@
                         pickedTexRef.current = {};
                         setParams([]);
                         setValues({});
+                        setKindState(null);
                     }
                     uniformsRef.current = null;
 
@@ -416,7 +479,7 @@
                             return kept.length ? kept : defs;
                         };
 
-                        const { doc, renderable, needsLighting, kind, outType, multiOutput } = await window.mxExclusive(() => {
+                        const { doc, renderable, needsLighting, kind, outType, multiOutput, sourceRenderable } = await window.mxExclusive(() => {
                         // Free the PREVIOUS exportDocRef entry under the same
                         // lock first — usually a no-op (cleanup already
                         // nulled it); matters only if cleanup raced/skipped.
@@ -479,6 +542,9 @@
                         };
                         let renderable;
                         let needsLighting = false;
+                        // Compare mode: the SOURCE (pre-translation)
+                        // shader instance, or null when unbuilt/off/failed.
+                        let sourceRenderable = null;
 
                         // findConvertChain(doc, fromType, toType) now lives in
                         // js/mtlx-engine.js (loaded before this script) and is
@@ -582,6 +648,25 @@
                             connectTypedInput(mat, 'surfaceshader', 'surfaceshader', 'preview_surface');
                             createdNodes.push(mat);
                             needsLighting = true;
+                            // Compare mode: a SECOND, plain instance of the
+                            // SOURCE shading model (e.g. standard_surface),
+                            // driven by the same params — never lets a
+                            // failure here break the target preview.
+                            if (compareOnRef.current) {
+                                try {
+                                    const sourceCat = nodeName.split('_to_')[0];
+                                    const srcNode = doc.addNode(sourceCat, 'preview_source', 'surfaceshader');
+                                    applyOverrides(srcNode); // translation input names are a subset of source input names
+                                    createdNodes.push(srcNode);
+                                    const srcMat = doc.addNode('surfacematerial', 'preview_source_material', 'material');
+                                    connectTypedInput(srcMat, 'surfaceshader', 'surfaceshader', 'preview_source');
+                                    createdNodes.push(srcMat);
+                                    sourceRenderable = srcNode;
+                                } catch (srcErr) {
+                                    console.warn('MaterialX preview: compare-mode source shader build failed, falling back to target-only:', srcErr);
+                                    sourceRenderable = null;
+                                }
+                            }
                         } else if (kind === 'color') {
                             // Multi-output nodes must be instantiated as
                             // 'multioutput'; the tapped output is selected via
@@ -701,7 +786,7 @@
                         // Island A ends here (see mxExclusive comment above)
                         // — only plain-pointer/plain-JS values cross the lock
                         // boundary.
-                        return { doc, renderable, needsLighting, kind, outType, multiOutput };
+                        return { doc, renderable, needsLighting, kind, outType, multiOutput, sourceRenderable };
                         } catch (islandErr) {
                             // A failed build used to leave the OLD doc paired
                             // with the NEW exportMetaRef, so Export could emit
@@ -711,6 +796,8 @@
                             throw islandErr;
                         }
                         });
+                        if (!mounted) return;
+                        setKindState(kind);
 
                         // Generation + rendering (shared pipeline): resolve
                         // the canvas first — a stale PREVIOUS-node message
@@ -910,21 +997,73 @@
                         // Maps introspected uniforms back to input names by
                         // path's last segment (or u_-stripped name) — only
                         // ever consumed for this node's own nodedef inputs.
-                        const uniformByInput = {};
-                        for (const u of introspected) {
-                            if (!uniforms[u.name]) continue;
-                            const pathStr = u.path || '';
-                            let inName;
-                            if (pathStr) {
-                                inName = pathStr.split('/').pop();
-                            } else {
-                                const stripped = u.name.replace(/^u_/, '');
-                                inName = stripped.indexOf(targetNode + '_') === 0
-                                    ? stripped.slice(targetNode.length + 1) : stripped;
+                        // Factored out (buildUniformMap) so the compare-mode
+                        // SOURCE view can build the same map against its own
+                        // uniforms/node name below.
+                        const buildUniformMap = (uniformStore, introspectedList, targetNodeName) => {
+                            const map = {};
+                            for (const u of introspectedList) {
+                                if (!uniformStore[u.name]) continue;
+                                const pathStr = u.path || '';
+                                let inName;
+                                if (pathStr) {
+                                    inName = pathStr.split('/').pop();
+                                } else {
+                                    const stripped = u.name.replace(/^u_/, '');
+                                    inName = stripped.indexOf(targetNodeName + '_') === 0
+                                        ? stripped.slice(targetNodeName.length + 1) : stripped;
+                                }
+                                if (!inName) continue;
+                                const underTarget = pathStr === targetNodeName || pathStr.indexOf(targetNodeName + '/') === 0;
+                                if (!map[inName] || underTarget) map[inName] = u;
                             }
-                            if (!inName) continue;
-                            const underTarget = pathStr === targetNode || pathStr.indexOf(targetNode + '/') === 0;
-                            if (!uniformByInput[inName] || underTarget) uniformByInput[inName] = u;
+                            return map;
+                        };
+                        const uniformByInput = buildUniformMap(uniforms, introspected, targetNode);
+
+                        // Compare mode: build the SOURCE shader's own render
+                        // view + uniform map on a second canvas, sequentially
+                        // right after the target (WASM calls are serialized).
+                        // No retry/blacklist here — a source failure just
+                        // falls back to target-only.
+                        if (kind === 'translation' && sourceRenderable && compareOnRef.current) {
+                            // The source canvas mounts conditionally
+                            // (kindState==='translation' && compareOn), so it
+                            // may not exist in the DOM yet — wait for it,
+                            // bounded, like the target canvas wait above.
+                            let srcCanvas = sourceCanvasRef.current;
+                            for (let attempt = 0; !srcCanvas && attempt < 20 && mounted; attempt++) {
+                                await new Promise((r) => requestAnimationFrame(r));
+                                srcCanvas = sourceCanvasRef.current;
+                            }
+                            if (srcCanvas && mounted) {
+                                try {
+                                    const sourceView = await createMtlxRenderView({
+                                        canvas: srcCanvas, mx, gen, genContext, renderable: sourceRenderable, lightData,
+                                        label: nodeName + ' (source)',
+                                        needsLighting,
+                                        geomName: geom,
+                                        sceneOrbit: false,
+                                        autoRotate: rotating,
+                                        envBackground: envBg,
+                                        isMounted: () => mounted,
+                                        isActive: () => activeRef.current,
+                                        debugKind: kind,
+                                    });
+                                    if (!sourceView || !mounted) {
+                                        if (sourceView) sourceView.dispose();
+                                    } else {
+                                        sourceViewHandle = sourceView;
+                                        sourceViewRef.current = sourceView;
+                                        sourceUniformsRef.current = sourceView.uniforms;
+                                        sourceUniformByInputRef.current = buildUniformMap(sourceView.uniforms, sourceView.introspected, 'preview_source');
+                                        setSourceViewLive(true);
+                                        setViewEpoch((n) => n + 1);
+                                    }
+                                } catch (srcViewErr) {
+                                    console.warn('MaterialX preview: compare-mode source view failed, falling back to target-only:', mxErr(mx, srcViewErr));
+                                }
+                            }
                         }
 
                         const firstNum = (...cands) => {
@@ -1120,6 +1259,28 @@
                             }
                             valuesRef.current = initVals;
                             setValues(initVals);
+                            // Compare mode: replay every current param value
+                            // into the freshly built SOURCE uniforms — its
+                            // nodedef's own DEFAULTS differ from the
+                            // translation nodedef's, so without this the two
+                            // sides would diverge spuriously at defaults.
+                            if (sourceUniformByInputRef.current) {
+                                for (const p of uiParams) {
+                                    if (p.readonly) continue;
+                                    const su = sourceUniformByInputRef.current[p.input];
+                                    if (!su) continue;
+                                    if (p.type === 'filename') {
+                                        const t = pickedTexRef.current[p.uniform];
+                                        if (t && sourceUniformsRef.current && sourceUniformsRef.current[su.name]) {
+                                            sourceUniformsRef.current[su.name].value = t;
+                                        }
+                                        continue;
+                                    }
+                                    if (!p.live) continue;
+                                    const v = initVals[p.uniform];
+                                    if (v !== undefined) writeUniformPlain(sourceUniformsRef.current, su.name, p, v);
+                                }
+                            }
                         }
                         if (DEBUG_SHADERS) console.log('UI params:', uiParams.map((p) => `${p.type} ${p.input}${p.live ? '' : p.readonly ? ' (read-only)' : ' (regen)'}`));
 
@@ -1160,6 +1321,12 @@
                     mounted = false;
                     if (viewRef.current === viewHandle) viewRef.current = null;
                     if (viewHandle) viewHandle.dispose();
+                    // Compare-mode source view: same dispose/clear pattern,
+                    // whether superseded mid-effect or unmounted.
+                    if (sourceViewRef.current === sourceViewHandle) sourceViewRef.current = null;
+                    if (sourceViewHandle) sourceViewHandle.dispose();
+                    sourceUniformsRef.current = null;
+                    sourceUniformByInputRef.current = null;
                     // Frees this run's export-doc entry under the SAME mutex
                     // as Island A, reading exportDocRef.current INSIDE the
                     // queued callback — this ordering is what makes it safe.
@@ -1170,7 +1337,7 @@
                         deleteMxHandles([ed.instance, ...(ed.created || []), ed.doc]);
                     });
                 };
-            }, [identKey, enabled, geom, overrides]);
+            }, [identKey, enabled, geom, overrides, compareOn]);
 
             // Groups params by uifolder: un-foldered render first; foldered
             // ones bucket under a collapsible header, in first-appearance
@@ -1403,6 +1570,12 @@
             // it below. Notice/error render as a slim row, hiding (not
             // unmounting) the viewport so the canvas ref survives.
             const suppressed = !!(notice || error);
+            // Compare mode: only meaningful for translation nodes with a
+            // live source render — a dead/failed source never shows the
+            // divider/labels (target-only stays exactly today's behavior).
+            const isCompareActive = kindState === 'translation' && compareOn && sourceViewLive;
+            const compareSourceCat = kindState === 'translation' ? nodeName.split('_to_')[0] : '';
+            const compareTargetCat = kindState === 'translation' ? nodeName.split('_to_')[1] : '';
             // Viewport controls (geometry picker, rotate pause, env
             // settings, screenshot, fullscreen), always overlaid on the
             // viewport. Fullscreen and no-params nodes get the default
@@ -1430,13 +1603,13 @@
                     // buffer and the full scene (engine's resetCamera
                     // no-ops for both anyway).
                     onCameraReset={(geom === 'buffer2d' || geom === 'shaderball-scene') ? undefined : () => {
-                        const v = viewRef.current;
+                        const v = controlsViewRef.current;
                         if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
                     }}
                     envBg={envBg}
                     onToggleEnvBg={toggleEnvBg}
                     envAvail={envAvail}
-                    viewRef={viewRef}
+                    viewRef={controlsViewRef}
                     viewEpoch={viewEpoch}
                     onScreenshot={takeScreenshot}
                     isFullscreen={isFullscreen}
@@ -1502,6 +1675,16 @@
                         >
                             <MtlxIcon name="restore" className="w-3.5 h-3.5" />
                         </button>
+                        {kindState === 'translation' && (
+                        <button
+                            onClick={() => setCompareOn((v) => !v)}
+                            disabled={loading}
+                            title={compareOn ? 'Show only the translated shader' : 'Compare against the source shader (swipe)'}
+                            className={'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed ' + (compareOn ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')}
+                        >
+                            <MtlxIcon name="compare" className="w-3.5 h-3.5" />
+                        </button>
+                        )}
                         {extraButtons}
                     </div>
                 </div>
@@ -1603,10 +1786,33 @@
                                 />
                             </React.Fragment>
                         )}
+                        {/* Compare mode: SOURCE render, an earlier sibling
+                            so the target canvas (below) stacks visually on
+                            top — the target's clip-path then reveals this
+                            one on the left of the divider. Both canvases are
+                            absolutely positioned so they overlap exactly. */}
+                        {kindState === 'translation' && compareOn && (
+                            <canvas ref={sourceCanvasRef} className={'absolute inset-0 z-0 w-full h-full block object-contain' + ((geom === 'buffer2d' || geom === 'shaderball-scene') ? '' : ' cursor-grab active:cursor-grabbing')} />
+                        )}
                         {/* object-contain, not 'fill': on a node switch the
                             canvas buffer briefly holds the OLD aspect while
-                            the CSS box reflows, causing a "smeared" stretch. */}
-                        <canvas ref={canvasRef} className={'w-full h-full block object-contain' + ((geom === 'buffer2d' || geom === 'shaderball-scene') ? '' : ' cursor-grab active:cursor-grabbing')} />
+                            the CSS box reflows, causing a "smeared" stretch.
+                            z-0 (explicit, not auto): keeps this canvas BELOW
+                            the z-10/z-20 overlays regardless of DOM order —
+                            'absolute' alone would otherwise let a static
+                            element's old tree-order-only stacking break. */}
+                        <canvas
+                            ref={canvasRef}
+                            className={'absolute inset-0 z-0 w-full h-full block object-contain' + ((geom === 'buffer2d' || geom === 'shaderball-scene') ? '' : ' cursor-grab active:cursor-grabbing')}
+                            style={isCompareActive ? compareClipStyle(sliderPos) : undefined}
+                        />
+                        {isCompareActive && (
+                            <React.Fragment>
+                                <CompareDivider pos={sliderPos} onPos={setSliderPos} />
+                                <CompareLabel side="left">{compareSourceCat}</CompareLabel>
+                                <CompareLabel side="right">{compareTargetCat + ' via translation'}</CompareLabel>
+                            </React.Fragment>
+                        )}
                         {/* Fullscreen-only collapsible parameters sidebar:
                             rendered INSIDE the viewport container because
                             native fullscreen top-layers only this element

@@ -60,10 +60,6 @@ const getMxEnv = () => {
                             if (HwGen && HwGen.bindLightShader && ldef) {
                                 try { HwGen.unbindLightShaders(genContext); } catch (e) { /* fresh ctx */ }
                                 HwGen.bindLightShader(ldef, 1, genContext);
-                                try {
-                                    const opts = genContext.getOptions();
-                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, 1);
-                                } catch (e) { /* keep default */ }
                                 // Parses <directional_light> via DOMParser,
                                 // which handles self-closing tags unlike
                                 // regex. Parse failure warns, never throws.
@@ -106,6 +102,14 @@ const getMxEnv = () => {
                                         console.warn('direct-light rig: DOMParser failed on environment_map.mtlx — no rig lights loaded.', e);
                                     }
                                 }
+                                // Capacity must cover the rig PLUS one slot
+                                // reserved for the auto-extracted env key
+                                // light (extractKeyLight) — fixed for good,
+                                // since a bound array's length can't change.
+                                try {
+                                    const opts = genContext.getOptions();
+                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1);
+                                } catch (e) { /* keep default */ }
                                 // No fallback light: an empty rig leaves
                                 // lightData empty, so u_numActiveLightSources
                                 // is 0 and the light loop is a no-op (pure IBL).
@@ -240,7 +244,7 @@ const compileFilteringDriverNoise = (renderer, scene, camera) => {
 // so bindings use the shader's real names. Returns [{ type, name }, ...].
 const parseUniforms = (src) => {
     const out = [];
-    const re = /uniform\s+(\w+)\s+(u_\w+)\s*(?:\[\s*\d+\s*\])?\s*;/g;
+    const re = /uniform\s+(\w+)\s+(u_\w+)\s*(?:\[\s*\w+\s*\])?\s*;/g;
     let m;
     while ((m = re.exec(src)) !== null) out.push({ type: m[1], name: m[2] });
     return out;
@@ -993,6 +997,9 @@ const configureLoadedTexture = (t) => {
 // Aliases three's attributes to MaterialX vertex-shader names, providing
 // tangents (real when computable, constant +X fallback otherwise).
 const prepGeometry = (geometry) => {
+    // Already prepped (e.g. a cached shaderball clone) — skip re-running
+    // computeTangents on an already-tangented geometry.
+    if (geometry.getAttribute('i_tangent')) return geometry;
     if (!geometry.getAttribute('uv')) {
         // MaterialX shaders read texcoords; give degenerate UVs
         // rather than an unbound attribute.
@@ -1019,6 +1026,24 @@ const prepGeometry = (geometry) => {
                 for (let i = 0; i < t.count; i++) {
                     tri[i * 3] = t.getX(i); tri[i * 3 + 1] = t.getY(i); tri[i * 3 + 2] = t.getZ(i);
                 }
+                // Zero-UV-area triangles (and the sphere's poles) leave
+                // computeTangents' normalize() dividing by zero, writing a
+                // (0,0,0) tangent that NaNs the shader's normalize(i_tangent).
+                // Repair those with a tangent orthogonal to the vertex normal.
+                const nrm = geometry.getAttribute('normal');
+                let repaired = 0;
+                for (let i = 0; i < t.count; i++) {
+                    const x = tri[i * 3], y = tri[i * 3 + 1], z = tri[i * 3 + 2];
+                    if (x * x + y * y + z * z < 1e-10) {
+                        const nx = nrm.getX(i), ny = nrm.getY(i), nz = nrm.getZ(i);
+                        const ax = Math.abs(nx) < 0.9 ? 1 : 0, ay = ax ? 0 : 1;
+                        let cx = -nz * ay, cy = nz * ax, cz = nx * ay - ny * ax;
+                        const len = Math.sqrt(cx * cx + cy * cy + cz * cz) || 1;
+                        tri[i * 3] = cx / len; tri[i * 3 + 1] = cy / len; tri[i * 3 + 2] = cz / len;
+                        repaired++;
+                    }
+                }
+                if (repaired) console.warn('[mtlx] repaired ' + repaired + ' degenerate tangents (zero-UV-area triangles) on geometry');
                 iTangent = new THREE.BufferAttribute(tri, 3);
             }
         } catch (e) { /* fall through to constant tangent */ }
@@ -1138,12 +1163,87 @@ const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
     return { group, surfaceMesh, glbCamera, ownedMaterials };
 };
 
-// Builds cube/sphere preview geometry only — shaderball presets are full
-// GLB scenes handled separately by instantiateShaderballScene(). Any
-// unrecognized `which` falls back to the sphere.
+// The official ASWF MaterialX shaderball (gh-pages branch asset), fetched
+// once and cached — reference geometry alongside the bundled models/*.glb
+// presets. mtlx-assets.js's ghPagesUrl() was removed in 6da20b1 along with
+// this geometry, so its gh-pages-branch URL is rebuilt here instead.
+let shaderballMtlxPromise = null;
+const getShaderballMtlxGeometry = () => {
+    if (!shaderballMtlxPromise) {
+        shaderballMtlxPromise = (async () => {
+            if (!THREE.GLTFLoader) return null;
+            if (window.MtlxAssets && window.MtlxAssets.ready) await window.MtlxAssets.ready;
+            const local = window.MtlxAssets && window.MtlxAssets.isLocal && window.MtlxAssets.isLocal();
+            const url = local
+                ? new URL('vendor/materialx/gh-pages/Geometry/shaderball.glb', document.baseURI).href
+                : 'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/gh-pages/Geometry/shaderball.glb';
+            return new Promise((resolve) => {
+                new THREE.GLTFLoader().load(url, (gltf) => {
+                    try {
+                        // Several meshes (ball, base, ...) with node transforms —
+                        // bake each mesh's world matrix and concatenate into one
+                        // BufferGeometry so it shares a single preview material.
+                        const parts = [];
+                        gltf.scene.updateMatrixWorld(true);
+                        gltf.scene.traverse((obj) => {
+                            if (obj.isMesh && obj.geometry) {
+                                const g = obj.geometry.clone().toNonIndexed();
+                                g.applyMatrix4(obj.matrixWorld);
+                                parts.push(g);
+                            }
+                        });
+                        if (!parts.length) return resolve(null);
+                        // Manual attribute concat (BufferGeometryUtils isn't loaded).
+                        const total = parts.reduce((n, g) => n + g.getAttribute('position').count, 0);
+                        const pos = new Float32Array(total * 3);
+                        const nrm = new Float32Array(total * 3);
+                        const uv = new Float32Array(total * 2);
+                        let off = 0;
+                        for (const g of parts) {
+                            const p = g.getAttribute('position');
+                            const n = g.getAttribute('normal');
+                            const u = g.getAttribute('uv');
+                            pos.set(p.array, off * 3);
+                            if (n) nrm.set(n.array, off * 3);
+                            if (u) uv.set(u.array, off * 2);
+                            off += p.count;
+                        }
+                        const merged = new THREE.BufferGeometry();
+                        merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                        merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+                        merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+                        // computeTangents (inside prepGeometry) requires an
+                        // index; the merge above is non-indexed, so give it
+                        // a trivial sequential one.
+                        const idx = new Uint32Array(total);
+                        for (let ii = 0; ii < total; ii++) idx[ii] = ii;
+                        merged.setIndex(new THREE.BufferAttribute(idx, 1));
+                        resolve(prepGeometry(normalizeGeometry(merged)));
+                    } catch (e) {
+                        console.warn('shaderball-mtlx merge failed:', e);
+                        resolve(null);
+                    }
+                }, undefined, (e) => {
+                    console.warn('shaderball-mtlx load failed:', e);
+                    resolve(null);
+                });
+            });
+        })();
+    }
+    return shaderballMtlxPromise;
+};
+
+// Builds cube/sphere/shaderball-mtlx preview geometry — the shaderball/
+// shaderball-scene presets are full GLB scenes handled separately by
+// instantiateShaderballScene(). Any unrecognized `which` falls back to
+// the sphere (including a shaderball-mtlx fetch failure).
 const buildPreviewGeometry = async (which) => {
     if (which === 'cube') {
         return normalizeGeometry(new THREE.BoxGeometry(1.3, 1.3, 1.3));
+    }
+    if (which === 'shaderball-mtlx') {
+        const g = await getShaderballMtlxGeometry();
+        if (g) return g.clone();
     }
     if (which === 'buffer2d') {
         // Fullscreen quad for the flat2d ortho frustum: already exactly
@@ -1290,6 +1390,16 @@ let envPromise = null;
 // newly-created render view uses this instead of getEnvironment().
 // null = no override; getEnvironment() itself stays the Reset target.
 let envOverride = null;
+// Auto key-light extraction toggle (env dialog UI). Persisted; default on.
+const KEYLIGHT_STORAGE_KEY = 'mtlx_env_keylight';
+let keyLightEnabled = true;
+try {
+    const saved = localStorage.getItem(KEYLIGHT_STORAGE_KEY);
+    if (saved !== null) keyLightEnabled = saved !== '0';
+} catch (e) { /* localStorage unavailable — default stays on */ }
+// Pristine (pre-extraction) bytes behind the default/override env, so
+// the toggle can re-parse + rebuild without a re-fetch/re-drop.
+let defaultEnvSource = null, overrideEnvSource = null;
 // Registry of live render-view handles, so environment imports/resets
 // broadcast to EVERY live view, not just the visible one — otherwise a
 // hidden keep-alive view keeps its stale baked-in environment.
@@ -1531,10 +1641,149 @@ const parseEnvBuffer = (buf, ext) => {
         return null;
     }
 };
+// ---- Automatic key-light extraction ----
+// FIS specular IBL (16 samples, mip LOD) can't reproduce a crisp
+// highlight from a tiny ultra-bright sun — it just blurs it. Official
+// MaterialX HDRIs solve this offline with a "split" asset: sun removed
+// from the image + a companion analytic directional_light. This
+// reproduces that automatically for any loaded environment.
+const KEYLIGHT_MIN_CONTRAST = 64;
+const KEYLIGHT_RADIUS_RAD = 0.10;
+const extractKeyLight = (tex) => {
+    try {
+        const img = tex.image;
+        const W = img.width, H = img.height;
+        const stride = img.data.length / (W * H);
+        const isHalf = img.data.constructor === Uint16Array;
+        const rd = (i) => (isHalf ? halfToFloat(img.data[i]) : img.data[i]);
+        const wr = (i, v) => { img.data[i] = isHalf ? floatToHalf(v) : v; };
+
+        // Pass 1: per-texel luminance + solid-angle weight -> mean + peak.
+        const lum = new Float32Array(W * H);
+        let sumW = 0, sumLW = 0, peakL = -1, peakX = 0, peakY = 0;
+        for (let y = 0; y < H; y++) {
+            const theta = Math.PI * (y + 0.5) / H;
+            const dOmega = Math.sin(theta) * (2 * Math.PI / W) * (Math.PI / H);
+            for (let x = 0; x < W; x++) {
+                const idx = (y * W + x) * stride;
+                const L = 0.2126 * rd(idx) + 0.7152 * rd(idx + 1) + 0.0722 * rd(idx + 2);
+                lum[y * W + x] = L;
+                sumW += dOmega; sumLW += L * dOmega;
+                if (L > peakL) { peakL = L; peakX = x; peakY = y; }
+            }
+        }
+        const meanL = sumW > 0 ? sumLW / sumW : 0;
+        if (!(peakL >= KEYLIGHT_MIN_CONTRAST * Math.max(meanL, 1e-6))) return null; // no sun-like source
+
+        // Peak direction (data space), used below for angular clustering.
+        const pTheta = Math.PI * (peakY + 0.5) / H, pPhi = 2 * Math.PI * (peakX + 0.5) / W;
+        const pDir = [Math.sin(pTheta) * Math.cos(pPhi), Math.cos(pTheta), Math.sin(pTheta) * Math.sin(pPhi)];
+
+        // Pass 2: cluster around the peak (angle + luminance-floor gated),
+        // accumulating per-channel energy + an L*dOmega-weighted centroid;
+        // also averages the surrounding annulus color, used by the clamp below.
+        const Lfloor = Math.max(8 * meanL, 0.02 * peakL);
+        let Er = 0, Eg = 0, Eb = 0, cxW = 0, cyW = 0, cW = 0;
+        let annR = 0, annG = 0, annB = 0, annN = 0;
+        const clusterIdx = [];
+        for (let y = 0; y < H; y++) {
+            const theta = Math.PI * (y + 0.5) / H;
+            const dOmega = Math.sin(theta) * (2 * Math.PI / W) * (Math.PI / H);
+            const sinT = Math.sin(theta), cosT = Math.cos(theta);
+            for (let x = 0; x < W; x++) {
+                const phi = 2 * Math.PI * (x + 0.5) / W;
+                const dx = sinT * Math.cos(phi), dy = cosT, dz = sinT * Math.sin(phi);
+                const cosAng = dx * pDir[0] + dy * pDir[1] + dz * pDir[2];
+                const ang = Math.acos(Math.min(1, Math.max(-1, cosAng)));
+                const idx = (y * W + x) * stride;
+                const L = lum[y * W + x];
+                if (ang <= KEYLIGHT_RADIUS_RAD && L >= Lfloor) {
+                    const r = rd(idx), g = rd(idx + 1), b = rd(idx + 2);
+                    Er += r * dOmega; Eg += g * dOmega; Eb += b * dOmega;
+                    cxW += x * (L * dOmega); cyW += y * (L * dOmega); cW += L * dOmega;
+                    clusterIdx.push(idx);
+                } else if (ang > KEYLIGHT_RADIUS_RAD && ang <= 2 * KEYLIGHT_RADIUS_RAD) {
+                    annR += rd(idx); annG += rd(idx + 1); annB += rd(idx + 2); annN++;
+                }
+            }
+        }
+        if (!clusterIdx.length || cW <= 0) return null;
+        const cx = cxW / cW, cy = cyW / cW;
+
+        // Direction: data-coord centroid -> world. gamma already absorbs
+        // u_envMatrix's +90deg base — do NOT also apply the rig's RotY.
+        const U = (cx + 0.5) / W;
+        const gamma = 2 * Math.PI * U - Math.PI;
+        const vRow = tex.flipY ? (H - 1 - cy) : cy;
+        const thetaV = Math.PI * (vRow + 0.5) / H;
+        const sinV = Math.sin(thetaV), cosV = Math.cos(thetaV);
+        // MaterialX directional lights store the direction light TRAVELS
+        // (light -> scene), so negate the computed direction-TO-light.
+        const direction = new THREE.Vector3(sinV * Math.cos(gamma), cosV, sinV * Math.sin(gamma)).negate();
+
+        // Clamp: overwrite the cluster with the annulus's mean color — the
+        // "split" that removes the sun from radiance/irradiance/backdrop.
+        const aN = annN || 1;
+        const annColor = [annR / aN, annG / aN, annB / aN];
+        for (const idx of clusterIdx) {
+            wr(idx, annColor[0]); wr(idx + 1, annColor[1]); wr(idx + 2, annColor[2]);
+        }
+
+        const maxE = Math.max(Er, Eg, Eb, 1e-8);
+        return { direction, color: [Er / maxE, Eg / maxE, Eb / maxE], intensity: maxE };
+    } catch (e) {
+        console.warn('key-light extraction failed:', e);
+        return null;
+    }
+};
+// Rotates the extracted key light to track env rotation (rig lights are
+// historically fixed — only this one rotates). RotY(-rad): env content
+// shifts by +rad, so the light direction shifts by -rad to match.
+const keyLightRotationMatrix = (rad) => new THREE.Matrix4().makeRotationY(-rad);
+// Rig lights (fixed) + the active env's extracted key light (rotates
+// live), padded to a FIXED length (rig.length + 1) for u_lightData —
+// the array length must never change after a program's first bind.
+const currentLights = (rigLights, keyLight, rotRad) => {
+    const out = (rigLights || []).map((l) => ({
+        type: l.type, direction: l.direction.clone(), color: l.color.clone(), intensity: l.intensity,
+    }));
+    if (keyLight) {
+        out.push({
+            type: 1,
+            direction: keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad || 0)),
+            color: new THREE.Vector3(keyLight.color[0], keyLight.color[1], keyLight.color[2]),
+            intensity: keyLight.intensity,
+        });
+    } else {
+        out.push({ type: 1, direction: new THREE.Vector3(0, -1, 0), color: new THREE.Vector3(0, 0, 0), intensity: 0 });
+    }
+    return out;
+};
+// Live-updates ONLY the key-light slot (last entry) of an already-bound
+// u_lightData array in place — mutates values, never replaces the
+// array/uniform object (three r128 caches the struct-array layout).
+const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad) => {
+    const entry = uniforms && uniforms.u_lightData && uniforms.u_lightData.value && uniforms.u_lightData.value[rigCount];
+    if (!entry) return;
+    if (keyLight) {
+        entry.direction.copy(keyLight.direction).applyMatrix4(keyLightRotationMatrix(rotRad || 0));
+        entry.color.set(keyLight.color[0], keyLight.color[1], keyLight.color[2]);
+        entry.intensity = keyLight.intensity;
+    } else {
+        entry.direction.set(0, -1, 0);
+        entry.color.set(0, 0, 0);
+        entry.intensity = 0;
+    }
+    if (uniforms.u_numActiveLightSources) uniforms.u_numActiveLightSources.value = rigCount + (keyLight ? 1 : 0);
+};
 // Builds the full { radiance, irradiance, mips, background,
-// prefilteredIrr } shape from a raw parseEnvBuffer() result — shared by
-// getEnvironment() and loadEnvironmentFromFile.
+// prefilteredIrr, keyLight } shape from a raw parseEnvBuffer() result —
+// shared by getEnvironment() and loadEnvironmentFromFile.
 const buildEnvFromParsedTexture = (raw) => {
+    // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
+    // background are built below, so it disappears from all three —
+    // matching official "split" env assets.
+    const keyLight = keyLightEnabled ? extractKeyLight(raw) : null;
     const radiance = prepareEnv(raw);
     const irrSrc = shIrradianceFromEquirect(raw);
     const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
@@ -1543,7 +1792,7 @@ const buildEnvFromParsedTexture = (raw) => {
     // Correctly-oriented copy for the visible skybox mesh — see
     // makeBackgroundTexture and the env-prep header above.
     const background = makeBackgroundTexture(radiance);
-    return { radiance, irradiance, mips, background, prefilteredIrr: false };
+    return { radiance, irradiance, mips, background, prefilteredIrr: false, keyLight };
 };
 const getEnvironment = () => {
     if (!envPromise) {
@@ -1558,6 +1807,7 @@ const getEnvironment = () => {
                 if (!buf) return null; // no file / fetch failed → synthesized sky
                 const raw = parseEnvBuffer(buf, ext);
                 if (!raw || !raw.image || !raw.image.data) return null; // parse failed → synthesized sky
+                defaultEnvSource = { buf, ext }; // pristine bytes, for the key-light toggle rebuild
                 return buildEnvFromParsedTexture(raw);
             });
     }
@@ -1587,6 +1837,7 @@ const loadEnvironmentFromFile = async (file) => {
     if (!raw || !raw.image || !raw.image.data) {
         throw new Error('Failed to parse the environment image "' + (file && file.name) + '".');
     }
+    overrideEnvSource = { buf, ext }; // pristine bytes, for the key-light toggle rebuild
     return buildEnvFromParsedTexture(raw);
 };
 
@@ -1610,6 +1861,27 @@ const setEnvOverride = (env) => {
     }
 };
 const getEnvOverride = () => envOverride;
+
+// Key-light toggle (UI-facing): rebuilds the ACTIVE env from its cached
+// pristine bytes with extraction on/off, then rebroadcasts it — reusing
+// setEnvOverride for an active import, or the memoized envPromise +
+// LIVE_VIEWS broadcast for the default env.
+const getKeyLightEnabled = () => keyLightEnabled;
+const setKeyLightEnabled = (on) => {
+    keyLightEnabled = !!on;
+    try { localStorage.setItem(KEYLIGHT_STORAGE_KEY, keyLightEnabled ? '1' : '0'); } catch (e) { /* unavailable */ }
+    const src = envOverride ? overrideEnvSource : defaultEnvSource;
+    if (!src) return; // nothing loaded yet — the next load already honors the flag
+    const raw = parseEnvBuffer(src.buf, src.ext);
+    if (!raw || !raw.image || !raw.image.data) return;
+    const rebuilt = buildEnvFromParsedTexture(raw);
+    if (envOverride) {
+        setEnvOverride(rebuilt); // re-broadcasts via each view's setEnvironment()
+    } else {
+        envPromise = Promise.resolve(rebuilt);
+        LIVE_VIEWS.forEach((v) => { try { v.setEnvironment(rebuilt); } catch (e) { /* view has no lighting/env — no-op */ } });
+    }
+};
 
 // Standard MaterialX color spaces accepted on filename inputs. Changing
 // one is a CODEGEN decision (the CMS inserts the shader transform), so
@@ -2229,6 +2501,8 @@ const createMtlxRenderView = async ({
     // editor); true (docs/viewer) = OrbitControls with pivot/zoom/polar
     // clamp and Box3 containment. Ignored outside full-scene mode.
     sceneOrbit = false,
+    // Caps setPixelRatio; lower it for cheap side-by-side/compare views.
+    maxPixelRatio = 2,
 }) => {
     // See the isAlive doc above: defaulting to isMounted here preserves
     // today's exact behavior for every caller that doesn't pass isAlive.
@@ -2247,6 +2521,9 @@ const createMtlxRenderView = async ({
     let resizeObs = null;
     let controls = null;
     let stopped = false;
+    // Reused by snapshotPixels below — avoids a fresh canvas/2D-context
+    // allocation on every readback call.
+    let __snapshotCanvas = null, __snapshotCtx = null;
     // Shell-level material/geometry/uniforms state, reassigned by
     // applyMaterialInternal() on every swap so one shell backs many edits.
     // `uniforms` MUST be `let`: every closure below shares this binding.
@@ -2293,6 +2570,10 @@ const createMtlxRenderView = async ({
     // in bindMaterialUniforms, to reproduce the old descriptive message
     // now that `env` no longer lives past the one-time shell-level fetch.
     let envHasFile = false, envPrefilteredIrr = false;
+    // The active env's auto-extracted key light (null = none) — see
+    // extractKeyLight/currentLights. rigCount fixes u_lightData's length.
+    let envKeyLight = null;
+    const rigCount = (lightData && lightData.length) || 0;
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
     let fallbackSpin = !!autoRotate;
@@ -2369,7 +2650,7 @@ const createMtlxRenderView = async ({
                 const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
                 renderer.setSize(cw, ch, false);
-                renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
                 renderer.debug.checkShaderErrors = true;
                 // No-ops for the RawShaderMaterial surface (encodeDisplay
                 // bakes its transform into the shader); set here for the
@@ -2635,6 +2916,7 @@ const createMtlxRenderView = async ({
                             envBgTexture = env.background;
                             envHasFile = true;
                             envPrefilteredIrr = !!env.prefilteredIrr;
+                            envKeyLight = env.keyLight || null;
                         } else {
                             envRadiance = makeEnvTexture(256, 128, false);
                             envIrradiance = makeEnvTexture(64, 32, true);
@@ -2850,18 +3132,22 @@ const createMtlxRenderView = async ({
                         // material swap PRESERVES whatever exposure the
                         // user already dialed in via setEnvExposure().
                         if (has('u_envLightIntensity') && !newUniforms.u_envLightIntensity) newUniforms.u_envLightIntensity = { value: envExposure };
-                        if (has('u_refractionEnv')) newUniforms.u_refractionEnv = { value: true };
-                        // Direct light rig (struct-array uniform). nLights=0
-                        // when the rig defines no lights is safe: codegen
-                        // reserves LightData[] capacity >= 1 either way.
-                        const nLights = (lightData && lightData.length) || 0;
+                        // Generated ESSL declares u_refractionTwoSided, not
+                        // u_refractionEnv — matches the official viewer's binding.
+                        if (has('u_refractionTwoSided')) newUniforms.u_refractionTwoSided = { value: true };
+                        // Direct lights = rig (fixed) + auto-extracted env
+                        // key light (rotates live) — ALWAYS bound at a FIXED
+                        // length (rigCount+1, see getMxEnv's
+                        // hwMaxActiveLightSources) so later updates can
+                        // mutate values in place without a rebuild.
+                        const nLights = rigCount + (envKeyLight ? 1 : 0);
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
-                        if (nLights && has('u_lightData')) newUniforms.u_lightData = { value: lightData };
+                        if (has('u_lightData')) newUniforms.u_lightData = { value: currentLights(lightData, envKeyLight, envRotationRad) };
                         if (DEBUG_SHADERS) {
                             console.log('env bound → radiance:', radSampler && radSampler.name,
                                         '| irradiance:', irrSampler && irrSampler.name,
                                         envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance SH-synthesized)') : '(synthesized)',
-                                        '| direct lights:', (lightData && lightData.length) || 0);
+                                        '| direct lights:', nLights, '(rig ' + rigCount + ' + key ' + (envKeyLight ? 1 : 0) + ')');
                             const envUnbound = declared.filter((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && !newUniforms[u.name]);
                             if (envUnbound.length) mtlxWarn('UNBOUND env samplers (likely cause of black):', envUnbound.map((u) => u.name));
                         }
@@ -2958,7 +3244,6 @@ const createMtlxRenderView = async ({
                 const animate = () => {
                     if (stopped || !aliveFn()) return;
                     reqId = requestAnimationFrame(animate);
-                    if (!isActive()) return;
                     if (controls) {
                         controls.update(); // damping + autoRotate
                         // Scene-orbit hard containment (null elsewhere):
@@ -2968,7 +3253,11 @@ const createMtlxRenderView = async ({
                             sceneOrbitClampBox.clampPoint(camera.position, camera.position);
                             camera.lookAt(controls.target);
                         }
-                    } else if (fallbackSpin) {
+                    }
+                    // Paused views must still track camera input (drag/damping);
+                    // compare's diff mode reads pixels on demand, not via this render.
+                    if (!isActive()) return;
+                    if (!controls && fallbackSpin) {
                         // OrbitControls script blocked → old behavior.
                         // Spins the WHOLE assembled scene when present —
                         // rotating just `mesh` would leave the backdrop static.
@@ -3033,6 +3322,9 @@ const createMtlxRenderView = async ({
                     uniforms.u_envMatrix.value = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad);
                 }
                 envRotationRad = rad;
+                // The extracted key light tracks the (clamped) sun's
+                // position as the env rotates — rig lights don't.
+                updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, rad);
                 // Rotates the visible backdrop mesh to match (a real
                 // geometry rotation, not a texture-offset — see bgMesh's
                 // declaration above for why offset.x never worked on r128).
@@ -3090,6 +3382,10 @@ const createMtlxRenderView = async ({
                 envIrradiance = env.irradiance;
                 envMips = env.mips;
                 envBgTexture = env.background;
+                // New env => possibly a new (or no) key light; refresh the
+                // bound uniform entry in place, honoring current rotation.
+                envKeyLight = env.keyLight || null;
+                updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, envRotationRad);
                 // bgMesh is null for previews with no env — guard so
                 // an Import/Reset broadcast (setEnvOverride's LIVE_VIEWS
                 // loop) can't throw calling this standalone.
@@ -3161,6 +3457,27 @@ const createMtlxRenderView = async ({
                 renderer.render(scene, camera);
                 return renderer.domElement.toDataURL('image/png');
             },
+            // Reads back the current view at caller-chosen dimensions:
+            // syncs a render first, then resamples through a 2D canvas
+            // so two compare views can be read at identical sizes.
+            // The canvas/context are cached in the closure and only
+            // resized when w/h change, instead of allocated per call.
+            snapshotPixels: (w, h) => {
+                setUniforms();
+                renderer.render(scene, camera);
+                if (!__snapshotCanvas) {
+                    __snapshotCanvas = document.createElement('canvas');
+                    __snapshotCtx = __snapshotCanvas.getContext('2d');
+                }
+                if (__snapshotCanvas.width !== w || __snapshotCanvas.height !== h) {
+                    __snapshotCanvas.width = w; __snapshotCanvas.height = h;
+                }
+                __snapshotCtx.drawImage(renderer.domElement, 0, 0, w, h);
+                return __snapshotCtx.getImageData(0, 0, w, h);
+            },
+            // Cheap same-frame render (no readback) — used by camera sync
+            // to remove one-frame lag between two mirrored views.
+            renderNow: () => { setUniforms(); renderer.render(scene, camera); },
             // Wrapped (not disposePartial directly) so dispose() also
             // deregisters the handle from LIVE_VIEWS — otherwise
             // setEnvOverride's broadcast could touch a torn-down view.
@@ -3416,6 +3733,7 @@ Object.assign(window, {
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
+    getKeyLightEnabled, setKeyLightEnabled,
     createMtlxRenderView, tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
