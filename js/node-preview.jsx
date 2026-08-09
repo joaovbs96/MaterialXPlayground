@@ -11,7 +11,7 @@
         // the shared GEOM_LABELS map): the default list plus 'buffer2d',
         // which is deliberately absent from ViewportControls' default so
         // the material viewer doesn't grow the option.
-        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'sphere', 'cube', 'buffer2d'];
+        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'buffer2d'];
         // ONE global geometry choice for every docs node preview, shared by
         // the preview dropdowns and the Settings popup, in one localStorage
         // slot. Whitelist-validated on read so a corrupt/stale value falls

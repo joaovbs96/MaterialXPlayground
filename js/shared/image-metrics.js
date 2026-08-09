@@ -1,23 +1,16 @@
 // ------------------------------------------------------------------
 // Pure-JS image comparison metrics for the render-comparison feature.
-// Operates on RGBA buffers (Uint8ClampedArray/Uint8Array) as produced
-// by CanvasRenderingContext2D.getImageData. Alpha is ignored. Exposed
-// as window.MtlxImageMetrics; no module system in this codebase.
+// Operates on RGBA buffers as produced by getImageData; alpha ignored.
+// Tuned for live per-frame use: SSIM runs on summed-area tables (O(1)
+// per window) and the diff heatmap uses a precomputed log-mapped LUT
+// with no per-pixel allocation. Scratch buffers are cached module-
+// level and reused across calls. Exposed as window.MtlxImageMetrics.
 // ------------------------------------------------------------------
 
 function assertBufferSize(buf, w, h, name) {
     if (buf.length !== w * h * 4) {
         throw new Error(`MtlxImageMetrics: ${name} length ${buf.length} does not match ${w}x${h}x4`);
     }
-}
-
-// Rec.709 luma plane, computed once and reused across the SSIM window pass.
-function toLumaPlane(buf, w, h) {
-    const out = new Float32Array(w * h);
-    for (let i = 0, p = 0; p < out.length; i += 4, p++) {
-        out[p] = 0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2];
-    }
-    return out;
 }
 
 const SSIM_WIN = 8;
@@ -28,42 +21,100 @@ const SSIM_L = 255;
 const SSIM_C1 = (SSIM_K1 * SSIM_L) ** 2;
 const SSIM_C2 = (SSIM_K2 * SSIM_L) ** 2;
 
-// Mean SSIM over overlapping 8x8 windows (stride 4); windows that don't
-// fully fit inside the image are skipped rather than clamped.
-function computeSSIM(grayA, grayB, w, h) {
+// Reused scratch buffers for the luma planes and their summed-area
+// tables. Reallocated only when the frame size (w,h) changes.
+let ssimCacheW = 0;
+let ssimCacheH = 0;
+let lumaA = new Float32Array(0);
+let lumaB = new Float32Array(0);
+let satA = new Float64Array(0);
+let satB = new Float64Array(0);
+let satAA = new Float64Array(0);
+let satBB = new Float64Array(0);
+let satAB = new Float64Array(0);
+
+function ensureSsimBuffers(w, h) {
+    if (w === ssimCacheW && h === ssimCacheH) return;
+    ssimCacheW = w;
+    ssimCacheH = h;
+    const n = w * h;
+    const sn = (w + 1) * (h + 1);
+    lumaA = new Float32Array(n);
+    lumaB = new Float32Array(n);
+    satA = new Float64Array(sn);
+    satB = new Float64Array(sn);
+    satAA = new Float64Array(sn);
+    satBB = new Float64Array(sn);
+    satAB = new Float64Array(sn);
+}
+
+// Rec.709 luma plane, written into a reused buffer (no allocation).
+function writeLumaPlane(buf, out) {
+    for (let i = 0, p = 0; p < out.length; i += 4, p++) {
+        out[p] = 0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2];
+    }
+}
+
+// Builds summed-area tables for both luma planes and their squares/
+// product in a single pass. Tables are (w+1)x(h+1); row/col 0 stay
+// zero from allocation and are never touched again on reuse.
+function buildSummedAreaTables(w, h) {
+    const stride = w + 1;
+    for (let y = 1; y <= h; y++) {
+        const rowBase = y * stride;
+        const prevRowBase = rowBase - stride;
+        const srcRow = (y - 1) * w;
+        let rA = 0, rB = 0, rAA = 0, rBB = 0, rAB = 0;
+        for (let x = 1; x <= w; x++) {
+            const va = lumaA[srcRow + x - 1];
+            const vb = lumaB[srcRow + x - 1];
+            rA += va;
+            rB += vb;
+            rAA += va * va;
+            rBB += vb * vb;
+            rAB += va * vb;
+            const idx = rowBase + x;
+            const pidx = prevRowBase + x;
+            satA[idx] = satA[pidx] + rA;
+            satB[idx] = satB[pidx] + rB;
+            satAA[idx] = satAA[pidx] + rAA;
+            satBB[idx] = satBB[pidx] + rBB;
+            satAB[idx] = satAB[pidx] + rAB;
+        }
+    }
+}
+
+// Mean SSIM over overlapping 8x8 windows (stride 4), read from the
+// summed-area tables in O(1) per window; windows that don't fully
+// fit inside the image are skipped rather than clamped.
+function computeSSIM(w, h) {
     if (w < SSIM_WIN || h < SSIM_WIN) return 1;
 
+    const stride = w + 1;
+    const n = SSIM_WIN * SSIM_WIN;
     let ssimSum = 0;
     let windowCount = 0;
-    const n = SSIM_WIN * SSIM_WIN;
 
     for (let wy = 0; wy <= h - SSIM_WIN; wy += SSIM_STRIDE) {
+        const y0 = wy, y1 = wy + SSIM_WIN;
         for (let wx = 0; wx <= w - SSIM_WIN; wx += SSIM_STRIDE) {
-            let sumA = 0, sumB = 0;
-            for (let y = 0; y < SSIM_WIN; y++) {
-                let row = (wy + y) * w + wx;
-                for (let x = 0; x < SSIM_WIN; x++, row++) {
-                    sumA += grayA[row];
-                    sumB += grayB[row];
-                }
-            }
+            const x0 = wx, x1 = wx + SSIM_WIN;
+            const i00 = y0 * stride + x0, i01 = y0 * stride + x1;
+            const i10 = y1 * stride + x0, i11 = y1 * stride + x1;
+
+            const sumA = satA[i11] - satA[i10] - satA[i01] + satA[i00];
+            const sumB = satB[i11] - satB[i10] - satB[i01] + satB[i00];
+            const sumAA = satAA[i11] - satAA[i10] - satAA[i01] + satAA[i00];
+            const sumBB = satBB[i11] - satBB[i10] - satBB[i01] + satBB[i00];
+            const sumAB = satAB[i11] - satAB[i10] - satAB[i01] + satAB[i00];
+
             const meanA = sumA / n;
             const meanB = sumB / n;
-
-            let varA = 0, varB = 0, cov = 0;
-            for (let y = 0; y < SSIM_WIN; y++) {
-                let row = (wy + y) * w + wx;
-                for (let x = 0; x < SSIM_WIN; x++, row++) {
-                    const da = grayA[row] - meanA;
-                    const db = grayB[row] - meanB;
-                    varA += da * da;
-                    varB += db * db;
-                    cov += da * db;
-                }
-            }
-            varA /= n;
-            varB /= n;
-            cov /= n;
+            let varA = sumAA / n - meanA * meanA;
+            let varB = sumBB / n - meanB * meanB;
+            const cov = sumAB / n - meanA * meanB;
+            if (varA < 0) varA = 0;
+            if (varB < 0) varB = 0;
 
             const numerator = (2 * meanA * meanB + SSIM_C1) * (2 * cov + SSIM_C2);
             const denominator = (meanA * meanA + meanB * meanB + SSIM_C1) * (varA + varB + SSIM_C2);
@@ -95,9 +146,11 @@ function computeMetrics(a, b, w, h) {
     const rmse = Math.sqrt(mse);
     const psnr = rmse === 0 ? Infinity : 20 * Math.log10(255 / rmse);
 
-    const grayA = toLumaPlane(a, w, h);
-    const grayB = toLumaPlane(b, w, h);
-    const ssim = computeSSIM(grayA, grayB, w, h);
+    ensureSsimBuffers(w, h);
+    writeLumaPlane(a, lumaA);
+    writeLumaPlane(b, lumaB);
+    buildSummedAreaTables(w, h);
+    const ssim = computeSSIM(w, h);
 
     return { rmse, psnr, meanAbsDiff, ssim };
 }
@@ -111,6 +164,8 @@ const HEATMAP_STOPS = [
     [1, 255, 0, 0],
 ];
 
+// Used only while building HEATMAP_LUT below (256 calls at module
+// load); not on the per-pixel hot path.
 function rampColor(t) {
     for (let i = 1; i < HEATMAP_STOPS.length; i++) {
         const [t1, r1, g1, b1] = HEATMAP_STOPS[i];
@@ -125,25 +180,48 @@ function rampColor(t) {
     return [last[1], last[2], last[3]];
 }
 
-function makeDiffHeatmap(a, b, w, h, { gain = 1 } = {}) {
+// Log-mapped diff -> RGB lookup table (d=0..255 -> 3 bytes each), so
+// small differences stay visible without an adjustable gain control.
+// d=0 maps to t=0, which is exactly the black stop.
+const HEATMAP_LUT = new Uint8Array(256 * 3);
+(function buildHeatmapLUT() {
+    for (let d = 0; d < 256; d++) {
+        const t = Math.min(1, Math.log2(1 + d) / 8);
+        const [r, g, bl] = rampColor(t);
+        HEATMAP_LUT[d * 3] = Math.round(r);
+        HEATMAP_LUT[d * 3 + 1] = Math.round(g);
+        HEATMAP_LUT[d * 3 + 2] = Math.round(bl);
+    }
+})();
+
+// Reused ImageData; ImageData can't be resized, so it's recreated
+// only when w/h change.
+let heatCacheW = 0;
+let heatCacheH = 0;
+let heatImageData = null;
+
+function makeDiffHeatmap(a, b, w, h) {
     assertBufferSize(a, w, h, 'a');
     assertBufferSize(b, w, h, 'b');
 
-    const out = new ImageData(w, h);
-    const data = out.data;
+    if (w !== heatCacheW || h !== heatCacheH) {
+        heatImageData = new ImageData(w, h);
+        heatCacheW = w;
+        heatCacheH = h;
+    }
+
+    const data = heatImageData.data;
     for (let i = 0; i < a.length; i += 4) {
         const dr = Math.abs(a[i] - b[i]);
         const dg = Math.abs(a[i + 1] - b[i + 1]);
         const db = Math.abs(a[i + 2] - b[i + 2]);
-        const d = (dr + dg + db) / 3;
-        const t = Math.min(1, (d / 255) * gain);
-        const [r, g, bl] = rampColor(t);
-        data[i] = r;
-        data[i + 1] = g;
-        data[i + 2] = bl;
+        const lutIdx = Math.round((dr + dg + db) / 3) * 3;
+        data[i] = HEATMAP_LUT[lutIdx];
+        data[i + 1] = HEATMAP_LUT[lutIdx + 1];
+        data[i + 2] = HEATMAP_LUT[lutIdx + 2];
         data[i + 3] = 255;
     }
-    return out;
+    return heatImageData;
 }
 
 window.MtlxImageMetrics = { computeMetrics, makeDiffHeatmap };

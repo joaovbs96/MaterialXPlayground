@@ -26,10 +26,10 @@ const HOME_CARDS = [
     {
         href: '#!compare',
         icon: 'compare',
-        title: 'Compare',
+        title: 'Compare Materials',
         desc: 'Load two MaterialX documents and compare their renders side by side, with a swipe slider, or as a difference heatmap — with SSIM/RMSE statistics.',
         img: 'images/preview-material.jpg',
-        cta: 'Open Compare',
+        cta: 'Open Material Comparison',
     },
     {
         href: '#!graph',

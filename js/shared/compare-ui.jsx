@@ -56,12 +56,16 @@ const CompareDivider = ({ pos, onPos, zClass = 'z-20' }) => {
 };
 
 // Small pill label pinned to a bottom corner of the same relative parent.
-const CompareLabel = ({ side, children }) => (
+// className/style let a caller nudge the default position (e.g. clear a
+// sidebar overlaying the left view) without changing the default look.
+const CompareLabel = ({ side, children, className, style }) => (
     <div
         className={
             'absolute z-20 m-2 px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90 pointer-events-none '
             + (side === 'right' ? 'bottom-0 right-0' : 'bottom-0 left-0')
+            + (className ? ' ' + className : '')
         }
+        style={style}
     >
         {children}
     </div>
@@ -69,13 +73,22 @@ const CompareLabel = ({ side, children }) => (
 
 // Keeps 2+ render-view handles' OrbitControls locked to the same camera
 // framing. Re-binds when `epoch` changes (e.g. views got rebuilt). A
-// shared `syncing` flag re-entrancy-guards the fan-out copy below.
+// shared `syncing` flag re-entrancy-guards the fan-out copy below. Does
+// NOT copy any initial framing on bind — a freshly rebuilt view keeps
+// whatever framing its own consumer gave it; only live camera changes
+// propagate from here on.
 const useCameraSync = (getHandles, epoch) => {
     React.useEffect(() => {
         const handles = (getHandles() || []).filter((h) => h && h.controls);
         if (handles.length < 2) return undefined;
 
-        const copyState = (src, dst) => {
+        // Takes the HANDLES (not just their .controls) so the peer can be
+        // repainted immediately after: renderNow() makes the copy visible
+        // in the same frame as the driven view instead of the peer's own
+        // rAF loop lagging a frame behind.
+        const copyState = (srcHandle, dstHandle) => {
+            const src = srcHandle.controls;
+            const dst = dstHandle.controls;
             dst.object.position.copy(src.object.position);
             dst.target.copy(src.target);
             if (dst.object.zoom !== src.object.zoom) {
@@ -83,18 +96,18 @@ const useCameraSync = (getHandles, epoch) => {
                 dst.object.updateProjectionMatrix();
             }
             dst.update();
+            // Skip the repaint when the peer canvas is hidden (e.g. diff mode) — nobody sees it.
+            const el = dstHandle.renderer && dstHandle.renderer.domElement;
+            const visible = el && (typeof el.checkVisibility !== 'function' || el.checkVisibility());
+            if (visible && typeof dstHandle.renderNow === 'function') dstHandle.renderNow();
         };
-
-        // One-shot: a freshly (re)bound view adopts the first live view's
-        // current framing instead of reappearing at its own default.
-        handles.slice(1).forEach((h) => copyState(handles[0].controls, h.controls));
 
         let syncing = false;
         const bound = handles.map((h) => {
             const onChange = () => {
                 if (syncing) return;
                 syncing = true;
-                handles.forEach((other) => { if (other !== h) copyState(h.controls, other.controls); });
+                handles.forEach((other) => { if (other !== h) copyState(h, other); });
                 syncing = false;
             };
             h.controls.addEventListener('change', onChange);
