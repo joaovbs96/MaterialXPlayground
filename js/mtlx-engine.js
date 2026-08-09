@@ -37,8 +37,9 @@ const getMxEnv = () => {
                 const genContext = new mx.GenContext(gen);
                 const stdlib = mx.loadStandardLibraries(genContext);
                 // TONE MAPPING: deliberately diverges from the official
-                // viewer (raw linear output here; ACES + sRGB applied
-                // unconditionally in encodeDisplay() below — see its header).
+                // viewer (raw linear output here; ACES + sRGB applied by
+                // encodeDisplay() below, gated at runtime so linear
+                // depth-peel passes can defer it — see its header).
                 try { genContext.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
                 // Textures are uploaded flipY=false (V0 = image top row),
                 // so generated shaders must sample file textures at
@@ -336,9 +337,37 @@ const patchUnlitLightingRefs = (src) => {
     return src;
 };
 
+// Shared ACES filmic (three r128's Hill fit) + sRGB OETF transform body.
+// `inVar` is a vec3 GLSL expression (may be a bare name or `x.rgb`);
+// the returned statements declare `outVar` (vec3) as the encoded result.
+// Sole source for this math — encodeDisplay() and finalMat's linear
+// composite (see allocPeel) both emit it, so the two never drift apart.
+const ACES_SRGB_GLSL = (inVar, outVar) =>
+    '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
+    '        const mat3 _acesIn = mat3(\n' +
+    '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
+    '            vec3(0.04823, 0.01566, 0.83777)\n' +
+    '        );\n' +
+    '        const mat3 _acesOut = mat3(\n' +
+    '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
+    '            vec3(-0.07367, -0.00605,  1.07602)\n' +
+    '        );\n' +
+    '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' +
+    '        _c = _acesIn * _c;\n' +
+    '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
+    '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
+    '        _c = _acesOut * (_aces_a / _aces_b);\n' +
+    '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
+    '        vec3 _lo = _c * 12.92;\n' +
+    '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
+    '        vec3 ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n';
+
 // Injects ACES filmic tone mapping (three r128's exact constants) and
 // sRGB OETF before main()'s closing brace — RawShaderMaterial bypasses
 // renderer.toneMapping, so this keeps it matching the rest of the scene.
+// The injected block is gated at runtime (see its `if` opener below):
+// linear peel/tail passes defer this transform to finalMat's single
+// composite-time pass instead, so it isn't applied twice.
 const encodeDisplay = (src) => {
     // Both anchors are load-bearing: a silent skip here used to ship
     // raw-linear output straight to the display with no error anywhere.
@@ -350,25 +379,9 @@ const encodeDisplay = (src) => {
     if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader — MaterialX output format may have changed');
     const inject =
         '\n    // Injected by previewer: ACES filmic tone map (three r128\'s Hill fit — see encodeDisplay()\'s header comment) then sRGB.\n' +
-        '    {\n' +
-        '        vec3 _c = max(' + v + '.rgb, vec3(0.0));\n' +
-        '        const mat3 _acesIn = mat3(\n' +
-        '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
-        '            vec3(0.04823, 0.01566, 0.83777)\n' +
-        '        );\n' +
-        '        const mat3 _acesOut = mat3(\n' +
-        '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
-        '            vec3(-0.07367, -0.00605,  1.07602)\n' +
-        '        );\n' +
-        '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' +
-        '        _c = _acesIn * _c;\n' +
-        '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
-        '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
-        '        _c = _acesOut * (_aces_a / _aces_b);\n' +
-        '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
-        '        vec3 _lo = _c * 12.92;\n' +
-        '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
-        '        ' + v + ' = vec4(mix(_hi, _lo, step(_c, vec3(0.0031308))), ' + v + '.a);\n' +
+        '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' +
+        ACES_SRGB_GLSL(v + '.rgb', '_enc') +
+        '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' +
         '    }\n';
     return src.slice(0, idx) + inject + src.slice(idx);
 };
@@ -440,7 +453,8 @@ const injectPeelDiscard = (src) => {
         declIfAbsent('uniform int u_peelMode;') +
         declIfAbsent('uniform int u_peelHasPrev;') +
         declIfAbsent('uniform highp sampler2D u_peelPrevDepth;') +
-        declIfAbsent('uniform highp sampler2D u_opaqueDepth;');
+        declIfAbsent('uniform highp sampler2D u_opaqueDepth;') +
+        declIfAbsent('uniform int u_peelLinear;');
     const block =
         '\n    if (u_peelMode != 0) {\n' +
         '        ivec2 _pc = ivec2(gl_FragCoord.xy);\n' +
@@ -460,8 +474,9 @@ const injectPeelDiscard = (src) => {
 
     // Tail pass (u_peelMode==2) writes premultiplied color so it can
     // under-blend into accumRT; injected right before main()'s closing
-    // brace (same anchor encodeDisplay() uses for its own epilogue,
-    // which by now already ran and is the last thing before that brace).
+    // brace (same anchor encodeDisplay() uses for its own epilogue, which
+    // by now has already spliced — gated open or not — and is the last
+    // thing before that brace).
     const outMatch = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
     if (outMatch) {
         const v = outMatch[1];
@@ -2275,9 +2290,10 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
     const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
     const vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
-    // hwSrgbEncodeOutput=false means raw linear output, so encodeDisplay()
-    // is injected below unless the FRAGMENT OUTPUT's own assignment
-    // already encodes srgb — checking the whole shader string false-positives.
+    // hwSrgbEncodeOutput=false means raw linear output, so encodeDisplay()'s
+    // (runtime-gated) epilogue is injected below unless the FRAGMENT
+    // OUTPUT's own assignment already encodes srgb — checking the whole
+    // shader string false-positives.
     let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
     fs = patchUnlitLightingRefs(fs);
     const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
@@ -2288,6 +2304,10 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     if (!outVar || !outAssignments || !outAssignments.length) {
         mtlxWarn(`mtlx-engine: could not locate the fragment output assignment for "${label}" — skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);
     } else if (/srgb/i.test(outAssignments.join('\n'))) {
+        // Self-encoding materials skip the epilogue entirely (no
+        // u_peelLinear gate to attach to), so the linear peel/tail passes
+        // treat their output as already display-encoded — a pre-existing
+        // approximation, sharper now that peeling can otherwise be linear.
         mtlxWarn(`mtlx-engine: the fragment output assignment for "${label}" already calls an sRGB encode (despite hwSrgbEncodeOutput=false): skipping encodeDisplay() to avoid double-encoding (ACES tone mapping will NOT be applied to this material).`);
     } else {
         fs = encodeDisplay(fs);
@@ -2698,6 +2718,9 @@ const createMtlxRenderView = async ({
     // while allocated. freePeel() releases it back to null.
     let viewIsTransparent = false;
     let peel = null;
+    // Tracks whether the scene's built-in materials are currently
+    // detoned for the linear-peel opaque pass (see setSceneLinear below).
+    let sceneLinearOn = false;
     // Outer-scope binding for freePeel (declared `const` deep inside the
     // try block below, out of disposePartial's reach): every call site
     // resolves this instead, assigned once right after that const.
@@ -2836,6 +2859,10 @@ const createMtlxRenderView = async ({
                     console.log('[mtlx-perf] WebGLRenderer init: '
                         + (performance.now() - __rendererPerfStart).toFixed(1) + 'ms');
                 }
+                // Hoisted once renderer exists: gates u_peelLinear binding,
+                // peel-layer/accum half-float storage, and finalMat's shader
+                // choice, all from this one extension check (see allocPeel).
+                const peelLinearOk = !!renderer.extensions.get('EXT_color_buffer_float');
 
                 const scene = new THREE.Scene();
 
@@ -3139,6 +3166,19 @@ const createMtlxRenderView = async ({
                     }
                 }
 
+                // Non-MaterialX materials (skybox + GLB clones) — fixed
+                // for this shell's lifetime, so cached once. setSceneLinear
+                // detones them for the merged linear-opaque pass (sRGB needs
+                // no flag: the RT's own texture.encoding gates that, r128-verified).
+                const sceneBuiltinMaterials = (bgMesh ? [bgMesh.material] : []).concat(sceneOwnedMaterials);
+                const setSceneLinear = (on) => {
+                    sceneBuiltinMaterials.forEach((m) => {
+                        if (m.toneMapped === !on) return;
+                        m.toneMapped = !on;
+                        m.needsUpdate = true;
+                    });
+                };
+
                 // Selected preview geometry. Scene mode pre-assigns the
                 // shell's `mesh`/`geometry` to material_surface, so the
                 // first applyMaterialInternal() reuses it, not a fresh Mesh.
@@ -3276,6 +3316,10 @@ const createMtlxRenderView = async ({
                         u_peelHasPrev: { value: 0 },
                         u_peelPrevDepth: { value: getDummyTex() },
                         u_opaqueDepth: { value: getDummyTexWhite() },
+                        // Lets encodeDisplay's epilogue defer to finalMat
+                        // when linear peel compositing is available (see
+                        // the hoisted peelLinearOk const, above allocPeel).
+                        u_peelLinear: { value: peelLinearOk ? 1 : 0 },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
@@ -3379,6 +3423,10 @@ const createMtlxRenderView = async ({
                 const syncMeshMaterialMode = () => {
                     if (!material) return;
                     const peelOn = viewIsTransparent && FORCE_TRANSPARENCY;
+                    // Idempotent transition (renderFrame's own check below is
+                    // the other call site) — flips scene built-ins' toneMapped.
+                    const wantLinear = peelOn && peelLinearOk;
+                    if (sceneLinearOn !== wantLinear) { setSceneLinear(wantLinear); sceneLinearOn = wantLinear; }
                     const blending = peelOn ? THREE.NoBlending : THREE.NormalBlending;
                     material.blending = blending;
                     material.transparent = false;
@@ -3533,11 +3581,11 @@ const createMtlxRenderView = async ({
                 // allocPeel(w, h) — (re)build every GPU resource the
                 // depth-peel render graph (renderFrame, below) needs at
                 // drawing-buffer size (w, h):
-                //   - opaqueRT: depth-only target holding the OPAQUE
-                //     scene's depth (its color output is never read —
-                //     only .depthTexture matters, see renderFrame step 2)
-                //     so peeled fragments can be rejected against solid
-                //     geometry (u_opaqueDepth in injectPeelDiscard).
+                //   - opaqueRT: the OPAQUE scene's depth (u_opaqueDepth in
+                //     injectPeelDiscard, rejecting peeled fragments behind
+                //     solid geometry); color is unused UNLESS peelLinearOk,
+                //     where it also holds the merged linear-opaque color
+                //     finalMat composites onto the screen (renderFrame step 1).
                 //   - peelA/peelB: a ping-ponged pair, each with its OWN
                 //     depth texture, used to rasterize one transparent
                 //     layer at a time (renderFrame step 4) — ping-ponging
@@ -3552,58 +3600,55 @@ const createMtlxRenderView = async ({
                 //     for BOTH the per-layer under-composite and the
                 //     final accum-over-opaque composite (quadMesh.material
                 //     is swapped between underMat/finalMat per use).
-                // NearestFilter everywhere: these targets are sampled
-                // via texelFetch at the exact source pixel (see
-                // injectPeelDiscard/underMat/finalMat), never
-                // interpolated, so linear filtering would be wasted GPU
-                // work at best. Always frees any existing `peel` first —
-                // this is the ONLY allocation path, called from
-                // renderFrame on a size mismatch.
+                // NearestFilter everywhere: injectPeelDiscard's depth
+                // comparisons use texelFetch at the exact source pixel;
+                // underMat/finalMat sample color via texture() (1:1 UV-to-
+                // texel, so linear filtering would still be wasted work).
+                // Always frees any existing `peel` first — this is the
+                // ONLY allocation path, called from renderFrame on a size
+                // mismatch.
                 // ------------------------------------------------------
                 const allocPeel = (w, h) => {
                     freePeelFn();
-                    const mkColorDepthTarget = (opts) => {
+                    const mkColorDepthTarget = (half) => {
                         const rt = new THREE.WebGLRenderTarget(w, h, Object.assign({
                             minFilter: THREE.NearestFilter,
                             magFilter: THREE.NearestFilter,
                             depthBuffer: true,
                             stencilBuffer: false,
-                        }, opts));
+                        }, half ? { type: THREE.HalfFloatType } : {}));
                         rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
                         rt.depthTexture.minFilter = THREE.NearestFilter;
                         rt.depthTexture.magFilter = THREE.NearestFilter;
                         return rt;
                     };
-                    // Color targets are plain RGBA8 (three's default
-                    // WebGLRenderTarget type/format — no explicit
-                    // type/format override below), NOT HalfFloat: the
-                    // MaterialX preview shader already emits DISPLAY-
-                    // ENCODED [0,1] color (encodeDisplay's ACES+sRGB
-                    // epilogue runs before this ever gets here), so 8-bit
-                    // storage loses nothing perceptible while completely
-                    // sidestepping EXT_color_buffer_float — float-format
-                    // render-target COLOR attachments aren't
-                    // unconditionally renderable in WebGL2 (renderability
-                    // depends on that extension), and a silent failure
-                    // there would show as "peeling looks broken" with no
-                    // error anywhere. Depth textures are unaffected —
-                    // still UnsignedIntType (a depth format, not a color
-                    // float format, so this dependency never applied to
-                    // them).
-                    const opaqueRT = mkColorDepthTarget({});
-                    const peelA = mkColorDepthTarget({});
-                    const peelB = mkColorDepthTarget({});
-                    // accumRT alone gets HalfFloat (when supported): unlike
-                    // the display-encoded peel layers above, it accumulates
-                    // premultiplied color/transmittance across many under-
-                    // composites, where 8-bit banding is visible.
-                    const accumHasFloat = !!renderer.extensions.get('EXT_color_buffer_float');
+                    // peelA/peelB go HalfFloat when peelLinearOk: the preview
+                    // shader's epilogue is gated off during peel/tail passes
+                    // (see encodeDisplay), so these hold straight-alpha LINEAR
+                    // HDR color. On devices lacking EXT_color_buffer_float
+                    // they stay RGBA8: the epilogue runs as normal there, so
+                    // materials self-encode to display-ready [0,1] color and
+                    // 8-bit storage loses nothing perceptible — this also
+                    // sidesteps float-format COLOR attachments not being
+                    // unconditionally renderable in WebGL2. opaqueRT stays
+                    // RGBA8 when NOT peelLinearOk (only its depth texture is
+                    // read); when peelLinearOk it ALSO carries the merged
+                    // opaque pass's linear HDR color (renderFrame step 1),
+                    // read by finalMat's composite alongside accumRT.
+                    const opaqueRT = mkColorDepthTarget(peelLinearOk);
+                    const peelA = mkColorDepthTarget(peelLinearOk);
+                    const peelB = mkColorDepthTarget(peelLinearOk);
+                    // accumRT shares the peelLinearOk gate above: premultiplied
+                    // LINEAR color/transmittance in HalfFloat when available
+                    // (finalMat applies the display transform once, at
+                    // composite time), else premultiplied display-encoded
+                    // color in RGBA8, matching the peel layers' fallback.
                     const accumRT = new THREE.WebGLRenderTarget(w, h, Object.assign({
                         minFilter: THREE.NearestFilter,
                         magFilter: THREE.NearestFilter,
                         depthBuffer: false,
                         stencilBuffer: false,
-                    }, accumHasFloat ? { type: THREE.HalfFloatType } : {}));
+                    }, peelLinearOk ? { type: THREE.HalfFloatType } : {}));
 
                     const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
                     const quadScene = new THREE.Scene();
@@ -3654,23 +3699,53 @@ const createMtlxRenderView = async ({
                     // correct coverage — without this the browser
                     // composites the transparent object away over the
                     // page since the canvas's own alpha stayed at 0.
-                    const finalMat = new THREE.RawShaderMaterial({
+                    // When peelLinearOk, accum.rgb is linear HDR and tOpaque
+                    // (opaqueRT, also linear HDR now — see allocPeel) is
+                    // folded in HERE, so the whole frame gets ACES+sRGB
+                    // (ACES_SRGB_GLSL, shared with encodeDisplay) exactly
+                    // ONCE; the result NoBlending-replaces the canvas — no
+                    // separate opaque screen draw, no double-encoding.
+                    // Otherwise accum is already display-encoded opaque+
+                    // transparent composited via three's own blend state,
+                    // same as before (plain passthrough + CustomBlending).
+                    const finalMat = new THREE.RawShaderMaterial(Object.assign({
                         glslVersion: THREE.GLSL3,
                         vertexShader:
                             'in vec3 position;\n' +
                             'in vec2 uv;\n' +
                             'out vec2 vUv;\n' +
                             'void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }\n',
-                        fragmentShader:
-                            'precision highp float;\n' +
-                            'in vec2 vUv;\n' +
-                            'out vec4 o;\n' +
-                            'uniform sampler2D tAccum;\n' +
-                            'void main(){ vec4 a = texture(tAccum, vUv); o = vec4(a.rgb, a.a); }\n',
-                        uniforms: { tAccum: { value: null } },
-                        transparent: true,
+                        fragmentShader: peelLinearOk
+                            ? 'precision highp float;\n' +
+                              'in vec2 vUv;\n' +
+                              'out vec4 o;\n' +
+                              'uniform sampler2D tAccum;\n' +
+                              'uniform sampler2D tOpaque;\n' +
+                              'void main(){\n' +
+                              '    vec4 a = texture(tAccum, vUv);\n' +
+                              '    vec4 op = texture(tOpaque, vUv);\n' +
+                              '    vec3 lin = a.rgb + a.a * op.rgb;\n' +
+                              ACES_SRGB_GLSL('lin', 'encv') +
+                              '    float outA = (1.0 - a.a) + a.a * op.a;\n' +
+                              '    o = vec4(encv, outA);\n' +
+                              '}\n'
+                            : 'precision highp float;\n' +
+                              'in vec2 vUv;\n' +
+                              'out vec4 o;\n' +
+                              'uniform sampler2D tAccum;\n' +
+                              'void main(){ vec4 a = texture(tAccum, vUv); o = vec4(a.rgb, a.a); }\n',
+                        uniforms: peelLinearOk
+                            ? { tAccum: { value: null }, tOpaque: { value: null } }
+                            : { tAccum: { value: null } },
                         depthTest: false,
                         depthWrite: false,
+                    }, peelLinearOk ? {
+                        // Full-screen replace: compositing is already done
+                        // in-shader above, so no GL blending against the canvas.
+                        transparent: false,
+                        blending: THREE.NoBlending,
+                    } : {
+                        transparent: true,
                         blending: THREE.CustomBlending,
                         blendEquation: THREE.AddEquation,
                         blendSrc: THREE.OneFactor,
@@ -3678,7 +3753,7 @@ const createMtlxRenderView = async ({
                         blendEquationAlpha: THREE.AddEquation,
                         blendSrcAlpha: THREE.OneMinusSrcAlphaFactor,
                         blendDstAlpha: THREE.SrcAlphaFactor,
-                    });
+                    }));
 
                     peel = {
                         w, h, opaqueRT, peelA, peelB, accumRT,
@@ -3719,13 +3794,18 @@ const createMtlxRenderView = async ({
                 // `.visible` is a hard, unambiguous per-object skip in
                 // r128's render-list build, so it's used everywhere below
                 // instead.
-                //   1. opaque scene -> screen (mesh.visible forced false
-                //      for this pass only, then restored to whatever it
-                //      was).
-                //   2. the SAME opaque scene -> opaqueRT (mesh still
-                //      hidden), so its depthTexture can gate the peel
-                //      passes (a peeled fragment behind solid geometry
-                //      must never show).
+                //   1+2. opaque scene -> screen AND -> opaqueRT (mesh.visible
+                //      forced false for both, then restored) so opaqueRT's
+                //      depthTexture can gate the peel passes (a peeled
+                //      fragment behind solid geometry must never show).
+                //      When peelLinearOk, these two draws MERGE into one:
+                //      opaqueRT alone, holding LINEAR HDR color (scene
+                //      built-ins detoned via setSceneLinear, RT encoding
+                //      skips sRGB) — no separate screen draw; finalMat
+                //      (step 5) composites it onto the canvas instead. No
+                //      MSAA for the merged case (default-framebuffer-only),
+                //      matching the already non-MSAA peel silhouettes; a
+                //      multisample RT + resolve is a possible future fix.
                 //   3. clear accumRT to (0,0,0,1) — a=1 means "nothing
                 //      occluded yet" (full transmittance).
                 //   4. every OTHER mesh in the scene is hidden (mesh
@@ -3765,6 +3845,10 @@ const createMtlxRenderView = async ({
                 const __peelHidden = [];
                 const renderFrame = () => {
                     const peelActive = FORCE_TRANSPARENCY && viewIsTransparent && !!mesh;
+                    // Idempotent transition (syncMeshMaterialMode is the
+                    // other call site) — flips scene built-ins' toneMapped.
+                    const wantLinear = peelActive && peelLinearOk;
+                    if (sceneLinearOn !== wantLinear) { setSceneLinear(wantLinear); sceneLinearOn = wantLinear; }
                     if (!peelActive) { renderer.render(scene, camera); return; } // byte-identical to the old path
 
                     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -3778,19 +3862,30 @@ const createMtlxRenderView = async ({
 
                     try {
                         const meshVis = mesh.visible;
-
-                        // 1. opaque -> screen (MSAA), transparent mesh hidden
                         mesh.visible = false;
-                        renderer.setRenderTarget(null);
-                        renderer.setClearColor(prevClearColor, prevClearAlpha);
-                        renderer.clear(true, true, true);
-                        renderer.render(scene, camera);
 
-                        // 2. opaque depth -> opaqueRT (mesh still hidden; only .depthTexture is used later)
-                        renderer.setRenderTarget(peel.opaqueRT);
-                        renderer.setClearColor(0x000000, 1);
-                        renderer.clear(true, true, true);
-                        renderer.render(scene, camera);
+                        if (peelLinearOk) {
+                            // 1+2 merged: opaque -> opaqueRT only, carrying
+                            // linear HDR color (alpha 0 where nothing draws)
+                            // + depth; finalMat composites it onto the
+                            // screen in step 5, so no screen draw here.
+                            renderer.setRenderTarget(peel.opaqueRT);
+                            renderer.setClearColor(prevClearColor, 0);
+                            renderer.clear(true, true, true);
+                            renderer.render(scene, camera);
+                        } else {
+                            // 1. opaque -> screen (MSAA), transparent mesh hidden
+                            renderer.setRenderTarget(null);
+                            renderer.setClearColor(prevClearColor, prevClearAlpha);
+                            renderer.clear(true, true, true);
+                            renderer.render(scene, camera);
+
+                            // 2. opaque depth -> opaqueRT (mesh still hidden; only .depthTexture is used later)
+                            renderer.setRenderTarget(peel.opaqueRT);
+                            renderer.setClearColor(0x000000, 1);
+                            renderer.clear(true, true, true);
+                            renderer.render(scene, camera);
+                        }
                         mesh.visible = meshVis;
 
                         // 3. clear accum to (0,0,0,1): rgb = premultiplied color, a = running transmittance T
@@ -3863,10 +3958,11 @@ const createMtlxRenderView = async ({
                         __peelHidden.forEach((o) => { o.visible = true; });
                         __peelHidden.length = 0;
 
-                        // 5. composite accum over the on-screen opaque image
+                        // 5. composite accum (+opaqueRT, linear mode) onto the canvas
                         renderer.setRenderTarget(null);
                         peel.quadMesh.material = peel.finalMat;
                         peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
+                        if (peelLinearOk) peel.finalMat.uniforms.tOpaque.value = peel.opaqueRT.texture;
                         renderer.render(peel.quadScene, peel.quadCam);
                     } finally {
                         // restore GL state even if a pass above threw
