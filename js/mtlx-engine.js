@@ -2,7 +2,7 @@
 // environment lighting, preview geometry, and the encapsulated
 // createMtlxRenderView() pipeline (generate ESSL -> three.js scene ->
 // bind defaults/env/lights -> compile-check -> render loop). Shared by
-// index.html (per-node previews) and material-viewer.html (.mtlx files).
+// the app shell (index.html) and the VS Code webview.
 // Public API exported onto window at the bottom.
 
 // ------------------------------------------------------------------
@@ -236,7 +236,8 @@ const compileFilteringDriverNoise = (renderer, scene, camera) => {
     }
 };
 
-// version) instead of guessing. Returns [{ type, name }, ...].
+// Scrapes `uniform <type> u_<name>;` declarations from generated source
+// so bindings use the shader's real names. Returns [{ type, name }, ...].
 const parseUniforms = (src) => {
     const out = [];
     const re = /uniform\s+(\w+)\s+(u_\w+)\s*(?:\[\s*\d+\s*\])?\s*;/g;
@@ -598,7 +599,7 @@ const listDocRenderables = (doc) => {
 const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 
 // ------------------------------------------------------------------
-// Drag & drop ingestion — shared by node-graph.html/material-viewer.html.
+// Drag & drop ingestion — shared by the graph editor and material viewer views.
 // ------------------------------------------------------------------
 
 // Normalize a path for matching: forward slashes, lowercase, no
@@ -1264,9 +1265,8 @@ const makeEnvTexture = (w, h, blurred) => {
         }
     }
     const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
-    // Equirect mapping: irrelevant for the IBL sampler; the visible
-    // skybox mesh uses a flipY=true copy of this texture
-    // (makeBackgroundTexture) — see its header comment for why.
+    // Equirect mapping is irrelevant to the IBL sampler; the skybox gets
+    // its own copy via makeBackgroundTexture (see env-prep header above).
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -1280,7 +1280,7 @@ const makeEnvTexture = (w, h, blurred) => {
 // Path to the app's default equirect environment: a studio EXR, parsed
 // via EXRLoader and routed through prepareEnv/padToRGBA. No paired
 // irradiance file — diffuse irradiance is always SH-synthesized (below).
-const ENV_MAP_URL = './env_maps/studio_kontrast_04_1k.exr';
+const ENV_MAP_URL = './env_maps/standard_shader_ball_env_512.exr';
 
 // Load the environment ONCE and reuse across previews. Resolves to
 // { radiance, irradiance, mips } or null if no file is present, in
@@ -1295,8 +1295,13 @@ let envOverride = null;
 // hidden keep-alive view keeps its stale baked-in environment.
 const LIVE_VIEWS = new Set();
 // ---- Environment preparation: OFFICIAL VIEWER PARITY ----
-// Mips are essential (FIS specular LOD needs them). r128 gotcha:
-// RGBELoader's half-float RGB16F isn't mippable — padToRGBA fixes it.
+// Conventions (see also makeBackgroundTexture, shIrradianceFromEquirect,
+// BG_BASE/BG_SIGN): MaterialX latlong has v=0 at +Y (u=atan2(x,-z)/2PI+0.5);
+// three's SphereGeometry/equirectUv put +Y at the OPPOSITE end of V, so a
+// three-sampled texture always needs the opposite flipY of a MaterialX-
+// sampled one. EXR decodes rows bottom-first, RGBE top-first —
+// parseEnvBuffer normalizes both via flipY. Mips are essential (FIS
+// specular LOD) — padToRGBA fixes RGBELoader's un-mippable RGB16F while preserving flipY.
 const padToRGBA = (tex) => {
     const img = tex.image;
     if (!img || !img.data) return tex;
@@ -1311,7 +1316,9 @@ const padToRGBA = (tex) => {
         out[i * 4 + 2] = img.data[i * 3 + 2];
         out[i * 4 + 3] = one;
     }
-    return new THREE.DataTexture(out, img.width, img.height, THREE.RGBAFormat, tex.type);
+    const t = new THREE.DataTexture(out, img.width, img.height, THREE.RGBAFormat, tex.type);
+    t.flipY = tex.flipY;
+    return t;
 };
 const prepareEnv = (tex) => {
     const t = padToRGBA(tex);
@@ -1327,16 +1334,16 @@ const prepareEnv = (tex) => {
     return t;
 };
 // Builds the skybox mesh's visible backdrop from a prepared radiance
-// texture — must be SEPARATE from the IBL sampler: the two disagree on
-// V orientation (MaterialX flipY=false, this skybox mesh flipY=true).
+// texture — separate from the IBL sampler because MaterialX and three's
+// sphere put +Y at opposite ends of V (env-prep header): inverse flipY.
 const makeBackgroundTexture = (src) => {
     const img = src.image;
     const bg = new THREE.DataTexture(img.data, img.width, img.height, src.format, src.type);
-    bg.flipY = true; // correct for the mirrored skybox sphere — see header comment above
+    bg.flipY = !src.flipY; // skybox sphere needs the opposite V orientation of the IBL texture
     bg.mapping = THREE.EquirectangularReflectionMapping;
     bg.wrapS = THREE.RepeatWrapping;
     bg.wrapT = THREE.ClampToEdgeWrapping;
-    // Sampled once into a cube render target — no mip chain needed.
+    // Sampled directly by the skybox mesh — no mip chain needed.
     bg.minFilter = THREE.LinearFilter;
     bg.magFilter = THREE.LinearFilter;
     bg.generateMipmaps = false;
@@ -1365,8 +1372,8 @@ const halfToFloat = (h) => {
     return sign * (1 + frac / 1024) * Math.pow(2, exp - 15);
 };
 // True SH (l<=2) cosine-convolution irradiance (Ramamoorthi & Hanrahan
-// 2001) — replaces the old paired "_irradiance.hdr" convention. Uses a
-// y-up equirect convention matching MaterialX's mx_latlong_map_lookup.
+// 2001). Convention-preserving: output rows keep the input's row<->
+// latitude mapping, so the result uploads with the source's flipY.
 const shIrradianceFromEquirect = (tex) => {
     try {
         const srcImg = tex.image;
@@ -1478,7 +1485,11 @@ const shIrradianceFromEquirect = (tex) => {
                 out[o + 3] = 0x3C00; // half 1.0 — alpha unused by the IBL sampler
             }
         }
-        return new THREE.DataTexture(out, OW, OH, THREE.RGBAFormat, THREE.HalfFloatType);
+        // Row↔latitude convention mirrors the input, so upload with the
+        // same flipY as the source texture.
+        const out_tex = new THREE.DataTexture(out, OW, OH, THREE.RGBAFormat, THREE.HalfFloatType);
+        out_tex.flipY = tex.flipY;
+        return out_tex;
     } catch (e) {
         console.warn('SH irradiance projection failed:', e);
         return null;
@@ -1495,7 +1506,12 @@ const parseEnvBuffer = (buf, ext) => {
             // encoded data only built-in materials can decode);
             // HalfFloatType makes it decode to linear float at parse.
             const d = new THREE.RGBELoader().setDataType(THREE.HalfFloatType).parse(buf);
-            return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
+            if (!d || !d.data) return null;
+            const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+            // RGBELoader keeps rows top-first, which already matches
+            // MaterialX's v=0-at-top — no flip.
+            tex.flipY = false;
+            return tex;
         }
         if (ext === '.exr') {
             if (typeof THREE.EXRLoader === 'undefined') return null;
@@ -1503,7 +1519,12 @@ const parseEnvBuffer = (buf, ext) => {
             // sampler use above): RGBA16F is core mip-able on WebGL2,
             // while RGBA32F needs optional extensions.
             const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
-            return (d && d.data) ? new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type) : null;
+            if (!d || !d.data) return null;
+            const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
+            // EXRLoader flips rows at decode (data row 0 = image bottom),
+            // so flip at upload to restore MaterialX's v=0-at-top.
+            tex.flipY = true;
+            return tex;
         }
         return null; // unrecognized extension
     } catch (e) {
@@ -1519,9 +1540,8 @@ const buildEnvFromParsedTexture = (raw) => {
     const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
     const img = radiance.image;
     const mips = Math.trunc(Math.log2(Math.max(img.width, img.height))) + 1;
-    // Correctly-oriented copy for the visible skybox mesh (see
-    // makeBackgroundTexture — the IBL texture's flipY=false doesn't
-    // match the mirrored-sphere backdrop's sampling).
+    // Correctly-oriented copy for the visible skybox mesh — see
+    // makeBackgroundTexture and the env-prep header above.
     const background = makeBackgroundTexture(radiance);
     return { radiance, irradiance, mips, background, prefilteredIrr: false };
 };
@@ -1620,9 +1640,8 @@ const getWarmContext = () => {
 // add pointless background wait. Keyed by a fast djb2 hash; collisions
 // are harmless (worst case, one un-warmed sync compile).
 const MTLX_WARMED_SOURCES = new Set();
-// Deliberately no size gate: a prior 128 KB cutoff assumed only small
-// shaders needed pre-warming, but real standard_surface/OpenPBR previews
-// are ~80-106 KB and froze the UI 2.5-2.9s synchronously when skipped.
+// Deliberately no size gate: standard_surface/OpenPBR previews run
+// ~80-106 KB, and skipping pre-warm above some cutoff would freeze the UI 2.5-2.9s synchronously.
 const warmKey = (vs, fs) => {
     let h = 5381;
     const s = vs + ' ' + fs;
@@ -1734,8 +1753,9 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
 };
 
 // Background driver pre-warm for an off-screen preview target — builds,
-// generates, and pre-compiles inside ONE mxExclusive hold (H-B1 race
-// safety). NEVER call from inside an existing mxExclusive (deadlock).
+// generates, and pre-compiles inside ONE mxExclusive hold (so a transient
+// __pv_* wrapper is never observable by a concurrent op). NEVER call from
+// inside an existing mxExclusive (deadlock).
 const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, label, isMounted = () => true }) => {
     // No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
     // generating sources here would only be thrown away — skip the work.
@@ -1752,8 +1772,8 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
                 });
             } finally {
                 // Best-effort, ALWAYS: the transient __pv_* wrappers must
-                // never survive past this hold (H-B1 above) — including
-                // when generation itself threw.
+                // never survive past this hold (same single-hold rule) —
+                // including when generation itself threw.
                 try { built.cleanup(); } catch (e) { /* best-effort */ }
             }
         });
@@ -1770,7 +1790,7 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
 
 // ------------------------------------------------------------------
 // checkTargetTransparency: fast-uniform-edit transparency re-check —
-// same H-B1 single-hold rule as prewarmPreviewTarget (build->read->
+// same single-hold rule as prewarmPreviewTarget (build->read->
 // cleanup in one mxExclusive hold; never call from inside one).
 // ------------------------------------------------------------------
 const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
@@ -2093,9 +2113,8 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         if (oldVal !== newVal) return { refreshed: false, srcs, texChange: true };
     }
 
-    // Introspection now happens INSIDE generatePreviewSourcesUnlocked,
-    // under the mxExclusive lock — srcs.introspected arrives here already
-    // plain JS, post-lock. No wasm reads left in this function.
+    // Introspection happens inside generatePreviewSourcesUnlocked under
+    // the same hold; this function performs no wasm reads.
     view.introspected = srcs.introspected;
     applyIntrospectedUniformDefaults(view.uniforms, srcs.introspected, { overwrite: true });
     if (window.MTLX_PERF_LOG) {
@@ -2110,119 +2129,24 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
 // preview surface: renderer/scene/camera/env/geometry built ONCE;
 // every edit calls applyMaterial() to swap materials on the SAME shell.
 // ------------------------------------------------------------------
-// Skybox backdrop rotation calibration — read by createMtlxRenderView's
-// shell init (applies the persisted envRotationRad to bgMesh before the
-// first frame) and its setEnvRotation(rad) handle method, so a single
-// constant pair keeps both call sites in lockstep.
-//
-// Derivation (this is the load-bearing part of F1 — re-derive rather
-// than guess if the backdrop ever looks wrong; BG_SIGN is the more
-// likely one to need flipping, BG_BASE the less likely):
-//
-// 1. The material's env lookup (see u_envMatrix in bindMaterialUniforms
-//    below) rotates the SAMPLE direction by RotationY(PI/2 + rad)
-//    before projecting it to latlong (u,v) via MaterialX's
-//    mx_latlong_map_projection (theta = acos(dy), phi = atan2(dz,dx);
-//    u = phi/2PI, v = theta/PI, v = 0 at the +Y pole — the same
-//    (sin(theta)cos(phi), cos(theta), sin(theta)sin(phi)) convention
-//    re-derived independently in the shIrradianceFromEquirect comment
-//    above). Rotating the QUERY direction forward by angle a, with
-//    world axes held fixed, reads identically to the ENVIRONMENT
-//    CONTENT having rotated backward by a — so the lighting behaves as
-//    if it had spun by -(PI/2 + rad) about Y.
-//
-// 2. bgMesh is `SphereGeometry(...).scale(-1,1,1)` (see its
-//    construction below). three's SphereGeometry sets uv.x = u =
-//    ix/widthSegments (phi = u*2PI; the x-mirror only negates
-//    vertex.x, not UVs) and uv.y = 1 - v where v = iy/heightSegments
-//    (theta = v*PI, so uv.y = 1 sits at the +Y pole, theta = 0). After
-//    the mirror, the vertex at (uv.x, uv.y) sits at object-space
-//    direction (cos(phi)sin(theta), cos(theta), sin(phi)sin(theta))
-//    with phi = uv.x*2PI, theta = (1 - uv.y)*PI — the SAME functional
-//    form as step 1's direction-from-(u,v), just parameterized by
-//    (uv.x, 1 - uv.y) instead of MaterialX's own (u,v).
-//
-// 3. makeBackgroundTexture sets flipY=true (see its header comment for
-//    why), so sampling bgMesh's texture at (uv.x, uv.y) actually reads
-//    the RAW .hdr data row/col at (uv.x, 1 - uv.y) — flipY flips which
-//    data row lands at a given GL v. Combined with step 2: a raw .hdr
-//    texel at MaterialX address (u,v) = (uv.x, 1 - uv.y) sits, at
-//    mesh.rotation.y = 0, at EXACTLY the object-space direction
-//    MaterialX's own (inverse) projection would place it at — the
-//    un-rotated skybox already matches MaterialX's un-rotated latlong
-//    convention texel-for-texel.
-//
-// 4. So rotating bgMesh by angle b moves every raw texel to
-//    (that texel's direction) rotated by RotationY(b) — i.e. (by the
-//    same phi-shifts-by-minus-the-angle rule used in step 1) the
-//    backdrop's visible content spins by -b in world space. Matching
-//    that to step 1's "-(PI/2 + rad)" lighting spin:
-//        -b = -(PI/2 + rad)  =>  b = -(PI/2 + rad)
-//    i.e. mesh.rotation.y = -(Math.PI / 2) + (-1) * rad — which is
-//    just the NEGATION of u_envMatrix's own (PI/2 + rad) angle, which
-//    makes sense given step 1's "query rotation forward = content
-//    rotation backward" equivalence.
-//
-// Verified analytically against r128's THREE.Matrix4.makeRotationY and
-// SphereGeometry source, NOT verified visually — the user's rotation-
-// slider check (see the plan) is the final word. If the backdrop
-// tracks the highlight but 180 degrees out of phase, adjust BG_BASE;
-// if it counter-rotates instead of co-rotating, flip BG_SIGN's -1.
-// ------------------------------------------------------------------
-const BG_BASE = -Math.PI / 2;
+// Skybox <-> IBL rotation calibration — read at shell init (rotation 0
+// there) and by setEnvRotation(). Derivation: u_envMatrix rotates env
+// queries by RotationY(PI/2 + rad), and MaterialX's longitude is
+// atan2(x,-z)/2PI + 0.5, so the IBL shows data column U at world angle
+// 2PI*U - PI + rad; the mirrored sphere (phi = 2PI*uv.x) rotated by b
+// shows column U at 2PI*U - b. Matching gives rotation.y = PI - rad.
+// If the backdrop is 180 degrees out of phase, adjust BG_BASE; if it counter-rotates, flip BG_SIGN.
+const BG_BASE = Math.PI;
 const BG_SIGN = -1;
 
-// ------------------------------------------------------------------
-// Neutral-material env rotation (r128 built-ins have no scene.environment
-// rotation knob — scene.environmentRotation only lands in r162+, and a
-// PMREM render target has no .offset/.matrix the way an ordinary texture
-// does). This USED to be an accepted limitation (see the old comment this
-// replaced, above setEnvRotation below) — revoked: patch every neutral
-// glTF PBR material's compiled shader (via onBeforeCompile) so its two
-// env-sampling functions rotate their query direction by a live
-// `uEnvRotation` uniform before hitting the PMREM, exactly like
-// u_envMatrix already does for the generated MaterialX shader's own
-// u_envRadiance/u_envIrradiance lookups.
-//
-// EXACT TEXT PROVENANCE: NEUTRAL_ENV_ROTATION_CHUNK below is r128's OWN
-// THREE.ShaderChunk.envmap_physical_pars_fragment — verified byte-for-byte
-// against vendor/three/three.min.js's ShaderChunk table — with exactly
-// three lines added (marked ADDED): the `uniform mat3 uEnvRotation;`
-// declaration and one `= uEnvRotation * ...` rotation each in
-// getLightProbeIndirectIrradiance (rotates worldNormal) and
-// getLightProbeIndirectRadiance (rotates reflectVec). Every #ifdef branch
-// (ENVMAP_MODE_REFRACTION / ENVMAP_TYPE_CUBE / ENVMAP_TYPE_CUBE_UV /
-// TEXTURE_LOD_EXT) is untouched and the rotation is applied BEFORE the
-// branch, so whichever mapping type is actually active — CUBE_UV is what
-// PMREMGenerator's output uses, the only one exercised by scene.environment
-// here today — still gets rotated correctly.
-//
-// ROTATION CONVENTION DERIVATION — the punchline is a bare RotationY(rad),
-// NOT RotationY(PI/2 + rad) like u_envMatrix: two independent "+90 degrees"
-// conventions cancel out. Walking through it:
-//   - u_envMatrix rotates the QUERY direction by RotationY(PI/2 + rad)
-//     before MaterialX's own mx_latlong_projection (mx_microfacet_specular.
-//     glsl): longitude = atan2(dir.x, -dir.z) / 2PI + 0.5.
-//   - scene.environment's PMREM was baked (by THREE.PMREMGenerator, see
-//     the creation-time PMREM block in createMtlxRenderView below) from
-//     radianceSrc — the SAME texture bound as u_envRadiance — via r128's
-//     OWN internal equirectUv: u = atan2(dir.z, dir.x) / 2PI + 0.5. Once
-//     baked into the CubeUV mip atlas, sampling it at a world direction
-//     `d` returns the same texel equirectUv(d) would read directly off
-//     radianceSrc.
-//   - For the SAME direction, atan2(x,-z) is atan2(z,x) rotated +90
-//     degrees (rotating a 2D point (a,b) by +90 gives (-b,a), and
-//     (-z,x) is exactly (x,z) rotated that way) — so MaterialX's
-//     longitude leads three's u by a CONSTANT +0.25 (in u; +90 degrees),
-//     independent of any rotation applied upstream.
-//   - Composing: sampling direction R*d (R = RotationY(PI/2 + rad)) through
-//     mx_latlong_projection lands on the SAME texel, expressed in three's
-//     own u-convention, as sampling direction RotationY(rad)*d through
-//     equirectUv would — the u_envMatrix's own baked-in +90 and the
-//     cross-convention +90 cancel exactly. Confirmed both symbolically and
-//     numerically (representative directions, rad swept across [-PI, PI])
-//     before wiring this in; V3's screenshot diff is still the final word
-//     per the plan.
+// Neutral-material env rotation: r128 lacks a scene.environment rotation knob (arrives r162+), so
+// onBeforeCompile patches every neutral glTF material's shader to rotate its env queries via a live
+// uEnvRotation uniform. The chunk is r128's own envmap_physical_pars_fragment plus exactly three
+// lines: `uniform mat3 uEnvRotation;` and one `uEnvRotation *` rotation in each of
+// getLightProbeIndirectIrradiance/Radiance, applied before every #ifdef branch. It's a bare
+// RotationY(rad), not PI/2+rad like u_envMatrix, because MaterialX's longitude (atan2(x,-z)) leads
+// three's equirectUv (atan2(z,x)) by +0.25 turn, cancelling u_envMatrix's own +90°. The two
+// conventions still disagree VERTICALLY (three +Y at v=1, MaterialX v=0) — unaddressed here; see the PMREM comment in createMtlxRenderView.
 const NEUTRAL_ENV_ROTATION_CHUNK = `#if defined( USE_ENVMAP )
 	#ifdef ENVMAP_MODE_REFRACTION
 		uniform float refractionRatio;
@@ -2447,9 +2371,9 @@ const createMtlxRenderView = async ({
                 renderer.setSize(cw, ch, false);
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
                 renderer.debug.checkShaderErrors = true;
-                // NOTE: outputEncoding/toneMapping are NO-OPS for
-                // RawShaderMaterial — the actual display transform is
-                // injected into the pixel shader by encodeDisplay() above.
+                // No-ops for the RawShaderMaterial surface (encodeDisplay
+                // bakes its transform into the shader); set here for the
+                // ordinary three materials in the scene — skybox, backplanes, neutral glTF parts.
                 if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
                 renderer.toneMapping = THREE.ACESFilmicToneMapping;
                 renderer.toneMappingExposure = 1.0;
@@ -2745,6 +2669,9 @@ const createMtlxRenderView = async ({
                         // Scene-mode lighting: bakes radianceSrc into a
                         // PMREM driving scene.environment. NEVER dispose
                         // the PMREMGenerator — r128 shares state module-wide.
+                        // three's equirectUv puts +Y at v=1 — opposite
+                        // MaterialX's v=0 — so reading the same texture
+                        // v-mirrors scene reflections vs the surface (ok for now).
                         pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(radianceSrc);
                         scene.environment = pmremRT.texture;
                     }
@@ -2913,9 +2840,9 @@ const createMtlxRenderView = async ({
                         // live-swap/mutate the right uniforms after creation.
                         envRadSamplerName = radSampler && radSampler.name;
                         envIrrSamplerName = irrSampler && irrSampler.name;
-                        // OFFICIAL PARITY: env matrix is ALWAYS a +90° Y
-                        // rotation. Seeded from envRotationRad (not a bare
-                        // 0) so a material swap PRESERVES the user's rotation.
+                        // +90° Y is the official viewer's fixed base; the
+                        // user's rotation adds on top — seeded from
+                        // envRotationRad (not 0) so a material swap preserves it.
                         if (has('u_envMatrix')) newUniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
                         if (has('u_envRadianceMips')) newUniforms.u_envRadianceMips = { value: envMips };
                         if (has('u_envRadianceSamples')) newUniforms.u_envRadianceSamples = { value: 16 };
@@ -2931,9 +2858,6 @@ const createMtlxRenderView = async ({
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
                         if (nLights && has('u_lightData')) newUniforms.u_lightData = { value: lightData };
                         if (DEBUG_SHADERS) {
-                            // envPrefilteredIrr is always false now (the
-                            // paired-<name>_irradiance.hdr convention was
-                            // removed); kept as a future-proofing log hook.
                             console.log('env bound → radiance:', radSampler && radSampler.name,
                                         '| irradiance:', irrSampler && irrSampler.name,
                                         envHasFile ? (envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance SH-synthesized)') : '(synthesized)',
@@ -3453,9 +3377,8 @@ const watchFullscreen = (cb) => {
     };
 };
 
-// Shared indeterminate loading bar, used by both viewer pages while a
-// shader generates/compiles. Injected once from the engine so the
-// pages don't need their own copies (both load this file).
+// Shared indeterminate loading bar used by the viewer/graph/preview
+// views while a shader generates/compiles; injected once from the engine.
 (() => {
     if (typeof document === 'undefined' || document.getElementById('mtlx-shared-css')) return;
     const st = document.createElement('style');
