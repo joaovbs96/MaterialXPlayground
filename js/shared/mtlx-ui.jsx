@@ -948,8 +948,8 @@ const EnvDialog = ({
 // double as engine geomName / persisted-storage values, never changed —
 // only how they're displayed). Falls back to the raw value if unlisted.
 const GEOM_LABELS = {
-    'shaderball': 'Shaderball',
-    'shaderball-scene': 'Shaderball w/ Backdrop',
+    'shaderball': 'Std. Shader Ball',
+    'shaderball-scene': 'Std. Shader Ball w/ Backdrop',
     'shaderball-mtlx': 'MaterialX Shader Ball',
     'sphere': 'Sphere',
     'cube': 'Cube',

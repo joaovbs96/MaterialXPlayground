@@ -123,7 +123,7 @@
         { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME },
         { id: 'docs', label: 'Node Library & Documentation', shellHref: '#!docs', icon: ICON_NAV_DOCS },
         { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
-        { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
+        { id: 'compare', label: 'Material Comparison', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
         { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
     ];
 

@@ -13,7 +13,7 @@ const HOME_CARDS = [
         title: 'Node Library & Documentation',
         desc: 'Browse every standard MaterialX node with per-signature docs, port tables, live 3D previews, an implementation-target matrix, and shareable permalinks.',
         img: 'images/preview-docs.jpg',
-        cta: 'Open the Node Library',
+        cta: 'Open Node Library Docs',
     },
     {
         href: '#!viewer',
@@ -21,12 +21,12 @@ const HOME_CARDS = [
         title: 'Material Viewer',
         desc: 'Load materials by drag-and-drop (.mtlx with textures, a folder, or a .zip) or from curated presets — rendered in real time with image-based lighting, custom HDRI environments, selectable preview geometry, and PNG export.',
         img: 'images/preview-material.jpg',
-        cta: 'Open the Material Viewer',
+        cta: 'Open Material Viewer',
     },
     {
         href: '#!compare',
         icon: 'compare',
-        title: 'Compare Materials',
+        title: 'Material Comparison',
         desc: 'Load two MaterialX documents and compare their renders side by side, with a swipe slider, or as a difference heatmap — with SSIM/RMSE statistics.',
         img: 'images/preview-compare.jpg',
         cta: 'Open Material Comparison',
@@ -37,7 +37,7 @@ const HOME_CARDS = [
         title: 'Node Graph Editor',
         desc: 'Visually build MaterialX graphs with nested nodegraphs, a live 3D preview, validation, and XML view/export.',
         img: 'images/preview-nodegraph.jpg',
-        cta: 'Open the Graph Editor',
+        cta: 'Open Node Graph Editor',
     },
 ];
 
