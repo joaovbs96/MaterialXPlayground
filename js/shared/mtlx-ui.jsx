@@ -953,6 +953,7 @@ const GEOM_LABELS = {
     'shaderball-mtlx': 'MaterialX Shader Ball',
     'sphere': 'Sphere',
     'cube': 'Cube',
+    'cloth': 'Cloth',
     // Only offered where a caller passes an explicit geomList including
     // it (node-preview) — deliberately absent from the default list
     // above so the material viewer doesn't grow the option.
@@ -977,7 +978,7 @@ const defaultGeomFor = (nodegroup) => (
 );
 
 const ViewportControls = ({
-    geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube'],
+    geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'],
     geom, onGeomChange,
     // Optional { value: badge text } for the geometry dropdown's rows
     // (see GeomSelect) — e.g. marking the docs previewer's Auto entry

@@ -35,7 +35,7 @@ Load and inspect MaterialX materials in 3D.
 - **Image-based lighting** from a built-in HDR environment, with automatic key-light extraction (a strong sun in the image becomes a sharp analytic directional light, toggleable) and a toggle to show or hide the environment as the visible backdrop (the lighting stays on either way).
 - **Drag-and-drop loading.** Drop a `.mtlx` document anywhere on the page, alone or with loose textures, a folder of textures, or a `.zip`. Textures are matched by relative path, with a UV-checker fallback for anything unresolved.
 - **Curated examples.** Load official MaterialX example materials, textures included, from a built-in presets list.
-- **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, or a cube), a material picker when a document defines several, save-as-PNG, and fullscreen.
+- **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, a cube, or a draped cloth mesh), a material picker when a document defines several, save-as-PNG, and fullscreen.
 - **Send to Graph Editor** to keep working on the current material in the Node Graph Editor.
 
 ### 🔀 Material Compare
@@ -144,7 +144,9 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 
 ## Asset credits
 
-**Shader Ball.** `models/shaderball.glb` and `models/shaderball_simple.glb` are GLB conversions of the ["Standard Shader Ball"](https://github.com/usd-wg/assets) by Chris Rydalch and André Mazzone (USD Working Group; original scene concept by Thomas Anagnostou), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE.txt`](models/LICENSE.txt) for the full attribution and modification notice.
+**Shader Ball.** `models/shaderball.glb` and `models/shaderball_simple.glb` are GLB conversions of the ["Standard Shader Ball"](https://github.com/usd-wg/assets) by Chris Rydalch and André Mazzone (USD Working Group; original scene concept by Thomas Anagnostou), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE_shaderball.txt`](models/LICENSE_shaderball.txt) for the full attribution and modification notice.
+
+**Cloth mesh.** `models/cloth_base_mesh.glb` is ["Cloth base mesh"](https://sketchfab.com/3d-models/cloth-base-mesh-3892a25754c7452eabe772ff691e4c6f) by Javier.Herrera, via Sketchfab, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE_cloth.txt`](models/LICENSE_cloth.txt).
 
 **HDRI.** The default environment lighting (`env_maps/standard_shader_ball_env_512.exr`) is a studio environment built to match the Standard Shader Ball scene's geometry, see license above. The repo also ships ["Studio Kontrast 04"](https://polyhaven.com/a/studio_kontrast_04) by Grzegorz Wronkowski, via [Poly Haven](https://polyhaven.com/), licensed [CC0](https://polyhaven.com/license). See [`env_maps/LICENSE.txt`](env_maps/LICENSE.txt).
 

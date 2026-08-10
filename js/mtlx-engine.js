@@ -1227,7 +1227,7 @@ const normalizeGeometry = (geometry) => {
 };
 
 // Shaderball: two GLB exports of the ASWF/USD-WG Standard Shader Ball
-// under models/ (see models/LICENSE.txt). glbSceneCache holds the raw
+// under models/ (see models/LICENSE_shaderball.txt). glbSceneCache holds the raw
 // GLTFLoader result per URL; consumers clone() rather than mutate/dispose it.
 const glbSceneCache = new Map();
 const loadGlbScene = (url) => {
@@ -1388,7 +1388,37 @@ const getShaderballMtlxGeometry = () => {
     return shaderballMtlxPromise;
 };
 
-// Builds cube/sphere/shaderball-mtlx preview geometry — the shaderball/
+// Cloth drape preset (models/cloth_base_mesh.glb, see
+// models/LICENSE_cloth.txt): a single-mesh GLB — bake its world
+// transform, prep once, and clone per view like shaderball-mtlx.
+let clothGeometryPromise = null;
+const getClothGeometry = () => {
+    if (!clothGeometryPromise) {
+        clothGeometryPromise = (async () => {
+            const url = new URL('models/cloth_base_mesh.glb', document.baseURI).href;
+            const gltf = await loadGlbScene(url);
+            if (!gltf) return null;
+            try {
+                gltf.scene.updateMatrixWorld(true);
+                let geom = null;
+                gltf.scene.traverse((obj) => {
+                    if (!geom && obj.isMesh && obj.geometry) {
+                        geom = obj.geometry.clone();
+                        geom.applyMatrix4(obj.matrixWorld);
+                    }
+                });
+                if (!geom) return null;
+                return prepGeometry(normalizeGeometry(geom));
+            } catch (e) {
+                console.warn('cloth geometry load failed:', e);
+                return null;
+            }
+        })();
+    }
+    return clothGeometryPromise;
+};
+
+// Builds cube/sphere/cloth/shaderball-mtlx preview geometry — the shaderball/
 // shaderball-scene presets are full GLB scenes handled separately by
 // instantiateShaderballScene(). Any unrecognized `which` falls back to
 // the sphere (including a shaderball-mtlx fetch failure).
@@ -1398,6 +1428,10 @@ const buildPreviewGeometry = async (which) => {
     }
     if (which === 'shaderball-mtlx') {
         const g = await getShaderballMtlxGeometry();
+        if (g) return g.clone();
+    }
+    if (which === 'cloth') {
+        const g = await getClothGeometry();
         if (g) return g.clone();
     }
     if (which === 'buffer2d') {

@@ -6,7 +6,7 @@
 // sync) and js/shared/image-metrics.js (metrics, heatmap).
 
 const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
-const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube'];
+const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
 
 // Same recipe as viewer-app.jsx's loadMtlxDocument: parse + attach stdlib
 // + list renderables. Duplicated locally (each lazy view script is its
