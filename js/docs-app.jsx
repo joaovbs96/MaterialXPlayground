@@ -250,7 +250,13 @@
                 if (!selectedNode || !active) return;
                 const h = selToHash(selectedNode);
                 if (window.location.hash !== h) {
-                    try { history.replaceState(null, '', h); } catch (e) { window.location.replace(h); }
+                    // replaceState resolves h against <base>; under the VS
+                    // Code webview that base is a different origin, so it
+                    // throws — fall back to a plain fragment assignment,
+                    // which never leaves the document (at the cost of a
+                    // hashchange the onNav listener below re-resolves,
+                    // idempotently, to the already-selected node).
+                    try { history.replaceState(null, '', h); } catch (e) { window.location.hash = h; }
                 }
             }, [selectedNode, active]);
             React.useEffect(() => {
@@ -393,18 +399,6 @@
                 if (!showPreviews) return;
                 getMxEnv().catch(() => {});
             }, [showPreviews]);
-            // Embed mode: pauses the 3D preview loop when the graph editor's
-            // docs dialog hides this iframe (display:none doesn't stop rAF).
-            // Not togglePreviews — that would pollute the full page's setting.
-            React.useEffect(() => {
-                if (!EMBED) return undefined;
-                const onMsg = (e) => {
-                    const d = e.data;
-                    if (d && d.type === 'mtlx-embed-visible') setShowPreviews(!!d.visible);
-                };
-                window.addEventListener('message', onMsg);
-                return () => window.removeEventListener('message', onMsg);
-            }, []);
 
             const stats = React.useMemo(() => {
                 if (!jsonData) return null;

@@ -3,7 +3,8 @@
 # -----------------------------------------------------------------------------
 # Builds a fully-offline package of the site (the servable tree plus the
 # vendor/materialx/ snapshot, so the app performs zero network access) and
-# attaches it to the GitHub release that triggered the run.
+# attaches it to the GitHub release that triggered the run — alongside an
+# offline .vsix of the VS Code extension as a second release asset.
 #
 # Security shape (mirrors deploy.yml's build/deploy split):
 #   - The `package` job runs all project code (npm ci, build, checks) with a
@@ -15,6 +16,10 @@
 #   - Actions are pinned to full commit SHAs (kept fresh by Dependabot).
 #
 # Failure modes worth knowing:
+#   - A tag↔version guard fails fast if package.json's "version" doesn't
+#     match the release tag, so the .vsix (and the version users see after
+#     install) can never drift from what was tagged — bump "version",
+#     npm install, commit, re-tag, re-publish.
 #   - The stale-artifact gate re-runs deploy.yml's guarantee against the
 #     tagged commit. If a release is cut from a commit that fails it, this
 #     job fails BEFORE packaging — fix the commit, re-tag, re-publish.
@@ -56,6 +61,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+
+      # The .vsix filename and the version users see after install both come
+      # from package.json's "version" — releasing with a stale version would
+      # ship a wrongly-versioned extension, so fail fast on drift.
+      - name: Enforce release tag matches package.json version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          [ "$PKG" = "$TAG" ] || { echo "::error::package.json version ($PKG) does not match release tag ($TAG) — bump \"version\" in package.json to ${TAG#v}, run npm install, commit, re-tag, re-publish."; exit 1; }
 
       - name: Install dependencies
         run: npm ci
@@ -123,6 +139,37 @@ jobs:
           path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.zip
           if-no-files-found: error
 
+      # vsce writes into cwd by default, which would dirty the tree the
+      # stale-artifact gate just certified — always --out into RUNNER_TEMP.
+      # vendor/materialx/ is present (vendored above) and NOT in
+      # .vscodeignore, so this is the OFFLINE flavor (zero runtime network).
+      # Lean variant, if ever wanted: `rm -rf vendor/materialx` first and
+      # drop the manifest.json assertion below.
+      # NOTE: never add a "vscode:prepublish" script to package.json — vsce
+      # would execute it here, inside the certified tree.
+      - name: Package VS Code extension (.vsix)
+        run: |
+          npx --yes @vscode/vsce@3.9.2 package --no-dependencies \
+            --out "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.vsix"
+
+      - name: Sanity-check vsix contents
+        run: |
+          VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.vsix"
+          L="$(unzip -l "$VSIX")"
+          echo "$L" | grep -q 'extension/vendor/materialx/manifest.json' || { echo "::error::vendor/materialx missing — vsix would not be offline"; exit 1; }
+          echo "$L" | grep -q 'extension/js/gen/mtlx-version.json' || { echo "::error::js/gen missing (specDocs.js requires it)"; exit 1; }
+          echo "$L" | grep -q 'extension/environment_map.mtlx' || { echo "::error::environment_map.mtlx missing (light-rig fetch)"; exit 1; }
+          echo "$L" | grep -q 'extension/vscode_extension/src/extension.js' || { echo "::error::extension sources missing"; exit 1; }
+          if echo "$L" | grep -qE 'extension/(node_modules|scripts|\.github)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          ls -lh "$VSIX" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload vsix artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.pkg.outputs.name }}-vsix
+          path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.vsix
+          if-no-files-found: error
+
   upload:
     needs: package
     if: github.event_name == 'release'
@@ -135,8 +182,19 @@ jobs:
         with:
           name: ${{ needs.package.outputs.name }}
 
+      - name: Download vsix artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.name }}-vsix
+
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release upload "${{ github.event.release.tag_name }}" "${{ needs.package.outputs.name }}.zip" --clobber
+
+      - name: Attach vsix to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ needs.package.outputs.name }}.vsix" --clobber

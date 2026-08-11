@@ -2,8 +2,9 @@
   "name": "materialx-playground",
   "displayName": "MaterialX Playground",
   "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor.",
-  "version": "2026.8.0",
+  "version": "2026.8.3",
   "publisher": "local",
+  "license": "Apache-2.0",
   "private": true,
   "icon": "images/icon.png",
   "engines": {

@@ -40,10 +40,10 @@
     // storage (=== null), so: this fires once per fresh webview state,
     // and the user's own later in-UI "3D previews: On" toggle (which
     // writes '1') sticks for the rest of that session — this default
-    // never fights it back off. Embed/chromeless iframes (the graph
-    // editor's inline "?" docs dialog) force previews on regardless of
-    // this key, and the Graph/Viewer views never read it at all — this
-    // only affects docs panels/tabs.
+    // never fights it back off. The graph editor's inline chromeless docs
+    // dialog forces previews on regardless of this key, and the
+    // Graph/Viewer views never read it at all — this only affects docs
+    // panels/tabs.
     try {
         if (window.localStorage.getItem('mtlx_show_previews') === null) {
             window.localStorage.setItem('mtlx_show_previews', '0');
@@ -266,53 +266,39 @@
     // Link interception: <base href="${baseUri}"> (webview.html) makes
     // every relative href in the site resolve to a webview-resource URL,
     // which is exactly what local script/style/image tags need — but it
-    // ALSO means a plain in-page hash link (e.g. <a href="#!graph">, the
-    // site's own top nav) would, without help, be resolved against that
-    // base and try to *navigate* the webview's frame to a new
-    // webview-resource document instead of just updating location.hash
-    // the way it does in a normal browser tab. Handle the cases the site
-    // actually produces:
-    //   - href starting with '#'   -> same-page hash navigation; do it
-    //                                  ourselves via location.hash so the
-    //                                  site's hash-based router sees it,
-    //                                  and preventDefault so the webview
-    //                                  doesn't also try to load
-    //                                  "<baseUri>#!graph" as a document.
-    //   - 'index.html#...' hrefs   -> same treatment. Cause: js/
-    //                                  site-header.js:28 computes IS_SHELL
-    //                                  from location.pathname, which under
-    //                                  the webview's document URL can be
-    //                                  false, so the header emits
-    //                                  'index.html#!...'-style links.
-    //                                  Letting those navigate would load
-    //                                  the RAW site page inside the
-    //                                  webview — without this bootstrap,
-    //                                  without the fetch bridge — so any
-    //                                  href whose pre-'#' part is empty or
-    //                                  ends in 'index.html' (i.e. would
-    //                                  target the SAME document) becomes a
-    //                                  hash update instead.
-    //   - http(s) links (external) -> leave alone; VS Code's webview host
-    //                                  intercepts these itself and opens
-    //                                  them in the user's real browser.
+    // ALSO means any relative <a href> (same-page hash links, and
+    // 'index.html#...' links — js/site-header.js's IS_SHELL check reads
+    // location.pathname, which is false under the webview's document URL,
+    // so the header emits those) would, without help, *navigate* the
+    // webview's frame to a webview-resource document instead of just
+    // updating location.hash. VS Code's workbench blocks such frame
+    // navigations outright ("frame-src 'self'"), breaking the page. So:
+    // an href with a real scheme (https:, mailto:, vscode:, ...) is a true
+    // external link — leave it alone, VS Code's webview host opens it in
+    // the user's real browser. Everything else is document-relative and
+    // gets intercepted: apply its hash (if any) to our own location.hash
+    // for the site's router, and always preventDefault so the frame never
+    // navigates.
     document.addEventListener('click', function (event) {
         var anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
         if (!anchor) return;
         var href = anchor.getAttribute('href');
         if (!href) return;
+        // A scheme (https:, mailto:, vscode:, ...) means a true external
+        // link — never intercept; VS Code's webview host opens http(s)
+        // links in the user's real browser itself.
+        if (/^[a-z][a-z0-9+.\-]*:/i.test(href)) return;
+        // Everything else is document-relative. Under <base href="${baseUri}">
+        // a relative navigation would load a raw webview-resource document
+        // (no bootstrap, no fetch bridge) — and VS Code's workbench blocks
+        // such frame navigations outright ("frame-src 'self'"). So: never
+        // let one through. If the href carries a hash, apply it as an
+        // in-page hash update for the site's router; otherwise swallow it.
+        event.preventDefault();
         var hashIdx = href.indexOf('#');
-        if (hashIdx === -1) return;
-        var beforeHash = href.slice(0, hashIdx);
-        // A scheme (https:, mailto:, ...) means a true external link —
-        // never intercept those, even if the path happens to end in
-        // 'index.html'.
-        if (/^[a-z][a-z0-9+.\-]*:/i.test(beforeHash)) return;
-        if (beforeHash === '' || /index\.html$/i.test(beforeHash)) {
-            event.preventDefault();
+        if (hashIdx !== -1) {
             location.hash = href.slice(hashIdx);
         }
-        // http(s):// (and any other scheme) links: no-op here, VS Code
-        // handles those.
     }, false);
 
     // ------------------------------------------------------------------
@@ -513,14 +499,9 @@
     }
 
     // NOTE: this is NOT the only postMessage traffic this page can see —
-    // the site's own graph-editor docs dialog embeds
-    // index.html?embed=1#/... in an <iframe>, and code under js/docs/
-    // posts messages for that iframe's own close/resize signaling. Those
-    // have a different shape (no `.type === 'mtlx-open'`) and target the
-    // iframe's parent window rather than this top-level webview document
-    // — but the type check below is kept regardless, both as
-    // defense-in-depth and because a future site change could add other
-    // message shapes at this level.
+    // the type check below (`.type === 'mtlx-open'`, etc.) is kept as
+    // defense-in-depth against any future/foreign message shapes that
+    // might arrive on this top-level webview document.
     window.addEventListener('message', function (event) {
         var msg = event.data;
         if (!msg) return;

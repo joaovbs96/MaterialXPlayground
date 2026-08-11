@@ -1,3 +1,4 @@
 *.py
 node_modules/
 vendor/materialx/
+*.vsix

@@ -1,6 +1,16 @@
 .git/**
 .claude/**
 .vscode/**
+.github/**
 .gitignore
+.gitattributes
 node_modules/**
 scripts/**
+docs/**
+tutorials-src/**
+package-lock.json
+sitemap.xml
+404.html
+tutorial-ideas.md
+images/og_image.png
+images/preview-*.jpg

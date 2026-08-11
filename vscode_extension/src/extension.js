@@ -351,14 +351,13 @@ function activate(context) {
                     category = undefined;
                     sig = undefined;
                 }
-                // Shares the docs-panel singleton with the graph editor's
-                // "?" button (editorProvider.js's openDocsPanel, which the
-                // editor webview's message handler also calls) — no
-                // document payload ever sent (the docs view browses the
-                // node library on its own, same as visiting
-                // index.html#!docs directly in a browser), and
-                // reveals/re-navigates the existing panel instead of
-                // spawning a new one if it's already open.
+                // This docs-panel singleton backs only this command
+                // (Command Palette, explorer/editor context menus, and
+                // hover deep links) — no document payload ever sent (the
+                // docs view browses the node library on its own, same as
+                // visiting index.html#!docs directly in a browser).
+                // Repeated invocations reveal and re-navigate the existing
+                // panel instead of spawning a new one.
                 const sigOk = typeof sig === 'string' && sig.length <= 512 && SIG_TOKEN_RE.test(sig);
                 const hash = category
                     ? '#/' + encodeURIComponent(String(category)) + (sigOk ? '?sig=' + encodeURIComponent(sig) : '')

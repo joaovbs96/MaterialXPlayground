@@ -12,8 +12,8 @@
         // The graph only knows a node's CATEGORY, so links use the
         // name-only hash form (#/<name>); hashToSel (doc-ui.jsx) resolves
         // the full permalink, avoiding search conflicts across libs/groups.
-        const nodeDocsUrl = (data, embed) => {
-            const prefix = embed ? 'index.html?embed=1#/' : 'index.html#/';
+        const nodeDocsUrl = (data) => {
+            const prefix = 'index.html#/';
             if (data.lib && data.group && data.category) {
                 return prefix + [data.lib, data.group, data.category].map(encodeURIComponent).join('/');
             }

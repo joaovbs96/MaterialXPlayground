@@ -122,11 +122,6 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          see js/mtlx-assets.js). blob:/data: cover the
                          object-URL and inline-asset fetches issued
                          against the img-src sources above.
-           frame-src   \${cspSource}
-                       — the graph editor's docs-dialog iframes
-                         index.html?embed=1#/... back into itself, which
-                         under <base href="\${baseUri}"> resolves to a
-                         \${cspSource} (webview-resource) URL.
          TRADEOFF: 'unsafe-inline' is in script-src (not just style-src)
          because index.html's inline scripts (embed-mode detection, the
          ReactDOM.createRoot(...) boot call) and this template's own
@@ -140,7 +135,6 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
         font-src \${cspSource};
         img-src \${cspSource} https: blob: data:;
         connect-src \${cspSource} https://raw.githubusercontent.com blob: data:;
-        frame-src \${cspSource};
     ">`;
 
 // <base href="${baseUri}">: every relative URL in the document resolves

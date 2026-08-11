@@ -859,6 +859,10 @@
             // Routing external edits through ingest() would null setParsed
             // first, remounting ReactFlow / killing the live GL preview on
             // every save; this instead parses first, keeping the same label.
+            // Set when an external edit failed to parse (banner up): the next
+            // successful parse clears the banner even when the skip-identical
+            // guard returns before the rebuild effect can.
+            const externalParseFailedRef = React.useRef(false);
             const externalReload = async (map) => {
                 // Mirrors ingest's REPLACE branch: the incoming map
                 // replaces fileMapRef wholesale (not merge) — the host
@@ -896,8 +900,14 @@
                     // The live session must survive a mid-edit broken
                     // file (e.g. an unbalanced tag mid-keystroke) — keep
                     // the current graph up instead of blanking it.
+                    externalParseFailedRef.current = true;
                     setError('External edit could not be parsed — keeping the current graph (' + errMsg(e) + ').');
                     return;
+                }
+
+                if (externalParseFailedRef.current) {
+                    externalParseFailedRef.current = false;
+                    setError(null);
                 }
 
                 // Skip-identical guard: raw text can't be string-compared
