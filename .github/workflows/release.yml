@@ -50,6 +50,7 @@ jobs:
       contents: read
     outputs:
       name: ${{ steps.pkg.outputs.name }}
+      vsix_name: ${{ steps.pkg.outputs.vsix_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,6 +97,7 @@ jobs:
           TAG="${{ github.event.release.tag_name }}"
           if [ -z "$TAG" ]; then TAG="manual-$(git rev-parse --short HEAD)"; fi
           echo "name=materialx-playground-$TAG-offline" >> "$GITHUB_OUTPUT"
+          echo "vsix_name=materialx-playground-vscode-$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Stage offline site
         run: |
@@ -150,11 +152,11 @@ jobs:
       - name: Package VS Code extension (.vsix)
         run: |
           npx --yes @vscode/vsce@3.9.2 package --no-dependencies \
-            --out "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.vsix"
+            --out "$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
 
       - name: Sanity-check vsix contents
         run: |
-          VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.vsix"
+          VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
           L="$(unzip -l "$VSIX")"
           echo "$L" | grep -q 'extension/vendor/materialx/manifest.json' || { echo "::error::vendor/materialx missing — vsix would not be offline"; exit 1; }
           echo "$L" | grep -q 'extension/js/gen/mtlx-version.json' || { echo "::error::js/gen missing (specDocs.js requires it)"; exit 1; }
@@ -166,8 +168,8 @@ jobs:
       - name: Upload vsix artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.pkg.outputs.name }}-vsix
-          path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.vsix
+          name: ${{ steps.pkg.outputs.vsix_name }}
+          path: ${{ runner.temp }}/${{ steps.pkg.outputs.vsix_name }}.vsix
           if-no-files-found: error
 
   upload:
@@ -185,7 +187,7 @@ jobs:
       - name: Download vsix artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.package.outputs.name }}-vsix
+          name: ${{ needs.package.outputs.vsix_name }}
 
       - name: Attach to release
         env:
@@ -197,4 +199,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ needs.package.outputs.name }}.vsix" --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ needs.package.outputs.vsix_name }}.vsix" --clobber

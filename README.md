@@ -109,6 +109,28 @@ localStorage.setItem('mtlxPerfLog', '1');      // log graph-editor timing (scope
 
 Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off again.
 
+## VS Code extension (experimental)
+
+The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation for node types, and the node library documentation as its own panel.
+
+> ⚠️ **Early, experimental release.** The extension is a work in progress and hasn't had wide testing yet — things may not be 100%, so expect rough edges and please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). It is currently distributed only as a `.vsix` file on the releases page (not the Visual Studio Marketplace) and does not auto-update.
+
+### Install
+
+Requires VS Code 1.85 or newer.
+
+1. Download the `.vsix` asset (named like `materialx-playground-vscode-v2026.8.3.vsix`) from the [latest release](https://github.com/joaovbs96/MaterialXPlayground/releases/latest).
+2. Install it either way:
+   - **VS Code UI:** Extensions view → `···` (Views and More Actions) menu → **Install from VSIX…** → pick the downloaded file. Equivalently, run **"Extensions: Install from VSIX…"** from the Command Palette, or just drag the `.vsix` file onto the Extensions view.
+   - **Command line:** `code --install-extension path/to/materialx-playground-vscode-<version>.vsix`
+3. Open any `.mtlx` file — the playground opens beside the text editor automatically (configurable via the `materialx.*` settings). All commands are under "MaterialX Playground:" in the Command Palette, including the standalone node documentation browser.
+
+The packaged extension is fully self-contained: it bundles the MaterialX libraries, curated examples, and spec content, and performs no network requests.
+
+### Update / uninstall
+
+There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension local.materialx-playground`.
+
 ## Tech stack
 
 - [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) (WebAssembly build: core + GenShader)
@@ -130,7 +152,7 @@ Some files in this repo are produced by scripts rather than written by hand: the
 
 - Custom geometry load support as GLB/GLTF/OBJ for all tools (USD/USDZ TBD).
 - **Interactive tutorials subsite**: a guided, hands-on set of MaterialX tutorials, served alongside the app (in progress).
-- **VS Code extension**: a custom `.mtlx` editor with live preview, validation, and hover docs, built on the same engine as the web app (in progress).
+- **VS Code extension**: a custom `.mtlx` editor with live preview, validation, and hover docs, built on the same engine as the web app (in progress — [early experimental builds](#vs-code-extension-experimental) are available from the releases page).
 
 Have a feature request or idea? File it on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues).
 
