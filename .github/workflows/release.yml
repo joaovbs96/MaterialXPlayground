@@ -16,10 +16,12 @@
 #   - Actions are pinned to full commit SHAs (kept fresh by Dependabot).
 #
 # Failure modes worth knowing:
-#   - A tag↔version guard fails fast if package.json's "version" doesn't
-#     match the release tag, so the .vsix (and the version users see after
-#     install) can never drift from what was tagged — bump "version",
-#     npm install, commit, re-tag, re-publish.
+#   - The extension version users see after install is DERIVED from the
+#     release tag (package.json's "version" is overwritten in the runner
+#     before packaging — the committed value only matters for manual
+#     workflow_dispatch builds). Tags must therefore look like
+#     v<major>.<minor>.<patch>; a malformed tag fails fast before any
+#     expensive work — delete the tag, re-tag correctly, re-publish.
 #   - The stale-artifact gate re-runs deploy.yml's guarantee against the
 #     tagged commit. If a release is cut from a commit that fails it, this
 #     job fails BEFORE packaging — fix the commit, re-tag, re-publish.
@@ -63,16 +65,16 @@ jobs:
           node-version: 24
           cache: npm
 
-      # The .vsix filename and the version users see after install both come
-      # from package.json's "version" — releasing with a stale version would
-      # ship a wrongly-versioned extension, so fail fast on drift.
-      - name: Enforce release tag matches package.json version
+      # The extension version is derived from the release tag (see the
+      # "Set extension version from release tag" step below), and vsce
+      # refuses non-semver versions — so validate the tag shape here,
+      # before any expensive work.
+      - name: Validate release tag shape
         if: github.event_name == 'release'
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          PKG="v$(node -p "require('./package.json').version")"
-          [ "$PKG" = "$TAG" ] || { echo "::error::package.json version ($PKG) does not match release tag ($TAG) — bump \"version\" in package.json to ${TAG#v}, run npm install, commit, re-tag, re-publish."; exit 1; }
+          echo "${TAG#v}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::release tag ($TAG) is not v<major>.<minor>.<patch> — the extension version is derived from the tag, so it must be \"v\" + a plain semver triplet. Delete the tag, re-tag, re-publish."; exit 1; }
 
       - name: Install dependencies
         run: npm ci
@@ -90,6 +92,19 @@ jobs:
 
       - name: Check
         run: npm run check
+
+      # The version users see after install comes from package.json's
+      # "version" — derive it from the release tag so cutting a release
+      # never requires a version-bump commit. This intentionally dirties
+      # the tree AFTER the stale-artifact gate certified it and `npm run
+      # check` ran against the pristine tree; the staged site and the
+      # .vsix both pick up the derived version. Manual workflow_dispatch
+      # runs keep the committed version as-is.
+      - name: Set extension version from release tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: npm pkg set version="${TAG#v}"
 
       - name: Determine package name
         id: pkg
