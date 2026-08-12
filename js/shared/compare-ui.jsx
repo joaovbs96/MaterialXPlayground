@@ -58,7 +58,11 @@ const CompareDivider = ({ pos, onPos, zClass = 'z-20' }) => {
 // Small pill label pinned to a bottom corner of the same relative parent.
 // className/style let a caller nudge the default position (e.g. clear a
 // sidebar overlaying the left view) without changing the default look.
-const CompareLabel = ({ side, children, className, style }) => (
+// `version`: optional pre-formatted tag (e.g. 'v1.39.4'), rendered as a
+// muted suffix inside the same pill. Callers should pass this only when
+// the two compared panes actually differ — the whole point of surfacing
+// it — so the common case (same version both sides) stays unchanged.
+const CompareLabel = ({ side, children, version, className, style }) => (
     <div
         className={
             'absolute z-20 m-2 px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90 pointer-events-none '
@@ -68,6 +72,7 @@ const CompareLabel = ({ side, children, className, style }) => (
         style={style}
     >
         {children}
+        {version && <span className="ml-1.5 text-white/50">{version}</span>}
     </div>
 );
 

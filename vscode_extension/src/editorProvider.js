@@ -72,13 +72,14 @@ async function buildHtml(context, webview, initialHash, docsOnly) {
 // behave identically everywhere the site runs.
 
 // Whitelist for 'mtlx-fetch' paths: exactly the MaterialX Emscripten
-// payloads under js/ (JsMaterialX*.data / *.wasm, including versioned
-// names like JsMaterialXGenShader-1.39.5.data). The webview must NOT be
-// able to read arbitrary disk paths through this bridge — no slashes
-// beyond the fixed 'js/' prefix, no '..' escapes (the character class
-// admits dots but the single fixed prefix means the path can never leave
-// js/), nothing that isn't a MaterialX payload.
-const FETCH_WHITELIST_RE = /^js\/JsMaterialX[\w.\-]*\.(data|wasm)$/;
+// payloads under js/materialx/<version>/ (JsMaterialX*.data / *.wasm,
+// including versioned names like JsMaterialXGenShader-1.39.5.data). The
+// webview must NOT be able to read arbitrary disk paths through this
+// bridge — no '..' escapes: the version segment is \d+\.\d+\.\d+, so
+// every '.' in it is digit-flanked and can never form '..', and
+// 'js/materialx/' + 'JsMaterialX' are fixed text, not wildcards — so the
+// path can never leave js/materialx/<version>/.
+const FETCH_WHITELIST_RE = /^js\/materialx\/\d+\.\d+\.\d+\/JsMaterialX[\w.\-]*\.(data|wasm)$/;
 
 // One OutputChannel for the whole extension, created lazily on the first
 // forwarded webview error — most sessions never need it, and channels

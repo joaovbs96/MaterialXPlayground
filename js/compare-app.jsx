@@ -11,8 +11,8 @@ const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphe
 // Same recipe as viewer-app.jsx's loadMtlxDocument: parse + attach stdlib
 // + list renderables. Duplicated locally (each lazy view script is its
 // own scope, no shared imports) rather than reaching into viewer-app.jsx.
-const loadMtlxDocument = async (xmlText) => {
-    const { mx, gen, genContext, stdlib, lightData } = await getMxEnv();
+const loadMtlxDocument = async (xmlText, version) => {
+    const { mx, gen, genContext, stdlib, lightData } = await getMxEnv(version);
     const doc = mx.createDocument();
     if (typeof mx.readFromXmlString !== 'function') {
         throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
@@ -36,6 +36,11 @@ const useCompareSlot = () => {
     const [chosenMtlx, setChosenMtlx] = React.useState(null);
     const [renderables, setRenderables] = React.useState([]);
     const [chosenMat, setChosenMat] = React.useState(0);
+    // Per-pane MaterialX engine version. Defaults to the stamped default —
+    // a Document belongs to the mx instance that parsed it, so changing
+    // this mid-session re-parses via loadDocument (see its versionArg
+    // below) rather than just retargeting future loads.
+    const [version, setVersion] = React.useState(window.MtlxAssets.MTLX_DEFAULT_VERSION);
     const [busy, setBusy] = React.useState(false);
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
@@ -45,15 +50,21 @@ const useCompareSlot = () => {
     const canvasRef = React.useRef(null);
     const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
 
-    const loadDocument = async (path, mapArg) => {
+    // versionArg lets a version-switch handler force the FRESH version
+    // into the same tick it changed it — plain `version` state wouldn't
+    // have re-rendered yet, so its closure here would still read the old
+    // value (same reason ingest() below passes `merged` explicitly rather
+    // than relying on the `fileMap` state closure).
+    const loadDocument = async (path, mapArg, versionArg) => {
         const map = mapArg || fileMapRef.current;
+        const ver = versionArg || version;
         setError(null);
         setTexReport(null);
         setBusy(true);
         setStatus('Parsing ' + path + '…');
         try {
             const { resolved: xml } = await readMtlxText(map[path], path, map);
-            const loaded = await loadMtlxDocument(xml);
+            const loaded = await loadMtlxDocument(xml, ver);
             loadedRef.current = loaded;
             setRenderables(loaded.renderables);
             if (!loaded.renderables.length) {
@@ -130,6 +141,7 @@ const useCompareSlot = () => {
     return {
         fileMap, fileMapRef, mtlxPaths, chosenMtlx, setChosenMtlx,
         renderables, chosenMat, setChosenMat,
+        version, setVersion,
         busy, setBusy, status, setStatus, error, setError,
         texReport, setTexReport,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
@@ -392,6 +404,53 @@ function MaterialCompareApp({ active = true } = {}) {
     useCameraSync(() => [slotA.viewRef.current, slotB.viewRef.current], slotA.viewEpoch + slotB.viewEpoch);
 
     const [dragOver, setDragOver] = useSplitFileDrop(activeRef);
+
+    // ---- Per-pane MaterialX version registry + availability probe --------
+    // MtlxAssets.ready (awaited by shell.jsx before any view mounts) has
+    // already populated these by the time this component exists.
+    const mtlxVersions = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
+    const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
+    const versionLabels = {};
+    mtlxVersions.forEach((v) => { versionLabels[v] = 'MaterialX ' + v; });
+    const versionBadges = { [mtlxDefaultVersion]: 'Default' };
+
+    // Non-default versions are gitignored and may simply be absent from a
+    // plain clone — probe once per version so the dropdown never offers a
+    // choice that would fail with a raw WASM/fetch error. Undecided (probe
+    // still in flight) is treated as unavailable until confirmed, so a
+    // version can only ever be SELECTED once it's known-good; the default
+    // is never probed (always committed).
+    const [versionAvailable, setVersionAvailable] = React.useState({});
+    React.useEffect(() => {
+        let cancelled = false;
+        mtlxVersions.filter((v) => v !== mtlxDefaultVersion).forEach((v) => {
+            // Modeled on js/mtlx-assets.js's manifest probe: a no-store
+            // HEAD against the version's entry script, ok/not-ok only.
+            fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', { method: 'HEAD', cache: 'no-store' })
+                .then((res) => {
+                    if (cancelled) return;
+                    setVersionAvailable((prev) => Object.assign({}, prev, { [v]: !!(res && res.ok) }));
+                })
+                .catch(() => {
+                    if (cancelled) return;
+                    setVersionAvailable((prev) => Object.assign({}, prev, { [v]: false }));
+                });
+        });
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    // GeomSelect has no notion of a disabled option, and extending it is
+    // out of scope here (js/shared/mtlx-ui.jsx isn't one of this pass's
+    // two touchable files) — so unavailable versions are filtered out of
+    // `options` instead, with a one-line hint standing in for the "not in
+    // this build" note a disabled row would otherwise carry.
+    const availableVersionOptions = mtlxVersions.filter((v) => v === mtlxDefaultVersion || versionAvailable[v] === true);
+    const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+
+    // Whole-feature signal for Task 4's labels: only worth surfacing the
+    // version at all once the two panes actually diverge.
+    const versionsDiffer = slotA.version !== slotB.version;
+    const versionTag = (v) => 'v' + v;
 
     // Re-apply the current env sliders to a freshly (re)built view — a
     // rebuild starts from envUI.bg only (see useCompareRenderEffect);
@@ -748,6 +807,31 @@ function MaterialCompareApp({ active = true } = {}) {
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={slot.onPickFiles} />
                     </label>
                 </div>
+                <div className="space-y-1">
+                    <div className="text-[11px] text-gray-500">MaterialX version</div>
+                    <GeomSelect
+                        value={slot.version}
+                        options={availableVersionOptions}
+                        labels={versionLabels}
+                        badges={versionBadges}
+                        onChange={(v) => {
+                            slot.setVersion(v);
+                            // A Document belongs to the mx instance that
+                            // parsed it, so switching versions re-parses
+                            // the already-chosen file with the new engine.
+                            // Nothing to reload if no document is loaded yet.
+                            if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
+                        }}
+                        className={'w-full justify-between bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200'
+                            + (slot.busy ? ' opacity-50 pointer-events-none' : '')}
+                    />
+                    {unavailableVersions.length > 0 && (
+                        <div className="text-[10px] text-gray-500">
+                            {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
+                            {unavailableVersions.length === 1 ? ' is' : ' are'} not available in this build.
+                        </div>
+                    )}
+                </div>
                 {fileCount > 0 && (
                     <div className="text-[11px] text-gray-500">
                         <span className="text-gray-300 font-semibold">{fileCount}</span> file{fileCount === 1 ? '' : 's'}
@@ -838,7 +922,10 @@ function MaterialCompareApp({ active = true } = {}) {
                         className={'absolute top-2 flex justify-center pointer-events-none z-20' + (sidebarOpen ? '' : ' inset-x-0')}
                         style={sidebarOpen ? { left: 336, right: 0 } : undefined}
                     >
-                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">{docName(slotA, 'Document A')}</span>
+                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                            {docName(slotA, 'Document A')}
+                            {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotA.version)}</span>}
+                        </span>
                     </div>
                 )}
             </div>
@@ -847,7 +934,10 @@ function MaterialCompareApp({ active = true } = {}) {
                 {renderSlotOverlays(slotB)}
                 {displayMode === 'side' && (
                     <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
-                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">{docName(slotB, 'Document B')}</span>
+                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                            {docName(slotB, 'Document B')}
+                            {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotB.version)}</span>}
+                        </span>
                     </div>
                 )}
             </div>
@@ -898,10 +988,17 @@ function MaterialCompareApp({ active = true } = {}) {
             {displayMode === 'slider' && (
                 <React.Fragment>
                     <CompareDivider pos={sliderPos} onPos={setSliderPos} />
-                    <CompareLabel side="left" style={sidebarOpen ? { left: 336 } : undefined}>
+                    <CompareLabel
+                        side="left"
+                        style={sidebarOpen ? { left: 336 } : undefined}
+                        version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'left') ? versionTag(slotA.version) : null}
+                    >
                         {effShowDiff && swipeDiffPos === 'left' ? 'Difference' : docName(slotA, 'Document A')}
                     </CompareLabel>
-                    <CompareLabel side="right">
+                    <CompareLabel
+                        side="right"
+                        version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'right') ? versionTag(slotB.version) : null}
+                    >
                         {effShowDiff && swipeDiffPos === 'right' ? 'Difference' : docName(slotB, 'Document B')}
                     </CompareLabel>
                 </React.Fragment>

@@ -58,6 +58,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Runs on EVERY event (push, PR, release, workflow_dispatch) —
+      # not gated to releases — so an upstream 404, a moved release
+      # asset, or a pinned sha256 drift is caught here, on a PR, rather
+      # than surfacing only when release.yml runs at release time. The
+      # fetched files land in js/materialx/<version>/ and are gitignored
+      # (see .gitignore), so they can't trip the staleness gates below.
+      - name: Fetch non-default MaterialX versions
+        run: npm run vendor:versions
+
       - name: Set up Python (tutorials subsite)
         if: hashFiles('tutorials-src/mkdocs.yml') != ''
         uses: actions/setup-python@v7

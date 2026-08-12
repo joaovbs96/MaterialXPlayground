@@ -342,8 +342,8 @@ editor.
 ### How the extension serves the MaterialX WASM payloads
 
 The site's Emscripten glue loads its packed standard-library filesystem
-and wasm binary (`js/JsMaterialX*.data` / `*.wasm`, ~1.5 MB / ~2 MB) via
-plain `fetch()`. VS Code's webview resource pipeline alters those large
+and wasm binary (`js/materialx/<version>/JsMaterialX*.data` / `*.wasm`,
+~1.5 MB / ~2 MB) via plain `fetch()`. VS Code's webview resource pipeline alters those large
 binaries in transit — the packed-FS slice offsets shift and the MaterialX
 standard libraries fail to parse, which breaks the docs view and all
 shader generation. So `media/bootstrap.js` intercepts exactly those

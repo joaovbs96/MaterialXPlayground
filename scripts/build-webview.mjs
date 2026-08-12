@@ -94,7 +94,7 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          build step, by design — js/shell.jsx,
                          js/graph-app.jsx, etc. are all loaded that way);
                          'wasm-unsafe-eval' for WebAssembly.instantiate
-                         (js/JsMaterialXCore.wasm / JsMaterialXGenShader.wasm).
+                         (js/materialx/<version>/JsMaterialXGenShader.wasm).
            style-src   \${cspSource} 'unsafe-inline'
                        — the vendored Tailwind Play build injects a
                          <style> tag at runtime from \${cspSource}, and the

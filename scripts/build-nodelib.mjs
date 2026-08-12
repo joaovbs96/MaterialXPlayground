@@ -54,13 +54,16 @@ function serialize(x) {
 
 /** Instantiates the vendored WASM build (mirrors version.mjs's
  * extractVersionFromWasm() / mtlx-engine.js's getMxEnv()), plus a
- * GenContext + stdlib for walking nodedefs. Returns { mx, stdlib }. */
-async function loadMxEnv() {
-  const jsPath = path.join(REPO_ROOT, "js", "JsMaterialXGenShader.js");
+ * GenContext + stdlib for walking nodedefs. `version` is the default
+ * version's directory name under js/materialx/ (from readVersionMeta()).
+ * Returns { mx, stdlib }. */
+async function loadMxEnv(version) {
+  const versionDir = path.join(REPO_ROOT, "js", "materialx", version);
+  const jsPath = path.join(versionDir, "JsMaterialXGenShader.js");
   const mod = await import(pathToFileURL(jsPath));
   const mx = await mod.default({
     // .wasm and .data live next to the .js.
-    locateFile: (p) => path.join(REPO_ROOT, "js", p),
+    locateFile: (p) => path.join(versionDir, p),
   });
   const gen = mx.EsslShaderGenerator.create();
   const ctx = new mx.GenContext(gen);
@@ -77,7 +80,7 @@ async function build() {
   const MtlxSpecParser = require("./lib/spec-parser.js");
   MtlxSpecParser.SPEC_TAG = meta.tag;
 
-  const { mx, stdlib } = await loadMxEnv();
+  const { mx, stdlib } = await loadMxEnv(meta.version);
 
   // Layer 1: spec-derived node database (description/notes/port_tables from
   // the spec markdown, joined against the WASM nodedefs).

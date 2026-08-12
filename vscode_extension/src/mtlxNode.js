@@ -1,5 +1,6 @@
 // mtlxNode.js — headless (extension-host) loader for the bundled
-// MaterialX WASM build (js/JsMaterialXGenShader.js), plus a semantic
+// MaterialX WASM build (js/materialx/<version>/JsMaterialXGenShader.js),
+// plus a semantic
 // (parse + validate) check for .mtlx documents. Pure Node: this module
 // must NOT require('vscode') anywhere, so it stays independently
 // loadable/testable with plain `node` — validator.js (the only caller)
@@ -22,10 +23,33 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { errMsg } = require('./util');
 
-// Expected byte size of js/JsMaterialXGenShader.data, the packed
-// emscripten virtual-FS archive carrying the MaterialX standard
-// library. See the KNOWN HAZARD comment in attemptLoad() below.
+// Expected byte size of the default version's JsMaterialXGenShader.data
+// (js/materialx/<version>/), the packed emscripten virtual-FS archive
+// carrying the MaterialX standard library. See the KNOWN HAZARD comment
+// in attemptLoad() below. Still describes the default version — only its
+// path changed when js/ was reorganized into per-version directories.
 const EXPECTED_DATA_SIZE = 1481718;
+
+// Default MaterialX version directory name under js/materialx/. Read
+// from js/gen/mtlx-version.json (committed, and not excluded by
+// .vscodeignore, so it ships inside the .vsix alongside js/materialx/)
+// instead of duplicating the literal here, so this can't silently drift
+// from js/mtlx-engine.js's MTLX_DEFAULT_VERSION (which
+// scripts/lib/version.mjs's STAMP_TABLE keeps stamped to the committed
+// WASM). Falls back to a local literal only if that file is somehow
+// unreadable, so a load attempt still has a version to try instead of
+// failing before it names one.
+const FALLBACK_MTLX_VERSION = '1.39.5';
+function getDefaultMtlxVersion(repoRoot) {
+    try {
+        const raw = fs.readFileSync(path.join(repoRoot, 'js', 'gen', 'mtlx-version.json'), 'utf8');
+        const meta = JSON.parse(raw);
+        if (meta && typeof meta.version === 'string' && /^\d+\.\d+\.\d+$/.test(meta.version)) {
+            return meta.version;
+        }
+    } catch (e) { /* js/gen/mtlx-version.json missing/unreadable — fall back below */ }
+    return FALLBACK_MTLX_VERSION;
+}
 
 // ---------------------------------------------------------------------
 // Local mirrors of js/mtlx-engine.js helpers (lines ~299-351 there).
@@ -80,11 +104,13 @@ let pendingError = null;
 // setDataLibrary/importLibrary — constructing a shader-generator object
 // does not require a graphics context.
 async function attemptLoad(repoRoot) {
-    const dataPath = path.join(repoRoot, 'js', 'JsMaterialXGenShader.data');
+    const versionDir = path.join(repoRoot, 'js', 'materialx', getDefaultMtlxVersion(repoRoot));
+    const dataPath = path.join(versionDir, 'JsMaterialXGenShader.data');
 
-    // KNOWN HAZARD: js/JsMaterialXGenShader.data is a packed emscripten
-    // virtual-FS archive — a BINARY file. A CRLF-smudged checkout (git
-    // autocrlf mangling a binary that should have been left alone)
+    // KNOWN HAZARD: JsMaterialXGenShader.data (js/materialx/<version>/)
+    // is a packed emscripten virtual-FS archive — a BINARY file. A
+    // CRLF-smudged checkout (git autocrlf mangling a binary that should
+    // have been left alone)
     // silently corrupts it, and wasm init then fails with a cryptic,
     // unhelpful error far downstream (inside stdlib XML parsing, nowhere
     // near this file). Catch it early with an actionable message instead.
@@ -109,14 +135,14 @@ async function attemptLoad(repoRoot) {
         }
     }
 
-    const jsPath = path.join(repoRoot, 'js', 'JsMaterialXGenShader.js');
+    const jsPath = path.join(versionDir, 'JsMaterialXGenShader.js');
     let mx = null;
     try {
         const mod = await import(pathToFileURL(jsPath).href);
         mx = await mod.default({
             // MUST return a plain filesystem path string, NOT a file://
             // URL. Verified via grep of the minified glue
-            // (js/JsMaterialXGenShader.js): in the Node (`isNode`)
+            // (JsMaterialXGenShader.js): in the Node (`isNode`)
             // branch, the .data package fetch does
             // `require("fs").readFile(packageName, cb)` with NO file://
             // handling at all — packageName comes straight from
@@ -129,7 +155,7 @@ async function attemptLoad(repoRoot) {
             // plain-path-returning locateFile satisfies both — do NOT
             // "fix" this into a file:// URL later, it will break the
             // .data fetch specifically.
-            locateFile: (fileName) => path.join(repoRoot, 'js', fileName),
+            locateFile: (fileName) => path.join(versionDir, fileName),
         });
 
         if (!mx.EsslShaderGenerator || typeof mx.EsslShaderGenerator.create !== 'function') {

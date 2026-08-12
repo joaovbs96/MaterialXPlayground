@@ -7,22 +7,35 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { DEFAULT_MTLX_VERSION } from "./mtlx-versions.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 export const VERSION_META_PATH = path.join(REPO_ROOT, "js", "gen", "mtlx-version.json");
+export const VERSIONS_META_PATH = path.join(REPO_ROOT, "js", "gen", "mtlx-versions.json");
+
+// Bootstrap note: extractVersionFromWasm() below GENERATES
+// js/gen/mtlx-version.json, so it cannot read that file to learn which
+// version directory to load — it has to know the committed default up
+// front. DEFAULT_MTLX_VERSION comes from scripts/lib/mtlx-versions.mjs
+// (the single source of truth for the version registry), never a local
+// literal here, so this can't independently drift from that table.
+// Mirrors js/mtlx-engine.js's MTLX_DEFAULT_VERSION literal (stamped
+// separately via STAMP_TABLE below); every other Node-side caller in
+// this repo instead threads readVersionMeta().version through, once
+// it's available.
 
 /** Load the vendored WASM the same way the browser does (only
  * JsMaterialXGenShader.js — loading JsMaterialXCore.js too double-
  * registers embind types) and read its self-reported version. */
 export async function extractVersionFromWasm() {
-  const jsPath = path.join(REPO_ROOT, "js", "JsMaterialXGenShader.js");
+  const jsPath = path.join(REPO_ROOT, "js", "materialx", DEFAULT_MTLX_VERSION, "JsMaterialXGenShader.js");
   const mod = await import(pathToFileURL(jsPath));
   const mx = await mod.default({
     // .wasm and .data live next to the .js.
-    locateFile: (p) => path.join(REPO_ROOT, "js", p),
+    locateFile: (p) => path.join(REPO_ROOT, "js", "materialx", DEFAULT_MTLX_VERSION, p),
   });
   const version = mx.getVersionString();
   const versionIntegers = Array.from(mx.getVersionIntegers());
@@ -92,6 +105,16 @@ export const STAMP_TABLE = [
     re: /\(`\.js`\/`\.wasm`\/`\.data`, (v[\d.]+)\)/,
     replacement: (meta) => `(\`.js\`/\`.wasm\`/\`.data\`, ${meta.tag})`,
   },
+  {
+    path: "js/mtlx-engine.js",
+    describe: "MTLX_DEFAULT_VERSION literal",
+    // A bare X.Y.Z (no "v") — it's a js/materialx/<version>/ path
+    // segment, not a display tag — so it's compared against
+    // meta.version rather than the default meta.tag via expect().
+    re: /const MTLX_DEFAULT_VERSION = '(\d[\d.]*)';/,
+    replacement: (meta) => `const MTLX_DEFAULT_VERSION = '${meta.version}';`,
+    expect: (meta) => meta.version,
+  },
 ];
 
 /** Applies every STAMP_TABLE replacement in place; errors (rather than
@@ -142,8 +165,9 @@ export async function checkStamps(meta) {
     }
 
     const found = match[1];
-    if (found !== meta.tag) {
-      problems.push(`${entry.path}: found ${found}, expected ${meta.tag}`);
+    const expected = entry.expect ? entry.expect(meta) : meta.tag;
+    if (found !== expected) {
+      problems.push(`${entry.path}: found ${found}, expected ${expected}`);
     }
   }
   return problems;
