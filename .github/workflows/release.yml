@@ -189,6 +189,13 @@ jobs:
           Z="$(unzip -l "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip")"
           echo "$Z" | grep -q 'vendor/materialx/manifest.json' \
             || { echo "::error::manifest.json missing from zip"; exit 1; }
+          # embed/ (the self-hostable <materialx-viewer> web embed) must ship
+          # in the offline zip — it's the only place self-hosting docs point
+          # people at (see docs/EMBEDDING.md's "Self-hosting" section).
+          echo "$Z" | grep -q 'embed/viewer.html' \
+            || { echo "::error::embed/viewer.html missing from zip — the offline package would not support self-hosted embeds"; exit 1; }
+          echo "$Z" | grep -q 'embed/mtlx-viewer.js' \
+            || { echo "::error::embed/mtlx-viewer.js missing from zip — the offline package would not support self-hosted embeds"; exit 1; }
           # Re-verify every supported MaterialX version made it into the
           # actual zip entries (not just the pre-zip staged tree above).
           for V in ${{ steps.pkg.outputs.mtlx_versions }}; do
@@ -225,7 +232,7 @@ jobs:
           echo "$L" | grep -q 'extension/js/gen/mtlx-version.json' || { echo "::error::js/gen missing (specDocs.js requires it)"; exit 1; }
           echo "$L" | grep -q 'extension/environment_map.mtlx' || { echo "::error::environment_map.mtlx missing (light-rig fetch)"; exit 1; }
           echo "$L" | grep -q 'extension/vscode_extension/src/extension.js' || { echo "::error::extension sources missing"; exit 1; }
-          if echo "$L" | grep -qE 'extension/(node_modules|scripts|\.github)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          if echo "$L" | grep -qE 'extension/(node_modules|scripts|\.github|embed)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
 
           # Positive: the default version's WASM path just moved under
           # js/materialx/<version>/ — a silent miss here would ship a

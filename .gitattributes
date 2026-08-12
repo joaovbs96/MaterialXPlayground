@@ -49,6 +49,12 @@ vendor/** -text
 # (or a plain git diff) spuriously fail.
 js/gen/** text eol=lf
 
+# embed/gen/ holds precompiled viewer JS (see scripts/build-embed.mjs) that
+# is byte-compared by --check; force LF for the same reason as js/gen/**
+# above — a Windows checkout's autocrlf setting would otherwise make the
+# comparison spuriously fail.
+embed/gen/** text eol=lf
+
 # tutorials/ is committed mkdocs build output, byte-compared against a fresh
 # rebuild by CI. mkdocs writes LF on every platform; force LF here too so a
 # Windows checkout's autocrlf=true can't check these files out as CRLF and

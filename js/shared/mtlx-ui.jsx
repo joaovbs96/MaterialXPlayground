@@ -639,9 +639,14 @@ const downloadXml = (xml, filename) => {
 // Bundles the viewport-control state cluster shared by the three preview
 // surfaces: rotate/env toggles, env-availability, fullscreen, screenshot.
 // `getSnapshotBase` supplies the PNG base name; no try/catch here by design.
-const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
-    const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
-    const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
+// `initialRotating`/`initialEnvBg`: optional seed values for the two
+// toggles (embed/viewer.html's `autorotate`/`background` query params, via
+// js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
+// every existing caller omits these, and `!!undefined` is `false`, so
+// today's default (both off) is unchanged.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg) => {
+    const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
+    const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
     const [envAvail, setEnvAvail] = React.useState(false);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
@@ -994,6 +999,9 @@ const ViewportControls = ({
     showBackgroundToggle = true,
     viewRef, viewEpoch,
     onScreenshot,
+    // Hides the screenshot button. Additive — every existing caller omits
+    // this and keeps today's always-shown behavior.
+    showScreenshot = true,
     isFullscreen, onToggleFullscreen,
     children,
     trailingChildren,
@@ -1001,6 +1009,10 @@ const ViewportControls = ({
     // Force Transparency block. Node or render prop; docs previewer is
     // the only consumer today.
     settingsChildren,
+    // Hides the settings cog. Additive, like showScreenshot above; the
+    // popover it opens (SettingsDialog) already renders null while closed,
+    // so hiding just the trigger is enough.
+    showSettings = true,
     envDialogPlacement,
     containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
     selectClassName = 'h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300',
@@ -1148,6 +1160,7 @@ const ViewportControls = ({
                 )}
             </React.Fragment>
         )}
+        {showScreenshot && (
         <button
             onClick={onScreenshot}
             title="Save a PNG preview of the current view"
@@ -1156,7 +1169,9 @@ const ViewportControls = ({
             <MtlxIcon name="camera" className="w-3.5 h-3.5" />
             {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
         </button>
+        )}
         {typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren}
+        {showSettings && (
         <button
             ref={settingsBtnRef}
             onClick={() => setSettingsOpen((o) => !o)}
@@ -1166,6 +1181,7 @@ const ViewportControls = ({
             <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
             {showLabels && <span className="ml-1.5 whitespace-nowrap">Settings</span>}
         </button>
+        )}
         {onToggleFullscreen && (
         <button
             onClick={onToggleFullscreen}

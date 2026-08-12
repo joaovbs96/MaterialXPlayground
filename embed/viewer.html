@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MaterialX Viewer</title>
+
+    <!-- Hand-written, NOT generated (unlike vscode_extension/media/webview.html,
+         which mirrors index.html — this page deliberately shares nothing with
+         it: no shell, no site-header, no Tailwind, no Babel, no hash router).
+         See the Embeddable MaterialX Viewer plan for the full rationale.
+
+         scripts/build-embed.mjs's --check asserts (in normal mode too) that
+         every vendor/three/** and js/vendor/** script index.html loads also
+         appears somewhere below (or is named in that script's
+         INTENTIONALLY_EXCLUDED list with a reason) — so a future three.js
+         loader added to index.html can't silently go missing here. If that
+         check ever fails, read its message; it names the missing file.
+
+         BASE HREF: this file lives at /embed/viewer.html, one directory
+         below the site root, but js/mtlx-engine.js resolves every asset
+         (MaterialX WASM, models/*.glb, env_maps/*.exr) against
+         document.baseURI using paths written for a root-level document
+         (e.g. './js/materialx/…', 'models/…') — see mtlx-engine.js:68,
+         :1308, :1629 and the ~12 other sites doing the same. Without help
+         those would resolve to /embed/js/… and 404. A single <base
+         href="../"> below (the same trick vscode_extension/media/webview.html
+         uses with its own vscode-resource base) fixes document.baseURI for
+         the WHOLE page — including this document's own relative asset
+         URLs, `new URL(..., document.baseURI)` calls in js/mtlx-assets.js,
+         and every fetch() the engine issues. The tradeoff: every relative
+         URL in the rest of THIS file (script src, the stylesheet href) must
+         now be written root-relative (e.g. "vendor/three/…",
+         "embed/embed.css") rather than relative to this file's own
+         directory — an `embed/gen/…` script written as `gen/…` here would
+         silently 404 once the base tag is in effect. Verified in the
+         browser Network panel: no 404s for js/materialx/**, models/**, or
+         env_maps/** with this base in place. -->
+    <base href="../">
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #111827; /* gray-900 — matches the chromeless viewport's own backdrop */
+            overflow: hidden;
+            /* index.html's <body> carries Tailwind's `font-sans` utility;
+               that's outside MaterialViewerApp's own JSX (its root div
+               never sets a font utility, relying on inheriting this from
+               body), so it has to be set explicitly here too — same stack
+               as js/site-tokens.css's --site-font-sans, not reused only
+               because this page doesn't load that file (see its header
+               comment for why). Without this the HUD/dialog text falls
+               back to the browser's default serif font. */
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            color: #f3f4f6; /* gray-100, matches index.html body's text-gray-100 */
+        }
+        #root {
+            position: absolute;
+            inset: 0;
+        }
+    </style>
+    <!-- Root-relative per the <base> note above: this is embed/embed.css,
+         written without the leading "embed/" it would need from this
+         file's own directory. -->
+    <link rel="stylesheet" href="embed/embed.css">
+
+    <!-- Vendor scripts embed/viewer.html actually needs, in the same load
+         ORDER index.html uses (order matters — EXRLoader needs fflate and
+         THREE loaded first; see index.html:58-96 for the full per-file
+         provenance/ordering rationale, not repeated here). No Tailwind, no
+         Babel: this page ships only precompiled classic scripts. -->
+    <script src="vendor/react/react.production.min.js"></script>
+    <script src="vendor/react/react-dom.production.min.js"></script>
+    <script src="vendor/three/three.min.js"></script>
+    <script src="vendor/three/RGBELoader.js"></script>
+    <script src="vendor/three/fflate.min.js"></script>
+    <script src="js/vendor/EXRLoader.js"></script>
+    <script src="vendor/three/GLTFLoader.js"></script>
+    <script src="vendor/three/OrbitControls.js"></script>
+    <script src="js/mtlx-assets.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- JS-off fallback — mirrors index.html's noscript block. Inline
+         styles only; embed.css never runs without JavaScript either. -->
+    <noscript>
+        <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#111827;color:#f3f4f6;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Noto Sans',sans-serif;text-align:center;padding:24px;">
+            <div style="max-width:420px;">
+                <h1 style="font-size:1.4rem;margin:0 0 10px;">This embed requires JavaScript</h1>
+                <p style="color:#9ca3af;margin:0;line-height:1.5;">The MaterialX viewer renders client-side in your browser. Please enable JavaScript to continue.</p>
+            </div>
+        </div>
+    </noscript>
+
+    <!-- Shared UI commons (icon registry) — must precede the engine and
+         every view script, same requirement as index.html:148. Plain
+         script, no transform needed (js/shared/ui-commons.js is JSX-free). -->
+    <script src="js/shared/ui-commons.js"></script>
+
+    <script>
+        // Loads the remaining precompiled scripts (scripts/build-embed.mjs)
+        // and embed-boot.js, in order, working around two load-order
+        // hazards a plain run of <script src> tags would hit:
+        //
+        // 1. js/mtlx-engine.js:68 does `import('./js/materialx/' + ver +
+        //    '/JsMaterialXGenShader.js')` — a DYNAMIC import(). Per the
+        //    HTML spec, a dynamic import() inside a classic (non-module)
+        //    script resolves its specifier against that SCRIPT'S OWN base
+        //    URL, not document.baseURI/the <base> tag above — a different
+        //    rule than fetch()/new URL(..., document.baseURI)/relative
+        //    <script src> attributes, which all DO respect <base>. Loaded
+        //    as a plain `<script src="embed/gen/mtlx-engine.js">`, that
+        //    own-URL would be .../embed/gen/mtlx-engine.js, so the
+        //    import() would resolve to .../embed/gen/js/materialx/…
+        //    (confirmed 404 in testing) instead of .../js/materialx/… .
+        //    index.html/webview.html never hit this: babel-standalone
+        //    fetches js/mtlx-engine.js's SOURCE and injects the transformed
+        //    result as an INLINE script (no src attribute), whose base URL
+        //    IS the document's own — this loader reproduces that same
+        //    fetch-then-inline-inject shape for the precompiled output,
+        //    without needing Babel to do it.
+        //
+        // 2. js/mtlx-assets.js (loaded in <head>) starts its local-vs-
+        //    remote probe at parse time but resolves ASYNCHRONOUSLY. The
+        //    main app never races this: js/shell.jsx's loadViewDeps()
+        //    awaits window.MtlxAssets.ready once before loading any
+        //    per-view script. This page has no shell to do that waiting
+        //    for it, but two of the remaining scripts call
+        //    window.MtlxAssets.repoUrl()/resourcesRoot() at their own TOP
+        //    LEVEL, synchronously, the moment they execute — js/shared/
+        //    mtlx-ui.jsx's MTLX_PRESETS_BASE and js/viewer-app.jsx's
+        //    DEFAULT_MATERIAL_URL. Running them before MtlxAssets.ready
+        //    settles would let those calls resolve in "remote" mode even
+        //    on a self-hosted offline build (see the plan's "Hosted by
+        //    default, self-hosting supported" decision) — wrong until the
+        //    next full page load, not just briefly.
+        //
+        // Each step waits for the previous to FINISH executing before the
+        // next even starts loading — required because embed/gen/mtlx-ui.js
+        // and embed/gen/viewer-app.js are each wrapped in their own IIFE
+        // (scripts/build-embed.mjs's `wrap: true`) and reach each other's
+        // exports only via window (each file's own
+        // Object.assign(window, {...}) at the bottom); embed/gen/
+        // mtlx-engine.js is unwrapped (`wrap: false`) and shares top-level
+        // const/let bindings with later scripts via the ordinary global
+        // script scope regardless of how it was loaded.
+        (function () {
+            function fetchAndRunInline(src) {
+                return fetch(src, { cache: 'no-cache' })
+                    .then(function (res) {
+                        if (!res.ok) throw new Error('Failed to fetch ' + src + ': ' + res.status);
+                        return res.text();
+                    })
+                    .then(function (code) {
+                        var el = document.createElement('script');
+                        el.textContent = code;
+                        document.body.appendChild(el);
+                    });
+            }
+            function loadOne(src) {
+                return new Promise(function (resolve, reject) {
+                    var el = document.createElement('script');
+                    el.src = src;
+                    el.onload = resolve;
+                    el.onerror = function () { reject(new Error('Failed to load ' + src)); };
+                    document.body.appendChild(el);
+                });
+            }
+            fetchAndRunInline('embed/gen/mtlx-engine.js')
+                .then(function () { return window.MtlxAssets.ready; })
+                .then(function () {
+                    var REMAINING = ['embed/gen/mtlx-ui.js', 'embed/gen/viewer-app.js', 'embed/embed-boot.js'];
+                    return REMAINING.reduce(function (chain, src) {
+                        return chain.then(function () { return loadOne(src); });
+                    }, Promise.resolve());
+                })
+                .catch(function (e) {
+                    console.error('[embed] failed to load viewer scripts:', e);
+                    var root = document.getElementById('root');
+                    if (root) {
+                        root.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fca5a5;font:13px ui-sans-serif,system-ui,sans-serif;text-align:center;padding:16px;">Failed to load the MaterialX viewer — see the browser console for details.</div>';
+                    }
+                });
+        })();
+    </script>
+</body>
+</html>

@@ -20,6 +20,7 @@
     "build": "node scripts/build.mjs",
     "build:vendor": "node scripts/build.mjs vendor",
     "build:nodelib": "node scripts/build.mjs nodelib",
+    "build:embed": "node scripts/build.mjs embed",
     "build:tutorials": "node scripts/build.mjs tutorials",
     "build:webview": "node scripts/build.mjs webview",
     "check": "node scripts/build.mjs --check"

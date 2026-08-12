@@ -8,6 +8,15 @@
 
         const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
 
+        // Geometry names this component actually knows how to render —
+        // mirrors ViewportControls' own default `geomList` (js/shared/
+        // mtlx-ui.jsx), since viewer-app.jsx never overrides that prop.
+        // Used only to validate the `geometry` controlled prop (embed/
+        // viewer.html's ?geometry= query param, a later step); an
+        // unrecognized value falls back to today's default rather than
+        // being handed to the engine as-is.
+        const VIEWER_GEOM_NAMES = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
+
         // Official OpenPBR default material, resolved via window.MtlxAssets
         // (not a hardcoded URL) so a future offline build can serve it
         // locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
@@ -52,7 +61,27 @@
 
         // ---- App ------------------------------------------------------------
 
-        function MaterialViewerApp({ active = true } = {}) {
+        function MaterialViewerApp({
+            active = true, embed = false, controls = null,
+            // Optional controlled props for the embeddable viewer
+            // (embed/embed-boot.js's postMessage adapter). Every one
+            // defaults to today's uncontrolled behavior — js/shell.jsx
+            // passes only `active` — so the main app is bit-for-bit
+            // unaffected by their existence.
+            geometry, envRotation, envExposure, envBackground, autoRotate,
+            documentUrl, onView, onRenderables, onReady, onError,
+        } = {}) {
+            // Embed mode: strips this down to a bare render surface — no
+            // Files sidebar, no site-shell-coupled buttons (Send to Graph
+            // Editor / Presets / Shader Code), no dialogs — for a future
+            // third-party iframe embed (embed/viewer.html, a later step).
+            // Named `chromeless` to mirror js/docs-app.jsx:91-99's identical
+            // concept (there: `inline || EMBED`); only one signal feeds it
+            // here today, but the name keeps the two views' vocabulary the
+            // same, and `chromeless` (not `embed`) is what the JSX below
+            // reads throughout. `controls` (below, near the HUD) separately
+            // opts specific ViewportControls buttons back in while chromeless.
+            const chromeless = embed;
             // True inside the VS Code extension webview (set by its bootstrap
             // before any site script runs). The editor is bound to one opened
             // .mtlx file, so browser-only affordances (drop zone, pickers) are hidden.
@@ -64,6 +93,19 @@
             activeRef.current = active;
             const canvasRef = React.useRef(null);
             const viewRef = React.useRef(null);
+            // Callback props, mirrored into refs (ingestRef/activeRef
+            // pattern, above) so the effects below can call the LATEST
+            // caller-supplied function without needing it in a dependency
+            // array — a fresh inline arrow from an embed host on every
+            // render must never retrigger a view rebuild.
+            const onViewRef = React.useRef(onView);
+            onViewRef.current = onView;
+            const onRenderablesRef = React.useRef(onRenderables);
+            onRenderablesRef.current = onRenderables;
+            const onReadyRef = React.useRef(onReady);
+            onReadyRef.current = onReady;
+            const onErrorRef = React.useRef(onError);
+            onErrorRef.current = onError;
             const [fileMap, setFileMap] = React.useState({});          // relPath -> File|Blob
             // Ref mirror of fileMap: `ingest` and the async render effect
             // read it so rapid successive drops (and texture binding after a
@@ -73,9 +115,20 @@
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [renderables, setRenderables] = React.useState([]);
             const [chosenMat, setChosenMat] = React.useState(0);
-            const [geom, setGeom] = React.useState('shaderball-scene');
+            // Initial geometry: the `geometry` controlled prop when it names
+            // a geometry this component can render, else today's default —
+            // undefined (the uncontrolled case, every existing caller)
+            // always falls through to 'shaderball-scene' unchanged.
+            const [geom, setGeom] = React.useState(
+                VIEWER_GEOM_NAMES.indexOf(geometry) !== -1 ? geometry : 'shaderball-scene');
             const [status, setStatus] = React.useState('Loading the default material…');
             const [error, setError] = React.useState(null);
+            // Reports a failure both to the local error banner (unchanged
+            // behavior) and to the optional onError controlled prop.
+            const reportError = (msg) => {
+                setError(msg);
+                if (onErrorRef.current) onErrorRef.current(msg);
+            };
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             // Compact-mode threshold: drives the toolbar's label/icon switch
@@ -123,7 +176,11 @@
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: onToggleFullscreen,
                 takeScreenshot: takeScreenshotRaw,
-            } = useViewportControls(viewRef, viewportRef, getSnapshotBase);
+            // autoRotate/envBackground: controlled props seed the hook's
+            // initial toggle state (`!!undefined` -> false for every
+            // existing, uncontrolled caller — see useViewportControls'
+            // header comment in js/shared/mtlx-ui.jsx).
+            } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground);
             // The hook's takeScreenshot has no internal try/catch (the
             // previewers swallow failures silently); here it surfaces as
             // an error banner instead, so the wrapping stays local.
@@ -138,6 +195,11 @@
             // stash loose files alongside, and let the shell's hash route
             // swap views (listens for 'mtlx-load-document', graph-app.jsx).
             const sendToEditor = () => {
+                // Embed mode has no site shell to navigate to — hashing to
+                // '#!graph' would drag the host page's iframe off the
+                // viewer. No-op the HANDLER (not just the button that
+                // calls it), so no other path can reach openInGraphEditor.
+                if (chromeless) return;
                 const loaded = loadedRef.current;
                 if (!loaded || !loaded.doc) return;
                 let xml;
@@ -180,7 +242,7 @@
                 try {
                     await expandZips(map);
                 } catch (e) {
-                    setError(errMsg(e));
+                    reportError(errMsg(e));
                     return;
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
@@ -233,12 +295,14 @@
             ingestRef.current = ingest;
             // Disabled under VS Code: the editor is bound to a single opened
             // .mtlx file, so dropping other documents onto the page doesn't
-            // apply.
+            // apply. Also disabled in embed mode: the host page may run its
+            // own drag-and-drop, and there is no sidebar here to show a
+            // dropped file's result. Could be made opt-in later.
             useWindowFileDrop({
                 activeRef,
                 onFiles: (map) => ingestRef.current(map),
                 onDragState: setDragOver,
-                disabled: IN_VSCODE,
+                disabled: IN_VSCODE || chromeless,
             });
 
             // ---- Receives a material handed off by the graph editor's
@@ -305,18 +369,43 @@
 
             // Warm the MaterialX WASM + environment map on mount, instead of
             // paying for them on the first drop. Also resolves the version
-            // badge in the shared header right away.
+            // badge in the shared header right away. onReady/onError are
+            // additive: getMxEnv() still resolves/rejects exactly as before
+            // for every existing (non-embed) caller, which simply never
+            // passed those props.
             React.useEffect(() => {
-                getMxEnv().catch(() => {});
+                getMxEnv()
+                    .then(() => {
+                        if (onReadyRef.current) onReadyRef.current(window.__mtlxVersion || null);
+                    })
+                    .catch((e) => {
+                        if (onErrorRef.current) onErrorRef.current('MaterialX engine failed to load: ' + errMsg(e));
+                    });
                 try { getEnvironment(); } catch (e) { /* optional */ }
             }, []);
 
+            // Geometry controlled-prop sync: an embed host changing its
+            // `geometry` prop after mount (e.g. embed-boot.js's setGeometry
+            // postMessage handler re-rendering with a new value) updates
+            // `geom` here. Guarded so: (a) an uncontrolled caller (geometry
+            // always undefined) never fires this, and (b) the HUD's own
+            // GeomSelect (when `controls` opts it in) isn't fought — this
+            // only reacts to the PROP actually changing, not to `geom`
+            // drifting away from it via the user's own selection.
+            const geometryPropRef = React.useRef(geometry);
+            React.useEffect(() => {
+                if (geometry === geometryPropRef.current) return;
+                geometryPropRef.current = geometry;
+                if (VIEWER_GEOM_NAMES.indexOf(geometry) !== -1) setGeom(geometry);
+            }, [geometry]);
+
             // Default material: page opens with open_pbr_default.mtlx
-            // fetched from the MaterialX repo, through the normal ingest()
-            // path. Skipped silently if offline or the user loaded first.
+            // fetched from the MaterialX repo (or `documentUrl`, when the
+            // caller supplies one), through the normal ingest() path.
+            // Skipped silently if offline or the user loaded first.
             React.useEffect(() => {
                 setBusy(true); // bar from the very first paint until rendered
-                fetch(DEFAULT_MATERIAL_URL)
+                fetch(documentUrl || DEFAULT_MATERIAL_URL)
                     .then((r) => {
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         return r.text();
@@ -366,10 +455,11 @@
                     const loaded = await loadMtlxDocument(xml);
                     loadedRef.current = loaded;
                     setRenderables(loaded.renderables);
+                    if (onRenderablesRef.current) onRenderablesRef.current(loaded.renderables);
                     if (!loaded.renderables.length) {
                         setStatus(null);
                         setBusy(false);
-                        setError('The document parsed, but contains no renderable material (no surfacematerial or surfaceshader node).');
+                        reportError('The document parsed, but contains no renderable material (no surfacematerial or surfaceshader node).');
                         return;
                     }
                     setChosenMat(0);
@@ -378,7 +468,7 @@
                 } catch (e2) {
                     setStatus(null);
                     setBusy(false);
-                    setError(errMsg(e2));
+                    reportError(errMsg(e2));
                 }
             };
 
@@ -388,7 +478,11 @@
                 if (!loaded || !loaded.renderables.length) return undefined;
                 let mounted = true;
                 const run = async () => {
-                    if (viewRef.current) { viewRef.current.dispose(); viewRef.current = null; }
+                    if (viewRef.current) {
+                        viewRef.current.dispose();
+                        viewRef.current = null;
+                        if (onViewRef.current) onViewRef.current(null);
+                    }
                     setError(null);
                     setTexReport(null);
                     setBusy(true);
@@ -414,28 +508,52 @@
                         if (!view) return; // superseded: the new run drives `busy`
                         if (!mounted) { view.dispose(); return; }
                         viewRef.current = view;
+                        // Initial env rotation/exposure controlled props —
+                        // applied once per (re)build, same as autoRotate/
+                        // envBackground above. Live updates after this point
+                        // go straight through the handle onView hands the
+                        // caller, not through these props (see onView below).
+                        if (typeof envRotation === 'number' && view.setEnvRotation) {
+                            view.setEnvRotation(envRotation * Math.PI / 180);
+                        }
+                        if (typeof envExposure === 'number' && view.setEnvExposure) {
+                            view.setEnvExposure(envExposure);
+                        }
                         setViewEpoch((n) => n + 1);
                         const report = bindDroppedTextures(view, fileMapRef.current);
                         setTexReport(report);
                         setStatus(null);
                         setBusy(false);
+                        if (onViewRef.current) onViewRef.current(view);
                     } catch (e2) {
                         if (mounted) {
                             setStatus(null);
                             setBusy(false);
-                            setError(errMsg(e2));
+                            reportError(errMsg(e2));
                         }
                     }
                 };
                 run();
                 return () => {
                     mounted = false;
-                    if (viewRef.current) { viewRef.current.dispose(); viewRef.current = null; }
+                    if (viewRef.current) {
+                        viewRef.current.dispose();
+                        viewRef.current = null;
+                        if (onViewRef.current) onViewRef.current(null);
+                    }
                 };
             }, [renderables, chosenMat, geom]);
 
             const fileCount = Object.keys(fileMap).length;
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
+
+            // Embed HUD opt-in: which ViewportControls buttons chromeless
+            // mode shows. Recognized names: 'geometry', 'rotate', 'reset',
+            // 'env', 'screenshot', 'settings', 'fullscreen'. Ignored (every
+            // showCtl() call short-circuits true) when !chromeless, so the
+            // full app's HUD is unaffected.
+            const embedControls = Array.isArray(controls) ? controls : [];
+            const showCtl = (name) => !chromeless || embedControls.indexOf(name) !== -1;
 
             return (
                 // IN_VSCODE: height chain fills the webview. Browser:
@@ -443,10 +561,11 @@
                 // (js/shell.jsx's viewer wrapClass is now empty).
                 <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'absolute inset-0 bg-gray-900 overflow-hidden'}>
                     {/* Full-page drop indicator, below the sticky header
-                        (top-14). z-40 matches the graph z-convention
+                        (top-14) — except in embed mode, which has no header
+                        to clear (top-0). z-40 matches the graph z-convention
                         (controls 10/30 < drop 40 < dialogs 50); pointer-events-none. */}
                     {dragOver && (
-                        <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
+                        <div className={`fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`}>
                             <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
                                 <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
                                     <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
@@ -484,8 +603,10 @@
                                 />
                                 {/* Rendered even with nothing loaded (browser only) so
                                     the Presets button stays reachable if the default-material
-                                    fetch failed. IN_VSCODE keeps the original renderables-only gate. */}
-                                {(renderables.length > 0 || !IN_VSCODE) && (
+                                    fetch failed. IN_VSCODE keeps the original renderables-only gate.
+                                    Chromeless: only rendered at all once `controls` opts at least
+                                    one button in — showCtl() below then picks which ones. */}
+                                {(renderables.length > 0 || !IN_VSCODE) && (!chromeless || embedControls.length > 0) && (
                                     <ViewportControls
                                         containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
                                         selectClassName="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
@@ -497,27 +618,34 @@
                                         geom={geom}
                                         onGeomChange={setGeom}
                                         geomBadges={{ 'shaderball-scene': 'Default' }}
+                                        showGeomSelect={showCtl('geometry')}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Engine no-ops auto-rotate for the full scene, and the
                                         // backdrop box fully occludes the env-background sky
                                         // sphere - hide both controls while it's selected.
-                                        showRotate={geom !== 'shaderball-scene'}
+                                        showRotate={showCtl('rotate') && geom !== 'shaderball-scene'}
                                         showBackgroundToggle={geom !== 'shaderball-scene'}
-                                        onCameraReset={() => {
+                                        onCameraReset={showCtl('reset') ? () => {
                                             const v = viewRef.current;
                                             if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
-                                        }}
+                                        } : undefined}
+                                        envAvail={showCtl('env')}
                                         envBg={envBg}
                                         onToggleEnvBg={toggleEnvBg}
                                         viewRef={viewRef}
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
+                                        showScreenshot={showCtl('screenshot')}
+                                        showSettings={showCtl('settings')}
                                         isFullscreen={isFullscreen}
-                                        onToggleFullscreen={onToggleFullscreen}
+                                        onToggleFullscreen={showCtl('fullscreen') ? onToggleFullscreen : undefined}
                                         showLabels={!narrow}
                                         labelsClass={(!IN_VSCODE && sidebarOpen) ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'}
-                                        trailingChildren={(labels) => (
+                                        // Site-shell-coupled (hash-routes to another view, or
+                                        // opens a dialog that assumes it owns the window) —
+                                        // hidden entirely in embed mode, not opt-in via `controls`.
+                                        trailingChildren={chromeless ? undefined : (labels) => (
                                             <React.Fragment>
                                                 {/* Graph and viewer are always in sync in the
                                                     extension (one opened .mtlx file), so this
@@ -563,8 +691,10 @@
                                     >
                                         {/* Material picker surfaces here only in fullscreen
                                             (sidebar out of reach) or under VS Code, where the
-                                            left-column picker is hidden. */}
-                                        {(isFullscreen || IN_VSCODE) && renderables.length > 1 && (
+                                            left-column picker is hidden. Chromeless: always
+                                            hidden — there's no sidebar to lack in the first place,
+                                            and it's not one of the `controls` opt-in names. */}
+                                        {(isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && (
                                             <select
                                                 value={chosenMat}
                                                 onChange={(e) => setChosenMat(Number(e.target.value))}
@@ -602,8 +732,10 @@
 
                     {/* Floating left "Files" sidebar (browser only), mirroring the
                         graph editor's param panel but anchored left. May cover the
-                        HUD's left edge at narrow widths — collapse it to reach the HUD. */}
-                    {!IN_VSCODE && (sidebarOpen ? (
+                        HUD's left edge at narrow widths — collapse it to reach the HUD.
+                        Hidden entirely in embed mode (drop zone, pickers, document/
+                        material <select>, texture report, collapse chevron and all). */}
+                    {!IN_VSCODE && !chromeless && (sidebarOpen ? (
                         <div className="absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden">
                             <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
                                 <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Files</span>
@@ -711,11 +843,16 @@
 
                     {/* Both dialogs use the `fixed` overlay variant (not
                         DialogFrame's `absolute` default) so the backdrop covers
-                        the whole window, including the shared header/footer. */}
+                        the whole window, including the shared header/footer.
+                        Not rendered in embed mode: they assume they own the
+                        window, and there's no trigger button to reach them
+                        from anyway (both live in trailingChildren, above). */}
+                    {!chromeless && (
                     <PresetsDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} onPick={loadPreset}
                         busy={presetsBusy} busyPath={presetsBusyPath}
                         overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70" />
-                    {shaderExportOpen && loadedRef.current && (
+                    )}
+                    {!chromeless && shaderExportOpen && loadedRef.current && (
                         <ShaderExportDialog open={true} onClose={() => setShaderExportOpen(false)}
                             renderables={renderables} initialIndex={chosenMat}
                             overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"

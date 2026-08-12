@@ -20,3 +20,10 @@ images/preview-*.jpg
 # webview nav. The default is computed in scripts/lib/mtlx-versions.mjs
 # (DEFAULT_MTLX_VERSION); update this line if that ever changes.
 js/materialx/1.39.4/**
+
+# embed/ (the <materialx-viewer> web-embed bundle: embed/gen/*.js,
+# embed/mtlx-viewer.js, embed/viewer.html, embed/embed.css) is a
+# web-only distribution path. The webview always loads index.html's own
+# view scripts and never references anything under embed/, so bundling
+# it here would just be ~370 KB of dead weight in the .vsix.
+embed/**

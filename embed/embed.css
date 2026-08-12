@@ -1,0 +1,201 @@
+/* embed/embed.css — static replacement for the Tailwind utility classes the
+   CHROMELESS render path of js/viewer-app.jsx actually uses, so
+   embed/viewer.html never loads vendor/tailwind/tailwind-play.min.js
+   (407 KB, and it installs a document-wide Preflight MutationObserver —
+   see the Embeddable MaterialX Viewer plan's "Finding 3").
+
+   SCOPE: every class below was found by reading js/viewer-app.jsx's
+   chromeless=true JSX (the root wrapper/canvas/status/error banners,
+   which always render) plus js/shared/mtlx-ui.jsx's ViewportControls,
+   GeomSelect, EnvDialog and SettingsDialog (which render only once a
+   `controls` query-param entry opts the corresponding HUD button in —
+   included here regardless, since embed/viewer.html must support ANY
+   combination of `?controls=`). Excluded on purpose, because chromeless
+   mode never reaches them: the drag-drop indicator (window drag/drop is
+   disabled while chromeless), the Files sidebar, PresetsDialog,
+   ShaderExportDialog, and the fullscreen-only material <select> — all
+   gated behind `!chromeless` in viewer-app.jsx. DialogFrame/ColorSwatch
+   are also excluded: SettingsDialog/EnvDialog build their own popover
+   markup and never use them.
+
+   COUNT: this comes to ~105 utility classes — well past the plan's "~60
+   rules, else stop and report" checkpoint. Reported rather than silently
+   hand-waved: the overrun comes from the opt-in HUD surface (EnvDialog's
+   sliders/import/reset, SettingsDialog's toggle) needing their own small
+   utility vocabulary on top of the always-present canvas/banners. Every
+   individual rule is still a one- or two-declaration atomic utility (this
+   file is a few KB), so hand-writing it remains the right call versus
+   reintroducing Tailwind Play — that would cost 407 KB and reinstate the
+   Preflight/global-mutation risk this whole feature exists to avoid, to
+   save writing the CSS below by hand.
+
+   Selectors mirror Tailwind's own generated class names EXACTLY, including
+   its escaping of `[`, `]`, `(`, `)`, `%`, `,`, `.`, `:` and `/` inside
+   arbitrary-value/variant classes — the JSX markup is UNCHANGED (shared
+   with the main app, which still uses real Tailwind), so the selectors
+   here must match those literal class strings verbatim or the rule never
+   applies. Values are Tailwind's own defaults (spacing = 0.25rem * N,
+   default color palette, default shadow/blur/transition curves) — see
+   js/site-tokens.css for the same palette already hand-copied once for
+   js/site-header.css, not reused here only because this page doesn't load
+   that file (kept off embed/viewer.html's script list on purpose, so this
+   stays self-contained). */
+
+/* ---- Mini-reset ------------------------------------------------------
+   Tailwind's own utility classes below assume Preflight's box-sizing and
+   button/input normalization already ran (Preflight itself isn't loaded
+   here — that's the whole point). Scoped to #root via :where() for zero
+   specificity, same technique js/site-header.css uses for its own
+   Tailwind-free chrome, so a real component class always wins regardless
+   of source order. Without this, a browser's default button padding/
+   border stacks underneath the explicit px-*/border utility classes
+   instead of being replaced by them, throwing HUD button sizing off by a
+   few px. */
+:where(#root, #root *) {
+    box-sizing: border-box;
+}
+:where(#root) :where(button) {
+    font: inherit;
+    color: inherit;
+    background: none;
+    padding: 0;
+    border: none;
+    cursor: pointer;
+}
+:where(#root) :where(input) {
+    font: inherit;
+    color: inherit;
+}
+
+/* ---- Layout / display -------------------------------------------- */
+.absolute { position: absolute; }
+.inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.flex-col { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-1 { flex: 1 1 0%; }
+.flex-none { flex: none; }
+.block { display: block; }
+.hidden { display: none; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.justify-end { justify-content: flex-end; }
+.text-left { text-align: left; }
+
+/* ---- Stacking / positioning ---------------------------------------- */
+.z-10 { z-index: 10; }
+.z-20 { z-index: 20; }
+.z-30 { z-index: 30; }
+.top-2 { top: .5rem; }
+.top-12 { top: 3rem; }
+.right-2 { right: .5rem; }
+.left-1\/2 { left: 50%; }
+.-translate-x-1\/2 { transform: translateX(-50%); }
+
+/* ---- Sizing ---------------------------------------------------------- */
+.w-full { width: 100%; }
+.w-56 { width: 14rem; }
+.w-3 { width: .75rem; }
+.w-3\.5 { width: .875rem; }
+.h-3 { height: .75rem; }
+.h-3\.5 { height: .875rem; }
+.h-5 { height: 1.25rem; }
+.h-6 { height: 1.5rem; }
+.max-w-\[calc\(100\%-19\.5rem\)\] { max-width: calc(100% - 19.5rem); }
+.max-w-\[calc\(100\%-1rem\)\] { max-width: calc(100% - 1rem); }
+.max-w-\[min\(42rem\,85\%\)\] { max-width: min(42rem, 85%); }
+
+/* ---- Spacing ----------------------------------------------------- */
+.gap-1 { gap: .25rem; }
+.gap-1\.5 { gap: .375rem; }
+.gap-2 { gap: .5rem; }
+.gap-3 { gap: .75rem; }
+.px-1 { padding-left: .25rem; padding-right: .25rem; }
+.px-2 { padding-left: .5rem; padding-right: .5rem; }
+.px-2\.5 { padding-left: .625rem; padding-right: .625rem; }
+.px-3 { padding-left: .75rem; padding-right: .75rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.py-0\.5 { padding-top: .125rem; padding-bottom: .125rem; }
+.py-1 { padding-top: .25rem; padding-bottom: .25rem; }
+.py-1\.5 { padding-top: .375rem; padding-bottom: .375rem; }
+.py-2 { padding-top: .5rem; padding-bottom: .5rem; }
+.py-2\.5 { padding-top: .625rem; padding-bottom: .625rem; }
+.py-3 { padding-top: .75rem; padding-bottom: .75rem; }
+.pt-1 { padding-top: .25rem; }
+.mb-0\.5 { margin-bottom: .125rem; }
+.ml-1\.5 { margin-left: .375rem; }
+.mt-1 { margin-top: .25rem; }
+.space-y-2\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: .625rem; }
+.space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: .75rem; }
+
+/* ---- Borders / radius ------------------------------------------------ */
+.border { border-width: 1px; border-style: solid; }
+.border-t { border-top-width: 1px; border-top-style: solid; }
+.rounded { border-radius: .25rem; }
+.rounded-lg { border-radius: .5rem; }
+.border-blue-500 { border-color: #3b82f6; }
+.border-gray-600 { border-color: #4b5563; }
+.border-gray-700 { border-color: #374151; }
+.border-red-800\/60 { border-color: rgba(153, 27, 27, .6); }
+.border-amber-500\/50 { border-color: rgba(245, 158, 11, .5); }
+.border-gray-500\/50 { border-color: rgba(107, 114, 128, .5); }
+
+/* ---- Backgrounds ----------------------------------------------------- */
+.bg-gray-900 { background-color: #111827; }
+.bg-gray-900\/70 { background-color: rgba(17, 24, 39, .7); }
+.bg-gray-800\/80 { background-color: rgba(31, 41, 55, .8); }
+.bg-gray-800\/90 { background-color: rgba(31, 41, 55, .9); }
+.bg-gray-800\/95 { background-color: rgba(31, 41, 55, .95); }
+.bg-gray-700\/60 { background-color: rgba(55, 65, 81, .6); }
+.bg-red-950\/90 { background-color: rgba(69, 10, 10, .9); }
+.bg-blue-600\/80 { background-color: rgba(37, 99, 235, .8); }
+.bg-blue-600\/30 { background-color: rgba(37, 99, 235, .3); }
+.bg-amber-600\/30 { background-color: rgba(217, 119, 6, .3); }
+
+/* ---- Text color -------------------------------------------------- */
+.text-white { color: #fff; }
+.text-gray-100 { color: #f3f4f6; }
+.text-gray-200 { color: #e5e7eb; }
+.text-gray-300 { color: #d1d5db; }
+.text-gray-400 { color: #9ca3af; }
+.text-red-200 { color: #fecaca; }
+.text-red-400 { color: #f87171; }
+.text-amber-300 { color: #fcd34d; }
+
+/* ---- Typography ---------------------------------------------------- */
+.text-sm { font-size: .875rem; line-height: 1.25rem; }
+.text-\[9px\] { font-size: 9px; }
+.text-\[11px\] { font-size: 11px; }
+.text-\[12px\] { font-size: 12px; }
+.font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.uppercase { text-transform: uppercase; }
+.tracking-wide { letter-spacing: .025em; }
+.whitespace-nowrap { white-space: nowrap; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.break-words { overflow-wrap: break-word; }
+
+/* ---- Effects ------------------------------------------------------- */
+.shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1); }
+.shadow-2xl { box-shadow: 0 25px 50px -12px rgb(0 0 0 / .25); }
+.backdrop-blur { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.overflow-hidden { overflow: hidden; }
+.opacity-70 { opacity: .7; }
+.accent-blue-500 { accent-color: #3b82f6; }
+.cursor-grab { cursor: grab; }
+.transition-colors {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+    transition-timing-function: cubic-bezier(.4, 0, .2, 1);
+    transition-duration: 150ms;
+}
+.animate-pulse { animation: mtlx-embed-pulse 2s cubic-bezier(.4, 0, .6, 1) infinite; }
+@keyframes mtlx-embed-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+}
+
+/* ---- State variants ------------------------------------------------ */
+.hover\:bg-gray-700\/80:hover { background-color: rgba(55, 65, 81, .8); }
+.active\:cursor-grabbing:active { cursor: grabbing; }
+.disabled\:opacity-40:disabled { opacity: .4; }

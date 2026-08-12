@@ -3,10 +3,12 @@
 // derived/committed artifact in this repo and verifies none drifted.
 //
 // Usage: node scripts/build.mjs [step] [--check] [--with-materialx]
-//   step: all | version | versions | stamp | vendor | nodelib | tutorials | webview
+//   step: all | version | versions | stamp | vendor | nodelib | embed | tutorials | webview
 //
-// Order for `all`: version -> versions -> vendor -> nodelib -> tutorials -> webview.
-// version runs first: vendor/nodelib read js/gen/mtlx-version.json.
+// Order for `all`: version -> versions -> vendor -> nodelib -> embed -> tutorials -> webview.
+// version runs first: vendor/nodelib read js/gen/mtlx-version.json. embed runs after
+// nodelib (both are source-derived generators) and before webview; it depends only on
+// the js/ sources, not on anything vendor/nodelib produce.
 //
 // `versions` is the non-default MaterialX WASM builds (js/materialx/<v>/
 // for every entry in scripts/lib/mtlx-versions.mjs other than the
@@ -29,7 +31,7 @@ const CHECK_MODE = argv.includes("--check");
 const WITH_MATERIALX = argv.includes("--with-materialx");
 const STEP = argv.find((a) => !a.startsWith("--")) || "all";
 
-const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "tutorials", "webview"];
+const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "embed", "tutorials", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
   console.error(`error: unknown step "${STEP}" — expected one of: ${VALID_STEPS.join(", ")}`);
   process.exit(1);
@@ -133,6 +135,15 @@ async function runNodelibStep() {
   );
 }
 
+async function runEmbedStep() {
+  log(`embed: ${CHECK_MODE ? "verifying" : "generating"} embed/gen/*.js (precompiled viewer JSX) ...`);
+  runNodeScript(
+    "embed",
+    path.join(REPO_ROOT, "scripts", "build-embed.mjs"),
+    CHECK_MODE ? ["--check"] : []
+  );
+}
+
 async function runTutorialsStep() {
   const active = existsSync(BUILD_TUTORIALS_PATH) && existsSync(TUTORIALS_MKDOCS_PATH);
   if (!active) {
@@ -161,6 +172,7 @@ async function main() {
     await runVersionsStep();
     await runVendorStep();
     await runNodelibStep();
+    await runEmbedStep();
     await runTutorialsStep();
     await runWebviewStep();
   } else if (STEP === "version") {
@@ -173,6 +185,8 @@ async function main() {
     await runVendorStep();
   } else if (STEP === "nodelib") {
     await runNodelibStep();
+  } else if (STEP === "embed") {
+    await runEmbedStep();
   } else if (STEP === "tutorials") {
     await runTutorialsStep();
   } else if (STEP === "webview") {

@@ -6,7 +6,7 @@ The repo follows a **committed-artifact model**: every generated file is checked
 
 ## Build steps
 
-`npm run build` runs `scripts/build.mjs`, which sequences six steps — each also available individually, and each with a read-only `--check` mode:
+`npm run build` runs `scripts/build.mjs`, which sequences seven steps — each also available individually, and each with a read-only `--check` mode:
 
 **1. `version` (`scripts/extract-mtlx-version.mjs`)** — the MaterialX version is never hand-typed anywhere in this repo. This step instantiates the vendored WebAssembly module under Node, calls its `getVersionString()`, and writes the result to `js/gen/mtlx-version.json` (`{version, tag, versionIntegers}`). It then *stamps* the few places that need the value as a literal (the header badge fallback in `js/site-header.js`, `js/mtlx-assets.js`, and two lines in the README/docs — which is why those version strings must not be edited by hand). Node-side consumers (`scripts/vendor.mjs`, the VS Code extension's `specDocs.js`) read the JSON directly. Swapping in a new WASM build and running `npm run build` propagates the new version everywhere; `--check` re-extracts from the WASM and fails on any disagreement.
 
@@ -21,9 +21,11 @@ The repo follows a **committed-artifact model**: every generated file is checked
 
 The docs view fetches these two JSONs instead of parsing anything live — browsing the node library is fully WASM-free (the ~3.7 MB engine now loads only if 3D previews are enabled). Generation is deterministic (stable serialization, no timestamps) and finishes with sanity assertions (node counts, schema shape, spot-checks like `standard_surface`'s signatures); `--check` regenerates both files in memory and fails on any byte difference from the committed copies.
 
-**5. `tutorials` (`scripts/build-tutorials.mjs`)** — builds the MkDocs-based tutorials subsite from `tutorials-src/` into the committed `/tutorials/` directory. This step activates automatically when `tutorials-src/mkdocs.yml` exists in the checkout and is skipped otherwise (the tutorials currently live on a separate branch; requires a pip-installed `mkdocs-material`, pinned in `tutorials-src/requirements.txt`).
+**5. `embed` (`scripts/build-embed.mjs`)** — precompiles `js/mtlx-engine.js`, `js/shared/mtlx-ui.jsx`, and `js/viewer-app.jsx` (the exact sources the embeddable `<materialx-viewer>` viewer, `embed/viewer.html`, needs) into classic, pre-transformed scripts under `embed/gen/`. It uses `@babel/standalone` with the same React-only preset the browser applies to these files at request time for the main app — just moved to build time — so the embed page never ships Babel itself (~3 MB, and the single biggest cost of the full app). `--check` re-transforms in memory and fails on any byte difference from the committed `embed/gen/*.js`. It also always verifies (even outside `--check`) that every `vendor/three/**`/`js/vendor/**` `<script>` tag `index.html` loads also appears in `embed/viewer.html`, so a three.js loader added to one page can't silently go missing from the other. See [docs/EMBEDDING.md](EMBEDDING.md) for the consumer-facing embedding guide.
 
-**6. `webview` (`scripts/build-webview.mjs`)** — regenerates `vscode_extension/media/webview.html` from `index.html`. The VS Code extension's webview needs the exact same `<head>`/`<body>` skeleton as the real site plus a handful of webview-only insertions (a Content-Security-Policy meta tag, a `<base>` tag, a bootstrap `<script>` tag, and a focus-outline CSS rule VS Code's Chromium needs but a real browser doesn't) — this step splices those fragments into a copy of `index.html` at two content-based anchors, so the mirror can never silently drift out of sync with the real site. `--check` fails on any byte difference from the committed file.
+**6. `tutorials` (`scripts/build-tutorials.mjs`)** — builds the MkDocs-based tutorials subsite from `tutorials-src/` into the committed `/tutorials/` directory. This step activates automatically when `tutorials-src/mkdocs.yml` exists in the checkout and is skipped otherwise (the tutorials currently live on a separate branch; requires a pip-installed `mkdocs-material`, pinned in `tutorials-src/requirements.txt`).
+
+**7. `webview` (`scripts/build-webview.mjs`)** — regenerates `vscode_extension/media/webview.html` from `index.html`. The VS Code extension's webview needs the exact same `<head>`/`<body>` skeleton as the real site plus a handful of webview-only insertions (a Content-Security-Policy meta tag, a `<base>` tag, a bootstrap `<script>` tag, and a focus-outline CSS rule VS Code's Chromium needs but a real browser doesn't) — this step splices those fragments into a copy of `index.html` at two content-based anchors, so the mirror can never silently drift out of sync with the real site. `--check` fails on any byte difference from the committed file. `embed/` is excluded from the `.vsix` (see `.vscodeignore`) — the webview never loads it.
 
 ## Verification and deployment
 
@@ -34,6 +36,7 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 | You changed... | Run |
 | --- | --- |
 | App code (`js/**.jsx`, CSS, HTML) | nothing — reload the browser |
+| `js/mtlx-engine.js`, `js/viewer-app.jsx`, or `js/shared/mtlx-ui.jsx` (also feeds the embed's precompiled copies) | `npm run build:embed` |
 | A pinned dependency version in `package.json` | `npm install && npm run build:vendor` |
 | The vendored WASM modules (`js/materialx/<version>/JsMaterialX*`) | `npm run build` (re-extracts the version, re-stamps, regenerates the nodelib data) |
 | You want a non-default MaterialX version available locally (e.g. to exercise Compare's multi-version rendering) | `npm run vendor:versions` |
