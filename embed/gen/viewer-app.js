@@ -46,7 +46,7 @@ const DEFAULT_MATERIAL_URL = window.MtlxAssets.repoUrl('resources/Materials/Exam
 
 // Read an .mtlx string into a fresh document (data library attached),
 // and list its renderable materials/shaders.
-const loadMtlxDocument = async xmlText => {
+const loadMtlxDocument = async (xmlText, path) => {
   const {
     mx,
     gen,
@@ -72,13 +72,16 @@ const loadMtlxDocument = async xmlText => {
   // bare surfaceshader nodes as a fallback (see listDocRenderables
   // in js/mtlx-engine.js for the caveat this works around).
   const renderables = listDocRenderables(doc);
+  // `path` rides along so the render effect can stamp what
+  // actually got rendered (renderedMtlx) once a view builds.
   return {
     mx,
     gen,
     genContext,
     lightData,
     doc,
-    renderables
+    renderables,
+    path
   };
 };
 
@@ -157,6 +160,10 @@ function MaterialViewerApp({
   const fileMapRef = React.useRef({});
   const [mtlxPaths, setMtlxPaths] = React.useState([]); // candidates
   const [chosenMtlx, setChosenMtlx] = React.useState(null);
+  // Document actually on screen, vs chosenMtlx (the requested
+  // one), which flips immediately on picker change. Stamped by
+  // the render effect once a view builds from it.
+  const [renderedMtlx, setRenderedMtlx] = React.useState(null);
   const [renderables, setRenderables] = React.useState([]);
   const [chosenMat, setChosenMat] = React.useState(0);
   // Initial geometry: the `geometry` controlled prop when it names
@@ -224,6 +231,10 @@ function MaterialViewerApp({
   // load AND every material/geometry regeneration.
   const [busy, setBusy] = React.useState(false);
   const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
+  // Monotonic guard: two loadDocument calls can be in flight at
+  // once (the document picker changed twice quickly). Whichever
+  // resolves LAST must not stomp state a newer call already wrote.
+  const runRef = React.useRef(0);
 
   // Viewport controls: shared with the previewers via
   // useViewportControls (js/shared/mtlx-ui.jsx). Fullscreen
@@ -294,7 +305,10 @@ function MaterialViewerApp({
       return;
     }
     const files = looseFilesFrom(fileMapRef.current || {});
-    const name = (chosenMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
+    // Filename must match what's actually rendered
+    // (renderedMtlx), not the requested value (chosenMtlx);
+    // a failed switch leaves those two disagreeing.
+    const name = (renderedMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
     openInGraphEditor({
       xml,
       name,
@@ -534,6 +548,7 @@ function MaterialViewerApp({
   };
   const loadDocument = async (path, mapArg) => {
     const map = mapArg || fileMapRef.current;
+    const id = ++runRef.current;
     setError(null);
     setTexReport(null);
     setBusy(true); // stays on through the render effect below
@@ -545,22 +560,30 @@ function MaterialViewerApp({
       const {
         resolved: xml
       } = await readMtlxText(map[path], path, map);
-      const loaded = await loadMtlxDocument(xml);
-      loadedRef.current = loaded;
-      setRenderables(loaded.renderables);
-      if (onRenderablesRef.current) onRenderablesRef.current(loaded.renderables);
+      const loaded = await loadMtlxDocument(xml, path);
+      if (runRef.current !== id) return; // superseded by a newer load
       if (!loaded.renderables.length) {
         setStatus(null);
         setBusy(false);
+        // Same reasoning as the catch below: this document
+        // parsed but has nothing to render, so the previous
+        // one (still valid) stays on screen instead of blanking.
         reportError('The document parsed, but contains no renderable material (no surfacematerial or surfaceshader node).');
         return;
       }
+      loadedRef.current = loaded;
+      setRenderables(loaded.renderables);
+      if (onRenderablesRef.current) onRenderablesRef.current(loaded.renderables);
       setChosenMat(0);
       setStatus(null);
       // Rendering itself is driven by the effect below.
     } catch (e2) {
+      if (runRef.current !== id) return; // superseded by a newer load
       setStatus(null);
       setBusy(false);
+      // The document is still valid; only this switch failed.
+      // Keep rendering the old one instead of blanking a
+      // working view over an unrelated failure.
       reportError(errMsg(e2));
     }
   };
@@ -618,6 +641,10 @@ function MaterialViewerApp({
           view.setEnvExposure(envExposure);
         }
         setViewEpoch(n => n + 1);
+        // What's on screen just changed; stamp the document
+        // that produced it so sendToEditor and the sidebar
+        // note never claim pixels that were never rendered.
+        setRenderedMtlx(loaded.path);
         const report = bindDroppedTextures(view, fileMapRef.current);
         setTexReport(report);
         setStatus(null);
@@ -889,7 +916,9 @@ function MaterialViewerApp({
     }, 'Pick a .mtlx\u2026'), mtlxPaths.map(p => /*#__PURE__*/React.createElement("option", {
       key: p,
       value: p
-    }, p)))), renderables.length > 1 && /*#__PURE__*/React.createElement("div", {
+    }, p))), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] text-amber-300/90 mt-1.5"
+    }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), renderables.length > 1 && /*#__PURE__*/React.createElement("div", {
       className: "bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3"
     }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       className: "text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2"
