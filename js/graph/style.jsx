@@ -10,8 +10,20 @@
 
         const NODE_W = 240;
         // Must track MtlxGraphNode's real metrics (header ~34px, row 22px)
-        // or dagre's ranks drift apart from what actually renders.
-        const nodeHeight = (d) => 38 + (d.inputs.length + d.outputs.length) * 22 + 6;
+        // or dagre's ranks drift apart from what actually renders. Guarded:
+        // a malformed descriptor (non-array inputs/outputs) used to throw
+        // here mid-layout; fall back to 0 rows for the missing side and
+        // warn instead, so one bad node degrades the layout, not the page.
+        const nodeHeight = (d) => {
+            const inputsOk = Array.isArray(d && d.inputs);
+            const outputsOk = Array.isArray(d && d.outputs);
+            if (!inputsOk || !outputsOk) {
+                console.warn('[mtlx] nodeHeight: node "' + (d && d.id) + '" has non-array inputs/outputs — treating the missing side as empty.', d);
+            }
+            const inputCount = inputsOk ? d.inputs.length : 0;
+            const outputCount = outputsOk ? d.outputs.length : 0;
+            return 38 + (inputCount + outputCount) * 22 + 6;
+        };
 
         const layoutScope = (descs, edges) => {
             // Two return points (stored-position fast path vs. dagre) each
@@ -42,6 +54,16 @@
             const posOf = {};
             for (const d of descs) {
                 const n = g.node(d.id); // dagre positions are CENTERS
+                if (!n) {
+                    // dagre never assigned this id a position (e.g. it was
+                    // never g.setNode()'d, or the graph is otherwise out of
+                    // sync with descs). Skip it here — leaving posOf[d.id]
+                    // unset — and let toFlow()'s own guard supply a sane
+                    // default so the node still renders instead of React
+                    // Flow dereferencing an undefined position.
+                    console.warn('[mtlx] layoutScope: dagre produced no position for node "' + d.id + '" — leaving it for toFlow\'s default-position fallback.', d);
+                    continue;
+                }
                 posOf[d.id] = { x: n.x - NODE_W / 2, y: n.y - nodeHeight(d) / 2 };
             }
             if (MTLX_PERF_LOG) {
@@ -145,12 +167,25 @@
                 });
             });
             const posOf = layoutScope(shaped, edges);
-            const nodes = shaped.map((d) => ({
-                id: d.id,
-                type: 'mtlx',
-                position: posOf[d.id],
-                data: d,
-            }));
+            // A missing posOf[d.id] (layoutScope skipped it, or a
+            // stored-position document is missing an entry) would hand
+            // React Flow `position: undefined` — it derefs node.position.x
+            // during its own render, unmounting the root. Fall back to a
+            // small index-based grid (not all-zeros, so fallback nodes
+            // don't stack exactly on top of each other) and warn once.
+            const nodes = shaped.map((d, i) => {
+                let pos = posOf[d.id];
+                if (!pos) {
+                    console.warn('[mtlx] toFlow: no layout position for node "' + d.id + '" — using a default grid position so it still renders.', d);
+                    pos = { x: (i % 6) * (NODE_W + 40), y: Math.floor(i / 6) * 200 };
+                }
+                return {
+                    id: d.id,
+                    type: 'mtlx',
+                    position: pos,
+                    data: d,
+                };
+            });
             const rfEdges = edges.map(toRfEdge);
             return { nodes, edges: rfEdges };
         };

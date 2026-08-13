@@ -84,3 +84,70 @@ const MtlxIcon = (props) => {
 };
 
 Object.assign(window, { MtlxIcon, MTLX_ICON_PATHS });
+
+// ------------------------------------------------------------------
+// Global error capture (browser-side). Until now there was no
+// window 'error'/'unhandledrejection' listener anywhere in js/ — the
+// only precedent is vscode_extension/media/bootstrap.js's postError(),
+// which forwards capped/truncated text to the extension host. This is
+// the same shape (a small cap, per-entry truncation), but LOCAL ONLY:
+// no network call, no telemetry — just an in-memory ring buffer that
+// js/shell.jsx's per-view error boundary (and anything else) can read
+// via mtlxDiagnosticsText() for its "Copy diagnostics" button. Always
+// also console.error, so nothing is hidden from normal devtools use.
+//
+// Lives here (not shell.jsx) because ui-commons.js is the first script
+// after React/Babel to run on every page (index.html, the tutorials
+// subsite's vendored copy, and the VS Code webview) — it must be
+// listening before mtlx-engine.js or shell.jsx even start loading.
+// ------------------------------------------------------------------
+const MTLX_ERROR_LOG_MAX = 20;
+const MTLX_ERROR_CHARS_MAX = 500;
+const __mtlxErrorLog = [];
+function mtlxRecordError(text) {
+    __mtlxErrorLog.push({
+        time: new Date().toISOString(),
+        text: String(text).slice(0, MTLX_ERROR_CHARS_MAX),
+    });
+    if (__mtlxErrorLog.length > MTLX_ERROR_LOG_MAX) __mtlxErrorLog.shift();
+}
+window.addEventListener('error', (event) => {
+    const where = event && event.filename ? ' (' + event.filename + ':' + event.lineno + ')' : '';
+    const err = event && event.error;
+    mtlxRecordError('Uncaught error: ' + ((err && (err.stack || err.message)) || (event && event.message) || 'Unknown error') + where);
+    console.error('[mtlx] Uncaught error:', err || (event && event.message));
+});
+window.addEventListener('unhandledrejection', (event) => {
+    const reason = event && event.reason;
+    mtlxRecordError('Unhandled rejection: ' + String((reason && (reason.stack || reason.message)) || reason));
+    console.error('[mtlx] Unhandled rejection:', reason);
+});
+
+// Formats the ring buffer (plus live page context) as plain text for a
+// "Copy diagnostics" button. `extra` is caller-supplied context, e.g. the
+// specific error/component stack an error boundary just caught — put
+// first since it's almost always the most relevant line.
+function mtlxDiagnosticsText(extra) {
+    const lines = ['MaterialX Playground diagnostics', 'Time: ' + new Date().toISOString()];
+    if (extra) lines.push('', String(extra));
+    lines.push(
+        '',
+        'URL: ' + location.href,
+        'Hash: ' + (location.hash || '(none)'),
+        'User agent: ' + navigator.userAgent,
+        'Viewport: ' + window.innerWidth + 'x' + window.innerHeight,
+    );
+    if (window.__mtlxVersion) lines.push('MaterialX version: ' + window.__mtlxVersion);
+    if (__mtlxErrorLog.length) {
+        lines.push('', 'Recent captured errors (' + __mtlxErrorLog.length + '):');
+        __mtlxErrorLog.forEach((e) => lines.push('[' + e.time + '] ' + e.text));
+    } else {
+        lines.push('', 'No other errors captured this session.');
+    }
+    return lines.join('\n');
+}
+
+Object.assign(window, {
+    mtlxRecordError, mtlxDiagnosticsText,
+    mtlxGetErrorLog: () => __mtlxErrorLog.slice(),
+});

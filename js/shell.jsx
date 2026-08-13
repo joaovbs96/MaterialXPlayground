@@ -205,6 +205,99 @@ async function loadViewDeps(viewName) {
 }
 
 // ------------------------------------------------------------------
+// Per-view error boundary. PreviewErrorBoundary (js/shared/mtlx-ui.jsx)
+// already documents the problem: "The site ships production React with
+// no error boundaries — one render throw anywhere unmounts the ENTIRE
+// app." That one only wraps the docs page's 3D preview. This is the
+// shell-level counterpart, one per view, so a throw anywhere inside a
+// view's own tree degrades to a recoverable card in that view's slot
+// instead of taking down #root (and with it every other view, and the
+// hash router that lives inside the same tree — see shell.jsx's module
+// comment). Defined HERE rather than in mtlx-ui.jsx, deliberately: that
+// file is a lazy per-view dependency loaded only after a view first
+// activates, so a boundary living there wouldn't exist yet for the very
+// first throw.
+//
+// Catches render-phase and commit-phase throws (including layout/passive
+// effects) — the class of bug that caused the production crash this is
+// mitigating. It does NOT catch throws from DOM event handlers; React 18
+// never routes those through boundaries at all, which is what
+// ui-commons.js's window 'error'/'unhandledrejection' listener is for.
+// Both funnel into the same mtlxRecordError() ring buffer, so "Copy
+// diagnostics" here can surface either kind.
+class ViewErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { error: null, info: null, copied: false };
+        this.handleReload = () => window.location.reload();
+        this.handleCopy = () => {
+            const text = this.diagnosticsText();
+            const copy = window.copyTextToClipboard
+                || ((s) => (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject(new Error('Clipboard unavailable'))));
+            Promise.resolve(copy(text)).then(() => {
+                this.setState({ copied: true });
+                clearTimeout(this._copiedTimer);
+                this._copiedTimer = setTimeout(() => this.setState({ copied: false }), 1500);
+            }, (err) => console.error('[mtlx] Copy diagnostics failed:', err));
+        };
+    }
+    static getDerivedStateFromError(error) { return { error }; }
+    componentDidCatch(error, info) {
+        this.setState({ info });
+        // Also feed the global ring buffer (ui-commons.js) — the same
+        // trail "Copy diagnostics" reads from a live window.onerror catch,
+        // so a render-phase crash and a later event-handler crash both
+        // show up together.
+        if (window.mtlxRecordError) {
+            window.mtlxRecordError('View "' + (this.props.view || '?') + '" render crash: '
+                + String((error && (error.stack || error.message)) || error)
+                + (info && info.componentStack ? '\nComponent stack:' + info.componentStack : ''));
+        }
+        console.error('[mtlx] ViewErrorBoundary caught an error in view "' + (this.props.view || '?') + '":', error, info);
+    }
+    componentWillUnmount() { clearTimeout(this._copiedTimer); }
+    diagnosticsText() {
+        const { error, info } = this.state;
+        const detail = 'Crashed view: ' + (this.props.view || '?')
+            + '\nError: ' + String((error && (error.stack || error.message)) || error)
+            + (info && info.componentStack ? '\nComponent stack:' + info.componentStack : '');
+        return window.mtlxDiagnosticsText ? window.mtlxDiagnosticsText(detail) : detail;
+    }
+    render() {
+        if (this.state.error) {
+            const { error, info } = this.state;
+            return (
+                <div className="flex flex-col items-center justify-center h-40 gap-3 text-red-400 text-sm text-center px-4">
+                    <span>This view crashed: {String((error && error.message) || error)}</span>
+                    {info && info.componentStack && (
+                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-gray-500 bg-gray-950/50 border border-gray-800 rounded p-2 whitespace-pre-wrap">
+                            {info.componentStack.trim()}
+                        </pre>
+                    )}
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={this.handleReload}
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                        >
+                            Reload page
+                        </button>
+                        <button
+                            type="button"
+                            onClick={this.handleCopy}
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                        >
+                            {this.state.copied ? 'Copied!' : 'Copy diagnostics'}
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+// ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
 function Shell() {
@@ -340,7 +433,14 @@ function Shell() {
                 </div>
             );
         } else if (st.status === 'ready' && window[dep.globalName]) {
-            const rendered = React.createElement(window[dep.globalName], { active: isActive });
+            // Wrapped so a render/effect-phase throw anywhere inside this
+            // view degrades to a card in this slot instead of unmounting
+            // #root (see ViewErrorBoundary's comment above).
+            const rendered = (
+                <ViewErrorBoundary view={view}>
+                    {React.createElement(window[dep.globalName], { active: isActive })}
+                </ViewErrorBoundary>
+            );
             if (view === 'home') {
                 // Mirrors the viewer wrapper contract: HomeApp handles its
                 // own inner max-width/centering, this just matches the
