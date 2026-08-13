@@ -3902,6 +3902,24 @@
             // geometry check closed it, not because the user minimized it
             // — drives the symmetric restore once room opens back up.
             const autoCollapsedLegendRef = React.useRef(false);
+            // The pill's own rendered width is effectively constant (fixed
+            // icon + "Map" label, no variable content) but subject to
+            // sub-pixel/font-settling jitter and to going to 0 while
+            // unmounted. Cached on the first good (non-zero) measurement
+            // and reused after that instead of re-reading the live rect on
+            // every pass — stage 2 must use fixed, known geometry, never a
+            // live rect that this same effect's own state changes can move
+            // (mounting/unmounting the pill via minimapBlocked below).
+            const pillWidthRef = React.useRef(0);
+            // Loop breaker (defense in depth, not a substitute for the
+            // fixes above): counts consecutive animation frames in which
+            // measure() actually changed some state. If real geometry has
+            // settled, this returns to 0 within a frame or two. If it
+            // hasn't past a small threshold, something is oscillating —
+            // stop adjusting and leave the layout as-is rather than let a
+            // no-deps effect spin forever (React error #185).
+            const consecutiveChangeFramesRef = React.useRef(0);
+            const loopBreakerTrippedRef = React.useRef(false);
             const [minimapBlocked, setMinimapBlocked] = React.useState(false);
             // The Map pill's own right-margin: 320 while the params
             // panel is expanded (mirrors minimapMarginRight), else just
@@ -3910,7 +3928,10 @@
             React.useLayoutEffect(() => {
                 const host = panelRef.current;
                 if (!host) return;
+                let rafId = null;
                 const measure = () => {
+                    if (loopBreakerTrippedRef.current) return;
+                    let changed = false;
                     const paneRect = host.getBoundingClientRect();
                     if (!paneRect.width) return;
                     const GAP = 8; // small breathing room, not a flush touch
@@ -3920,18 +3941,31 @@
                     const legendRightEdge = legendRect ? (legendRect.right - paneRect.left) : 0;
                     const minimapLeftEdge = paneRect.width - minimapMarginRight - 200 - GAP;
                     const blocked = minimapLeftEdge < legendRightEdge + GAP;
-                    setMinimapBlocked((prev) => (prev === blocked ? prev : blocked));
+                    setMinimapBlocked((prev) => {
+                        if (prev === blocked) return prev;
+                        changed = true;
+                        return blocked;
+                    });
 
                     // The pill's own margin (item 3): mirrors
                     // minimapMarginRight's 320 while expanded, else clears
                     // the collapsed chip's live width (8px + width + GAP).
+                    // Rounded to whole pixels at the source — the value
+                    // feeds an exact-equality change guard just below, and
+                    // getBoundingClientRect() returns sub-pixel floats that
+                    // can jitter render to render without the chip's actual
+                    // on-screen size changing at all.
                     const chipRect = (!paramsOpen && paramsChipRef.current)
                         ? paramsChipRef.current.getBoundingClientRect() : null;
                     const chipWidth = chipRect ? chipRect.width : 0;
-                    const pillMarginRightNow = (parsed && paramsOpen && !narrow)
+                    const pillMarginRightNow = Math.round((parsed && paramsOpen && !narrow)
                         ? 320
-                        : (parsed ? (8 + chipWidth + GAP) : 15);
-                    setPillMarginRight((prev) => (prev === pillMarginRightNow ? prev : pillMarginRightNow));
+                        : (parsed ? (8 + chipWidth + GAP) : 15));
+                    setPillMarginRight((prev) => {
+                        if (prev === pillMarginRightNow) return prev;
+                        changed = true;
+                        return pillMarginRightNow;
+                    });
 
                     // Stage 2: the collapsed pill vs. a HYPOTHETICALLY OPEN
                     // legend card. ALWAYS uses the card's known fixed
@@ -3949,33 +3983,72 @@
                     // production). One constant, shared by both directions,
                     // can't disagree with itself.
                     const legendOpenRightEdge = 8 + 320;
-                    const pillWidth = pillRef.current ? pillRef.current.getBoundingClientRect().width : 0;
-                    const pillLeftEdge = paneRect.width - pillMarginRightNow - pillWidth;
-                    const pillOverlap = !!pillRef.current && (pillLeftEdge < legendOpenRightEdge + GAP);
-                    // Comfortable clearance, not just "not overlapping"
-                    // — hysteresis so residual jitter at the collapse
-                    // threshold can't immediately re-trigger and oscillate.
-                    const pillClear = pillLeftEdge > legendOpenRightEdge + GAP + 16;
+                    // Skip stage 2 entirely while the pill isn't mounted —
+                    // there is nothing to measure, and treating a 0-width
+                    // phantom pill as "clear" was spuriously firing the
+                    // restore branch below. Leaves prevPillOverlapRef/
+                    // autoCollapsedLegendRef untouched; they pick back up
+                    // correctly once the pill remounts.
+                    if (pillRef.current) {
+                        const liveWidth = pillRef.current.getBoundingClientRect().width;
+                        if (liveWidth > 0) pillWidthRef.current = liveWidth;
+                        const pillWidth = pillWidthRef.current;
+                        const pillLeftEdge = paneRect.width - pillMarginRightNow - pillWidth;
+                        const pillOverlap = pillLeftEdge < legendOpenRightEdge + GAP;
+                        // Comfortable clearance, not just "not overlapping"
+                        // — hysteresis so residual jitter at the collapse
+                        // threshold can't immediately re-trigger and oscillate.
+                        const pillClear = pillLeftEdge > legendOpenRightEdge + GAP + 16;
 
-                    // Collapse: fires once on the crossing INTO overlap
-                    // (prevPillOverlapRef), remembering GEOMETRY closed it.
-                    // Restore: level-triggered on that same latch — safe since it self-clears.
-                    if (pillOverlap && !prevPillOverlapRef.current && legendOpen) {
-                        setLegendOpen(false);
-                        autoCollapsedLegendRef.current = true;
-                    } else if (pillClear && autoCollapsedLegendRef.current) {
-                        setLegendOpen(true);
-                        autoCollapsedLegendRef.current = false;
+                        // Collapse: fires once on the crossing INTO overlap
+                        // (prevPillOverlapRef), remembering GEOMETRY closed it.
+                        // Restore: level-triggered on that same latch — safe since it self-clears.
+                        if (pillOverlap && !prevPillOverlapRef.current && legendOpen) {
+                            setLegendOpen(false);
+                            autoCollapsedLegendRef.current = true;
+                            changed = true;
+                        } else if (pillClear && autoCollapsedLegendRef.current) {
+                            setLegendOpen(true);
+                            autoCollapsedLegendRef.current = false;
+                            changed = true;
+                        }
+                        prevPillOverlapRef.current = pillOverlap;
                     }
-                    prevPillOverlapRef.current = pillOverlap;
+
+                    if (changed) {
+                        consecutiveChangeFramesRef.current += 1;
+                        if (consecutiveChangeFramesRef.current > 5) {
+                            loopBreakerTrippedRef.current = true;
+                            console.warn('[graph] legend/minimap layout effect: '
+                                + consecutiveChangeFramesRef.current
+                                + ' consecutive frames changed state — stopping auto-adjustment '
+                                + '(loop breaker tripped) and leaving the current layout as-is.');
+                        }
+                    } else {
+                        consecutiveChangeFramesRef.current = 0;
+                    }
                 };
-                measure();
+                // Coalesced with rAF so at most one measurement runs per
+                // frame: this effect has no deps and reruns on every
+                // render, and panOnDrag={[1]}/selectionOnDrag mean a
+                // left-drag box-select re-renders every node per pointer
+                // tick — without coalescing, measure() (and any state
+                // change it makes) would run once per tick instead of once
+                // per frame.
+                const scheduleMeasure = () => {
+                    if (rafId != null) return;
+                    rafId = requestAnimationFrame(() => { rafId = null; measure(); });
+                };
+                scheduleMeasure();
                 // Covers pane resizes (params panel drag, preview panel
                 // toggle, window resize) without a React re-render — same
                 // rationale as the toolbar clusters' own ResizeObservers.
-                const ro = new ResizeObserver(measure);
+                const ro = new ResizeObserver(scheduleMeasure);
                 ro.observe(host);
-                return () => ro.disconnect();
+                return () => {
+                    ro.disconnect();
+                    if (rafId != null) cancelAnimationFrame(rafId);
+                };
                 // Intentionally no deps: paramsOpen/legendOpen/narrow/
                 // minimapOpen already trigger renders, so this re-runs
                 // whenever any change — math is microseconds, like the toolbar effects.
@@ -3997,15 +4070,49 @@
             // Box select also marks every edge touching the selected nodes
             // in React Flow's INTERNAL store (cloned objects — swallowing
             // the change events isn't enough). Edge selection in this app
-            // is exclusively the click-selected selectedEdgeId, so each
-            // such attempt bumps this epoch, forcing rfEdges below to
-            // re-emit fresh objects whose explicit selected:false
-            // overwrites the store's clones on the prop resync.
+            // is exclusively the click-selected selectedEdgeId plus the
+            // path-sampled selectedEdgeIds (below), so a RF-internal mark
+            // that disagrees with our own state bumps this epoch, forcing
+            // rfEdges below to re-emit fresh objects whose explicit
+            // selected flags overwrite the store's clones on the prop resync.
             const [edgeDeselectEpoch, setEdgeDeselectEpoch] = React.useState(0);
+            // The last set of edge ids a resync was already issued for —
+            // keyed by content, not time. The app is a controlled flow, so
+            // every resync round-trips through render; if RF reasserts the
+            // SAME disagreeing set right back (a ping-pong reaction to our
+            // own prop update, not new user input), bumping again would
+            // provoke another reassertion with no iteration cap (React
+            // error #185). A genuinely new disagreement has a different
+            // id set and so a different key, and isn't blocked by this.
+            const lastEdgeResyncKeyRef = React.useRef(null);
             const onEdgesChange = (changes) => {
-                if (changes.some((c) => c.type === 'select' && c.selected)) {
-                    setEdgeDeselectEpoch((n) => n + 1);
+                const incoming = changes.filter((c) => c.type === 'select' && c.selected).map((c) => c.id);
+                if (!incoming.length) return;
+                // Only a genuine disagreement needs correcting — RF's own
+                // touching-node auto-selection can legitimately differ
+                // from our own selection (click or path-sampled box), and
+                // agreement there is not a problem to resync away.
+                const disagreeing = incoming.filter((id) =>
+                    id !== selectedEdgeId && selectedEdgeIds.indexOf(id) === -1);
+                if (!disagreeing.length) {
+                    // RF agrees with us — settled, so a later disagreement
+                    // over these same ids is genuinely new, not a ping-pong.
+                    lastEdgeResyncKeyRef.current = null;
+                    return;
                 }
+                // Key on the disagreeing ids AND our own current selection.
+                // A ping-pong reassertion arrives while our selection is
+                // unchanged, so it keys identically and is blocked; a later
+                // interaction with a different selection keys differently
+                // and is allowed through. Keying on the ids alone would
+                // block that set from ever resyncing again for the life of
+                // the page, leaving RF's store stale.
+                const key = disagreeing.slice().sort().join(',')
+                    + '|' + (selectedEdgeId || '')
+                    + '|' + selectedEdgeIds.slice().sort().join(',');
+                if (lastEdgeResyncKeyRef.current === key) return;
+                lastEdgeResyncKeyRef.current = key;
+                setEdgeDeselectEpoch((n) => n + 1);
             };
 
             // What React Flow renders: the flow edges, with the selection
