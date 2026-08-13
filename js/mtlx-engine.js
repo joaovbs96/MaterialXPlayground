@@ -4302,6 +4302,10 @@ const createMtlxRenderView = async ({
                 if (__snapshotCanvas.width !== w || __snapshotCanvas.height !== h) {
                     __snapshotCanvas.width = w; __snapshotCanvas.height = h;
                 }
+                // Source is alpha:true, so drawImage's source-over would
+                // blend it onto whatever this reused canvas held last —
+                // only a size change reallocates (and thus clears) it.
+                __snapshotCtx.clearRect(0, 0, w, h);
                 __snapshotCtx.drawImage(renderer.domElement, 0, 0, w, h);
                 return __snapshotCtx.getImageData(0, 0, w, h);
             },

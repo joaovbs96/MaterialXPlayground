@@ -396,6 +396,15 @@ const createGpuDiffView = (canvas) => {
     }
 };
 
+// The engine's syncSize runs one frame AFTER rAF, so a just-committed
+// layout change leaves the buffer at its old size for a frame. Both
+// callers bail WITHOUT clearing their dirty flag, so the next one retries.
+const srcStale = (v) => {
+    const dpr = Math.min(window.devicePixelRatio, 1.5);
+    const c = v.renderer.domElement;
+    return c.width !== Math.floor(c.clientWidth * dpr) || c.height !== Math.floor(c.clientHeight * dpr);
+};
+
 function MaterialCompareApp({ active = true } = {}) {
     const activeRef = React.useRef(active);
     activeRef.current = active;
@@ -548,7 +557,11 @@ function MaterialCompareApp({ active = true } = {}) {
     // ---- Statistics: live, dirty-flag-driven (no debounce, no button) ----
     const computeComparison = () => {
         const va = slotA.viewRef.current, vb = slotB.viewRef.current;
-        if (!va || !vb) return;
+        if (!va || !vb) return; // nothing to compare yet — leave the flag armed
+        // Same guard as the GPU diff loop: a tick landing mid-resize would
+        // read a stretched buffer as a real difference. Leaves the flag
+        // armed so the next tick retries instead of latching that.
+        if (srcStale(va) || srcStale(vb)) return;
         try {
             const ca = va.renderer.domElement, cb = vb.renderer.domElement;
             let w = Math.max(1, Math.min(ca.width, cb.width));
@@ -572,6 +585,8 @@ function MaterialCompareApp({ active = true } = {}) {
                     hc.getContext('2d').putImageData(heat, 0, 0);
                 }
             }
+            // Cleared only on success, so a throw above leaves it armed.
+            statsDirtyRef.current = false;
         } catch (e) {
             console.warn('Comparison failed:', e);
         }
@@ -600,6 +615,18 @@ function MaterialCompareApp({ active = true } = {}) {
         if (!el || typeof ResizeObserver === 'undefined') return undefined;
         const ro = new ResizeObserver(() => { statsDirtyRef.current = true; diffDirtyRef.current = true; });
         ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
+    // A mode switch resizes each pane but not the stage, so the observer
+    // above never fires for it, and the panes' own one lives inside the
+    // engine closure with no callback out. Watch the canvases directly.
+    React.useEffect(() => {
+        if (typeof ResizeObserver === 'undefined') return undefined;
+        const targets = [slotA.canvasRef.current, slotB.canvasRef.current].filter(Boolean);
+        if (!targets.length) return undefined;
+        const ro = new ResizeObserver(() => { statsDirtyRef.current = true; diffDirtyRef.current = true; });
+        targets.forEach((el) => ro.observe(el));
         return () => ro.disconnect();
     }, []);
 
@@ -648,10 +675,8 @@ function MaterialCompareApp({ active = true } = {}) {
     // more commit while gpuDiffOk propagates) is skipped the same way —
     // clamping to 1×1 and rendering into it would both paint garbage and
     // wrongly clear the dirty flag before the pane is actually visible.
-    // Also self-healing against stale SOURCE buffers: rAF fires before each
-    // engine view's own ResizeObserver on the first frame after a layout
-    // change, so the source canvases can still be the old size — see the
-    // srcStale guard below, which re-arms `forced` as dirty and bails.
+    // Also self-healing against stale SOURCE buffers, via the shared
+    // srcStale() below — it re-arms `forced` as dirty and bails.
     React.useEffect(() => {
         if (displayMode !== 'diff' && !effShowDiff) return undefined;
         let reqId = requestAnimationFrame(function loop() {
@@ -683,11 +708,9 @@ function MaterialCompareApp({ active = true } = {}) {
             }
             // rAF runs before ResizeObserver within a frame: after a layout
             // change the source buffers can still have the OLD size for one
-            // frame — rendering now would bake a stretched frame. Wait it out.
-            const srcStale = (v) => {
-                const c = v.renderer.domElement;
-                return c.width !== Math.floor(c.clientWidth * dpr) || c.height !== Math.floor(c.clientHeight * dpr);
-            };
+            // frame — rendering now would bake a stretched frame. Wait it
+            // out (srcStale is hoisted above the component — computeComparison
+            // shares this exact same guard for the CPU/stats path).
             if (srcStale(va) || srcStale(vb)) { if (forced) diffDirtyRef.current = true; return; }
             if (!forced && !diffDirtyRef.current) return;
             diffDirtyRef.current = false;
@@ -698,13 +721,13 @@ function MaterialCompareApp({ active = true } = {}) {
     }, [displayMode, effShowDiff, gpuDiffOk]);
 
     // 200ms ticker: recomputes only while active, both views are live, and
-    // something actually changed since the last computed frame.
+    // something changed. computeComparison owns clearing statsDirtyRef, and
+    // only on success, so a tick landing mid-resize just retries.
     React.useEffect(() => {
         const id = setInterval(() => {
             if (!activeRef.current) return;
             if (!slotA.viewRef.current || !slotB.viewRef.current) return;
             if (!statsDirtyRef.current) return;
-            statsDirtyRef.current = false;
             computeRef.current();
         }, 200);
         return () => clearInterval(id);
