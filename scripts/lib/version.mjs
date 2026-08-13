@@ -5,6 +5,7 @@
 // else reads that JSON or gets it stamped in via stampAll.
 
 import { readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_MTLX_VERSION } from "./mtlx-versions.mjs";
@@ -31,7 +32,23 @@ export const VERSIONS_META_PATH = path.join(REPO_ROOT, "js", "gen", "mtlx-versio
  * JsMaterialXGenShader.js — loading JsMaterialXCore.js too double-
  * registers embind types) and read its self-reported version. */
 export async function extractVersionFromWasm() {
-  const jsPath = path.join(REPO_ROOT, "js", "materialx", DEFAULT_MTLX_VERSION, "JsMaterialXGenShader.js");
+  const versionDir = path.join(REPO_ROOT, "js", "materialx", DEFAULT_MTLX_VERSION);
+  const jsPath = path.join(versionDir, "JsMaterialXGenShader.js");
+  // Without this check, a registry edit that promotes a not-yet-committed
+  // version to the default (DEFAULT_MTLX_VERSION is the computed max —
+  // see mtlx-versions.mjs) fails downstream as a raw ERR_MODULE_NOT_FOUND
+  // from the dynamic import below, which reads like a broken install
+  // rather than the actual problem. Fail here instead, naming exactly
+  // what's missing and what to do about it.
+  if (!existsSync(jsPath)) {
+    throw new Error(
+      [
+        `MaterialX WASM directory not found: ${path.relative(REPO_ROOT, versionDir)} (expected to contain ${path.basename(jsPath)}).`,
+        `DEFAULT_MTLX_VERSION (scripts/lib/mtlx-versions.mjs) is computed as the newest entry in MTLX_VERSIONS and currently resolves to ${DEFAULT_MTLX_VERSION}, but that version's build isn't committed here.`,
+        `Either commit ${DEFAULT_MTLX_VERSION}'s built JsMaterialXGenShader.js/.wasm/.data as the new default (see "Promoting a new default" in docs/BUILDING.md), or remove/adjust its entry in scripts/lib/mtlx-versions.mjs so the default points back at a version whose WASM is actually committed.`,
+      ].join("\n")
+    );
+  }
   const mod = await import(pathToFileURL(jsPath));
   const mx = await mod.default({
     // .wasm and .data live next to the .js.

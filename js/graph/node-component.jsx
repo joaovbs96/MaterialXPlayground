@@ -13,6 +13,26 @@
         let __mtlxRenderCount = 0;
         let __mtlxRenderWindowStart = 0;
 
+        // Render-phase guard: graph-app.jsx's rebuild helpers already read
+        // `n.data.allInputs || n.data.inputs || []` defensively when
+        // re-deriving node data, but this component historically read
+        // data.inputs/outputs non-defensively — a malformed or missing
+        // array here would throw mid-render and (per shell.jsx's per-view
+        // error boundary) blank at least this view's slot. Degrade to an
+        // empty list instead, but warn once per node+field so a real
+        // upstream data bug doesn't go silently unnoticed.
+        const __mtlxWarnedPortLists = new Set();
+        function safePortList(list, nodeId, field) {
+            if (Array.isArray(list)) return list;
+            const key = nodeId + ':' + field;
+            if (!__mtlxWarnedPortLists.has(key)) {
+                __mtlxWarnedPortLists.add(key);
+                console.warn('[mtlx] MtlxGraphNode: node "' + nodeId + '" has a non-array '
+                    + field + ' (' + typeof list + ') — rendering it as empty.', list);
+            }
+            return [];
+        }
+
         // Node card: header + one 22px port row each (row height must
         // match nodeHeight() above). Interface input/output GRAPH BOUNDARY
         // pseudo-nodes use a dashed border, darker body, and diamond dot.
@@ -90,7 +110,7 @@
                         </div>
                     </div>
                     <div className="py-0.5">
-                        {data.inputs.map((inp) => (
+                        {safePortList(data.inputs, data.id, 'inputs').map((inp) => (
                             <div key={'in:' + inp.name}
                                 className={'relative flex items-center gap-1.5 px-2' + (inp.authored === false ? ' opacity-50' : '')}
                                 style={{ height: 22 }}
@@ -116,7 +136,7 @@
                             <div className="px-2 text-gray-500 truncate" style={{ height: 22, lineHeight: '22px' }}
                                 title={data.value}>= {data.value}</div>
                         )}
-                        {data.outputs.map((out) => (
+                        {safePortList(data.outputs, data.id, 'outputs').map((out) => (
                             <div key={'out:' + out.name} className="relative flex items-center justify-end gap-1.5 px-2" style={{ height: 22 }}>
                                 <span className="text-[9px]" style={{ color: typeColor(out.type) }}>{out.type}</span>
                                 <span className="text-gray-300 truncate">{out.name}</span>
