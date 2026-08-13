@@ -17,6 +17,18 @@
         // being handed to the engine as-is.
         const VIEWER_GEOM_NAMES = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
 
+        // shaderball-scene is an authored room that fills the whole frame,
+        // so it can never look transparent. transparent=1 against it falls
+        // back to 'shaderball' instead of refusing, and reports why.
+        const TRANSPARENT_ROOM_GEOM = 'shaderball-scene';
+
+        function resolveViewerGeom(requested, wantTransparent) {
+            const invalid = requested != null && VIEWER_GEOM_NAMES.indexOf(requested) === -1;
+            const base = (!invalid && requested) ? requested : 'shaderball-scene';
+            const fellBackForTransparency = !!wantTransparent && base === TRANSPARENT_ROOM_GEOM;
+            return { geom: fellBackForTransparency ? 'shaderball' : base, invalid, fellBackForTransparency };
+        }
+
         // Official OpenPBR default material, resolved via window.MtlxAssets
         // (not a hardcoded URL) so a future offline build can serve it
         // locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
@@ -69,6 +81,7 @@
             // passes only `active` — so the main app is bit-for-bit
             // unaffected by their existence.
             geometry, envRotation, envExposure, envBackground, autoRotate,
+            transparent = false,
             documentUrl, onView, onRenderables, onReady, onError,
         } = {}) {
             // Embed mode: strips this down to a bare render surface — no
@@ -106,6 +119,10 @@
             onReadyRef.current = onReady;
             const onErrorRef = React.useRef(onError);
             onErrorRef.current = onError;
+            // Non-fatal configuration notices (invalid geometry, a
+            // transparent+geometry combo that needed a fallback): reported
+            // to the host only, via onError, no local error banner.
+            const notify = (msg) => { if (onErrorRef.current) onErrorRef.current(msg); };
             const [fileMap, setFileMap] = React.useState({});          // relPath -> File|Blob
             // Ref mirror of fileMap: `ingest` and the async render effect
             // read it so rapid successive drops (and texture binding after a
@@ -119,8 +136,30 @@
             // a geometry this component can render, else today's default —
             // undefined (the uncontrolled case, every existing caller)
             // always falls through to 'shaderball-scene' unchanged.
-            const [geom, setGeom] = React.useState(
-                VIEWER_GEOM_NAMES.indexOf(geometry) !== -1 ? geometry : 'shaderball-scene');
+            const [geom, setGeom] = React.useState(() => resolveViewerGeom(geometry, transparent).geom);
+            const geomRef = React.useRef(geom);
+            geomRef.current = geom;
+            // Reports the INITIAL geometry/transparent resolution once: an
+            // invalid `geometry`, or a transparent+room combo that needed
+            // a fallback, both get reported here, mount only.
+            React.useEffect(() => {
+                const r = resolveViewerGeom(geometry, transparent);
+                if (r.invalid) {
+                    notify(`Unknown geometry "${geometry}", using the default instead. Valid values: ${VIEWER_GEOM_NAMES.join(', ')}.`);
+                } else if (r.fellBackForTransparency) {
+                    notify('transparent cannot render "shaderball-scene" (an opaque room), so "shaderball" is used instead. Compatible geometries: shaderball, sphere, cube, cloth, shaderball-mtlx.');
+                }
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, []);
+            // Live transparent toggle: no-ops on mount (already resolved
+            // above), only reacts to `transparent` turning on while the
+            // CURRENT geom (geomRef, not the `geometry` prop) is the room.
+            React.useEffect(() => {
+                if (transparent && geomRef.current === TRANSPARENT_ROOM_GEOM) {
+                    notify('transparent cannot render "shaderball-scene", switching to "shaderball" instead.');
+                    setGeom('shaderball');
+                }
+            }, [transparent]);
             const [status, setStatus] = React.useState('Loading the default material…');
             const [error, setError] = React.useState(null);
             // Reports a failure both to the local error banner (unchanged
@@ -190,6 +229,12 @@
                 } catch (e) {
                     setError('Save PNG preview failed: ' + errMsg(e));
                 }
+            };
+            // Shared by ViewportControls (app) and EmbedControls (chromeless):
+            // resetCamera is absent for some geometries (e.g. flat2d).
+            const handleCameraReset = () => {
+                const v = viewRef.current;
+                if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
             };
             // Hand the loaded document to the graph editor: serialize it,
             // stash loose files alongside, and let the shell's hash route
@@ -396,7 +441,16 @@
             React.useEffect(() => {
                 if (geometry === geometryPropRef.current) return;
                 geometryPropRef.current = geometry;
-                if (VIEWER_GEOM_NAMES.indexOf(geometry) !== -1) setGeom(geometry);
+                const r = resolveViewerGeom(geometry, transparent);
+                if (r.invalid) {
+                    notify(`Unknown geometry "${geometry}" ignored. Valid values: ${VIEWER_GEOM_NAMES.join(', ')}.`);
+                    return;
+                }
+                if (r.fellBackForTransparency) {
+                    notify('transparent cannot render "shaderball-scene", using "shaderball" instead.');
+                }
+                setGeom(r.geom);
+                // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [geometry]);
 
             // Default material: page opens with open_pbr_default.mtlx
@@ -450,7 +504,7 @@
                 try {
                     // readMtlxText resolves xi:includes; only the resolved
                     // text is used here (the raw half is for callers needing
-                    // as-authored text, e.g. the graph editor — unused here).
+                    // as-authored text, e.g. the graph editor, unused here).
                     const { resolved: xml } = await readMtlxText(map[path], path, map);
                     const loaded = await loadMtlxDocument(xml);
                     loadedRef.current = loaded;
@@ -554,12 +608,29 @@
             // full app's HUD is unaffected.
             const embedControls = Array.isArray(controls) ? controls : [];
             const showCtl = (name) => !chromeless || embedControls.indexOf(name) !== -1;
+            // shaderball-scene has no working rotate/background-toggle. A
+            // REQUESTED control silently rendering nothing is the "looks
+            // broken" problem, so report it instead of just omitting it.
+            const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
+            const rotateSuppressed = chromeless && showCtl('rotate') && roomGeomActive;
+            const envBgSuppressed = chromeless && showCtl('env') && roomGeomActive;
+            React.useEffect(() => {
+                if (rotateSuppressed) notify('The Rotate control has no effect on "shaderball-scene" (turntable rotation is disabled for the full scene) and is hidden.');
+            }, [rotateSuppressed]);
+            React.useEffect(() => {
+                if (envBgSuppressed) notify('The Background toggle has no effect on "shaderball-scene" (the room occludes the sky sphere) and is hidden from Environment.');
+            }, [envBgSuppressed]);
+            // Page-transparency CSS: requested AND resolved away from the
+            // room. Belt-and-suspenders alongside resolveViewerGeom's own
+            // guard above, in case geom ever drifts back to the room.
+            const transparentActive = chromeless && !!transparent && !roomGeomActive;
+            const bgClass = transparentActive ? 'bg-transparent' : 'bg-gray-900';
 
             return (
                 // IN_VSCODE: height chain fills the webview. Browser:
                 // graph-editor-style full-bleed stage via `absolute inset-0`
                 // (js/shell.jsx's viewer wrapClass is now empty).
-                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'absolute inset-0 bg-gray-900 overflow-hidden'}>
+                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden ${bgClass}`}>
                     {/* Full-page drop indicator, below the sticky header
                         (top-14) — except in embed mode, which has no header
                         to clear (top-0). z-40 matches the graph z-convention
@@ -593,7 +664,7 @@
                             {/* IN_VSCODE: sized off the card's remaining
                                 height, not the canvas child. Browser: fills
                                 the full-bleed viewport card via `absolute inset-0`. */}
-                            <div ref={viewportRef} className={`overflow-hidden bg-gray-900 ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
+                            <div ref={viewportRef} className={`overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
                                 <LoadingOverlay
                                     show={busy}
                                     label={status}
@@ -607,6 +678,42 @@
                                     Chromeless: only rendered at all once `controls` opts at least
                                     one button in — showCtl() below then picks which ones. */}
                                 {(renderables.length > 0 || !IN_VSCODE) && (!chromeless || embedControls.length > 0) && (
+                                    chromeless ? (
+                                    // Purpose-built compact strip (js/embed-controls.jsx):
+                                    // no portals, own CSS, degrades with width. See that
+                                    // file's header for why this isn't ViewportControls.
+                                    <EmbedControls
+                                        containerRef={viewportRef}
+                                        geom={geom}
+                                        // shaderball-scene is excluded while transparent is on:
+                                        // picking it back would just re-trigger the fallback
+                                        // above, so don't offer it in the first place.
+                                        geomList={transparent ? VIEWER_GEOM_NAMES.filter((g) => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES}
+                                        onGeomChange={setGeom}
+                                        showGeom={showCtl('geometry')}
+                                        rotating={rotating}
+                                        onToggleRotating={toggleRotating}
+                                        // Hidden for the room (rotateSuppressed/envBgSuppressed
+                                        // above report why).
+                                        showRotate={showCtl('rotate') && !roomGeomActive}
+                                        onCameraReset={handleCameraReset}
+                                        showReset={showCtl('reset')}
+                                        envBg={envBg}
+                                        onToggleEnvBg={toggleEnvBg}
+                                        showBackgroundToggle={!roomGeomActive}
+                                        showEnv={showCtl('env')}
+                                        initialEnvRotation={envRotation}
+                                        initialEnvExposure={envExposure}
+                                        viewRef={viewRef}
+                                        viewEpoch={viewEpoch}
+                                        onScreenshot={takeScreenshot}
+                                        showScreenshot={showCtl('screenshot')}
+                                        showSettings={showCtl('settings')}
+                                        isFullscreen={isFullscreen}
+                                        onToggleFullscreen={onToggleFullscreen}
+                                        showFullscreen={showCtl('fullscreen')}
+                                    />
+                                    ) : (
                                     <ViewportControls
                                         containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
                                         selectClassName="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
@@ -626,10 +733,7 @@
                                         // sphere - hide both controls while it's selected.
                                         showRotate={showCtl('rotate') && geom !== 'shaderball-scene'}
                                         showBackgroundToggle={geom !== 'shaderball-scene'}
-                                        onCameraReset={showCtl('reset') ? () => {
-                                            const v = viewRef.current;
-                                            if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
-                                        } : undefined}
+                                        onCameraReset={showCtl('reset') ? handleCameraReset : undefined}
                                         envAvail={showCtl('env')}
                                         envBg={envBg}
                                         onToggleEnvBg={toggleEnvBg}
@@ -707,6 +811,7 @@
                                             </select>
                                         )}
                                     </ViewportControls>
+                                    )
                                 )}
                                 <canvas
                                     ref={canvasRef}

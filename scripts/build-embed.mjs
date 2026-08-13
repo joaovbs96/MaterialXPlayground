@@ -128,6 +128,7 @@ function fail(message) {
 const TARGETS = [
   { src: "js/mtlx-engine.js", out: "embed/gen/mtlx-engine.js", wrap: false },
   { src: "js/shared/mtlx-ui.jsx", out: "embed/gen/mtlx-ui.js", wrap: true },
+  { src: "js/embed-controls.jsx", out: "embed/gen/embed-controls.js", wrap: true },
   { src: "js/viewer-app.jsx", out: "embed/gen/viewer-app.js", wrap: true },
 ];
 

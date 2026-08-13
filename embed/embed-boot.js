@@ -13,7 +13,8 @@
 // instead of accidentally reacting to a foreign message shaped like ours.
 //
 // Inbound (host -> iframe): load, setGeometry, setEnvRotation,
-// setEnvExposure, setEnvBackground, resetCamera, snapshot.
+// setEnvExposure, setEnvBackground, setTransparent, setTheme, resetCamera,
+// snapshot.
 // Outbound (iframe -> host): ready, renderables, error, snapshot.
 (function () {
     'use strict';
@@ -84,10 +85,54 @@
         var n = Number(v);
         return isNaN(n) ? undefined : n;
     }
+    // Accepts the common boolean spellings, case-insensitive, not just a
+    // literal '1': background=true/autorotate=on/transparent=yes all mean
+    // the same as =1. Anything unrecognized keeps the default untouched.
+    var TRUE_WORDS = ['1', 'true', 'yes', 'on'];
+    var FALSE_WORDS = ['0', 'false', 'no', 'off'];
+    function parseBool(v, def) {
+        if (v == null) return def;
+        var s = String(v).trim().toLowerCase();
+        if (TRUE_WORDS.indexOf(s) !== -1) return true;
+        if (FALSE_WORDS.indexOf(s) !== -1) return false;
+        return def;
+    }
+    var KNOWN_CONTROLS = ['geometry', 'rotate', 'reset', 'env', 'screenshot', 'settings', 'fullscreen'];
     function parseControls(v) {
         if (!v) return [];
-        return v.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+        var known = [];
+        var unknown = [];
+        v.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (name) {
+            (KNOWN_CONTROLS.indexOf(name) !== -1 ? known : unknown).push(name);
+        });
+        if (unknown.length) {
+            post('error', { message: 'Unknown control name(s) ignored: ' + unknown.join(', ') + '. Valid values: ' + KNOWN_CONTROLS.join(', ') + '.' });
+        }
+        return known;
     }
+
+    // Theming (docs/EMBEDDING.md "Theming"): accent/surface/text/radius map
+    // to the CSS custom properties embed/embed-controls.css consumes,
+    // applied straight onto <html> so a cross-origin host can reach them.
+    var THEME_VARS = { accent: '--mtlx-accent', surface: '--mtlx-surface', text: '--mtlx-text', radius: '--mtlx-radius' };
+    // Rejects a supported-but-hostile value even if CSS.supports() below
+    // would accept it, e.g. a url() that would let an embed phone home.
+    var UNSAFE_THEME_PATTERN = /url\(|;|\}|\/\*|expression/i;
+    function themeValueOk(name, value) {
+        if (UNSAFE_THEME_PATTERN.test(value)) return false;
+        return name === 'radius' ? CSS.supports('border-radius', value) : CSS.supports('color', value);
+    }
+    // Applies one theme param, or reports+skips it (leaving whatever was
+    // there before, default or previously-applied) if it fails validation.
+    function applyTheme(name, value) {
+        if (value == null || value === '') return;
+        if (!themeValueOk(name, value)) {
+            post('error', { message: 'Invalid `' + name + '` value "' + value + '" rejected (failed CSS validation).' });
+            return;
+        }
+        document.documentElement.style.setProperty(THEME_VARS[name], value);
+    }
+    Object.keys(THEME_VARS).forEach(function (name) { applyTheme(name, qs.get(name)); });
 
     var props = {
         embed: true,
@@ -95,10 +140,21 @@
         geometry: qs.get('geometry') || undefined,
         envRotation: parseNumber(qs.get('env')),
         envExposure: parseNumber(qs.get('exposure')),
-        envBackground: qs.get('background') === '1',
-        autoRotate: qs.get('autorotate') === '1',
+        envBackground: parseBool(qs.get('background'), false),
+        autoRotate: parseBool(qs.get('autorotate'), false),
         controls: parseControls(qs.get('controls')),
+        transparent: parseBool(qs.get('transparent'), false),
     };
+
+    // Layer 1 of 4 (docs/EMBEDDING.md's transparent param note): an inline
+    // style wins over embed/viewer.html's stylesheet rule. Layers 2-3 are
+    // viewer-app.jsx's own class; layer 4 is mtlx-viewer.js's :host rule.
+    function applyPageBackground(isTransparent) {
+        var bg = isTransparent ? 'transparent' : '';
+        document.documentElement.style.background = bg;
+        document.body.style.background = bg;
+    }
+    applyPageBackground(props.transparent);
 
     // Live env state, tracked here (not just handed to the engine once) so
     // it survives a view REBUILD (a geometry/material change disposes the
@@ -251,6 +307,24 @@
         }
     }
 
+    // Live `transparent` update (LIVE_ATTRS): flips layer 1 directly, then
+    // re-renders so viewer-app.jsx's own class and geometry guard (layers
+    // 2-3) follow.
+    function handleSetTransparent(msg) {
+        var on = !!msg.on;
+        props.transparent = on;
+        applyPageBackground(on);
+        render();
+    }
+
+    // Live theme update (LIVE_ATTRS): re-validates before applying, same
+    // as the initial query-param pass, so a bad live value still can't
+    // reach the stylesheet.
+    function handleSetTheme(msg) {
+        if (!THEME_VARS.hasOwnProperty(msg.name)) return;
+        applyTheme(msg.name, msg.value);
+    }
+
     function handleResetCamera() {
         if (currentHandle && currentHandle.resetCamera) {
             try { currentHandle.resetCamera(); } catch (e) { /* no-op view, e.g. flat2d */ }
@@ -287,6 +361,8 @@
         setEnvRotation: handleSetEnvRotation,
         setEnvExposure: handleSetEnvExposure,
         setEnvBackground: handleSetEnvBackground,
+        setTransparent: handleSetTransparent,
+        setTheme: handleSetTheme,
         resetCamera: handleResetCamera,
         snapshot: handleSnapshot,
     };

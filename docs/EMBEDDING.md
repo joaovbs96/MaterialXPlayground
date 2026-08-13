@@ -32,13 +32,22 @@ default OpenPBR material, which is a fine sanity check while you wire things up.
 | Param | Type / values | Default | Description |
 | --- | --- | --- | --- |
 | `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers — see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). |
-| `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes a full backdrop scene and is the heaviest option (1.86 MB GLB); `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default rather than erroring. |
+| `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes a full backdrop scene and is the heaviest option (1.86 MB GLB); `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default and is also reported through the `mtlx-error` event (see [Events](#events)), so a typo doesn't fail silently. |
 | `env` | number (degrees) | *(engine default)* | Environment map rotation. |
 | `exposure` | number | *(engine default)* | Environment exposure multiplier. |
-| `autorotate` | `1` to enable | off | Turntable auto-rotation. |
-| `controls` | comma-separated list — see below | *(none — fully chromeless)* | Which HUD buttons to show over the viewport. Omit entirely for a bare render with no UI at all. |
-| `background` | `1` to enable | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. |
+| `autorotate` | boolean | off | Turntable auto-rotation. |
+| `controls` | comma-separated list, see below | *(none, fully chromeless)* | Which HUD buttons to show over the viewport. Omit entirely for a bare render with no UI at all. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
+| `background` | boolean | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as `transparent` below. |
+| `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of the viewer's usual dark backdrop. See [Transparent background](#transparent-background). |
+| `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
+| `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
+| `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
+| `radius` | CSS `<length>` | `4px` | HUD button/select corner radius. See [Theming](#theming). |
 | `origin` | origin URL (scheme + host + port) | *(none — accepts/broadcasts to any origin)* | Locks the embed's postMessage protocol to one parent origin. Only meaningful if you're scripting the iframe directly with `postMessage`; the `<materialx-viewer>` element sets this for you. See [Security](#security). |
+
+Every `boolean` param accepts `1`, `true`, `yes`, or `on` for true, and `0`, `false`, `no`,
+or `off` for false, case-insensitively (so `autorotate=on` and `background=TRUE` both work,
+not just a literal `1`). Anything else falls back to the default shown above.
 
 Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 `js/shared/mtlx-ui.jsx`), for reference:
@@ -63,6 +72,30 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | `screenshot` | A "save PNG" button. |
 | `settings` | The settings popover (force-transparency, etc.). |
 | `fullscreen` | A fullscreen toggle button. Requires `allowfullscreen` on the `<iframe>` itself — see [Limitations](#limitations). |
+
+`rotate` and the Environment panel's background toggle have no effect on the default
+`shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its walls
+occlude the sky sphere), so both are hidden while it's selected. Requesting either one
+against that geometry is reported through `mtlx-error` rather than silently doing nothing.
+
+### Transparent background
+
+`transparent=1` makes the iframe itself see-through, so the host page shows behind the
+rendered geometry instead of the viewer's usual dark backdrop:
+
+```html
+<iframe
+  src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&transparent=1"
+  width="480" height="360" loading="lazy"
+  title="MaterialX material preview">
+</iframe>
+```
+
+**Geometry constraint.** `shaderball-scene`, the default geometry, is an authored room (walls,
+floor, backdrop) that fills the whole frame, so it can never look transparent. Requesting
+`transparent=1` against it (including by simply omitting `geometry` altogether) falls back to
+`shaderball` instead, and reports the substitution through `mtlx-error`. The geometries that
+do work with `transparent` are `shaderball`, `sphere`, `cube`, `cloth`, and `shaderball-mtlx`.
 
 ## The `<materialx-viewer>` custom element
 
@@ -104,6 +137,11 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `autorotate` | `.autorotate` | boolean | off | No (reload) |
 | `controls` | `.controls` | comma list (or an array via the property) | — | No (reload) |
 | `background` | `.background` | boolean | off | Yes |
+| `transparent` | `.transparent` | boolean | off | Yes |
+| `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
+| `surface` | `.surface` | CSS color | `#1f2937` | Yes |
+| `text` | `.text` | CSS color | `#d1d5db` | Yes |
+| `radius` | `.radius` | CSS `<length>` | `4px` | Yes |
 | `base` | `.base` | URL string | the directory `mtlx-viewer.js` was loaded from | — (read once per activation) |
 | `poster` | `.poster` | URL string | — | — (placeholder image only, before the iframe activates) |
 | `eager` | `.eager` | boolean | off | — (read once, on connect — skips the `IntersectionObserver` and creates the iframe immediately instead of waiting for scroll) |
@@ -111,6 +149,12 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 Two read-only diagnostic properties, not reflected as attributes: `el.ready` (`true` once the
 iframe has posted `ready`) and `el.active` (`true` while the element currently owns a live
 iframe/WebGL context).
+
+Boolean attributes on the element itself (`autorotate`, `background`, `transparent`, `eager`)
+follow the ordinary HTML convention: presence means true, regardless of value, so
+`transparent="0"` is still on. Use `el.removeAttribute('transparent')`, or the property
+(`el.transparent = false`), to turn one off. This is a different rule from the `boolean`
+query params above, which do parse the value (`1`/`true`/`yes`/`on`).
 
 `base` only needs setting explicitly if `mtlx-viewer.js` isn't loaded as a plain, synchronous
 `<script src>` next to `viewer.html` (for example, if you copy the script into a bundler or
@@ -141,13 +185,71 @@ Dispatched as `CustomEvent`s on the element itself:
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
 | `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, or a client-side error (e.g. `base` couldn't be determined). |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, or an `accent`/`surface`/`text`/`radius` value that failed validation. |
 
 ```js
 const el = document.querySelector('materialx-viewer');
 el.addEventListener('mtlx-ready', (e) => console.log('engine version', e.detail.version));
 el.addEventListener('mtlx-renderables', (e) => console.log('materials:', e.detail));
 el.addEventListener('mtlx-error', (e) => console.error('viewer error:', e.detail.message));
+```
+
+## Theming
+
+Four params (`accent`, `surface`, `text`, `radius`) map to CSS custom properties consumed by
+`embed/embed-controls.css` (the HUD strip's own stylesheet), which defines them on `:root`
+with the defaults below as fallbacks:
+
+| Param / attribute | Variable | Affects | Default |
+| --- | --- | --- | --- |
+| `accent` | `--mtlx-accent` | Active/on state color for buttons and toggles, focus outline, slider fill. | `#3b82f6` |
+| `surface` | `--mtlx-surface` | HUD button/panel background color. | `#1f2937` |
+| `text` | `--mtlx-text` | HUD text and icon color. | `#d1d5db` |
+| `radius` | `--mtlx-radius` | HUD button/select corner radius (the panel uses `radius + 2px`). | `4px` |
+
+Since normal CSS on your page can't cross the iframe boundary, these are read from the query
+string (or the matching `<materialx-viewer>` attribute) and applied *inside* the framed
+document as inline styles on its `<html>` element — that's what makes them reachable by a
+cross-origin host, not just a [self-hosted](#self-hosting) copy.
+
+**Validation.** Each value is checked with the browser's own `CSS.supports()` before it's
+applied: `accent`/`surface`/`text` must pass `CSS.supports('color', value)`, and `radius` must
+pass `CSS.supports('border-radius', value)`. On top of that, any value containing `url(`, `;`,
+`}`, `/*`, or `expression` is rejected outright even if `CSS.supports()` would otherwise accept
+it, since a value landing in a stylesheet is worth extra caution (a `url()` in particular could
+make the embed phone home). A rejected value is dropped, reported through `mtlx-error`, and
+leaves whatever was already applied (the default, or a prior valid value) untouched — the
+other, valid params in the same request still apply normally.
+
+```html
+<iframe
+  src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&controls=geometry,env&accent=%232563eb&surface=%23ffffff&text=%23111111&radius=2px"
+  width="480" height="360" loading="lazy"
+  title="MaterialX material preview">
+</iframe>
+```
+
+That example themes the HUD to a light, blue-accented look, e.g. to match a host page's own
+light theme (note the colors are URL-encoded: `#` becomes `%23`). The same four values work as
+`<materialx-viewer>` attributes:
+
+```html
+<materialx-viewer
+  src="…" geometry="sphere" controls="geometry,env"
+  accent="#2563eb" surface="#ffffff" text="#111111" radius="2px"
+  style="width: 480px; height: 360px;">
+</materialx-viewer>
+```
+
+Self-hosting is still an option too, if you'd rather set a permanent site-wide default instead
+of passing params on every embed: edit `embed/embed-controls.css` directly, or serve your own
+stylesheet after it that redeclares the variables:
+
+```css
+:root {
+  --mtlx-accent: #f97316;
+  --mtlx-radius: 8px;
+}
 ```
 
 ## Loading a document without CORS

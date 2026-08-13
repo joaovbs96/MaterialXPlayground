@@ -76,14 +76,22 @@
     // the iframe's query string and reloads it (a real navigation, with a
     // fresh 'ready' handshake) — the only way to change those short of a
     // parallel protocol embed-boot.js doesn't speak.
-    var LIVE_ATTRS = { geometry: 1, env: 1, exposure: 1, background: 1 };
+    var LIVE_ATTRS = {
+        geometry: 1, env: 1, exposure: 1, background: 1, transparent: 1,
+        accent: 1, surface: 1, text: 1, radius: 1,
+    };
+    // Theme attributes forwarded verbatim as `setTheme` messages — see
+    // embed-boot.js's THEME_VARS/applyTheme, which does the actual
+    // CSS.supports() validation on the other side of the iframe boundary.
+    var THEME_ATTRS = { accent: 1, surface: 1, text: 1, radius: 1 };
 
     // (Custom elements require native `class`/`extends HTMLElement` —
     // there's no ES5-compatible way to subclass a built-in. This is still
     // "no build step": every current browser runs this syntax natively.)
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
-            return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'base', 'poster'];
+            return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'transparent', 'base', 'poster',
+                'accent', 'surface', 'text', 'radius'];
         }
 
         constructor() {
@@ -159,8 +167,29 @@
         get background() { return this.hasAttribute('background'); }
         set background(v) { this._reflectBool('background', v); }
 
+        // Page transparency, not the environment skybox toggle above (see
+        // docs/EMBEDDING.md). Only meaningful with a compatible geometry;
+        // an incompatible one falls back inside the iframe and reports.
+        get transparent() { return this.hasAttribute('transparent'); }
+        set transparent(v) { this._reflectBool('transparent', v); }
+
         get controls() { return this.getAttribute('controls') || ''; }
         set controls(v) { this._reflect('controls', Array.isArray(v) ? v.join(',') : v); }
+
+        // Theming (docs/EMBEDDING.md): four CSS custom properties, forwarded
+        // as query params/setTheme messages. Validated on the iframe side
+        // (embed-boot.js) — this element passes the raw string through.
+        get accent() { return this.getAttribute('accent') || ''; }
+        set accent(v) { this._reflect('accent', v); }
+
+        get surface() { return this.getAttribute('surface') || ''; }
+        set surface(v) { this._reflect('surface', v); }
+
+        get text() { return this.getAttribute('text') || ''; }
+        set text(v) { this._reflect('text', v); }
+
+        get radius() { return this.getAttribute('radius') || ''; }
+        set radius(v) { this._reflect('radius', v); }
 
         get base() {
             var b = this.getAttribute('base') || DEFAULT_BASE;
@@ -211,13 +240,17 @@
             style.textContent =
                 ':host{display:block;position:relative;width:100%;aspect-ratio:16/9;' +
                 'background:#111827;overflow:hidden;box-sizing:border-box;}' +
+                // Layer 4 of 4 (docs/EMBEDDING.md): outside the iframe entirely, so this
+                // applies regardless of the framed document's own state.
+                ':host([transparent]){background:transparent;}' +
                 '.slot{position:absolute;inset:0;}' +
                 'iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;}' +
                 '.placeholder{position:absolute;inset:0;display:flex;align-items:center;' +
                 'justify-content:center;background-color:#111827;background-position:center;' +
                 'background-size:cover;background-repeat:no-repeat;color:#9ca3af;' +
                 'font:13px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;' +
-                'text-align:center;padding:12px;box-sizing:border-box;}';
+                'text-align:center;padding:12px;box-sizing:border-box;}' +
+                ':host([transparent]) .placeholder{background-color:transparent;}';
             shadow.appendChild(style);
             var slot = document.createElement('div');
             slot.className = 'slot';
@@ -329,6 +362,10 @@
             if (this.autorotate) qp.set('autorotate', '1');
             if (this.controls) qp.set('controls', this.controls);
             if (this.background) qp.set('background', '1');
+            if (this.transparent) qp.set('transparent', '1');
+            Object.keys(THEME_ATTRS).forEach((name) => {
+                if (this[name]) qp.set(name, this[name]);
+            });
             // The host's OWN origin — lets embed-boot.js target replies at this
             // exact origin instead of '*'. See its header comment.
             qp.set('origin', window.location.origin);
@@ -348,6 +385,10 @@
                 if (v !== undefined) this._send('setEnvExposure', { value: v });
             } else if (name === 'background') {
                 this._send('setEnvBackground', { on: this.background });
+            } else if (name === 'transparent') {
+                this._send('setTransparent', { on: this.transparent });
+            } else if (THEME_ATTRS[name]) {
+                this._send('setTheme', { name: name, value: this[name] });
             }
         }
 

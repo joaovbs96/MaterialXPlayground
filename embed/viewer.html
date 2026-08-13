@@ -44,7 +44,7 @@
             padding: 0;
             width: 100%;
             height: 100%;
-            background: #111827; /* gray-900 — matches the chromeless viewport's own backdrop */
+            background: var(--mtlx-page-bg, #111827); /* gray-900 default; ?transparent=1 overrides */
             overflow: hidden;
             /* index.html's <body> carries Tailwind's `font-sans` utility;
                that's outside MaterialViewerApp's own JSX (its root div
@@ -62,10 +62,24 @@
             inset: 0;
         }
     </style>
+    <script>
+        // Reads `transparent` before the engine loads, so html/body never
+        // flashes opaque while the ~3.84MB engine loads. embed-boot.js
+        // re-applies this once mounted, and handles the live toggle.
+        (function () {
+            var v = (new URLSearchParams(window.location.search).get('transparent') || '').trim().toLowerCase();
+            if (['1', 'true', 'yes', 'on'].indexOf(v) !== -1) {
+                document.documentElement.style.setProperty('--mtlx-page-bg', 'transparent');
+            }
+        })();
+    </script>
     <!-- Root-relative per the <base> note above: this is embed/embed.css,
          written without the leading "embed/" it would need from this
          file's own directory. -->
     <link rel="stylesheet" href="embed/embed.css">
+    <!-- js/embed-controls.jsx's HUD strip styles: own file, own class
+         names, not part of the Tailwind-replacement embed.css above. -->
+    <link rel="stylesheet" href="embed/embed-controls.css">
 
     <!-- Vendor scripts embed/viewer.html actually needs, in the same load
          ORDER index.html uses (order matters — EXRLoader needs fflate and
@@ -173,7 +187,7 @@
             fetchAndRunInline('embed/gen/mtlx-engine.js')
                 .then(function () { return window.MtlxAssets.ready; })
                 .then(function () {
-                    var REMAINING = ['embed/gen/mtlx-ui.js', 'embed/gen/viewer-app.js', 'embed/embed-boot.js'];
+                    var REMAINING = ['embed/gen/mtlx-ui.js', 'embed/gen/embed-controls.js', 'embed/gen/viewer-app.js', 'embed/embed-boot.js'];
                     return REMAINING.reduce(function (chain, src) {
                         return chain.then(function () { return loadOne(src); });
                     }, Promise.resolve());

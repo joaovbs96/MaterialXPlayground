@@ -1,0 +1,220 @@
+// js/embed-controls.jsx: compact, portal-free HUD strip for embed/viewer.html.
+// Replaces ViewportControls/GeomSelect/EnvDialog/SettingsDialog (js/shared/
+// mtlx-ui.jsx) in chromeless mode; same public `controls` names, own CSS.
+
+// Below EMBED_CTL_ICON_BELOW: icons only, no labels. Below
+// EMBED_CTL_HIDE_BELOW: no strip at all (a strip that doesn't fit is
+// worse than none). Keeps all seven controls usable down to 200px wide.
+const EMBED_CTL_HIDE_BELOW = 150;
+const EMBED_CTL_ICON_BELOW = 480;
+
+// Tracks a DOM node's border-box width via ResizeObserver. Plain
+// useEffect, not useLayoutEffect: `ref` is an ancestor's, and its host
+// ref attaches only after our own layout effects already ran.
+const useElementWidth = (ref) => {
+    const [width, setWidth] = React.useState(0);
+    React.useEffect(() => {
+        const el = ref.current;
+        if (!el) return undefined;
+        setWidth(el.getBoundingClientRect().width);
+        if (typeof ResizeObserver === 'undefined') return undefined;
+        const ro = new ResizeObserver((entries) => {
+            for (const entry of entries) setWidth(entry.contentRect.width);
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [ref]);
+    return width;
+};
+
+const EmbedControls = ({
+    containerRef,
+    geom, geomList, onGeomChange, showGeom,
+    rotating, onToggleRotating, showRotate,
+    onCameraReset, showReset,
+    envBg, onToggleEnvBg, showBackgroundToggle, showEnv,
+    initialEnvRotation, initialEnvExposure,
+    viewRef, viewEpoch,
+    onScreenshot, showScreenshot,
+    showSettings,
+    isFullscreen, onToggleFullscreen, showFullscreen,
+}) => {
+    const width = useElementWidth(containerRef);
+    const hidden = width > 0 && width < EMBED_CTL_HIDE_BELOW;
+    const compact = width > 0 && width < EMBED_CTL_ICON_BELOW;
+
+    const [openPanel, setOpenPanel] = React.useState(null); // null | 'env' | 'settings'
+    const [envRotation, setEnvRotationState] = React.useState(
+        () => (typeof initialEnvRotation === 'number' ? initialEnvRotation : 0));
+    const [envExposure, setEnvExposureState] = React.useState(
+        () => (typeof initialEnvExposure === 'number' ? initialEnvExposure : 1.0));
+    const [forceT, setForceT] = React.useState(
+        () => !!(window.getForceTransparency && window.getForceTransparency()));
+
+    // Re-apply rotation/exposure whenever the view is rebuilt (geometry or
+    // material change), mirroring ViewportControls' identical effect.
+    React.useEffect(() => {
+        const view = viewRef && viewRef.current;
+        if (!view) return;
+        if (view.setEnvRotation) view.setEnvRotation(envRotation * Math.PI / 180);
+        if (view.setEnvExposure) view.setEnvExposure(envExposure);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewEpoch]);
+
+    useEscapeToClose(() => setOpenPanel(null), openPanel !== null);
+
+    if (hidden) return null;
+
+    const togglePanel = (name) => setOpenPanel((p) => (p === name ? null : name));
+
+    const setEnvRotation = (deg) => {
+        setEnvRotationState(deg);
+        const view = viewRef && viewRef.current;
+        if (view && view.setEnvRotation) view.setEnvRotation(deg * Math.PI / 180);
+    };
+    const setEnvExposure = (v) => {
+        setEnvExposureState(v);
+        const view = viewRef && viewRef.current;
+        if (view && view.setEnvExposure) view.setEnvExposure(v);
+    };
+    const toggleForceTransparency = () => {
+        const next = !forceT;
+        setForceT(next);
+        if (window.setForceTransparency) window.setForceTransparency(next);
+    };
+
+    return (
+        <div className={'mtlx-ec' + (compact ? ' mtlx-ec--compact' : '')}>
+            <div className="mtlx-ec-row">
+                {showGeom && (
+                    <select
+                        className="mtlx-ec-select"
+                        value={geom}
+                        onChange={(e) => onGeomChange(e.target.value)}
+                        title="Preview geometry"
+                    >
+                        {geomList.map((g) => (
+                            <option key={g} value={g}>{(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}</option>
+                        ))}
+                    </select>
+                )}
+                {showRotate && (
+                    <button
+                        type="button"
+                        className={'mtlx-ec-btn' + (rotating ? ' is-active' : '')}
+                        onClick={onToggleRotating}
+                        title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
+                    >
+                        <MtlxIcon name="rotate" className="mtlx-ec-icon" />
+                        {!compact && <span>Rotate</span>}
+                    </button>
+                )}
+                {showReset && (
+                    <button type="button" className="mtlx-ec-btn" onClick={onCameraReset} title="Reset camera">
+                        <MtlxIcon name="camera-reset" className="mtlx-ec-icon" />
+                        {!compact && <span>Reset</span>}
+                    </button>
+                )}
+                {showEnv && (
+                    <button
+                        type="button"
+                        className={'mtlx-ec-btn' + (openPanel === 'env' ? ' is-active' : '')}
+                        onClick={() => togglePanel('env')}
+                        title="Environment"
+                    >
+                        <MtlxIcon name="environment" className="mtlx-ec-icon" />
+                        {!compact && <span>Environment</span>}
+                    </button>
+                )}
+                {showScreenshot && (
+                    <button type="button" className="mtlx-ec-btn" onClick={onScreenshot} title="Save a PNG preview of the current view">
+                        <MtlxIcon name="camera" className="mtlx-ec-icon" />
+                        {!compact && <span>Screenshot</span>}
+                    </button>
+                )}
+                {showSettings && (
+                    <button
+                        type="button"
+                        className={'mtlx-ec-btn' + (openPanel === 'settings' ? ' is-active' : '')}
+                        onClick={() => togglePanel('settings')}
+                        title="Settings"
+                    >
+                        <MtlxIcon name="settings-cog" className="mtlx-ec-icon" />
+                        {!compact && <span>Settings</span>}
+                    </button>
+                )}
+                {showFullscreen && (
+                    <button
+                        type="button"
+                        className="mtlx-ec-btn"
+                        onClick={onToggleFullscreen}
+                        title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                    >
+                        <MtlxIcon name="maximize" className="mtlx-ec-icon" />
+                        {!compact && <span>{isFullscreen ? 'Exit' : 'Fullscreen'}</span>}
+                    </button>
+                )}
+            </div>
+            {openPanel === 'env' && (
+                <div className="mtlx-ec-panel">
+                    {showBackgroundToggle && (
+                        <div className="mtlx-ec-panel-row">
+                            <span>Background</span>
+                            <button
+                                type="button"
+                                className={'mtlx-ec-toggle' + (envBg ? ' is-on' : '')}
+                                onClick={onToggleEnvBg}
+                                title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
+                            >
+                                {envBg ? 'On' : 'Off'}
+                            </button>
+                        </div>
+                    )}
+                    <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider">
+                        <div className="mtlx-ec-slider-label">
+                            <span>Rotation</span>
+                            <span>{Math.round(envRotation)}°</span>
+                        </div>
+                        <input
+                            type="range" min="0" max="360" step="1"
+                            value={envRotation}
+                            onChange={(e) => setEnvRotation(Number(e.target.value))}
+                        />
+                    </div>
+                    <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider">
+                        <div className="mtlx-ec-slider-label">
+                            <span>Exposure</span>
+                            <span>{envExposure.toFixed(2)}</span>
+                        </div>
+                        <input
+                            type="range" min="0" max="4" step="0.05"
+                            value={envExposure}
+                            onChange={(e) => setEnvExposure(Number(e.target.value))}
+                        />
+                    </div>
+                </div>
+            )}
+            {openPanel === 'settings' && (
+                <div className="mtlx-ec-panel">
+                    <div className="mtlx-ec-panel-row">
+                        <span>Force Transparency</span>
+                        <button
+                            type="button"
+                            className={'mtlx-ec-toggle' + (forceT ? ' is-on' : '')}
+                            onClick={toggleForceTransparency}
+                            title={forceT ? 'Disable forced transparency' : 'Enable forced transparency'}
+                        >
+                            {forceT ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mtlx-ec-desc">
+                        Render opacity/transmission with real alpha blending. When off, the preview
+                        matches the standard MaterialX viewer (opaque).
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+window.EmbedControls = EmbedControls;
