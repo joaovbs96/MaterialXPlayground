@@ -177,6 +177,15 @@ const VIEW_DEPS = {
         app: 'js/compare-app.jsx',
         globalName: 'MaterialCompareApp',
     },
+    builder: {
+        css: [],
+        // Dependency-free, self-registering custom element (docs/EMBEDDING.md)
+        // that drives the live preview - a plain script, not a babelScript.
+        scripts: ['embed/mtlx-viewer.js'],
+        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        app: 'js/builder-app.jsx',
+        globalName: 'BuilderApp',
+    },
 };
 
 // Loads a view's CSS/scripts/babelScripts + app bundle, in VIEW_DEPS
@@ -308,6 +317,7 @@ function Shell() {
         viewer: { mounted: false, status: 'idle' },
         graph: { mounted: false, status: 'idle' },
         compare: { mounted: false, status: 'idle' },
+        builder: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -378,6 +388,7 @@ function Shell() {
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
             compare: 'MaterialX Playground — Material Compare',
+            builder: 'MaterialX Playground - Embed Builder',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -399,6 +410,7 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
+            builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -479,6 +491,10 @@ function Shell() {
                 // inset-0` root positions directly against #root. VS
                 // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
+            } else if (view === 'builder') {
+                // Same wrapper contract as home: a static, scrollable
+                // content page, not a full-bleed canvas.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
                 // directly via their own `absolute inset-0` root.
@@ -503,6 +519,7 @@ function Shell() {
             {renderView('viewer')}
             {renderView('graph')}
             {renderView('compare')}
+            {renderView('builder')}
         </div>
     );
 }

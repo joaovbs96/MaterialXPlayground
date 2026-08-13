@@ -114,6 +114,14 @@
             '<path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" />' +
             '<path d="M12 4l0 16" />' +
         '</svg>';
+    // Matches MTLX_ICON_PATHS.code (js/shared/ui-commons.js) - same
+    // "embed a snippet" glyph used on the builder's own copy buttons.
+    var ICON_NAV_BUILDER =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M7 8l-4 4l4 4" />' +
+            '<path d="M17 8l4 4l-4 4" />' +
+            '<path d="M14 4l-4 16" />' +
+        '</svg>';
 
     // Pages of the site, in nav order. shellHref-only now that the old
     // standalone pages are gone: docs/viewer/graph/compare live behind hash
@@ -125,6 +133,7 @@
         { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
         { id: 'compare', label: 'Material Comparison', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
         { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
+        { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER },
     ];
 
     // Given the current hash, which shell view is active? Shared with
@@ -134,6 +143,7 @@
         if (hash === '#!viewer') { return 'viewer'; }
         if (hash === '#!graph') { return 'graph'; }
         if (hash === '#!compare') { return 'compare'; }
+        if (hash === '#!builder') { return 'builder'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
     }
@@ -154,9 +164,9 @@
             if (window.__MTLX_DOCS_ONLY__) {
                 return t.id === 'docs';
             }
-            // Compare is a browser-only feature (drag-and-drop of two
-            // documents at once) — excluded here same as docs.
-            return t.id !== 'docs' && t.id !== 'compare';
+            // Compare and Builder are browser-only features (drag-and-drop,
+            // an iframe-based live preview) - excluded here same as docs.
+            return t.id !== 'docs' && t.id !== 'compare' && t.id !== 'builder';
         })
         : NAV;
 
