@@ -51,3 +51,35 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 Only that default version is committed to git. Every other entry in `scripts/lib/mtlx-versions.mjs` (currently also 1.39.4) is fetched into its own `js/materialx/<version>/` directory on demand by `npm run vendor:versions` — downloaded from the matching upstream GitHub release asset, verified against a pinned sha256, unzipped, and left gitignored (see the `versions` build step above). These extra versions exist solely for the Material Compare view's per-pane version picker; every other consumer (docs, presets, the header version badge) stays pinned to the default.
 
 **`models/`** ships two GLB exports of the ASWF/USD-WG Standard Shader Ball (see [Asset credits](../README.md#asset-credits) in the README, and `models/LICENSE.txt`), committed in-repo — no download step: `shaderball.glb`, the full scene used by the Node Graph Editor's live preview (backdrop, grid, emissive panels, and an embedded camera), and `shaderball_simple.glb`, a plain ball used by the Material Viewer and docs previews. In both, the generated MaterialX material is applied only to the mesh named `material_surface`; every other mesh keeps its authored glTF material.
+
+## Adding or promoting a MaterialX version
+
+`scripts/lib/mtlx-versions.mjs` is hand-maintained (see its header comment). Every entry needs three coordinated manual edits, and missing either ignore line fails silently rather than loudly: it either commits several MB of WASM straight into git, or bloats the packaged `.vsix` with a version the extension never loads.
+
+### Adding a non-default version
+
+1. **Get the numbers — don't guess them.** Download the release zip for the new tag and inspect it:
+
+   ```powershell
+   $tag = "v1.39.6"
+   Invoke-WebRequest -Uri "https://github.com/AcademySoftwareFoundation/MaterialX/releases/download/$tag/MaterialX_JavaScript.zip" -OutFile mtlx.zip
+   (Get-FileHash mtlx.zip -Algorithm SHA256).Hash.ToLower()   # -> zipSha256
+   (Get-Item mtlx.zip).Length                                  # -> zipBytes
+   Expand-Archive mtlx.zip -DestinationPath mtlx-extracted
+   Get-ChildItem -Recurse mtlx-extracted -Filter JsMaterialXGenShader.* | Select-Object Name, Length
+   ```
+
+   (`sha256sum mtlx.zip` and `unzip -l mtlx.zip` do the same job on macOS/Linux.) The three `Select-Object` rows are the `files` byte sizes for the GenShader `.js`/`.wasm`/`.data` trio.
+2. **Add the entry** to `MTLX_VERSIONS` in `scripts/lib/mtlx-versions.mjs`: `version`, `tag`, `zipSha256`, `zipBytes`, `files`.
+3. **Add a line to `.gitignore`**: `js/materialx/<version>/`. Skip this and the fetched build looks like an ordinary new directory to git — a broad `git add` silently stages several MB of WASM.
+4. **Add a line to `.vscodeignore`**: `js/materialx/<version>/**`. Skip this and the version ships inside the packaged `.vsix` even though the webview's nav has no Compare view to use it — a silent multi-MB size regression on every release.
+5. Run `npm run vendor:versions` to fetch it locally, then `npm run build && npm run check` to confirm everything — including `js/gen/mtlx-versions.json`, the browser-facing mirror of the registry — is clean.
+
+### Promoting a new default
+
+`DEFAULT_MTLX_VERSION` (also in `scripts/lib/mtlx-versions.mjs`) is **computed** as the numeric max across `MTLX_VERSIONS`, never hand-picked. The moment a newer entry is added, it becomes the default, and the `version` build step (`scripts/lib/version.mjs`) immediately tries to load that version's WASM from `js/materialx/<newVersion>/` — so that directory has to actually contain the build in the *same* change, or the build breaks (see the pre-check in Item 2b below for the friendlier error this now gives when it doesn't).
+
+1. Follow steps 1-2 above to add the new version's registry entry (this alone makes it the default).
+2. Commit the new default's actual GenShader `.js`/`.wasm`/`.data` files under `js/materialx/<newVersion>/` — fetch them the same way as step 1, or via `npm run vendor:versions` before it becomes the default — then `git add` the directory. If it already had `.gitignore`/`.vscodeignore` lines from being a non-default version, remove those lines now; the new default must be committed.
+3. The version that was previously default is no longer committed — add its `js/materialx/<oldVersion>/` line to both `.gitignore` and `.vscodeignore` (step 3/4 above), then untrack the directory that's still sitting in the working tree: `git rm -r --cached js/materialx/<oldVersion>/`.
+4. Run `npm run build` — this re-extracts the version from the new default's WASM and re-stamps every literal copy (the header badge, `js/mtlx-assets.js`, `js/site-header.js`, `js/mtlx-engine.js`, and the WASM modules note above) — then `npm run check` to confirm the tree is clean.

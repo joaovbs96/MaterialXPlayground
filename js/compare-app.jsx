@@ -25,7 +25,10 @@ const loadMtlxDocument = async (xmlText, version) => {
     if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
     else doc.importLibrary(stdlib);
     const renderables = listDocRenderables(doc);
-    return { mx, gen, genContext, lightData, doc, renderables };
+    // `version` rides along with the parsed document so the render effect
+    // below can stamp "what actually got rendered" (slot.renderedVersion)
+    // once a view is built from it — see the header comment on that state.
+    return { mx, gen, genContext, lightData, doc, renderables, version };
 };
 
 // ---- Per-slot session state (one instance per Document A / Document B) ----
@@ -41,6 +44,15 @@ const useCompareSlot = () => {
     // this mid-session re-parses via loadDocument (see its versionArg
     // below) rather than just retargeting future loads.
     const [version, setVersion] = React.useState(window.MtlxAssets.MTLX_DEFAULT_VERSION);
+    // Last version that actually finished rendering into viewRef — as
+    // opposed to `version` above, which is the user's REQUESTED version
+    // and flips the instant the dropdown changes, before the load even
+    // starts. Labels must read this one: if a version switch fails, the
+    // pane keeps showing the previous version's pixels (see loadDocument's
+    // catch below), and only this state stays in sync with what's on
+    // screen. Seeded to the same default as `version` so an unloaded slot
+    // (nothing rendered yet) never spuriously "differs" from its peer.
+    const [renderedVersion, setRenderedVersion] = React.useState(window.MtlxAssets.MTLX_DEFAULT_VERSION);
     const [busy, setBusy] = React.useState(false);
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
@@ -48,7 +60,14 @@ const useCompareSlot = () => {
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const viewRef = React.useRef(null);
     const canvasRef = React.useRef(null);
-    const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
+    const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables, version }
+    // Monotonic guard, same idiom as js/shared/mtlx-ui.jsx's runRef: two
+    // loadDocument calls can be in flight at once (e.g. the version
+    // dropdown changed twice before the first request settled), and
+    // whichever one resolves LAST must not stomp state that a more recent
+    // call already wrote (a stale failure clobbering a fresh success's
+    // busy/error, or vice versa).
+    const runRef = React.useRef(0);
 
     // versionArg lets a version-switch handler force the FRESH version
     // into the same tick it changed it — plain `version` state wouldn't
@@ -58,6 +77,7 @@ const useCompareSlot = () => {
     const loadDocument = async (path, mapArg, versionArg) => {
         const map = mapArg || fileMapRef.current;
         const ver = versionArg || version;
+        const id = ++runRef.current;
         setError(null);
         setTexReport(null);
         setBusy(true);
@@ -65,6 +85,7 @@ const useCompareSlot = () => {
         try {
             const { resolved: xml } = await readMtlxText(map[path], path, map);
             const loaded = await loadMtlxDocument(xml, ver);
+            if (runRef.current !== id) return; // superseded by a newer load
             loadedRef.current = loaded;
             setRenderables(loaded.renderables);
             if (!loaded.renderables.length) {
@@ -75,10 +96,23 @@ const useCompareSlot = () => {
             }
             setChosenMat(0);
             setStatus(null);
-            // Rendering itself is driven by useCompareRenderEffect below.
+            // Rendering itself is driven by useCompareRenderEffect below,
+            // which also stamps renderedVersion once a view actually builds.
         } catch (e2) {
+            if (runRef.current !== id) return; // superseded — a newer load already resolved
             setStatus(null);
             setBusy(false);
+            // Deliberately NOT resetting loadedRef/renderables/chosenMat/
+            // viewRef here, unlike ingest()'s full-session invalidation
+            // above: the document itself is still valid and still parsed
+            // fine under its PREVIOUS version — only this particular
+            // version switch failed. renderedVersion (unlike `version`,
+            // which the dropdown already committed to above) is untouched
+            // too, so the pane keeps rendering the old version's pixels
+            // under an honestly-labeled tag instead of going blank. A
+            // blank pane would throw away a working comparison over an
+            // unrelated engine-load failure; the error banner below
+            // already says the switch didn't take.
             setError(errMsg(e2));
         }
     };
@@ -141,7 +175,7 @@ const useCompareSlot = () => {
     return {
         fileMap, fileMapRef, mtlxPaths, chosenMtlx, setChosenMtlx,
         renderables, chosenMat, setChosenMat,
-        version, setVersion,
+        version, setVersion, renderedVersion, setRenderedVersion,
         busy, setBusy, status, setStatus, error, setError,
         texReport, setTexReport,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
@@ -214,6 +248,11 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     if (typeof view.renderNow === 'function') view.renderNow();
                 }
                 slot.setViewEpoch((n) => n + 1);
+                // What's actually on screen just changed — stamp the
+                // version that produced it (see loadMtlxDocument/loadedRef
+                // above) so the pane's label can never claim a version
+                // whose pixels aren't the ones rendered.
+                slot.setRenderedVersion(loaded.version);
                 const report = bindDroppedTextures(view, slot.fileMapRef.current);
                 slot.setTexReport(report);
                 slot.setStatus(null);
@@ -448,8 +487,11 @@ function MaterialCompareApp({ active = true } = {}) {
     const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
 
     // Whole-feature signal for Task 4's labels: only worth surfacing the
-    // version at all once the two panes actually diverge.
-    const versionsDiffer = slotA.version !== slotB.version;
+    // version at all once the two panes actually diverge. Compares
+    // renderedVersion (what's on screen), not the requested `version` —
+    // a pane whose version switch failed keeps rendering its old version,
+    // and the tag must follow the pixels, not the dropdown.
+    const versionsDiffer = slotA.renderedVersion !== slotB.renderedVersion;
     const versionTag = (v) => 'v' + v;
 
     // Re-apply the current env sliders to a freshly (re)built view — a
@@ -924,7 +966,7 @@ function MaterialCompareApp({ active = true } = {}) {
                     >
                         <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
                             {docName(slotA, 'Document A')}
-                            {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotA.version)}</span>}
+                            {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotA.renderedVersion)}</span>}
                         </span>
                     </div>
                 )}
@@ -936,7 +978,7 @@ function MaterialCompareApp({ active = true } = {}) {
                     <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
                         <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
                             {docName(slotB, 'Document B')}
-                            {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotB.version)}</span>}
+                            {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotB.renderedVersion)}</span>}
                         </span>
                     </div>
                 )}
@@ -991,13 +1033,13 @@ function MaterialCompareApp({ active = true } = {}) {
                     <CompareLabel
                         side="left"
                         style={sidebarOpen ? { left: 336 } : undefined}
-                        version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'left') ? versionTag(slotA.version) : null}
+                        version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'left') ? versionTag(slotA.renderedVersion) : null}
                     >
                         {effShowDiff && swipeDiffPos === 'left' ? 'Difference' : docName(slotA, 'Document A')}
                     </CompareLabel>
                     <CompareLabel
                         side="right"
-                        version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'right') ? versionTag(slotB.version) : null}
+                        version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'right') ? versionTag(slotB.renderedVersion) : null}
                     >
                         {effShowDiff && swipeDiffPos === 'right' ? 'Difference' : docName(slotB, 'Document B')}
                     </CompareLabel>
