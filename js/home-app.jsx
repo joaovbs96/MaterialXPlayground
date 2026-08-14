@@ -39,6 +39,14 @@ const HOME_CARDS = [
         img: 'images/preview-nodegraph.jpg',
         cta: 'Open Node Graph Editor',
     },
+    {
+        href: '#!builder',
+        icon: 'code',
+        title: 'Embed Builder',
+        desc: 'Configure an embeddable MaterialX viewer, preview it live, and copy a ready-made <iframe> or custom-element snippet to drop into any web page.',
+        img: 'images/preview-builder.jpg',
+        cta: 'Open Embed Builder',
+    },
 ];
 
 function HomeApp({ active } = {}) {

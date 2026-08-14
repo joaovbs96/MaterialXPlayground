@@ -16,7 +16,11 @@ const BUILDER_CONTROLS = [
     { id: 'settings', label: 'Settings panel' },
     { id: 'fullscreen', label: 'Fullscreen toggle' },
 ];
-const BUILDER_THEME_DEFAULTS = { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4px' };
+// radius is stored/edited as a bare number (the field is numeric, docs/
+// EMBEDDING.md); the "px" suffix is appended wherever it's emitted, since
+// embed-boot.js validates with CSS.supports and rejects a bare number.
+const BUILDER_THEME_DEFAULTS = { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4' };
+const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); return t ? t + 'px' : ''; };
 
 // The directory index.html lives in, e.g. "https://host/MaterialXPlayground/".
 // Both snippet types resolve embed/* against this, same as a real host page.
@@ -109,7 +113,9 @@ function BuilderApp({ active } = {}) {
     const previewElRef = React.useRef(null);
 
     const controlsList = BUILDER_CONTROLS.filter((c) => controls[c.id]).map((c) => c.id);
-    const controlsStr = controlsList.join(',');
+    // Round trips embed-boot.js's `all` keyword: every box ticked emits it.
+    // None ticked emits '' - omitted below, same chromeless default as `none`.
+    const controlsStr = controlsList.length === BUILDER_CONTROLS.length ? 'all' : controlsList.join(',');
 
     // Builds the real <materialx-viewer> element off-DOM (not via JSX),
     // so `eager` and the initial src/geometry/controls are all set before
@@ -130,7 +136,7 @@ function BuilderApp({ active } = {}) {
         el.accent = accent;
         el.surface = surface;
         el.text = text;
-        el.radius = radius;
+        el.radius = builderRadiusPx(radius);
         const handleError = (e) => {
             const message = (e && e.detail && e.detail.message) || 'Unknown error';
             setErrors((prev) => [...prev.slice(-5), { id: Math.random(), message }]);
@@ -160,7 +166,7 @@ function BuilderApp({ active } = {}) {
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = accent; }, [accent]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = surface; }, [surface]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.text = text; }, [text]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.radius = radius; }, [radius]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.radius = builderRadiusPx(radius); }, [radius]);
 
     // Reload-triggering properties: controls and autorotate are discrete
     // clicks (not typed text), so applying them immediately is fine - the
@@ -178,11 +184,14 @@ function BuilderApp({ active } = {}) {
     }, [autorotate]);
 
     // `src` is free-typed text - applying it on every keystroke would
-    // reload the ~5.4 MiB iframe per character. Commit only on blur/Enter.
+    // reload the iframe per character. Commit only on blur/Enter, and only
+    // if it actually changed, or "loading" sticks for a reload that never comes.
     const commitSrc = () => {
         if (!previewElRef.current) return;
+        const next = src.trim();
+        if (previewElRef.current.src === next) return;
         setReady(false);
-        previewElRef.current.src = src.trim();
+        previewElRef.current.src = next;
     };
 
     React.useEffect(() => () => clearTimeout(copyTimerRef.current), []);
@@ -209,7 +218,7 @@ function BuilderApp({ active } = {}) {
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) entries.push(['accent', accent.trim()]);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) entries.push(['surface', surface.trim()]);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) entries.push(['text', text.trim()]);
-        if (radius.trim() && builderNorm(radius) !== builderNorm(BUILDER_THEME_DEFAULTS.radius)) entries.push(['radius', radius.trim()]);
+        if (radius.trim() && builderNorm(radius) !== builderNorm(BUILDER_THEME_DEFAULTS.radius)) entries.push(['radius', builderRadiusPx(radius)]);
         return entries;
     };
 
@@ -240,7 +249,7 @@ function BuilderApp({ active } = {}) {
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) attrs.push(`text="${builderEscAttr(text.trim())}"`);
-        if (radius.trim() && builderNorm(radius) !== builderNorm(BUILDER_THEME_DEFAULTS.radius)) attrs.push(`radius="${builderEscAttr(radius.trim())}"`);
+        if (radius.trim() && builderNorm(radius) !== builderNorm(BUILDER_THEME_DEFAULTS.radius)) attrs.push(`radius="${builderEscAttr(builderRadiusPx(radius))}"`);
         attrs.push(`style="width: ${width}px; height: ${height}px;"`);
         const attrLines = attrs.map((a) => '  ' + a).join('\n');
         return `<script src="${builderEscAttr(BUILDER_SITE_BASE + 'embed/mtlx-viewer.js')}"></script>\n\n` +
@@ -332,7 +341,18 @@ function BuilderApp({ active } = {}) {
                         <ColorField label="Text" value={text} onChange={setText} placeholder={BUILDER_THEME_DEFAULTS.text} />
                         <div>
                             <label className={FIELD_LABEL_CLS}>Radius</label>
-                            <input type="text" value={radius} onChange={(e) => setRadius(e.target.value)} placeholder={BUILDER_THEME_DEFAULTS.radius} className={TEXT_INPUT_CLS} />
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={radius}
+                                    onChange={(e) => setRadius(e.target.value)}
+                                    placeholder={BUILDER_THEME_DEFAULTS.radius}
+                                    className={TEXT_INPUT_CLS}
+                                />
+                                <span className="text-sm text-gray-400 shrink-0">px</span>
+                            </div>
                         </div>
                     </div>
 
