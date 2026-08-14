@@ -646,6 +646,19 @@
             React.useEffect(() => {
                 if (envBgSuppressed) notify('The Background toggle has no effect on "shaderball-scene" (the room occludes the sky sphere) and is hidden from Environment.');
             }, [envBgSuppressed]);
+            // Per-control effective visibility, computed once so the mount
+            // gate and each EmbedControls prop agree (a control can be
+            // requested but still suppressed, e.g. rotate on the room geom).
+            const ctlFlags = {
+                geometry: showCtl('geometry'),
+                rotate: showCtl('rotate') && !roomGeomActive,
+                reset: showCtl('reset'),
+                env: showCtl('env'),
+                screenshot: showCtl('screenshot'),
+                settings: showCtl('settings'),
+                fullscreen: showCtl('fullscreen'),
+            };
+            const anyCtlVisible = Object.values(ctlFlags).some(Boolean);
             // Page-transparency CSS: requested AND resolved away from the
             // room. Belt-and-suspenders alongside resolveViewerGeom's own
             // guard above, in case geom ever drifts back to the room.
@@ -703,7 +716,7 @@
                                     fetch failed. IN_VSCODE keeps the original renderables-only gate.
                                     Chromeless: only rendered at all once `controls` opts at least
                                     one button in — showCtl() below then picks which ones. */}
-                                {(renderables.length > 0 || !IN_VSCODE) && (!chromeless || embedControls.length > 0) && (
+                                {(renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (
                                     chromeless ? (
                                     // Purpose-built compact strip (js/embed-controls.jsx):
                                     // no portals, own CSS, degrades with width. See that
@@ -716,28 +729,28 @@
                                         // above, so don't offer it in the first place.
                                         geomList={transparent ? VIEWER_GEOM_NAMES.filter((g) => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES}
                                         onGeomChange={setGeom}
-                                        showGeom={showCtl('geometry')}
+                                        showGeom={ctlFlags.geometry}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Hidden for the room (rotateSuppressed/envBgSuppressed
                                         // above report why).
-                                        showRotate={showCtl('rotate') && !roomGeomActive}
+                                        showRotate={ctlFlags.rotate}
                                         onCameraReset={handleCameraReset}
-                                        showReset={showCtl('reset')}
+                                        showReset={ctlFlags.reset}
                                         envBg={envBg}
                                         onToggleEnvBg={toggleEnvBg}
                                         showBackgroundToggle={!roomGeomActive}
-                                        showEnv={showCtl('env')}
+                                        showEnv={ctlFlags.env}
                                         initialEnvRotation={envRotation}
                                         initialEnvExposure={envExposure}
                                         viewRef={viewRef}
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
-                                        showScreenshot={showCtl('screenshot')}
-                                        showSettings={showCtl('settings')}
+                                        showScreenshot={ctlFlags.screenshot}
+                                        showSettings={ctlFlags.settings}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}
-                                        showFullscreen={showCtl('fullscreen')}
+                                        showFullscreen={ctlFlags.fullscreen}
                                     />
                                     ) : (
                                     <ViewportControls

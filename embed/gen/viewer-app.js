@@ -690,6 +690,19 @@ function MaterialViewerApp({
   React.useEffect(() => {
     if (envBgSuppressed) notify('The Background toggle has no effect on "shaderball-scene" (the room occludes the sky sphere) and is hidden from Environment.');
   }, [envBgSuppressed]);
+  // Per-control effective visibility, computed once so the mount
+  // gate and each EmbedControls prop agree (a control can be
+  // requested but still suppressed, e.g. rotate on the room geom).
+  const ctlFlags = {
+    geometry: showCtl('geometry'),
+    rotate: showCtl('rotate') && !roomGeomActive,
+    reset: showCtl('reset'),
+    env: showCtl('env'),
+    screenshot: showCtl('screenshot'),
+    settings: showCtl('settings'),
+    fullscreen: showCtl('fullscreen')
+  };
+  const anyCtlVisible = Object.values(ctlFlags).some(Boolean);
   // Page-transparency CSS: requested AND resolved away from the
   // room. Belt-and-suspenders alongside resolveViewerGeom's own
   // guard above, in case geom ever drifts back to the room.
@@ -728,7 +741,7 @@ function MaterialViewerApp({
       className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
       labelClassName: "text-sm text-gray-300 animate-pulse",
       barWidthClass: "w-56"
-    }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || embedControls.length > 0) && (chromeless ?
+    }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
     /*#__PURE__*/
     // Purpose-built compact strip (js/embed-controls.jsx):
     // no portals, own CSS, degrades with width. See that
@@ -742,29 +755,29 @@ function MaterialViewerApp({
       ,
       geomList: transparent ? VIEWER_GEOM_NAMES.filter(g => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES,
       onGeomChange: setGeom,
-      showGeom: showCtl('geometry'),
+      showGeom: ctlFlags.geometry,
       rotating: rotating,
       onToggleRotating: toggleRotating
       // Hidden for the room (rotateSuppressed/envBgSuppressed
       // above report why).
       ,
-      showRotate: showCtl('rotate') && !roomGeomActive,
+      showRotate: ctlFlags.rotate,
       onCameraReset: handleCameraReset,
-      showReset: showCtl('reset'),
+      showReset: ctlFlags.reset,
       envBg: envBg,
       onToggleEnvBg: toggleEnvBg,
       showBackgroundToggle: !roomGeomActive,
-      showEnv: showCtl('env'),
+      showEnv: ctlFlags.env,
       initialEnvRotation: envRotation,
       initialEnvExposure: envExposure,
       viewRef: viewRef,
       viewEpoch: viewEpoch,
       onScreenshot: takeScreenshot,
-      showScreenshot: showCtl('screenshot'),
-      showSettings: showCtl('settings'),
+      showScreenshot: ctlFlags.screenshot,
+      showSettings: ctlFlags.settings,
       isFullscreen: isFullscreen,
       onToggleFullscreen: onToggleFullscreen,
-      showFullscreen: showCtl('fullscreen')
+      showFullscreen: ctlFlags.fullscreen
     }) : /*#__PURE__*/React.createElement(ViewportControls, {
       containerClassName: "absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end",
       selectClassName: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300",
