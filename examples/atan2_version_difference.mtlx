@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+
+  <!-- Renders yellow under MaterialX 1.39.4 and black under 1.39.5.
+       ND_atan2_vector2 swapped its input defaults between the two, so an
+       atan2 with NOTHING authored gives atan2(1,0)=pi/2, then atan2(0,1)=0.
+       Authoring either input, or connecting anything, breaks the demo. -->
+  <atan2 name="atan2Defaults" type="vector2" />
+
+  <!-- convert is required: there is no color3 atan2, and MaterialX will
+       not connect a vector2 to a color3 on its own. -->
+  <convert name="atan2Color" type="color3">
+    <input name="in" type="vector2" nodename="atan2Defaults" />
+  </convert>
+
+  <!-- Unlit so the comparison shows the math, not the lighting on top. -->
+  <surface_unlit name="atan2Shader" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="atan2Color" />
+  </surface_unlit>
+
+  <surfacematerial name="atan2_version_difference" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="atan2Shader" />
+  </surfacematerial>
+
+</materialx>
