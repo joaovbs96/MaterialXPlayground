@@ -98,6 +98,7 @@
             super();
             this._iframe = null;
             this._ready = false;
+            this._reloadNeeded = false; // a reload was requested while a load was already in flight.
             this._queue = [];           // messages sent before 'ready'; flushed in order once it arrives.
             this._pending = new Map();  // id -> {resolve, reject}, for snapshot()'s Promise<Blob>.
             this._idCounter = 0;
@@ -108,6 +109,7 @@
             this._expectedOrigin = null; // the IFRAME's own origin — only messages from here are trusted.
             this._slot = null;
             this._shadowBuilt = false;
+            this._paramLossReported = false; // at most one dropped-query-string report per navigation.
         }
 
         // ---- lifecycle ----------------------------------------------------
@@ -323,6 +325,7 @@
             this._slot.appendChild(iframe);
             this._iframe = iframe;
             this._ready = false;
+            this._paramLossReported = false;
             LIVE.add(this);
         }
 
@@ -335,6 +338,7 @@
             this._iframe.remove();
             this._iframe = null;
             this._ready = false;
+            this._reloadNeeded = false;
             this._expectedOrigin = null;
             LIVE.delete(this);
             this._rejectAllPending(new Error('materialx-viewer: iframe torn down'));
@@ -394,19 +398,40 @@
 
         _reloadIfActive() {
             if (!this._iframe) return;
+            if (!this._ready) {
+                // A load is already in flight; reassigning src now would
+                // abort it and restart the download from scratch. Deferred:
+                // _handleInbound('ready') applies it once that load finishes.
+                this._reloadNeeded = true;
+                return;
+            }
+            this._applyReload();
+        }
+
+        // Returns whether a real navigation started, so _handleInbound's
+        // deferred-reload path knows whether to complete the ready
+        // handshake itself (no navigation means no future 'ready' will).
+        _applyReload() {
             var url;
             try {
                 url = this._buildSrcUrl();
             } catch (e) {
                 this._reportError(e);
-                return;
+                return false;
             }
-            if (url === this._iframe.src) return;
+            // Net no-op: a reload-attr was toggled on then off again
+            // before this ever ran. Current iframe content already
+            // matches, so there's nothing to (re)navigate to.
+            if (url === this._iframe.src) return false;
             this._ready = false;
+            this._paramLossReported = false;
+            this._queue = []; // superseded: the reload's own query string
+            // already carries every current LIVE_ATTR value.
             this._rejectAllPending(new Error('materialx-viewer: attribute change reloaded the iframe'));
             this._expectedOrigin = new URL(url).origin;
             this._iframe.src = url; // real navigation — src/autorotate/controls/base have no
             // live postMessage handler in embed-boot.js, so this is the only way to apply them.
+            return true;
         }
 
         // ---- outbound postMessage / queueing --------------------------------
@@ -457,6 +482,26 @@
             this.dispatchEvent(new CustomEvent('mtlx-error', { detail: { message: String(err && err.message || err) } }));
         }
 
+        // Detects a host that stripped the query string (serve/Vercel cleanUrls),
+        // by comparing params THIS element sent vs what embed-boot.js reports back.
+        // `msg.search` absent (older cached embed-boot.js): do nothing, not an error.
+        _checkDroppedParams(msg) {
+            if (typeof msg.search !== 'string' || this._paramLossReported || !this._iframe) return;
+            var sent = new URL(this._iframe.src).searchParams;
+            var got = new URLSearchParams(msg.search);
+            var missing = [];
+            sent.forEach((_v, key) => {
+                if (!got.has(key) && missing.indexOf(key) === -1) missing.push(key);
+            });
+            if (!missing.length) return;
+            this._paramLossReported = true;
+            this._reportError(new Error(
+                'materialx-viewer: the server dropped the embed\'s query parameters (missing: ' +
+                missing.join(', ') + '). The host is rewriting URLs, e.g. serve/Vercel cleanUrls. ' +
+                'Disable that, or the viewer loads with default settings.'
+            ));
+        }
+
         // ---- inbound postMessage --------------------------------------------
 
         _onMessage(event) {
@@ -470,6 +515,14 @@
         _handleInbound(name, msg) {
             if (name === 'ready') {
                 this._ready = true;
+                this._checkDroppedParams(msg);
+                if (this._reloadNeeded) {
+                    // Something changed mid-load; apply it now instead of
+                    // reporting this now-superseded state as ready. If it
+                    // turned out to be a no-op, this ready IS real; fall through.
+                    this._reloadNeeded = false;
+                    if (this._applyReload()) return;
+                }
                 this._flushQueue();
                 this.dispatchEvent(new CustomEvent('mtlx-ready', { detail: { version: msg.version || null } }));
             } else if (name === 'renderables') {

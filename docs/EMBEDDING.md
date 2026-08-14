@@ -36,7 +36,7 @@ default OpenPBR material, which is a fine sanity check while you wire things up.
 | `env` | number (degrees) | *(engine default)* | Environment map rotation. |
 | `exposure` | number | *(engine default)* | Environment exposure multiplier. |
 | `autorotate` | boolean | off | Turntable auto-rotation. |
-| `controls` | comma-separated list, see below | *(none, fully chromeless)* | Which HUD buttons to show over the viewport. Omit entirely for a bare render with no UI at all. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
+| `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the seven names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
 | `background` | boolean | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as `transparent` below. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of the viewer's usual dark backdrop. See [Transparent background](#transparent-background). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
@@ -77,6 +77,24 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 `shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its walls
 occlude the sky sphere), so both are hidden while it's selected. Requesting either one
 against that geometry is reported through `mtlx-error` rather than silently doing nothing.
+
+Two extra keywords, both case-insensitive (`ALL`/`None` work the same as `all`/`none`):
+
+- **`none`** - no controls at all. This is also what an absent `controls` param means, so
+  `controls=none` and omitting the param entirely are exactly the same thing; `none` just
+  makes that choice explicit and self-documenting in the URL.
+- **`all`** - every control above, equivalent to spelling out all seven names. It's derived
+  from the actual list of controls internally, so it stays correct automatically if a control
+  is ever added or removed.
+
+Combining `controls` names with these keywords is still resolved to something sensible, and
+always reported through the `mtlx-error` event so the mistake isn't silent:
+
+| Combination | Result | Why |
+| --- | --- | --- |
+| `none,all` (either order) | All seven controls | A direct contradiction between the two keywords; `all` is the more permissive reading, so it wins. |
+| `all,geometry` (`all` plus specific names) | All seven controls | The named controls are already included in `all`, so they're redundant rather than conflicting - reported, then ignored. |
+| `none,geometry` (`none` plus specific names) | Just `geometry` | Contradictory, but naming a control is a clear, specific positive intent, so the explicit name(s) win over `none`. |
 
 ### Transparent background
 
@@ -135,7 +153,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `env` | `.env` | number (degrees) | — | Yes |
 | `exposure` | `.exposure` | number | — | Yes |
 | `autorotate` | `.autorotate` | boolean | off | No (reload) |
-| `controls` | `.controls` | comma list (or an array via the property) | — | No (reload) |
+| `controls` | `.controls` | comma list (or an array via the property), plus `all`/`none` | `none` | No (reload) |
 | `background` | `.background` | boolean | off | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
@@ -348,6 +366,33 @@ must sit **exactly one level below** the same root that contains `js/`, `models/
 The [offline release zip](https://github.com/joaovbs96/MaterialXPlayground/releases/latest)
 attached to every GitHub release already contains the full tree in this shape — unzip it and
 serve the folder as-is with any static file server.
+
+### Your server must preserve query strings
+
+Every param in this doc (`src`, `geometry`, `controls`, `origin`, the theme colors, all of it)
+travels as a query string on the request for `embed/viewer.html`. If your server rewrites or
+redirects that URL and drops the query string, the viewer boots with zero params: no `src`
+falls back to the built-in default material, no `controls` means fully chromeless, and so on,
+with nothing visibly erroring.
+
+The common cause is a "clean URLs" feature: `serve` (the npm package) has `cleanUrls` on by
+default since v14, and Vercel has its own `cleanUrls` setting; both 301-redirect
+`/embed/viewer.html?...` to `/embed/viewer`, discarding everything after the `?`. Turn it off.
+For `serve`, add a `serve.json` next to the directory you serve:
+
+```json
+{ "cleanUrls": false }
+```
+
+This repo ships its own root-level `serve.json` with that setting, so `npx serve .` works
+correctly for local development out of the box. For Vercel, set `"cleanUrls": false` in
+`vercel.json` instead.
+
+`<materialx-viewer>` detects a dropped query string automatically: it compares the params it
+put into the iframe's URL against what `embed/embed-boot.js` reports receiving, and fires
+`mtlx-error` naming exactly which ones went missing. A hand-written `<iframe>` has no such
+check (nothing on your page runs inside it to compare against); if the viewer loads with
+unexpected defaults, check the Network panel for a redirect on the `viewer.html` request.
 
 ## Security
 

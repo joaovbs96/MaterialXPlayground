@@ -98,15 +98,47 @@
         return def;
     }
     var KNOWN_CONTROLS = ['geometry', 'rotate', 'reset', 'env', 'screenshot', 'settings', 'fullscreen'];
+    // `none`/`all` are case-insensitive shorthands (TRUE_WORDS/FALSE_WORDS
+    // spirit). `all` is derived from KNOWN_CONTROLS, not a second list, so
+    // it can't drift if a control is added/removed later.
     function parseControls(v) {
         if (!v) return [];
         var known = [];
         var unknown = [];
+        var hasNone = false;
+        var hasAll = false;
         v.split(',').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (name) {
-            (KNOWN_CONTROLS.indexOf(name) !== -1 ? known : unknown).push(name);
+            var lower = name.toLowerCase();
+            if (lower === 'none') { hasNone = true; }
+            else if (lower === 'all') { hasAll = true; }
+            else if (KNOWN_CONTROLS.indexOf(name) !== -1) { known.push(name); }
+            else { unknown.push(name); }
         });
         if (unknown.length) {
-            post('error', { message: 'Unknown control name(s) ignored: ' + unknown.join(', ') + '. Valid values: ' + KNOWN_CONTROLS.join(', ') + '.' });
+            post('error', { message: 'Unknown control name(s) ignored: ' + unknown.join(', ') + '. Valid values: ' + KNOWN_CONTROLS.join(', ') + ', all, none.' });
+        }
+        // `none` + `all` together is a direct contradiction: assume `all`,
+        // the more permissive reading, and say so rather than guessing
+        // silently either way.
+        if (hasNone && hasAll) {
+            post('error', { message: '`controls` had both `all` and `none`; showing all controls.' });
+            return KNOWN_CONTROLS.slice();
+        }
+        // `all` plus explicit names: the names are redundant, not
+        // contradictory, so just note it and use `all`.
+        if (hasAll) {
+            if (known.length) {
+                post('error', { message: '`all` already includes every control; ignoring redundant name(s): ' + known.join(', ') + '.' });
+            }
+            return KNOWN_CONTROLS.slice();
+        }
+        // `none` plus explicit names is contradictory. Listing a name is a
+        // clear positive intent, so the explicit names win over `none`.
+        if (hasNone) {
+            if (known.length) {
+                post('error', { message: '`none` conflicts with explicit control name(s) (' + known.join(', ') + '); showing those and ignoring `none`.' });
+            }
+            return known;
         }
         return known;
     }
@@ -208,7 +240,9 @@
         // actually needs to know a new document settled.
         if (readyPosted) return;
         readyPosted = true;
-        post('ready', { version: version || null });
+        // `search` lets the host detect a stripped query string (e.g. a
+        // clean-URL rewrite), see mtlx-viewer.js's 'ready' handling.
+        post('ready', { version: version || null, search: window.location.search });
     }
 
     function onError(message) {
