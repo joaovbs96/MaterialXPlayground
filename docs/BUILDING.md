@@ -46,7 +46,13 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 
 **`libraries/`** vendors the MaterialX standard library (`stdlib`, `pbrlib`, `bxdf`, `cmlib`, `lights`, `nprlib`, `targets`), which the WASM loads to resolve node definitions, implementations, and target inheritance.
 
-**`js/materialx/<version>/JsMaterialXGenShader*`** (`.js`/`.wasm`/`.data`, v1.39.5) is the MaterialX WebAssembly module itself, obtained from the official MaterialX build and committed manually for the default version (license at `js/materialx/LICENSE.txt`). It predates, and is not managed by, `scripts/vendor.mjs` — but it is the **single source of truth for the MaterialX version**: the build's `version` step extracts it from the module at build time and every other occurrence in the repo is generated or stamped from that (see the `version` step above).
+**`js/materialx/<version>/`** holds the MaterialX WebAssembly modules, obtained from the official MaterialX build and committed manually for the default version (license at `js/materialx/LICENSE.txt`). It predates, and is not managed by, `scripts/vendor.mjs`, but `JsMaterialXGenShader.wasm` is the **single source of truth for the MaterialX version**: the build's `version` step extracts it from the module at build time and every other occurrence in the repo is generated or stamped from that (see the `version` step above).
+
+Each version directory holds the complete upstream distribution, all seven files from `MaterialX_JavaScript.zip`, pinned by byte size in `scripts/lib/mtlx-versions.mjs`:
+
+- **`JsMaterialXGenShader*`** (`.js`/`.wasm`/`.data`, v1.39.5) is the only module anything loads. The `.data` is the packed standard library.
+- **`JsMaterialXCore.{js,wasm}`** is currently unused. `JsMaterialXGenShader` is a strict superset of it (verified: every symbol in Core is present in GenShader), so Core offers no capability the site does not already have, only a smaller binary. Note it ships **no `.data`**, so it carries no standard library and cannot resolve node definitions on its own.
+- **`JsMaterialX{Core,GenShader}-<version>.js`** are byte-identical duplicates of the two unsuffixed `.js` files. They are kept only so each directory mirrors the upstream zip exactly.
 
 Only that default version is committed to git. Every other entry in `scripts/lib/mtlx-versions.mjs` (currently also 1.39.4) is fetched into its own `js/materialx/<version>/` directory on demand by `npm run vendor:versions` — downloaded from the matching upstream GitHub release asset, verified against a pinned sha256, unzipped, and left gitignored (see the `versions` build step above). These extra versions exist solely for the Material Compare view's per-pane version picker; every other consumer (docs, presets, the header version badge) stays pinned to the default.
 
