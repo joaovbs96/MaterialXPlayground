@@ -45,6 +45,7 @@ Load and inspect MaterialX materials in 3D.
 Render two MaterialX materials side by side and see exactly where they differ.
 
 - **Two independent documents**, loaded the same way as the Material Viewer — drag-and-drop (a single `.mtlx`, a `.zip`, or loose files) or file/folder pickers — one per side, with identical camera and lighting.
+- **Per-pane MaterialX version.** Each side can render through its own vendored MaterialX version, so you can see exactly what a document looks like under one MaterialX release versus another.
 - **Three display modes**: side by side, a swipe slider, and a difference heatmap. A **Show difference** checkbox adds the difference as a third pane in side-by-side mode, or into either half of the slider (**Switch Views** swaps which side it takes).
 - **GPU difference rendering** that updates live while orbiting: a per-pixel absolute color difference, log-scaled through a false-color ramp.
 - **Live statistics** — SSIM, RMSE, PSNR, and mean absolute difference — recomputed automatically as the camera, documents, or environment change.

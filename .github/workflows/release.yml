@@ -82,6 +82,14 @@ jobs:
       - name: Vendor the offline MaterialX snapshot
         run: npm run vendor:offline
 
+      # Every version this repo supports (scripts/lib/mtlx-versions.mjs)
+      # must be on disk before staging below — the offline zip is the
+      # only place non-default versions are distributed at all, since
+      # the .vsix intentionally ships the default only (see the vsix
+      # sanity check further down).
+      - name: Fetch non-default MaterialX versions
+        run: npm run vendor:versions
+
       - name: Build
         run: npm run build
 
@@ -114,6 +122,22 @@ jobs:
           echo "name=materialx-playground-$TAG-offline" >> "$GITHUB_OUTPUT"
           echo "vsix_name=materialx-playground-vscode-$TAG" >> "$GITHUB_OUTPUT"
 
+          # scripts/lib/mtlx-versions.mjs is the single source of truth for
+          # which MaterialX versions this repo supports — read it here
+          # instead of hardcoding version numbers in this workflow, so the
+          # offline-zip and vsix assertions further down stay correct as
+          # versions are added or retired.
+          MTLX_VERSIONS="$(node --input-type=module -e '
+            import { MTLX_VERSIONS } from "./scripts/lib/mtlx-versions.mjs";
+            console.log(MTLX_VERSIONS.map((v) => v.version).join(" "));
+          ')"
+          MTLX_DEFAULT_VERSION="$(node --input-type=module -e '
+            import { DEFAULT_MTLX_VERSION } from "./scripts/lib/mtlx-versions.mjs";
+            console.log(DEFAULT_MTLX_VERSION);
+          ')"
+          echo "mtlx_versions=$MTLX_VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "mtlx_default_version=$MTLX_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Stage offline site
         run: |
           DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"
@@ -141,12 +165,36 @@ jobs:
             console.log(`MaterialX snapshot: tag=${m.tag} files=${m.fileCount} bytes=${m.totalBytes}`);
           ' "$DEST/vendor/materialx/manifest.json" | tee -a "$GITHUB_STEP_SUMMARY"
 
+          # Every supported MaterialX version (scripts/lib/mtlx-versions.mjs,
+          # surfaced above as steps.pkg.outputs.mtlx_versions) must be
+          # present in the staged tree — the offline zip is the only place
+          # non-default versions are distributed, so a silent miss here
+          # would mean the package would NOT be offline for those versions.
+          VERSION_COUNT=0
+          VERSION_BYTES=0
+          for V in ${{ steps.pkg.outputs.mtlx_versions }}; do
+            for F in JsMaterialXGenShader.js JsMaterialXGenShader.wasm JsMaterialXGenShader.data; do
+              P="$DEST/js/materialx/$V/$F"
+              test -f "$P" || { echo "::error::js/materialx/$V/$F missing from staged tree — the offline package would not contain MaterialX $V"; exit 1; }
+              VERSION_BYTES=$((VERSION_BYTES + $(stat -c%s "$P")))
+            done
+            VERSION_COUNT=$((VERSION_COUNT + 1))
+          done
+          echo "MaterialX versions bundled: ${{ steps.pkg.outputs.mtlx_versions }} (versions=$VERSION_COUNT bytes=$VERSION_BYTES)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Create zip
         run: |
           cd "$RUNNER_TEMP/package"
           zip -r -q "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" "${{ steps.pkg.outputs.name }}"
-          unzip -l "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" | grep -q 'vendor/materialx/manifest.json' \
+          Z="$(unzip -l "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip")"
+          echo "$Z" | grep -q 'vendor/materialx/manifest.json' \
             || { echo "::error::manifest.json missing from zip"; exit 1; }
+          # Re-verify every supported MaterialX version made it into the
+          # actual zip entries (not just the pre-zip staged tree above).
+          for V in ${{ steps.pkg.outputs.mtlx_versions }}; do
+            echo "$Z" | grep -q "js/materialx/$V/JsMaterialXGenShader.wasm" \
+              || { echo "::error::js/materialx/$V/JsMaterialXGenShader.wasm missing from zip"; exit 1; }
+          done
           ls -lh "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload package artifact
@@ -178,6 +226,25 @@ jobs:
           echo "$L" | grep -q 'extension/environment_map.mtlx' || { echo "::error::environment_map.mtlx missing (light-rig fetch)"; exit 1; }
           echo "$L" | grep -q 'extension/vscode_extension/src/extension.js' || { echo "::error::extension sources missing"; exit 1; }
           if echo "$L" | grep -qE 'extension/(node_modules|scripts|\.github)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+
+          # Positive: the default version's WASM path just moved under
+          # js/materialx/<version>/ — a silent miss here would ship a
+          # structurally valid but completely broken extension (no
+          # MaterialX engine at all).
+          DEFAULT_DIR="extension/js/materialx/${{ steps.pkg.outputs.mtlx_default_version }}"
+          for F in JsMaterialXGenShader.js JsMaterialXGenShader.wasm JsMaterialXGenShader.data; do
+            echo "$L" | grep -q "$DEFAULT_DIR/$F" || { echo "::error::$DEFAULT_DIR/$F missing — vsix would not load MaterialX"; exit 1; }
+          done
+
+          # Negative: only the default version should ship — .vscodeignore
+          # excludes the rest (Compare, the only feature that needs extra
+          # versions, isn't in the webview nav; see js/site-header.js:157-159).
+          for V in ${{ steps.pkg.outputs.mtlx_versions }}; do
+            if [ "$V" != "${{ steps.pkg.outputs.mtlx_default_version }}" ]; then
+              if echo "$L" | grep -q "extension/js/materialx/$V/"; then echo "::error::non-default MaterialX version $V leaked into the vsix"; exit 1; fi
+            fi
+          done
+
           ls -lh "$VSIX" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload vsix artifact

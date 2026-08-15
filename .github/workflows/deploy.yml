@@ -58,6 +58,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Runs on release (the staging/upload steps below need the versions)
+      # and on manual dispatch, so this path can be smoke-tested WITHOUT
+      # cutting a release. Otherwise its first real execution would be a
+      # live release, and a failure there fails the deploy with it.
+      #
+      # Still skipped on push/PR. Nothing before the staging steps consumes
+      # the fetched versions: `npm run build` skips them entirely and
+      # `npm run check` treats an absent version directory as valid, so
+      # fetching there buys nothing while putting an external download on
+      # the critical path for unrelated work. scripts/fetch-mtlx-versions.mjs
+      # has no retry (one `fetch`, and a non-2xx calls fail() -> exit 1), so
+      # a single transient 503 from the release-asset CDN would fail an
+      # unrelated PR.
+      #
+      # Deliberately NOT continue-on-error: that turns a hard failure into
+      # a warning nobody reads, and the release staging below then fails
+      # anyway with the versions missing.
+      #
+      # The fetched files land in js/materialx/<version>/ and are
+      # gitignored, so they can't trip the staleness gates below either.
+      # On dispatch they also make `npm run check` verify each version's
+      # bytes, which turns a dispatch run into a real upstream-drift check.
+      - name: Fetch non-default MaterialX versions
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        run: npm run vendor:versions
+
       - name: Set up Python (tutorials subsite)
         if: hashFiles('tutorials-src/mkdocs.yml') != ''
         uses: actions/setup-python@v7

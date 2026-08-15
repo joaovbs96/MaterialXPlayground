@@ -1,4 +1,4 @@
-# js/JsMaterialXGenShader.data is an Emscripten-packed virtual filesystem
+# js/materialx/<version>/JsMaterialXGenShader.data is an Emscripten-packed virtual filesystem
 # archive: concatenated .mtlx text files with ZERO NUL bytes anywhere in the
 # 1.4MB payload. Git's automatic text/binary detection keys off NUL-byte
 # presence, so it misclassifies this file as text. On a Windows clone with
@@ -37,8 +37,9 @@
 # scripts/vendor.mjs). Mark it vendored for GitHub linguist stats, and force
 # git to skip all EOL/text conversion for every file under it regardless of
 # extension-based text/binary heuristics — the same class of heuristic
-# mis-detection documented above corrupted JsMaterialXGenShader.data on a
-# fresh Windows clone, and vendored .js/.css/font files must not risk it.
+# mis-detection documented above corrupted
+# js/materialx/<version>/JsMaterialXGenShader.data on a fresh Windows
+# clone, and vendored .js/.css/font files must not risk it.
 vendor/** linguist-vendored
 vendor/** -text
 

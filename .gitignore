@@ -2,3 +2,11 @@
 node_modules/
 vendor/materialx/
 *.vsix
+
+# js/materialx/<version>/: only the default MaterialX version (see
+# DEFAULT_MTLX_VERSION in scripts/lib/mtlx-versions.mjs) is committed to
+# git. Every other pinned version is fetched on demand by
+# `npm run vendor:versions` (scripts/fetch-mtlx-versions.mjs) and
+# intentionally left out of the repo. Explicit per-version lines rather
+# than a negation pattern — negation is fragile for directories.
+js/materialx/1.39.4/

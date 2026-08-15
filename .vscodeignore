@@ -14,3 +14,9 @@ sitemap.xml
 tutorial-ideas.md
 images/og_image.png
 images/preview-*.jpg
+
+# Only the default MaterialX version ships in the .vsix — the Compare
+# view (the only feature that needs extra versions) isn't in the
+# webview nav. The default is computed in scripts/lib/mtlx-versions.mjs
+# (DEFAULT_MTLX_VERSION); update this line if that ever changes.
+js/materialx/1.39.4/**

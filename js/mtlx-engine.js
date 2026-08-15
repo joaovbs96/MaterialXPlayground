@@ -10,26 +10,83 @@
 // ------------------------------------------------------------------
 // Load ONLY JsMaterialXGenShader.js (superset of JsMaterialXCore.js) —
 // loading both makes embind register shared C++ types twice and throw.
-// Runtime is cached at module scope, not re-downloaded per node select.
-let mxEnvPromise = null;
-const getMxEnv = () => {
-    if (!mxEnvPromise) {
-        mxEnvPromise = import('./js/JsMaterialXGenShader.js')
-            .then((mod) => mod.default({
-                // .wasm and .data live next to the .js (in ./js/).
-                locateFile: (path) => './js/' + path,
+// Runtime is cached per-version, not re-downloaded per node select.
+// MTLX_DEFAULT_VERSION is build-stamped — see scripts/lib/version.mjs
+// STAMP_TABLE, which fails CI if this literal drifts from
+// js/gen/mtlx-version.json.
+const MTLX_DEFAULT_VERSION = '1.39.5';
+const mxEnvPromises = new Map();
+
+// Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
+// `export` statement and no `root.MaterialX = ...` global fallback — see
+// getMxEnv's header comment below for why import() can't reach their
+// factory. A classic script makes the build's top-level `var MaterialX =
+// ...` land on window, same as any other <script src>. Captures
+// window.MaterialX synchronously in onload (before anything else can run),
+// restores whatever was there before (both UMD and ESM builds use this
+// same global name, so leaving it set risks a later version reading a
+// stale factory), then resolves with the captured value.
+const loadMxFactoryViaScript = (ver) => new Promise((resolve, reject) => {
+    const url = './js/materialx/' + ver + '/JsMaterialXGenShader.js';
+    const prevGlobal = window.MaterialX;
+    const script = document.createElement('script');
+    script.src = url;
+    script.onload = () => {
+        const captured = window.MaterialX; // synchronous: capture before restoring
+        window.MaterialX = prevGlobal;
+        script.remove();
+        if (typeof captured !== 'function') {
+            // Fail loud here rather than let the caller hit a confusing
+            // "captured is not a function" later.
+            reject(new Error('MaterialX engine script loaded but window.MaterialX is not a factory function (got ' + typeof captured + ') — url: ' + url));
+            return;
+        }
+        resolve(captured);
+    };
+    script.onerror = () => {
+        window.MaterialX = prevGlobal;
+        script.remove();
+        reject(new Error('Failed to load MaterialX engine script: ' + url));
+    };
+    document.head.appendChild(script);
+});
+
+const getMxEnv = (version) => {
+    const ver = version || MTLX_DEFAULT_VERSION;
+    if (!mxEnvPromises.has(ver)) {
+        // ES-module builds (1.39.5+) export the factory as default. Older
+        // builds (1.39.4 and earlier) are UMD with no export statement and
+        // no global fallback, so under import() the factory is unreachable —
+        // re-load those via a classic <script>, where top-level `var` lands
+        // on window (see loadMxFactoryViaScript above). Detected by shape
+        // (whether mod.default is actually a function), not by version
+        // number, so a future build switching either way keeps working.
+        // This means a failing version pays for TWO requests (import() then
+        // the <script> re-fetch of the same URL) — deliberate and cheap,
+        // since the second one is an HTTP cache hit; do not "optimize" this
+        // into a hardcoded version check.
+        const factoryPromise = import('./js/materialx/' + ver + '/JsMaterialXGenShader.js')
+            .then((mod) => (typeof mod.default === 'function' ? mod.default : loadMxFactoryViaScript(ver)));
+        mxEnvPromises.set(ver, factoryPromise
+            .then((factory) => factory({
+                // .wasm and .data live next to the .js.
+                locateFile: (path) => './js/materialx/' + ver + '/' + path,
             }))
             .then((mx) => {
                 // Expose the MaterialX library version (from the JS API)
                 // for the top-menu badge; broadcast so the UI can update
-                // whenever the WASM finishes loading.
-                try {
-                    const ver = (mx.getVersionString && mx.getVersionString()) || null;
-                    if (ver) {
-                        window.__mtlxVersion = ver;
-                        window.dispatchEvent(new CustomEvent('mtlx-version', { detail: ver }));
-                    }
-                } catch (e) { /* version is optional */ }
+                // whenever the WASM finishes loading. Only the default
+                // version drives the header badge — a non-default pane
+                // (e.g. Compare) must not overwrite it.
+                if (ver === MTLX_DEFAULT_VERSION) {
+                    try {
+                        const verStr = (mx.getVersionString && mx.getVersionString()) || null;
+                        if (verStr) {
+                            window.__mtlxVersion = verStr;
+                            window.dispatchEvent(new CustomEvent('mtlx-version', { detail: verStr }));
+                        }
+                    } catch (e) { /* version is optional */ }
+                }
                 // WebGL 2 targets ESSL (GLSL ES 3.00), not the desktop GLSL
                 // generator (#version 400 won't compile in-browser).
                 // loadStandardLibraries also registers the source-code search path.
@@ -132,18 +189,18 @@ const getMxEnv = () => {
                             console.warn('direct-light registration unavailable:', e);
                             lightData.length = 0;
                         }
-                        return { mx, gen, genContext, stdlib, lightData };
+                        return { mx, gen, genContext, stdlib, lightData, version: ver };
                     });
             })
             .catch((e) => {
-                // Reset the memo so a retry re-attempts the load instead of
-                // replaying this rejection forever, and wrap the (often
-                // opaque) failure in a message the user can act on.
-                mxEnvPromise = null;
+                // Reset this version's memo so a retry re-attempts the load
+                // instead of replaying this rejection forever, and wrap the
+                // (often opaque) failure in a message the user can act on.
+                mxEnvPromises.delete(ver);
                 throw new Error('The MaterialX engine (WASM) failed to load: check your connection and try again, or reload the page. (' + ((e && e.message) || e) + ')');
-            });
+            }));
     }
-    return mxEnvPromise;
+    return mxEnvPromises.get(ver);
 };
 
 // Wasm calls must be serialized — the heap can GROW mid-call
@@ -4245,6 +4302,10 @@ const createMtlxRenderView = async ({
                 if (__snapshotCanvas.width !== w || __snapshotCanvas.height !== h) {
                     __snapshotCanvas.width = w; __snapshotCanvas.height = h;
                 }
+                // Source is alpha:true, so drawImage's source-over would
+                // blend it onto whatever this reused canvas held last —
+                // only a size change reallocates (and thus clears) it.
+                __snapshotCtx.clearRect(0, 0, w, h);
                 __snapshotCtx.drawImage(renderer.domElement, 0, 0, w, h);
                 return __snapshotCtx.getImageData(0, 0, w, h);
             },

@@ -3,10 +3,16 @@
 // derived/committed artifact in this repo and verifies none drifted.
 //
 // Usage: node scripts/build.mjs [step] [--check] [--with-materialx]
-//   step: all | version | stamp | vendor | nodelib | tutorials | webview
+//   step: all | version | versions | stamp | vendor | nodelib | tutorials | webview
 //
-// Order for `all`: version -> vendor -> nodelib -> tutorials -> webview.
+// Order for `all`: version -> versions -> vendor -> nodelib -> tutorials -> webview.
 // version runs first: vendor/nodelib read js/gen/mtlx-version.json.
+//
+// `versions` is the non-default MaterialX WASM builds (js/materialx/<v>/
+// for every entry in scripts/lib/mtlx-versions.mjs other than the
+// committed default) — NEVER fetched here, only verified. Downloads only
+// ever happen via the explicit `npm run vendor:versions` (which CI calls
+// separately); see scripts/fetch-mtlx-versions.mjs.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -23,7 +29,7 @@ const CHECK_MODE = argv.includes("--check");
 const WITH_MATERIALX = argv.includes("--with-materialx");
 const STEP = argv.find((a) => !a.startsWith("--")) || "all";
 
-const VALID_STEPS = ["all", "version", "stamp", "vendor", "nodelib", "tutorials", "webview"];
+const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "tutorials", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
   console.error(`error: unknown step "${STEP}" — expected one of: ${VALID_STEPS.join(", ")}`);
   process.exit(1);
@@ -64,6 +70,23 @@ async function runVersionStep() {
     path.join(REPO_ROOT, "scripts", "extract-mtlx-version.mjs"),
     CHECK_MODE ? ["--check"] : []
   );
+}
+
+/** Never downloads (see header comment) — in normal mode this is a
+ * no-op; in --check mode it verifies on-disk byte sizes for whichever
+ * non-default versions happen to be present, treating absence as valid. */
+async function runVersionsStep() {
+  if (!CHECK_MODE) {
+    log("versions: skipped — non-default MaterialX WASM builds are fetched only via `npm run vendor:versions`, never by `npm run build`.");
+    return;
+  }
+  log("versions: verifying non-default MaterialX WASM builds (js/materialx/<version>/) (--check) ...");
+  try {
+    const { runCheck } = await import("./fetch-mtlx-versions.mjs");
+    await runCheck();
+  } catch (err) {
+    failStep("versions", err.message);
+  }
 }
 
 async function runStampStep() {
@@ -135,12 +158,15 @@ async function main() {
     // `stamp` isn't run separately here: the version step's default mode
     // already re-stamps every literal, so a follow-up stamp step would be redundant.
     await runVersionStep();
+    await runVersionsStep();
     await runVendorStep();
     await runNodelibStep();
     await runTutorialsStep();
     await runWebviewStep();
   } else if (STEP === "version") {
     await runVersionStep();
+  } else if (STEP === "versions") {
+    await runVersionsStep();
   } else if (STEP === "stamp") {
     await runStampStep();
   } else if (STEP === "vendor") {

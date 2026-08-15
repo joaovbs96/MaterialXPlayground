@@ -75,9 +75,10 @@
     // ------------------------------------------------------------------
     // fetch() bridge for the MaterialX Emscripten payloads.
     //
-    // WHY: the Emscripten glue (js/JsMaterialXGenShader.js et al.) loads
-    // its packed virtual filesystem and wasm binary via plain relative
-    // fetch('./js/JsMaterialXGenShader.data' / '.wasm'). Under <base
+    // WHY: the Emscripten glue (js/materialx/<version>/JsMaterialXGenShader.js
+    // et al.) loads its packed virtual filesystem and wasm binary via plain
+    // relative fetch('./js/materialx/<version>/JsMaterialXGenShader.data' /
+    // '.wasm'). Under <base
     // href="${baseUri}"> those resolve to webview-resource URLs — and the
     // webview resource pipeline ALTERS these large binaries in transit:
     // the packed-FS slice offsets shift, so a standard-library file
@@ -102,7 +103,15 @@
     // 'mtlx-fetch-result' replies are settled by the window 'message'
     // listener further down. Ids are a private incrementing counter —
     // they cannot collide with the 'mtlx-open' flow, which has no id.
-    var MTLX_PAYLOAD_RE = /(?:^|\/)js\/(JsMaterialX[\w.\-]*\.(?:data|wasm))$/;
+    // Group 1 captures everything after the fixed 'js/' prefix
+    // (materialx/<version>/JsMaterialX....data|wasm) so relPath below
+    // reconstructs the exact string editorProvider.js's
+    // FETCH_WHITELIST_RE whitelists (js/materialx/\d+\.\d+\.\d+/JsMaterialX...).
+    // The \d+\.\d+\.\d+ version segment can't spell '..' — every '.' in
+    // it is digit-flanked — so widening to allow a version directory
+    // does not open a path-escape hole; see the fuller no-escape note on
+    // FETCH_WHITELIST_RE in editorProvider.js.
+    var MTLX_PAYLOAD_RE = /(?:^|\/)js\/(materialx\/\d+\.\d+\.\d+\/JsMaterialX[\w.\-]*\.(?:data|wasm))$/;
     var pendingFetches = {}; // id -> { resolve, fallback, path }
     var nextFetchId = 1;
     // Not in a VS Code webview (vscodeApi unavailable): skip wrapping

@@ -16,6 +16,7 @@
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "vendor:offline": "node scripts/vendor.mjs --with-materialx",
+    "vendor:versions": "node scripts/fetch-mtlx-versions.mjs",
     "build": "node scripts/build.mjs",
     "build:vendor": "node scripts/build.mjs vendor",
     "build:nodelib": "node scripts/build.mjs nodelib",

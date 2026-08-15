@@ -8,11 +8,15 @@
 const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
 const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
 
+// Sidebar width when open (w-80), used to inset the stage content wrapper
+// so the panel and the renders never overlap. Flush panel, so no gap.
+const COMPARE_SIDEBAR_INSET = 320;
+
 // Same recipe as viewer-app.jsx's loadMtlxDocument: parse + attach stdlib
 // + list renderables. Duplicated locally (each lazy view script is its
 // own scope, no shared imports) rather than reaching into viewer-app.jsx.
-const loadMtlxDocument = async (xmlText) => {
-    const { mx, gen, genContext, stdlib, lightData } = await getMxEnv();
+const loadMtlxDocument = async (xmlText, version) => {
+    const { mx, gen, genContext, stdlib, lightData } = await getMxEnv(version);
     const doc = mx.createDocument();
     if (typeof mx.readFromXmlString !== 'function') {
         throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
@@ -25,7 +29,10 @@ const loadMtlxDocument = async (xmlText) => {
     if (typeof doc.setDataLibrary === 'function') doc.setDataLibrary(stdlib);
     else doc.importLibrary(stdlib);
     const renderables = listDocRenderables(doc);
-    return { mx, gen, genContext, lightData, doc, renderables };
+    // `version` rides along with the parsed document so the render effect
+    // below can stamp "what actually got rendered" (slot.renderedVersion)
+    // once a view is built from it — see the header comment on that state.
+    return { mx, gen, genContext, lightData, doc, renderables, version };
 };
 
 // ---- Per-slot session state (one instance per Document A / Document B) ----
@@ -36,6 +43,20 @@ const useCompareSlot = () => {
     const [chosenMtlx, setChosenMtlx] = React.useState(null);
     const [renderables, setRenderables] = React.useState([]);
     const [chosenMat, setChosenMat] = React.useState(0);
+    // Per-pane MaterialX engine version. Defaults to the stamped default —
+    // a Document belongs to the mx instance that parsed it, so changing
+    // this mid-session re-parses via loadDocument (see its versionArg
+    // below) rather than just retargeting future loads.
+    const [version, setVersion] = React.useState(window.MtlxAssets.MTLX_DEFAULT_VERSION);
+    // Last version that actually finished rendering into viewRef — as
+    // opposed to `version` above, which is the user's REQUESTED version
+    // and flips the instant the dropdown changes, before the load even
+    // starts. Labels must read this one: if a version switch fails, the
+    // pane keeps showing the previous version's pixels (see loadDocument's
+    // catch below), and only this state stays in sync with what's on
+    // screen. Seeded to the same default as `version` so an unloaded slot
+    // (nothing rendered yet) never spuriously "differs" from its peer.
+    const [renderedVersion, setRenderedVersion] = React.useState(window.MtlxAssets.MTLX_DEFAULT_VERSION);
     const [busy, setBusy] = React.useState(false);
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
@@ -43,17 +64,32 @@ const useCompareSlot = () => {
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const viewRef = React.useRef(null);
     const canvasRef = React.useRef(null);
-    const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
+    const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables, version }
+    // Monotonic guard, same idiom as js/shared/mtlx-ui.jsx's runRef: two
+    // loadDocument calls can be in flight at once (e.g. the version
+    // dropdown changed twice before the first request settled), and
+    // whichever one resolves LAST must not stomp state that a more recent
+    // call already wrote (a stale failure clobbering a fresh success's
+    // busy/error, or vice versa).
+    const runRef = React.useRef(0);
 
-    const loadDocument = async (path, mapArg) => {
+    // versionArg lets a version-switch handler force the FRESH version
+    // into the same tick it changed it — plain `version` state wouldn't
+    // have re-rendered yet, so its closure here would still read the old
+    // value (same reason ingest() below passes `merged` explicitly rather
+    // than relying on the `fileMap` state closure).
+    const loadDocument = async (path, mapArg, versionArg) => {
         const map = mapArg || fileMapRef.current;
+        const ver = versionArg || version;
+        const id = ++runRef.current;
         setError(null);
         setTexReport(null);
         setBusy(true);
         setStatus('Parsing ' + path + '…');
         try {
             const { resolved: xml } = await readMtlxText(map[path], path, map);
-            const loaded = await loadMtlxDocument(xml);
+            const loaded = await loadMtlxDocument(xml, ver);
+            if (runRef.current !== id) return; // superseded by a newer load
             loadedRef.current = loaded;
             setRenderables(loaded.renderables);
             if (!loaded.renderables.length) {
@@ -64,10 +100,23 @@ const useCompareSlot = () => {
             }
             setChosenMat(0);
             setStatus(null);
-            // Rendering itself is driven by useCompareRenderEffect below.
+            // Rendering itself is driven by useCompareRenderEffect below,
+            // which also stamps renderedVersion once a view actually builds.
         } catch (e2) {
+            if (runRef.current !== id) return; // superseded — a newer load already resolved
             setStatus(null);
             setBusy(false);
+            // Deliberately NOT resetting loadedRef/renderables/chosenMat/
+            // viewRef here, unlike ingest()'s full-session invalidation
+            // above: the document itself is still valid and still parsed
+            // fine under its PREVIOUS version — only this particular
+            // version switch failed. renderedVersion (unlike `version`,
+            // which the dropdown already committed to above) is untouched
+            // too, so the pane keeps rendering the old version's pixels
+            // under an honestly-labeled tag instead of going blank. A
+            // blank pane would throw away a working comparison over an
+            // unrelated engine-load failure; the error banner below
+            // already says the switch didn't take.
             setError(errMsg(e2));
         }
     };
@@ -130,6 +179,7 @@ const useCompareSlot = () => {
     return {
         fileMap, fileMapRef, mtlxPaths, chosenMtlx, setChosenMtlx,
         renderables, chosenMat, setChosenMat,
+        version, setVersion, renderedVersion, setRenderedVersion,
         busy, setBusy, status, setStatus, error, setError,
         texReport, setTexReport,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
@@ -202,6 +252,11 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     if (typeof view.renderNow === 'function') view.renderNow();
                 }
                 slot.setViewEpoch((n) => n + 1);
+                // What's actually on screen just changed — stamp the
+                // version that produced it (see loadMtlxDocument/loadedRef
+                // above) so the pane's label can never claim a version
+                // whose pixels aren't the ones rendered.
+                slot.setRenderedVersion(loaded.version);
                 const report = bindDroppedTextures(view, slot.fileMapRef.current);
                 slot.setTexReport(report);
                 slot.setStatus(null);
@@ -345,6 +400,15 @@ const createGpuDiffView = (canvas) => {
     }
 };
 
+// The engine's syncSize runs one frame AFTER rAF, so a just-committed
+// layout change leaves the buffer at its old size for a frame. Both
+// callers bail WITHOUT clearing their dirty flag, so the next one retries.
+const srcStale = (v) => {
+    const dpr = Math.min(window.devicePixelRatio, 1.5);
+    const c = v.renderer.domElement;
+    return c.width !== Math.floor(c.clientWidth * dpr) || c.height !== Math.floor(c.clientHeight * dpr);
+};
+
 function MaterialCompareApp({ active = true } = {}) {
     const activeRef = React.useRef(active);
     activeRef.current = active;
@@ -392,6 +456,56 @@ function MaterialCompareApp({ active = true } = {}) {
     useCameraSync(() => [slotA.viewRef.current, slotB.viewRef.current], slotA.viewEpoch + slotB.viewEpoch);
 
     const [dragOver, setDragOver] = useSplitFileDrop(activeRef);
+
+    // ---- Per-pane MaterialX version registry + availability probe --------
+    // MtlxAssets.ready (awaited by shell.jsx before any view mounts) has
+    // already populated these by the time this component exists.
+    const mtlxVersions = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
+    const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
+    const versionLabels = {};
+    mtlxVersions.forEach((v) => { versionLabels[v] = 'MaterialX ' + v; });
+    const versionBadges = { [mtlxDefaultVersion]: 'Default' };
+
+    // Non-default versions are gitignored and may simply be absent from a
+    // plain clone — probe once per version so the dropdown never offers a
+    // choice that would fail with a raw WASM/fetch error. Undecided (probe
+    // still in flight) is treated as unavailable until confirmed, so a
+    // version can only ever be SELECTED once it's known-good; the default
+    // is never probed (always committed).
+    const [versionAvailable, setVersionAvailable] = React.useState({});
+    React.useEffect(() => {
+        let cancelled = false;
+        mtlxVersions.filter((v) => v !== mtlxDefaultVersion).forEach((v) => {
+            // Modeled on js/mtlx-assets.js's manifest probe: a no-store
+            // HEAD against the version's entry script, ok/not-ok only.
+            fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', { method: 'HEAD', cache: 'no-store' })
+                .then((res) => {
+                    if (cancelled) return;
+                    setVersionAvailable((prev) => Object.assign({}, prev, { [v]: !!(res && res.ok) }));
+                })
+                .catch(() => {
+                    if (cancelled) return;
+                    setVersionAvailable((prev) => Object.assign({}, prev, { [v]: false }));
+                });
+        });
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    // GeomSelect has no notion of a disabled option, and extending it is
+    // out of scope here (js/shared/mtlx-ui.jsx isn't one of this pass's
+    // two touchable files) — so unavailable versions are filtered out of
+    // `options` instead, with a one-line hint standing in for the "not in
+    // this build" note a disabled row would otherwise carry.
+    const availableVersionOptions = mtlxVersions.filter((v) => v === mtlxDefaultVersion || versionAvailable[v] === true);
+    const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+
+    // Whole-feature signal for Task 4's labels: only worth surfacing the
+    // version at all once the two panes actually diverge. Compares
+    // renderedVersion (what's on screen), not the requested `version` —
+    // a pane whose version switch failed keeps rendering its old version,
+    // and the tag must follow the pixels, not the dropdown.
+    const versionsDiffer = slotA.renderedVersion !== slotB.renderedVersion;
+    const versionTag = (v) => 'v' + v;
 
     // Re-apply the current env sliders to a freshly (re)built view — a
     // rebuild starts from envUI.bg only (see useCompareRenderEffect);
@@ -447,7 +561,11 @@ function MaterialCompareApp({ active = true } = {}) {
     // ---- Statistics: live, dirty-flag-driven (no debounce, no button) ----
     const computeComparison = () => {
         const va = slotA.viewRef.current, vb = slotB.viewRef.current;
-        if (!va || !vb) return;
+        if (!va || !vb) return; // nothing to compare yet — leave the flag armed
+        // Same guard as the GPU diff loop: a tick landing mid-resize would
+        // read a stretched buffer as a real difference. Leaves the flag
+        // armed so the next tick retries instead of latching that.
+        if (srcStale(va) || srcStale(vb)) return;
         try {
             const ca = va.renderer.domElement, cb = vb.renderer.domElement;
             let w = Math.max(1, Math.min(ca.width, cb.width));
@@ -471,6 +589,8 @@ function MaterialCompareApp({ active = true } = {}) {
                     hc.getContext('2d').putImageData(heat, 0, 0);
                 }
             }
+            // Cleared only on success, so a throw above leaves it armed.
+            statsDirtyRef.current = false;
         } catch (e) {
             console.warn('Comparison failed:', e);
         }
@@ -499,6 +619,18 @@ function MaterialCompareApp({ active = true } = {}) {
         if (!el || typeof ResizeObserver === 'undefined') return undefined;
         const ro = new ResizeObserver(() => { statsDirtyRef.current = true; diffDirtyRef.current = true; });
         ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
+    // A mode switch resizes each pane but not the stage, so the observer
+    // above never fires for it, and the panes' own one lives inside the
+    // engine closure with no callback out. Watch the canvases directly.
+    React.useEffect(() => {
+        if (typeof ResizeObserver === 'undefined') return undefined;
+        const targets = [slotA.canvasRef.current, slotB.canvasRef.current].filter(Boolean);
+        if (!targets.length) return undefined;
+        const ro = new ResizeObserver(() => { statsDirtyRef.current = true; diffDirtyRef.current = true; });
+        targets.forEach((el) => ro.observe(el));
         return () => ro.disconnect();
     }, []);
 
@@ -547,10 +679,8 @@ function MaterialCompareApp({ active = true } = {}) {
     // more commit while gpuDiffOk propagates) is skipped the same way —
     // clamping to 1×1 and rendering into it would both paint garbage and
     // wrongly clear the dirty flag before the pane is actually visible.
-    // Also self-healing against stale SOURCE buffers: rAF fires before each
-    // engine view's own ResizeObserver on the first frame after a layout
-    // change, so the source canvases can still be the old size — see the
-    // srcStale guard below, which re-arms `forced` as dirty and bails.
+    // Also self-healing against stale SOURCE buffers, via the shared
+    // srcStale() below — it re-arms `forced` as dirty and bails.
     React.useEffect(() => {
         if (displayMode !== 'diff' && !effShowDiff) return undefined;
         let reqId = requestAnimationFrame(function loop() {
@@ -582,11 +712,9 @@ function MaterialCompareApp({ active = true } = {}) {
             }
             // rAF runs before ResizeObserver within a frame: after a layout
             // change the source buffers can still have the OLD size for one
-            // frame — rendering now would bake a stretched frame. Wait it out.
-            const srcStale = (v) => {
-                const c = v.renderer.domElement;
-                return c.width !== Math.floor(c.clientWidth * dpr) || c.height !== Math.floor(c.clientHeight * dpr);
-            };
+            // frame — rendering now would bake a stretched frame. Wait it
+            // out (srcStale is hoisted above the component — computeComparison
+            // shares this exact same guard for the CPU/stats path).
             if (srcStale(va) || srcStale(vb)) { if (forced) diffDirtyRef.current = true; return; }
             if (!forced && !diffDirtyRef.current) return;
             diffDirtyRef.current = false;
@@ -597,13 +725,13 @@ function MaterialCompareApp({ active = true } = {}) {
     }, [displayMode, effShowDiff, gpuDiffOk]);
 
     // 200ms ticker: recomputes only while active, both views are live, and
-    // something actually changed since the last computed frame.
+    // something changed. computeComparison owns clearing statsDirtyRef, and
+    // only on success, so a tick landing mid-resize just retries.
     React.useEffect(() => {
         const id = setInterval(() => {
             if (!activeRef.current) return;
             if (!slotA.viewRef.current || !slotB.viewRef.current) return;
             if (!statsDirtyRef.current) return;
-            statsDirtyRef.current = false;
             computeRef.current();
         }, 200);
         return () => clearInterval(id);
@@ -748,6 +876,31 @@ function MaterialCompareApp({ active = true } = {}) {
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={slot.onPickFiles} />
                     </label>
                 </div>
+                <div className="space-y-1">
+                    <div className="text-[11px] text-gray-500">MaterialX version</div>
+                    <GeomSelect
+                        value={slot.version}
+                        options={availableVersionOptions}
+                        labels={versionLabels}
+                        badges={versionBadges}
+                        onChange={(v) => {
+                            slot.setVersion(v);
+                            // A Document belongs to the mx instance that
+                            // parsed it, so switching versions re-parses
+                            // the already-chosen file with the new engine.
+                            // Nothing to reload if no document is loaded yet.
+                            if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
+                        }}
+                        className={'w-full justify-between bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200'
+                            + (slot.busy ? ' opacity-50 pointer-events-none' : '')}
+                    />
+                    {unavailableVersions.length > 0 && (
+                        <div className="text-[10px] text-gray-500">
+                            {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
+                            {unavailableVersions.length === 1 ? ' is' : ' are'} not available in this build.
+                        </div>
+                    )}
+                </div>
                 {fileCount > 0 && (
                     <div className="text-[11px] text-gray-500">
                         <span className="text-gray-300 font-semibold">{fileCount}</span> file{fileCount === 1 ? '' : 's'}
@@ -794,138 +947,153 @@ function MaterialCompareApp({ active = true } = {}) {
 
     return (
         <div ref={stageRef} className="absolute inset-0 bg-gray-900 overflow-hidden">
-            {/* Full-stage split drop indicator (z-40, above the sidebar). */}
-            {dragOver && (
-                <div className="absolute inset-0 z-40 p-2 sm:p-4 flex gap-2">
-                    <div
-                        className="flex-1 rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            readDroppedItems(e.dataTransfer).then((map) => slotA.ingest(map));
-                            setDragOver(false);
-                        }}
-                    >
-                        <div className="flex items-center gap-2 text-blue-200 text-base sm:text-lg font-semibold bg-gray-900/80 rounded-lg px-4 py-3 text-center">
-                            <MtlxIcon name="file-upload" className="w-6 h-6 shrink-0" /> {'Drop → Document A'}
+            {/* Stage content only, inset from the sidebar's footprint when
+                open so nothing renders underneath it. Percentage insets
+                below (styleFor, diffCanvasStyle, dividers) resolve against
+                this box, not the full stage. */}
+            <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: sidebarOpen ? COMPARE_SIDEBAR_INSET : 0 }}>
+                {/* Full-stage split drop indicator (z-40, above the sidebar). */}
+                {dragOver && (
+                    <div className="absolute inset-0 z-40 p-2 sm:p-4 flex gap-2">
+                        <div
+                            className="flex-1 rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                readDroppedItems(e.dataTransfer).then((map) => slotA.ingest(map));
+                                setDragOver(false);
+                            }}
+                        >
+                            <div className="flex items-center gap-2 text-blue-200 text-base sm:text-lg font-semibold bg-gray-900/80 rounded-lg px-4 py-3 text-center">
+                                <MtlxIcon name="file-upload" className="w-6 h-6 shrink-0" /> {'Drop → Document A'}
+                            </div>
+                        </div>
+                        <div
+                            className="flex-1 rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                readDroppedItems(e.dataTransfer).then((map) => slotB.ingest(map));
+                                setDragOver(false);
+                            }}
+                        >
+                            <div className="flex items-center gap-2 text-blue-200 text-base sm:text-lg font-semibold bg-gray-900/80 rounded-lg px-4 py-3 text-center">
+                                <MtlxIcon name="file-upload" className="w-6 h-6 shrink-0" /> {'Drop → Document B'}
+                            </div>
                         </div>
                     </div>
-                    <div
-                        className="flex-1 rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            readDroppedItems(e.dataTransfer).then((map) => slotB.ingest(map));
-                            setDragOver(false);
-                        }}
-                    >
-                        <div className="flex items-center gap-2 text-blue-200 text-base sm:text-lg font-semibold bg-gray-900/80 rounded-lg px-4 py-3 text-center">
-                            <MtlxIcon name="file-upload" className="w-6 h-6 shrink-0" /> {'Drop → Document B'}
+                )}
+
+                {/* Stage: three always-mounted layers, never unmounted across mode
+                    switches (inline styles only — see styleFor above). */}
+                <div style={styleFor('A')} className="overflow-hidden bg-gray-900">
+                    <canvas ref={slotA.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
+                    {renderSlotOverlays(slotA)}
+                    {displayMode === 'side' && (
+                        <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
+                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                                {docName(slotA, 'Document A')}
+                                {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotA.renderedVersion)}</span>}
+                            </span>
                         </div>
-                    </div>
+                    )}
                 </div>
-            )}
+                <div style={styleFor('B')} className="overflow-hidden bg-gray-900">
+                    <canvas ref={slotB.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
+                    {renderSlotOverlays(slotB)}
+                    {displayMode === 'side' && (
+                        <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
+                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                                {docName(slotB, 'Document B')}
+                                {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotB.renderedVersion)}</span>}
+                            </span>
+                        </div>
+                    )}
+                </div>
 
-            {/* Stage: three always-mounted layers, never unmounted across mode
-                switches (inline styles only — see styleFor above). */}
-            <div style={styleFor('A')} className="overflow-hidden bg-gray-900">
-                <canvas ref={slotA.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
-                {renderSlotOverlays(slotA)}
                 {displayMode === 'side' && (
+                    effShowDiff ? (
+                        <React.Fragment>
+                            <div className="absolute inset-y-0 pointer-events-none" style={{ left: '33.333%', width: 1, background: 'rgba(255,255,255,0.2)' }} />
+                            <div className="absolute inset-y-0 pointer-events-none" style={{ left: '66.667%', width: 1, background: 'rgba(255,255,255,0.2)' }} />
+                        </React.Fragment>
+                    ) : (
+                        <div className="absolute inset-y-0 pointer-events-none" style={{ left: '50%', width: 1, background: 'rgba(255,255,255,0.2)' }} />
+                    )
+                )}
+                {displayMode === 'side' && effShowDiff && (
                     <div
-                        className={'absolute top-2 flex justify-center pointer-events-none z-20' + (sidebarOpen ? '' : ' inset-x-0')}
-                        style={sidebarOpen ? { left: 336, right: 0 } : undefined}
+                        className="absolute pointer-events-none"
+                        style={{ inset: sideDiffPos === 'middle' ? '0 33.333% 0 33.333%' : '0 0 0 66.667%' }}
                     >
-                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">{docName(slotA, 'Document A')}</span>
+                        <div className="absolute top-2 inset-x-0 flex justify-center z-20">
+                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">Difference</span>
+                        </div>
                     </div>
                 )}
-            </div>
-            <div style={styleFor('B')} className="overflow-hidden bg-gray-900">
-                <canvas ref={slotB.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
-                {renderSlotOverlays(slotB)}
-                {displayMode === 'side' && (
-                    <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
-                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">{docName(slotB, 'Document B')}</span>
-                    </div>
+                {/* The third pane has no canvas under the pointer-events-none
+                    diff canvas, so drags/wheel there would otherwise hit the
+                    stage background and do nothing. Forwarding just pointerdown
+                    is enough: OrbitControls' setPointerCapture(pointerId) on
+                    canvas A then redirects the REAL subsequent pointermove/up
+                    events to canvas A natively, so drags track without any
+                    further forwarding. Wheel isn't captured, so it's forwarded
+                    per-event via the non-passive ref effect above. */}
+                {displayMode === 'side' && effShowDiff && (
+                    <div
+                        ref={diffOverlayRef}
+                        className="absolute"
+                        style={{ top: 0, left: sideDiffPos === 'middle' ? '33.333%' : '66.667%', width: '33.333%', height: '100%', zIndex: 10, cursor: 'grab', touchAction: 'none' }}
+                        onPointerDown={(e) => {
+                            const c = slotA.canvasRef.current;
+                            if (!c) return;
+                            e.preventDefault();
+                            c.dispatchEvent(new PointerEvent('pointerdown', e.nativeEvent));
+                        }}
+                        onContextMenu={(e) => e.preventDefault()}
+                    />
                 )}
-            </div>
 
-            {displayMode === 'side' && (
-                effShowDiff ? (
+                {displayMode === 'slider' && (
                     <React.Fragment>
-                        <div className="absolute inset-y-0 pointer-events-none" style={{ left: '33.333%', width: 1, background: 'rgba(255,255,255,0.2)' }} />
-                        <div className="absolute inset-y-0 pointer-events-none" style={{ left: '66.667%', width: 1, background: 'rgba(255,255,255,0.2)' }} />
+                        <CompareDivider pos={sliderPos} onPos={setSliderPos} />
+                        <CompareLabel
+                            side="left"
+                            version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'left') ? versionTag(slotA.renderedVersion) : null}
+                        >
+                            {effShowDiff && swipeDiffPos === 'left' ? 'Difference' : docName(slotA, 'Document A')}
+                        </CompareLabel>
+                        <CompareLabel
+                            side="right"
+                            version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'right') ? versionTag(slotB.renderedVersion) : null}
+                        >
+                            {effShowDiff && swipeDiffPos === 'right' ? 'Difference' : docName(slotB, 'Document B')}
+                        </CompareLabel>
                     </React.Fragment>
-                ) : (
-                    <div className="absolute inset-y-0 pointer-events-none" style={{ left: '50%', width: 1, background: 'rgba(255,255,255,0.2)' }} />
-                )
-            )}
-            {displayMode === 'side' && effShowDiff && (
-                <div
-                    className="absolute pointer-events-none"
-                    style={{ inset: sideDiffPos === 'middle' ? '0 33.333% 0 33.333%' : '0 0 0 66.667%' }}
-                >
-                    <div className="absolute top-2 inset-x-0 flex justify-center z-20">
-                        <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">Difference</span>
-                    </div>
-                </div>
-            )}
-            {/* The third pane has no canvas under the pointer-events-none
-                diff canvas, so drags/wheel there would otherwise hit the
-                stage background and do nothing. Forwarding just pointerdown
-                is enough: OrbitControls' setPointerCapture(pointerId) on
-                canvas A then redirects the REAL subsequent pointermove/up
-                events to canvas A natively, so drags track without any
-                further forwarding. Wheel isn't captured, so it's forwarded
-                per-event via the non-passive ref effect above. */}
-            {displayMode === 'side' && effShowDiff && (
-                <div
-                    ref={diffOverlayRef}
-                    className="absolute"
-                    style={{ top: 0, left: sideDiffPos === 'middle' ? '33.333%' : '66.667%', width: '33.333%', height: '100%', zIndex: 10, cursor: 'grab', touchAction: 'none' }}
-                    onPointerDown={(e) => {
-                        const c = slotA.canvasRef.current;
-                        if (!c) return;
-                        e.preventDefault();
-                        c.dispatchEvent(new PointerEvent('pointerdown', e.nativeEvent));
-                    }}
-                    onContextMenu={(e) => e.preventDefault()}
+                )}
+
+                <canvas
+                    ref={gpuDiffCanvasRef}
+                    className="pointer-events-none bg-gray-950"
+                    style={diffCanvasStyle()}
                 />
-            )}
-
-            {displayMode === 'slider' && (
-                <React.Fragment>
-                    <CompareDivider pos={sliderPos} onPos={setSliderPos} />
-                    <CompareLabel side="left" style={sidebarOpen ? { left: 336 } : undefined}>
-                        {effShowDiff && swipeDiffPos === 'left' ? 'Difference' : docName(slotA, 'Document A')}
-                    </CompareLabel>
-                    <CompareLabel side="right">
-                        {effShowDiff && swipeDiffPos === 'right' ? 'Difference' : docName(slotB, 'Document B')}
-                    </CompareLabel>
-                </React.Fragment>
-            )}
-
-            <canvas
-                ref={gpuDiffCanvasRef}
-                className="pointer-events-none bg-gray-950"
-                style={diffCanvasStyle()}
-            />
-            <canvas
-                ref={heatmapCanvasRef}
-                className="absolute inset-0 w-full h-full object-contain bg-gray-950 pointer-events-none"
-                style={{ display: displayMode === 'diff' && gpuDiffOk === false ? 'block' : 'none' }}
-            />
-            {displayMode === 'diff' && !bothLive && (
-                <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
-                    {'Load both documents to see the difference'}
-                </div>
-            )}
+                <canvas
+                    ref={heatmapCanvasRef}
+                    className="absolute inset-0 w-full h-full object-contain bg-gray-950 pointer-events-none"
+                    style={{ display: displayMode === 'diff' && gpuDiffOk === false ? 'block' : 'none' }}
+                />
+                {displayMode === 'diff' && !bothLive && (
+                    <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
+                        {'Load both documents to see the difference'}
+                    </div>
+                )}
+            </div>
 
             {/* Floating left sidebar, mirroring viewer-app.jsx's Files panel. */}
             {sidebarOpen ? (
-                <div className="absolute top-2 bottom-2 left-2 z-30 w-80 max-w-[90%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden">
+                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-gray-800 border-r border-gray-700 overflow-hidden">
                     <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
                         <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Compare</span>
                         <button
