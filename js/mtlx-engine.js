@@ -2329,6 +2329,49 @@ const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
 };
 
 
+// MaterialX reports an unresolved node by its INSTANCE name only ("could
+// not find a nodedef for node 'x'"), which is a name the author invented.
+// This adds the category, and whether that category exists here at all.
+const describeUnresolvedNodes = (renderable) => {
+    let doc = null;
+    try { doc = renderable.getDocument(); } catch (e) { return []; }
+    if (!doc) return [];
+
+    // Library-owned graphs carry a source URI; user-authored ones don't.
+    // Without that filter this would walk the whole standard library.
+    const nodes = [];
+    try { nodes.push(...(doc.getNodes() || [])); } catch (e) { /* keep going */ }
+    try {
+        for (const g of doc.getNodeGraphs() || []) {
+            if (g.getSourceUri && g.getSourceUri()) continue;
+            nodes.push(...(g.getNodes() || []));
+        }
+    } catch (e) { /* keep going */ }
+
+    const out = [];
+    for (const node of nodes) {
+        try {
+            if (node.getNodeDef()) continue;
+        } catch (e) { /* unresolved counts as a finding */ }
+        let category = '';
+        let known = false;
+        try { category = node.getCategory() || ''; } catch (e) { /* unnamed */ }
+        try { known = ((doc.getMatchingNodeDefs(category) || []).length > 0); } catch (e) { /* assume not */ }
+        let name = '';
+        try { name = node.getName() || ''; } catch (e) { /* unnamed */ }
+        out.push({ name, category, known });
+    }
+    return out;
+};
+
+// One sentence per unresolved node. `known` separates "this build has no
+// such node type" from "it has the type, but not with these inputs",
+// which is the difference between a typo and a version/signature problem.
+const unresolvedNodesText = (found) => found.map((u) => (u.known
+    ? `Node "${u.name}" (type "${u.category}") exists in this MaterialX build, but no definition matches its inputs.`
+    : `Node "${u.name}" (type "${u.category}") has no definition in this MaterialX build.`
+)).join(' ');
+
 // ------------------------------------------------------------------
 // generatePreviewSources: shader-generation slice of createMtlxRenderView,
 // letting tryRefreshRenderView diff sources without a full rebuild.
@@ -2367,8 +2410,11 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         mxShader = gen.generate('PreviewShader', renderable, genContext);
     } catch (genErr) {
         // Decode the REAL MaterialX error (Emscripten throws
-        // numeric pointers) instead of a generic string.
-        throw new Error(`Shader generation failed for "${label}": ${mxErr(mx, genErr)}`);
+        // numeric pointers) instead of a generic string, then name the
+        // node types behind it, which MaterialX's own message omits.
+        const detail = unresolvedNodesText(describeUnresolvedNodes(renderable));
+        throw new Error(`Shader generation failed for "${label}": ${mxErr(mx, genErr)}`
+            + (detail ? `. ${detail}` : ''));
     }
     if (window.MTLX_PERF_LOG) {
         console.log('[mtlx-perf] gen.generate: '
