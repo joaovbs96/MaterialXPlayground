@@ -6,7 +6,7 @@ The repo follows a **committed-artifact model**: every generated file is checked
 
 ## Build steps
 
-`npm run build` runs `scripts/build.mjs`, which sequences six steps — each also available individually, and each with a read-only `--check` mode:
+`npm run build` runs `scripts/build.mjs`, which sequences seven steps — each also available individually, and each with a read-only `--check` mode:
 
 **1. `version` (`scripts/extract-mtlx-version.mjs`)** — the MaterialX version is never hand-typed anywhere in this repo. This step instantiates the vendored WebAssembly module under Node, calls its `getVersionString()`, and writes the result to `js/gen/mtlx-version.json` (`{version, tag, versionIntegers}`). It then *stamps* the few places that need the value as a literal (the header badge fallback in `js/site-header.js`, `js/mtlx-assets.js`, and two lines in the README/docs — which is why those version strings must not be edited by hand). Node-side consumers (`scripts/vendor.mjs`, the VS Code extension's `specDocs.js`) read the JSON directly. Swapping in a new WASM build and running `npm run build` propagates the new version everywhere; `--check` re-extracts from the WASM and fails on any disagreement.
 
@@ -23,7 +23,9 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 
 **5. `tutorials` (`scripts/build-tutorials.mjs`)** — builds the MkDocs-based tutorials subsite from `tutorials-src/` into the committed `/tutorials/` directory. This step activates automatically when `tutorials-src/mkdocs.yml` exists in the checkout and is skipped otherwise (the tutorials currently live on a separate branch; requires a pip-installed `mkdocs-material`, pinned in `tutorials-src/requirements.txt`).
 
-**6. `webview` (`scripts/build-webview.mjs`)** — regenerates `vscode_extension/media/webview.html` from `index.html`. The VS Code extension's webview needs the exact same `<head>`/`<body>` skeleton as the real site plus a handful of webview-only insertions (a Content-Security-Policy meta tag, a `<base>` tag, a bootstrap `<script>` tag, and a focus-outline CSS rule VS Code's Chromium needs but a real browser doesn't) — this step splices those fragments into a copy of `index.html` at two content-based anchors, so the mirror can never silently drift out of sync with the real site. `--check` fails on any byte difference from the committed file.
+**6. `buildid` (`scripts/lib/build-id.mjs`)**: computes a deterministic build id: a 16-hex-char sha256 fingerprint over `index.html` (with its `window.__MTLX_BUILD` token canonicalized to the literal `dev` first, so stamping the computed id back in doesn't change the next run's input), every `js/**.{js,jsx,css,json}` file except `js/gen/build-id.json` itself and everything under `js/materialx/`, and `vendor/vendor-manifest.json`. `js/materialx/` and `vendor/materialx/` are excluded on purpose: `.github/workflows/release.yml` runs `vendor:offline`/`vendor:versions` before `npm run build`, so those directories exist there but not in a plain `deploy.yml` push run, and excluding them is what makes both compute the same id. Every input is read as UTF-8 with a leading BOM stripped and CRLF normalized to LF before hashing, so the id can't depend on which OS produced the checkout. The id is written to `js/gen/build-id.json` and stamped into the `window.__MTLX_BUILD` literal in `index.html`'s embed-mode bootstrap script. `--check` recomputes the id in memory and fails if either committed artifact disagrees. Must run after `version` and `nodelib` (both write files it hashes) and before `webview` (which splices `index.html`, including this step's stamp). A merge conflict on `js/gen/build-id.json` or the `window.__MTLX_BUILD` line in `index.html` can be resolved by taking either side and re-running `npm run build`: both files are fully regenerated from other inputs, so neither side's exact text needs to be preserved.
+
+**7. `webview` (`scripts/build-webview.mjs`)** — regenerates `vscode_extension/media/webview.html` from `index.html`. The VS Code extension's webview needs the exact same `<head>`/`<body>` skeleton as the real site plus a handful of webview-only insertions (a Content-Security-Policy meta tag, a `<base>` tag, a bootstrap `<script>` tag, and a focus-outline CSS rule VS Code's Chromium needs but a real browser doesn't) — this step splices those fragments into a copy of `index.html` at two content-based anchors, so the mirror can never silently drift out of sync with the real site. `--check` fails on any byte difference from the committed file.
 
 ## Verification and deployment
 
@@ -39,6 +41,7 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 | You want a non-default MaterialX version available locally (e.g. to exercise Compare's multi-version rendering) | `npm run vendor:versions` |
 | `libraries/` or anything affecting node docs | `npm run build:nodelib` |
 | Tutorial content (`tutorials-src/`) | `npm run build:tutorials` |
+| Anything about to be committed under `index.html`, `js/**` (excluding `js/materialx/`), or `vendor/vendor-manifest.json` | `npm run build:buildid` (or `npm run build`), so `js/gen/build-id.json` and index.html's stamp don't go stale |
 | `index.html` structure or webview-only fragments (`scripts/build-webview.mjs`) | `npm run build:webview` |
 | Not sure | `npm run build` then `npm run check` — it's all idempotent |
 

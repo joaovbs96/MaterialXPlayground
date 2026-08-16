@@ -1038,6 +1038,33 @@
                 return () => window.removeEventListener('mtlx-load-document', onLoadDoc);
             }, []);
 
+            // Set by the restore effect below just before it dispatches a
+            // recovered document; consumed by the watcher right after,
+            // once that load settles (loadDocument()/ingest() end in
+            // markSaved(), which would otherwise leave a restored,
+            // still-unsaved document looking clean).
+            const pendingRestoreDirtyRef = React.useRef(false);
+
+            // ---- Restore a session captured by js/shared/mtlx-handoff.js
+            // just before a self-triggered reload (new build). Routed
+            // through the SAME 'mtlx-load-document' event the handoff
+            // listener above already handles, instead of a parallel path.
+            React.useEffect(() => {
+                if (!window.MtlxHandoff) return;
+                window.MtlxHandoff.consume('graph').then((payload) => {
+                    if (!payload) return;
+                    pendingRestoreDirtyRef.current = true;
+                    window.__mtlxPendingImport = { xml: payload.xml, name: payload.name, files: payload.files };
+                    window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
+                });
+            }, []);
+            React.useEffect(() => {
+                if (pendingRestoreDirtyRef.current && parsed && !isDirty) {
+                    pendingRestoreDirtyRef.current = false;
+                    markDirty();
+                }
+            }, [parsed, isDirty]);
+
             // ------------------------------------------------------------
             // VS Code extension bridge (bootstrap.js) — inert in the
             // browser. Exposes the graph's XML for Ctrl+S and a markSaved
@@ -1276,7 +1303,7 @@
             // In-app actions get the full custom dialog (confirmReplace).
             React.useEffect(() => {
                 const onBeforeUnload = (e) => {
-                    if (!isDirty) return;
+                    if (!isDirty || window.__mtlxSuppressUnloadPrompt) return;
                     e.preventDefault();
                     e.returnValue = '';
                 };

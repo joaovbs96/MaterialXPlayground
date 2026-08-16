@@ -75,6 +75,12 @@
             '<path d="M12 12l0 4" />' +
         '</svg>';
 
+    // Update-banner icon (alert-triangle), paths only, hand-copied from
+    // window.MTLX_ICON_PATHS in js/shared/ui-commons.js, same
+    // paths-only convention as ICON_OCTOCAT below (svg tag/class set below).
+    var ICON_ALERT_TRIANGLE =
+        '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0"/><path d="M12 16h.01"/>';
+
     // GitHub "octocat" mark, shared verbatim between the desktop widget
     // and the mobile hamburger's flat copy (both wrap it in an identical
     // `<svg class="mtlx-source-icon">` shell), same icon convention as above.
@@ -449,6 +455,146 @@
             };
             try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(facts)); } catch (e) { /* best-effort */ }
             render(facts);
+        });
+    })();
+
+    // ---- Update banner: a newer build was published while this tab was open
+    // Purely passive: window.__MTLX_BUILD_CHECK and window.MtlxHandoff may
+    // both be entirely absent (e.g. the vendored tutorials copy of this
+    // file), so everything below is feature-detected; nothing is fetched here.
+    (function initBuildBanner() {
+        // Same webview/embed exclusions as initSourceFacts above, plus a
+        // guard on the build-check contract itself (may not be defined,
+        // e.g. an older cached index.html without it).
+        if (window.__MTLX_VSCODE__) return;
+        if (document.documentElement.classList.contains('embed-mode')) return;
+        if (!window.__MTLX_BUILD_CHECK) return;
+
+        var headerEl = document.querySelector('.mtlx-header');
+        if (!headerEl) return;
+
+        // Injected as a sibling of #mtlx-header-bar (not inside it) so it
+        // can never perturb that bar's own overflow measurement above.
+        // Starts with no `is-visible` class; reveal() below adds it once.
+        var bannerHtml =
+            '<div id="mtlx-build-banner" class="mtlx-build-banner" role="alert">' +
+                '<div class="mtlx-build-banner-inner">' +
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-build-banner-icon">' +
+                        ICON_ALERT_TRIANGLE +
+                    '</svg>' +
+                    '<span id="mtlx-build-banner-text" class="mtlx-build-banner-text"></span>' +
+                    '<button type="button" id="mtlx-build-banner-action" class="mtlx-build-banner-action"></button>' +
+                    '<button type="button" id="mtlx-build-banner-dismiss" class="mtlx-build-banner-dismiss" aria-label="Dismiss">' +
+                        '×' +
+                    '</button>' +
+                '</div>' +
+            '</div>';
+        headerEl.insertAdjacentHTML('beforeend', bannerHtml);
+
+        var banner = document.getElementById('mtlx-build-banner');
+        var textEl = document.getElementById('mtlx-build-banner-text');
+        var actionEl = document.getElementById('mtlx-build-banner-action');
+        var dismissEl = document.getElementById('mtlx-build-banner-dismiss');
+        if (!banner || !textEl || !actionEl || !dismissEl) return;
+
+        var revealed = false;
+
+        // capture() sets the beforeunload suppression flag itself, so a
+        // reload that races an in-flight capture doesn't get warned about.
+        // With no work to save (or no MtlxHandoff at all), reload directly.
+        function doReload() {
+            var h = window.MtlxHandoff;
+            if (!(h && h.capture && h.hasWork && h.hasWork())) {
+                location.reload();
+                return;
+            }
+            // A capture that reports failure means the work would not
+            // survive, so fall back to the lossy copy instead of reloading
+            // over it. capture() never rejects, but guard anyway.
+            h.capture().then(function (ok) {
+                if (ok === false) setState('lossy', 'Saving the current document failed.');
+                else location.reload();
+            }, function () {
+                setState('lossy', 'Saving the current document failed.');
+            });
+        }
+
+        // Three copy/button states: clean, lossy (unsaved work that can't
+        // survive a reload), downloaded (after the user exports). Only
+        // text/button change here; reveal() below controls visibility.
+        function setState(state, reasonText) {
+            if (state === 'lossy') {
+                textEl.textContent = "A new version is available. Your dropped textures can't be carried across a reload." +
+                    (reasonText ? ' ' + reasonText : '');
+                actionEl.textContent = 'Download .zip';
+                actionEl.onclick = function () {
+                    if (window.MtlxHandoff && window.MtlxHandoff.exportForUser) {
+                        window.MtlxHandoff.exportForUser();
+                    }
+                    // downloadBlob returns immediately and can't detect a
+                    // cancelled save dialog, so don't auto-reload here.
+                    setState('downloaded');
+                };
+            } else if (state === 'downloaded') {
+                textEl.textContent = 'Saved. Reload now, then drop the .zip back in.';
+                actionEl.textContent = 'Reload';
+                actionEl.onclick = doReload;
+            } else {
+                textEl.textContent = 'A new version of MaterialX Playground is available.';
+                actionEl.textContent = 'Reload';
+                actionEl.onclick = doReload;
+            }
+        }
+
+        // Decide the state once, right when the banner first reveals: an
+        // absent MtlxHandoff, no captured work, or an ok canSave() all
+        // resolve to the plain "clean" copy per the CLEAN state's contract.
+        function reveal() {
+            if (revealed) return;
+            revealed = true;
+
+            var state = 'clean';
+            var reasonText = '';
+            if (window.MtlxHandoff && window.MtlxHandoff.hasWork && window.MtlxHandoff.hasWork()) {
+                var canSave = window.MtlxHandoff.canSave ? window.MtlxHandoff.canSave() : { ok: true };
+                if (canSave && !canSave.ok) {
+                    state = 'lossy';
+                    reasonText = canSave.reason || '';
+                }
+            }
+            setState(state, reasonText);
+            banner.classList.add('is-visible');
+        }
+
+        // Dismissal is ephemeral (no storage), same choice as the footer
+        // disclaimer above: it just hides the banner, `revealed` stays
+        // true so the re-check listeners below never fire again.
+        dismissEl.addEventListener('click', function () {
+            banner.classList.remove('is-visible');
+        });
+
+        function handleCheck(result) {
+            if (result && result.stale) reveal();
+        }
+
+        window.__MTLX_BUILD_CHECK.then(handleCheck);
+
+        // The probe announces staleness whenever it finds it, including
+        // from a forced `__mtlxCheckBuild(true)`, so the banner never has
+        // to wait out the probe's throttle.
+        window.addEventListener('mtlx-build-stale', function () { reveal(); });
+
+        // Re-check on tab refocus and on bfcache restores (which skip load
+        // events entirely). Both stop once the banner has been revealed.
+        document.addEventListener('visibilitychange', function () {
+            if (revealed) return;
+            if (document.visibilityState !== 'visible') return;
+            if (window.__mtlxCheckBuild) window.__mtlxCheckBuild().then(handleCheck);
+        });
+        window.addEventListener('pageshow', function (e) {
+            if (revealed) return;
+            if (!e.persisted) return;
+            if (window.__mtlxCheckBuild) window.__mtlxCheckBuild().then(handleCheck);
         });
     })();
 
