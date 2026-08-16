@@ -179,6 +179,35 @@ const VIEW_DEPS = {
     },
 };
 
+// One-shot staleness self-heal, run before the first view's files are
+// injected. A session-restore load can serve a cached index.html while
+// loadJsxApp's `cache: 'no-cache'` fetches bring back current view
+// files; that mismatched pair is exactly what crashes. index.html's
+// probe (see its <head>) decides; this only reacts.
+let __selfHealDone = false;
+async function maybeSelfHeal() {
+    if (__selfHealDone) return;
+    __selfHealDone = true;
+    if (!window.__MTLX_BUILD_CHECK) return;
+    let result = null;
+    try {
+        result = await window.__MTLX_BUILD_CHECK;
+    } catch (e) {
+        return; // the probe never rejects, but never gate loading on it
+    }
+    if (!result || !result.stale || !result.serverId) return;
+    // Keyed on the SERVER id, not the page's: a stale intermediary that
+    // keeps serving the old document would otherwise reload forever.
+    let already = null;
+    try { already = sessionStorage.getItem('mtlx_build_reload'); } catch (e) { /* unavailable */ }
+    if (already === result.serverId) return;
+    try { sessionStorage.setItem('mtlx_build_reload', result.serverId); } catch (e) { /* best-effort */ }
+    window.location.reload();
+    // Never resolves: reload() is asynchronous, and letting the caller
+    // continue would inject the very files this is avoiding.
+    await new Promise(() => {});
+}
+
 // Loads a view's CSS/scripts/babelScripts + app bundle, in VIEW_DEPS
 // order. Memoized per view so the mount effect and the graph editor's
 // docs dialog share one in-flight load; failures clear the memo to retry.
@@ -191,6 +220,7 @@ async function loadViewDeps(viewName) {
         // resolves async; awaiting it once here lets every lazy view
         // treat isLocal()/repoUrl()/resourcesRoot() as synchronous below.
         await window.MtlxAssets.ready;
+        await maybeSelfHeal();
         for (const href of dep.css) await loadCss(href);
         for (const src of dep.scripts) await loadScript(src);
         for (const src of dep.babelScripts) await loadJsxApp(src);

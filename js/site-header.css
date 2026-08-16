@@ -472,6 +472,90 @@
     white-space: nowrap;
 }
 
+/* Update banner: sibling of .mtlx-header-bar, shown by initBuildBanner()
+   when a build check reports stale. No amber bg/border token exists, so
+   hardcode rgba() here, following .mtlx-header's own rgba() precedent. */
+.mtlx-build-banner {
+    display: none;
+    border-top: 1px solid rgba(217, 119, 6, 0.5); /* amber-600/50 */
+    background-color: rgba(120, 53, 15, 0.3); /* amber-900/30 */
+}
+.mtlx-build-banner.is-visible {
+    display: block;
+}
+.mtlx-build-banner-inner {
+    max-width: var(--site-max-width);
+    margin-left: auto;
+    margin-right: auto;
+    padding: 8px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--site-amber-200);
+}
+@media (min-width: 640px) {
+    .mtlx-build-banner-inner {
+        padding: 8px 24px;
+    }
+}
+/* The :where() reset near the top of this file sets svg{display:block};
+   this icon sits inline with the row's text, so override that here,
+   same as .mtlx-footer-warn-icon does below. */
+.mtlx-build-banner-icon {
+    display: inline;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+/* Grows to fill the row, wrapping onto its own line on narrow widths
+   (flex-wrap on the parent) so the action/dismiss buttons never clip. */
+.mtlx-build-banner-text {
+    flex: 1 1 auto;
+    min-width: 200px;
+}
+/* Action button ("Reload" / "Download .zip"): same border/background/
+   hover precedent as .mtlx-nav-toggle above, just auto-width with a
+   text label instead of a fixed-size icon square. */
+.mtlx-build-banner-action {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--site-gray-600);
+    background-color: var(--site-gray-800);
+    color: var(--site-gray-200);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-build-banner-action:hover {
+    background-color: var(--site-gray-700);
+}
+.mtlx-build-banner-dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--site-amber-200);
+    opacity: 0.8;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-build-banner-dismiss:hover {
+    color: var(--site-amber-100);
+    opacity: 1;
+}
+
 /* ---- Footer --------------------------------------------------------- */
 /* On hover-capable pointers the footer rests collapsed and hover-expands
    (click pins it open); that state machine lives entirely in

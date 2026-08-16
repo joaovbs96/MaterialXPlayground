@@ -36,6 +36,53 @@
             }
         })();
     </script>
+    <script>window.__MTLX_BUILD = '532746d0a8a619a3';</script>
+    <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
+         other script (shell.jsx, mtlx-assets.js) is separately cached and
+         may itself be the stale file this is meant to detect. -->
+    <script>
+        (function () {
+            var THROTTLE_MS = 300000;
+            var last = 0;
+            var pending = null;
+            var FRESH = { stale: false, serverId: null };
+            // Skipped in the VS Code webview (it updates via the
+            // Marketplace) and in embed mode, matching js/site-header.js.
+            // An unstamped 'dev' tree is never treated as stale.
+            function skip() {
+                return !!window.__MTLX_VSCODE__
+                    || window.__MTLX_BUILD === 'dev'
+                    || document.documentElement.classList.contains('embed-mode');
+            }
+            // Announces staleness rather than requiring callers to poll, so
+            // a forced check from the console surfaces the banner too.
+            function announce(result) {
+                if (result && result.stale) {
+                    window.dispatchEvent(new CustomEvent('mtlx-build-stale', { detail: result }));
+                }
+                return result;
+            }
+            // force=true skips the throttle. Used by `__mtlxCheckBuild(true)`
+            // to verify the banner without waiting out THROTTLE_MS.
+            function check(force) {
+                if (skip()) return Promise.resolve(FRESH);
+                var now = Date.now();
+                if (!force && pending && (now - last) < THROTTLE_MS) return pending;
+                last = now;
+                pending = fetch('js/gen/build-id.json', { cache: 'no-store' })
+                    .then(function (res) { return res && res.ok ? res.json() : null; })
+                    .then(function (data) {
+                        if (!data || typeof data.id !== 'string') return FRESH;
+                        return { stale: data.id !== window.__MTLX_BUILD, serverId: data.id };
+                    })
+                    .catch(function () { return FRESH; })
+                    .then(announce);
+                return pending;
+            }
+            window.__mtlxCheckBuild = check;
+            window.__MTLX_BUILD_CHECK = check();
+        })();
+    </script>
     <style>
         /* Embed mode (the graph editor's docs dialog iframe): hide the
            shared chrome — the iframe shows only the focused docs view. */
@@ -146,6 +193,10 @@
          leaves import() native. -->
     <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
     <script src="js/shared/ui-commons.js"></script>
+    <!-- Session handoff: lets the graph editor's document survive the
+         reload that picks up a new build. Eager and plain JS, so a view
+         can register with it the moment that view's bundle runs. -->
+    <script src="js/shared/mtlx-handoff.js"></script>
     <script type="text/babel" data-presets="react" src="js/mtlx-engine.js"></script>
     <script type="text/babel" data-presets="react" src="js/shell.jsx"></script>
     <script type="text/babel" data-presets="react">
