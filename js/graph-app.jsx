@@ -124,6 +124,20 @@
             return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, n));
         };
 
+        // Relative-age copy for the crash-recovery modal (item 14),
+        // e.g. "5 min ago", "2 h ago", "yesterday". No component state
+        // needed, so it lives at module scope like the pieces above.
+        function formatDraftAge(ts) {
+            if (!ts) return 'a while ago';
+            const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + ' min ago';
+            const hours = Math.round(mins / 60);
+            if (hours < 24) return hours + ' h ago';
+            if (hours < 48) return 'yesterday';
+            return Math.round(hours / 24) + ' days ago';
+        }
+
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
@@ -272,6 +286,10 @@
             // what gets selected afterward (item 10's pin toggle) — same
             // { scope, id } shape as previewSel, reset alongside it.
             const [pinnedTarget, setPinnedTarget] = React.useState(null);
+            // Crash-recovery modal (item 14): a queue of orphaned
+            // autosave drafts (most-recent-first) offered one at a time;
+            // null/empty means nothing to offer right now.
+            const [restoreOffer, setRestoreOffer] = React.useState(null);
             const [catalog, setCatalog] = React.useState(null);
             // Bumped on every committed edit that reached the MaterialX
             // document — the material preview regenerates from the live doc.
@@ -299,9 +317,41 @@
             // that moment, regardless of which render's closure it runs in.
             const dirtyRevRef = React.useRef(0);
             dirtyRevRef.current = dirtyRev;
+            // Same trampoline, for autosaveNote/writeFinal's clean-vs-
+            // dirty check (item 6/11): whether the last autosave flush
+            // already covers the current edit.
+            const savedRevRef = React.useRef(0);
+            savedRevRef.current = savedRev;
+            // ---- Autosave (js/shared/mtlx-autosave.js): disabled under
+            // VS Code, where the on-disk file is the source of truth and
+            // __mtlxNotifyEdit already syncs every debounced edit.
+            const AUTOSAVE_ON = !IN_VSCODE && !!(window.MtlxAutosave && window.MtlxAutosave.available());
+            // Mirrors mtlx-autosave.js's own XML_MAX (not exposed on its
+            // public surface) so canSave() can pre-check the same cap.
+            const AUTOSAVE_XML_MAX = 2 * 1024 * 1024;
+            // This tab's current autosave session id, set by adoptSession()
+            // in the mount effect below.
+            const autosaveIdRef = React.useRef(null);
+            // Texture fileMap keys already confirmed stored in IndexedDB,
+            // diffed on every dirty flush so only new/changed keys are
+            // re-put.
+            const lastPersistedKeysRef = React.useRef(new Set());
+            // Set to an orphan session id while a restored draft hasn't
+            // been re-saved under the current id yet (crash-safe adoption:
+            // the orphan is only deleted once that first flush lands).
+            const pendingAdoptRef = React.useRef(null);
+            // Set synchronously by the adopt/GC/offer effect when a
+            // continue-marker restore is pending, so the default-doc
+            // fetch effect can't win the race on a warm cache.
+            const draftPendingRef = React.useRef(false);
+            // ref-trampoline for autosaveNote (item 6), same idiom as
+            // resolveDocXmlRef: always calls THIS render's implementation
+            // from the debounced flush closures below.
+            const autosaveNoteRef = React.useRef(null);
             const markSaved = () => {
                 setSavedRev(dirtyRevRef.current);
                 undoStateRef.current.savedIndex = undoStateRef.current.index;
+                if (AUTOSAVE_ON) window.MtlxAutosave.clearCurrent();
             };
 
             // ---- Undo / redo: coarse XML-snapshot history --------------
@@ -439,6 +489,9 @@
                     }
                     u.index = u.stack.length - 1;
                 }
+                // Autosave (item 3): every debounced flush is a dirty
+                // edit, so note it after the stack ops settle.
+                autosaveNoteRef.current(xml);
             };
 
             const pushUndoSnapshot = (tag) => {
@@ -477,7 +530,13 @@
                     noteDocXml(entry.xml);
                     const u = undoStateRef.current;
                     if (u.index === u.savedIndex) markSaved();
-                    else setDirtyRev((r) => r + 1);
+                    else {
+                        setDirtyRev((r) => r + 1);
+                        // Autosave (item 4): forceDirty because dirtyRevRef
+                        // hasn't re-rendered yet (restoringRef excludes
+                        // undo/redo from the flushUndoSnapshot note above).
+                        autosaveNoteRef.current(entry.xml, true);
+                    }
                 } catch (e) {
                     console.error('undo restore failed', e);
                 } finally {
@@ -946,6 +1005,13 @@
                     setFlow({ nodes: [], edges: [] });
                     if (snapshotTimerRef.current) { clearTimeout(snapshotTimerRef.current); snapshotTimerRef.current = null; }
                     undoStateRef.current = { stack: [], index: -1, savedIndex: -1 };
+                    // Autosave (item 5): covers loadDocument failing
+                    // before its markSaved, which would otherwise leave
+                    // the OLD document's draft claiming this session id.
+                    if (AUTOSAVE_ON) {
+                        window.MtlxAutosave.clearCurrent();
+                        lastPersistedKeysRef.current = new Set();
+                    }
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
                 }
@@ -1176,18 +1242,69 @@
             // still-unsaved document looking clean).
             const pendingRestoreDirtyRef = React.useRef(false);
 
-            // ---- Restore a session captured by js/shared/mtlx-handoff.js
-            // just before a self-triggered reload (new build). Routed
-            // through the SAME 'mtlx-load-document' event the handoff
-            // listener above already handles, instead of a parallel path.
-            React.useEffect(() => {
-                if (!window.MtlxHandoff) return;
-                window.MtlxHandoff.consume('graph').then((payload) => {
-                    if (!payload) return;
+            // ---- Restore a session captured by js/shared/mtlx-autosave.js
+            // (item 8): builds the fileMap like handleImport does, xml
+            // overlaid LAST so no texture with the same key can clobber it.
+            const restoreDraft = async (record, opts) => {
+                if (!record || !record.id) return;
+                const blobs = await window.MtlxAutosave.getBlobs(record.id);
+                const map = Object.assign({}, blobs);
+                const safeName = (record.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                map[safeName + '.mtlx'] = new Blob([record.xml || ''], { type: 'application/xml' });
+                const commit = () => {
+                    // Crash-safe adoption: the orphan is only removed once
+                    // the restored doc has been re-saved under this tab's
+                    // own session id (autosaveNote, item 6).
+                    pendingAdoptRef.current = record.id;
                     pendingRestoreDirtyRef.current = true;
-                    window.__mtlxPendingImport = { xml: payload.xml, name: payload.name, files: payload.files };
-                    window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
-                });
+                    ingestRef.current(map);
+                };
+                // Auto path: no confirm needed, nothing is loaded yet.
+                // Modal path: confirmReplace DIRECTLY, not the event path,
+                // so a cancelled dialog never leaves the refs above set.
+                if (opts && opts.auto) commit();
+                else confirmReplace(true, commit);
+            };
+            const onRestoreDraft = () => {
+                const current = restoreOffer && restoreOffer[0];
+                if (!current) return;
+                restoreDraft(current, { auto: false });
+                setRestoreOffer((q) => (q && q.length > 1) ? q.slice(1) : null);
+            };
+            const onDiscardDraft = () => {
+                const current = restoreOffer && restoreOffer[0];
+                if (!current) return;
+                window.MtlxAutosave.removeSession(current.id);
+                setRestoreOffer((q) => (q && q.length > 1) ? q.slice(1) : null);
+            };
+            const onDiscardAllDrafts = () => {
+                const queue = restoreOffer;
+                if (!queue) return;
+                queue.forEach((s) => window.MtlxAutosave.removeSession(s.id));
+                setRestoreOffer(null);
+            };
+
+            // ---- Adopt this tab's autosave session, GC stale drafts, and
+            // either silently continue a marked draft (explicit continue-
+            // intent) or queue orphaned sessions for the modal (item 7).
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                const auto = window.MtlxAutosave.adoptSession();
+                autosaveIdRef.current = auto.id;
+                const continueRecord = auto.continueId ? window.MtlxAutosave.readRecord(auto.continueId) : null;
+                // Set BEFORE anything async: closes the default-doc fetch
+                // race on a warm cache (localStorage reads are sync).
+                if (continueRecord) draftPendingRef.current = true;
+                window.MtlxAutosave.gcSweep(auto.id);
+                if (continueRecord) {
+                    restoreDraft(continueRecord, { auto: true });
+                } else {
+                    const offers = window.MtlxAutosave.offerable(auto.id, auto.prevId);
+                    if (offers.length) setRestoreOffer(offers);
+                }
+                // Mount-time only: a modal popping over active editing
+                // mid-session would be hostile. Orphans from a late-crashed
+                // sibling tab surface on the next reload instead.
             }, []);
             React.useEffect(() => {
                 if (pendingRestoreDirtyRef.current && parsed && !isDirty) {
@@ -1226,7 +1343,9 @@
                     .then((xml) => {
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
-                        if (hasSession) return;
+                        // draftPendingRef (item 9): an async autosave
+                        // restore may still be in flight, don't stomp it.
+                        if (hasSession || draftPendingRef.current) return;
                         ingestRef.current({
                             'standard_surface_marble_solid.mtlx': new Blob([xml], { type: 'application/xml' }),
                         });
@@ -1235,7 +1354,7 @@
                         setBusy(false);
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
-                        if (!hasSession && !IN_VSCODE) {
+                        if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
                             setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
@@ -1468,6 +1587,80 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 window.addEventListener('beforeunload', onBeforeUnload);
                 return () => window.removeEventListener('beforeunload', onBeforeUnload);
             }, [isDirty]);
+
+            // Autosave final write (item 11): pagehide stamps closedAt
+            // (tab is actually going away); a hidden tab is still alive,
+            // so visibilitychange->hidden doesn't.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                const onPagehide = () => { writeFinalRef.current(true); };
+                const onVisibility = () => {
+                    if (document.visibilityState === 'hidden') writeFinalRef.current(false);
+                };
+                window.addEventListener('pagehide', onPagehide);
+                document.addEventListener('visibilitychange', onVisibility);
+                return () => {
+                    window.removeEventListener('pagehide', onPagehide);
+                    document.removeEventListener('visibilitychange', onVisibility);
+                };
+            }, []);
+
+            // Autosave heartbeat (item 12): bumps `beat` every 20s while
+            // dirty, so a background-throttled tab's staleness clock
+            // (offerable's STALE_MS) doesn't fire while it's actually alive.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                const id = setInterval(() => {
+                    if (dirtyRevRef.current !== savedRevRef.current) window.MtlxAutosave.beat();
+                }, window.MtlxAutosave.BEAT_MS);
+                return () => clearInterval(id);
+            }, []);
+
+            // Autosave producer registration (item 13): the missing half
+            // of the handoff contract. save() reuses writeFinal, then
+            // arms the continue marker so next mount auto-restores.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON || !window.MtlxHandoff) return;
+                window.MtlxHandoff.register('graph', {
+                    hasWork: () => !!parsedRef.current && dirtyRevRef.current !== savedRevRef.current,
+                    canSave: () => {
+                        if (!window.MtlxAutosave.available()) {
+                            return { ok: false, reason: 'Autosave storage is unavailable in this browser.', bytes: 0 };
+                        }
+                        const resolved = scanExportTexturesRef.current().resolved;
+                        let bytes = 0;
+                        for (const t of resolved) {
+                            const blob = fileMapRef.current[t.key];
+                            if (blob) bytes += blob.size || 0;
+                        }
+                        if (resolved.length) {
+                            const probe = window.MtlxAutosave.probeStorageSync();
+                            if (!probe.ok) {
+                                return { ok: false, reason: 'Texture storage is unavailable, likely private browsing.', bytes };
+                            }
+                        }
+                        if (bytes > window.MtlxAutosave.BYTES_BUDGET) {
+                            return { ok: false, reason: 'Dropped textures exceed the 100MB autosave budget.', bytes };
+                        }
+                        const xml = docXmlRef.current.xml;
+                        if (typeof xml === 'string' && xml.length > AUTOSAVE_XML_MAX) {
+                            return { ok: false, reason: 'The document is too large to autosave.', bytes };
+                        }
+                        return { ok: true, reason: null, bytes };
+                    },
+                    save: () => {
+                        const ok = writeFinalRef.current(false);
+                        if (ok) window.MtlxAutosave.setContinueMarker();
+                        return ok;
+                    },
+                    exportForUser: () => {
+                        const p = parsedRef.current;
+                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+                        const resolved = scanExportTexturesRef.current().resolved;
+                        exportZipRef.current(name, resolved);
+                    },
+                });
+            }, []);
 
             // Sidebar-aware replacement for inst.fitView(opts): the params
             // panel is a docked flex sibling of the canvas host, not an
@@ -1817,6 +2010,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 fileMapRef.current = merged;
                 setFileMap(merged);
                 pickedFileNamesRef.current.add(file.name);
+                // Autosave (item 10): eager single-blob put, closing the
+                // pick-then-wire race under the 350ms undo debounce.
+                if (AUTOSAVE_ON && autosaveIdRef.current) {
+                    window.MtlxAutosave.putBlobs(autosaveIdRef.current, [{ key: file.name, blob: file }])
+                        .then((storedKeys) => { storedKeys.forEach((k) => lastPersistedKeysRef.current.add(k)); });
+                }
             };
 
             // Tag an input with a COLORSPACE (or clear it) — a codegen
@@ -2017,6 +2216,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     exportBusyRef.current = false;
                 }
             };
+            // ref-trampoline (item 13): the handoff's exportForUser hook
+            // is registered once at mount, so it must call THIS render's
+            // exportZip, not the first render's (parsed was null then).
+            const exportZipRef = React.useRef(exportZip);
+            exportZipRef.current = exportZip;
 
             // Scan the WHOLE document (root + every nodegraph's nodes)
             // for authored `filename` inputs and resolve each against
@@ -2043,6 +2247,89 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 }
                 return { resolved, unresolved };
             };
+            // ref-trampoline (item 13): canSave()/exportForUser are wired
+            // once at mount, so they must call THIS render's scan, not the
+            // first render's (parsed was null then).
+            const scanExportTexturesRef = React.useRef(scanExportTextures);
+            scanExportTexturesRef.current = scanExportTextures;
+
+            // Autosave dirty-flush (item 6): ref-trampoline idiom like
+            // resolveDocXmlRef, so a stale debounce closure always notes
+            // THIS render's parsed/fileMap via autosaveNoteRef.
+            const autosaveNote = (xml, forceDirty) => {
+                if (!AUTOSAVE_ON) return;
+                const dirty = forceDirty || dirtyRevRef.current !== savedRevRef.current;
+                if (!dirty) {
+                    window.MtlxAutosave.clearCurrent();
+                    return;
+                }
+                const ok = window.MtlxAutosave.writeRecord({
+                    name: defaultExportBase(),
+                    xml,
+                    closedAt: null, // a flush proves the tab is alive
+                    textureKeys: Array.from(lastPersistedKeysRef.current),
+                });
+                if (!ok) return; // xml over cap or no session id, nothing more to persist
+                const finishAdoption = () => {
+                    if (!pendingAdoptRef.current) return;
+                    const orphanId = pendingAdoptRef.current;
+                    pendingAdoptRef.current = null;
+                    window.MtlxAutosave.removeSession(orphanId);
+                };
+                const { resolved } = scanExportTextures();
+                const missing = [];
+                for (const t of resolved) {
+                    if (lastPersistedKeysRef.current.has(t.key)) continue;
+                    const blob = fileMapRef.current[t.key];
+                    if (blob) missing.push({ key: t.key, blob });
+                }
+                if (!missing.length) {
+                    finishAdoption();
+                    return;
+                }
+                const id = autosaveIdRef.current;
+                window.MtlxAutosave.putBlobs(id, missing).then((storedKeys) => {
+                    storedKeys.forEach((k) => lastPersistedKeysRef.current.add(k));
+                    window.MtlxAutosave.writeRecord({ textureKeys: Array.from(lastPersistedKeysRef.current) });
+                    finishAdoption();
+                });
+            };
+            autosaveNoteRef.current = autosaveNote;
+
+            // Final autosave write (item 11), shared by the handoff's
+            // save() hook (item 13). Sync only (no await at pagehide):
+            // fresh serializeDocXml, else docXmlRef, else the undo top.
+            const writeFinal = (isPagehide) => {
+                if (!AUTOSAVE_ON || !autosaveIdRef.current) return false;
+                const dirty = dirtyRevRef.current !== savedRevRef.current;
+                if (!dirty) {
+                    window.MtlxAutosave.clearCurrent();
+                    return true;
+                }
+                let xml = null;
+                if (parsedRef.current) {
+                    try { xml = serializeDocXml(parsedRef.current); } catch (e) { xml = null; }
+                }
+                if (xml == null) xml = docXmlRef.current.xml;
+                if (xml == null) {
+                    const u = undoStateRef.current;
+                    const top = u.stack[u.index];
+                    xml = top ? top.xml : null;
+                }
+                if (xml == null) return false;
+                const fields = {
+                    name: defaultExportBase(),
+                    xml,
+                    textureKeys: Array.from(lastPersistedKeysRef.current),
+                };
+                if (isPagehide) fields.closedAt = Date.now();
+                return window.MtlxAutosave.writeRecord(fields);
+            };
+            // ref-trampoline: both the pagehide/visibility effect (item 11,
+            // declared earlier in this file) and the handoff registration
+            // (item 13) call THIS render's writeFinal via the ref.
+            const writeFinalRef = React.useRef(writeFinal);
+            writeFinalRef.current = writeFinal;
 
             // Toolbar "Presets" button: fetches a curated example .mtlx
             // (crawl lives in fetchPresetFiles) and hands it to ingest(),
@@ -5904,6 +6191,49 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                         }}
                                         className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
                                     >Export & Continue</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Crash-recovery modal (item 14): blocking, forced
+                        choice. No dismiss X, no escape-close, no backdrop-
+                        click-close. Restore/Discard advance the queue. */}
+                    {restoreOffer && restoreOffer.length > 0 && (
+                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
+                            <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-96 max-w-[90%] p-4">
+                                <div className="text-sm font-semibold text-gray-100 mb-2">Restore previous session?</div>
+                                <div className="text-[12px] text-gray-300 mb-1 break-words">
+                                    {'“'}{restoreOffer[0].name || 'untitled'}{'”'}
+                                    {' '}({formatDraftAge(restoreOffer[0].closedAt || Math.max(restoreOffer[0].savedAt || 0, restoreOffer[0].beat || 0))})
+                                </div>
+                                <div className="text-[12px] text-gray-400 mb-1">
+                                    A previous editing session ended with unsaved changes.
+                                    Restore it, or discard it permanently?
+                                </div>
+                                {restoreOffer.length > 1 && (
+                                    <div className="text-[11px] text-gray-500 mb-1">
+                                        ({restoreOffer.length - 1} more session{restoreOffer.length - 1 === 1 ? '' : 's'} waiting)
+                                    </div>
+                                )}
+                                <div className="flex justify-end gap-2 mt-3">
+                                    {restoreOffer.length > 1 && (
+                                        <button
+                                            type="button"
+                                            onClick={onDiscardAllDrafts}
+                                            className={BTN_SECONDARY}
+                                        >Discard all</button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={onDiscardDraft}
+                                        className={BTN_SECONDARY}
+                                    >{restoreOffer.length > 1 ? 'Discard this' : 'Discard'}</button>
+                                    <button
+                                        type="button"
+                                        onClick={onRestoreDraft}
+                                        className={BTN_PRIMARY}
+                                    >Restore</button>
                                 </div>
                             </div>
                         </div>
