@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '532746d0a8a619a3';</script>
+    <script>window.__MTLX_BUILD = '369f229abd3bb5fd';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -47,12 +47,24 @@
             var pending = null;
             var FRESH = { stale: false, serverId: null };
             // Skipped in the VS Code webview (it updates via the
-            // Marketplace) and in embed mode, matching js/site-header.js.
-            // An unstamped 'dev' tree is never treated as stale.
+            // Marketplace), in embed mode, and on file: (offline zip
+            // opened directly). An unstamped 'dev' tree is never stale.
             function skip() {
                 return !!window.__MTLX_VSCODE__
                     || window.__MTLX_BUILD === 'dev'
+                    || location.protocol === 'file:'
                     || document.documentElement.classList.contains('embed-mode');
+            }
+            // Offline builds are pinned snapshots, never stale. Same
+            // marker probe as js/mtlx-assets.js localMode; checked once.
+            var offlineProbe = null;
+            function isOffline() {
+                if (!offlineProbe) {
+                    offlineProbe = fetch('vendor/materialx/manifest.json', { cache: 'no-store' })
+                        .then(function (res) { return !!(res && res.ok); })
+                        .catch(function () { return false; });
+                }
+                return offlineProbe;
             }
             // Announces staleness rather than requiring callers to poll, so
             // a forced check from the console surfaces the banner too.
@@ -69,8 +81,12 @@
                 var now = Date.now();
                 if (!force && pending && (now - last) < THROTTLE_MS) return pending;
                 last = now;
-                pending = fetch('js/gen/build-id.json', { cache: 'no-store' })
-                    .then(function (res) { return res && res.ok ? res.json() : null; })
+                pending = isOffline()
+                    .then(function (offline) {
+                        if (offline) return null;
+                        return fetch('js/gen/build-id.json', { cache: 'no-store' })
+                            .then(function (res) { return res && res.ok ? res.json() : null; });
+                    })
                     .then(function (data) {
                         if (!data || typeof data.id !== 'string') return FRESH;
                         return { stale: data.id !== window.__MTLX_BUILD, serverId: data.id };
