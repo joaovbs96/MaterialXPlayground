@@ -12,7 +12,10 @@
     "node": ">=18"
   },
   "main": "vscode_extension/src/extension.js",
-  "repository": { "type": "git", "url": "https://github.com/joaovbs96/MaterialXPlayground" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joaovbs96/MaterialXPlayground"
+  },
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "vendor:offline": "node scripts/vendor.mjs --with-materialx",
@@ -20,22 +23,27 @@
     "build": "node scripts/build.mjs",
     "build:vendor": "node scripts/build.mjs vendor",
     "build:nodelib": "node scripts/build.mjs nodelib",
+    "build:embed": "node scripts/build.mjs embed",
+    "build:embeddocs": "node scripts/build.mjs embeddocs",
     "build:tutorials": "node scripts/build.mjs tutorials",
     "build:buildid": "node scripts/build.mjs buildid",
     "build:webview": "node scripts/build.mjs webview",
-    "check": "node scripts/build.mjs --check"
+    "check": "node scripts/build.mjs --check",
+    "test:embed": "playwright test"
   },
   "devDependencies": {
+    "@babel/standalone": "7.26.10",
+    "@highlightjs/cdn-assets": "11.9.0",
+    "@playwright/test": "1.62.1",
+    "dagre": "0.8.5",
+    "jszip": "3.10.1",
+    "katex": "0.16.47",
+    "marked": "18.0.9",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "@babel/standalone": "7.26.10",
-    "three": "0.128.0",
-    "three-147": "npm:three@0.147.0",
-    "katex": "0.16.47",
-    "jszip": "3.10.1",
     "reactflow": "11.11.4",
-    "dagre": "0.8.5",
-    "@highlightjs/cdn-assets": "11.9.0"
+    "three": "0.128.0",
+    "three-147": "npm:three@0.147.0"
   },
   "categories": [
     "Visualization"
@@ -66,8 +74,13 @@
     "languages": [
       {
         "id": "mtlx",
-        "extensions": [".mtlx"],
-        "aliases": ["MaterialX", "mtlx"],
+        "extensions": [
+          ".mtlx"
+        ],
+        "aliases": [
+          "MaterialX",
+          "mtlx"
+        ],
         "configuration": "./vscode_extension/language/mtlx.language-configuration.json"
       }
     ],

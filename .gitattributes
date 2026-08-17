@@ -49,6 +49,12 @@ vendor/** -text
 # (or a plain git diff) spuriously fail.
 js/gen/** text eol=lf
 
+# embed/gen/ holds precompiled viewer JS (see scripts/build-embed.mjs) that
+# is byte-compared by --check; force LF for the same reason as js/gen/**
+# above — a Windows checkout's autocrlf setting would otherwise make the
+# comparison spuriously fail.
+embed/gen/** text eol=lf
+
 # js/** is forced to LF: js/gen/build-id.json's deterministic hash walks
 # every js/**.{js,jsx,css,json} file, and js/** is otherwise unspecified
 # here, so a Windows checkout's autocrlf=true would hash bytes CI never

@@ -8,6 +8,42 @@
 
         const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
 
+        // Geometry names this component actually knows how to render —
+        // mirrors ViewportControls' own default `geomList` (js/shared/
+        // mtlx-ui.jsx), since viewer-app.jsx never overrides that prop.
+        // Used only to validate the `geometry` controlled prop (embed/
+        // viewer.html's ?geometry= query param, a later step); an
+        // unrecognized value falls back to today's default rather than
+        // being handed to the engine as-is.
+        const VIEWER_GEOM_NAMES = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
+
+        // shaderball-scene is an authored room that fills the whole frame,
+        // so it can never look transparent. transparent=1 against it falls
+        // back to 'shaderball' instead of refusing, and reports why.
+        const TRANSPARENT_ROOM_GEOM = 'shaderball-scene';
+
+        function resolveViewerGeom(requested, wantTransparent) {
+            const invalid = requested != null && VIEWER_GEOM_NAMES.indexOf(requested) === -1;
+            const base = (!invalid && requested) ? requested : 'shaderball-scene';
+            const fellBackForTransparency = !!wantTransparent && base === TRANSPARENT_ROOM_GEOM;
+            return { geom: fellBackForTransparency ? 'shaderball' : base, invalid, fellBackForTransparency };
+        }
+
+        // Resolves the `material` controlled prop against the current
+        // renderables list: exact name, then case-insensitive name, then
+        // a non-negative integer index ("2"). -1 when unresolved.
+        function resolveMaterialIndex(requested, renderables) {
+            let idx = renderables.findIndex((r) => r.name === requested);
+            if (idx === -1) {
+                idx = renderables.findIndex((r) => r.name.toLowerCase() === requested.toLowerCase());
+            }
+            if (idx === -1 && /^\d+$/.test(requested) && String(Number(requested)) === requested) {
+                const n = Number(requested);
+                if (n < renderables.length) idx = n;
+            }
+            return idx;
+        }
+
         // Official OpenPBR default material, resolved via window.MtlxAssets
         // (not a hardcoded URL) so a future offline build can serve it
         // locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
@@ -21,9 +57,10 @@
         // ---- Document loading ---------------------------------------------
 
         // Read an .mtlx string into a fresh document (data library attached),
-        // and list its renderable materials/shaders.
-        const loadMtlxDocument = async (xmlText) => {
-            const { mx, gen, genContext, stdlib, lightData } = await getMxEnv();
+        // and list its renderable materials/shaders. `version`, when given,
+        // selects which MaterialX build getMxEnv() resolves.
+        const loadMtlxDocument = async (xmlText, path, version) => {
+            const { mx, gen, genContext, stdlib, lightData } = await getMxEnv(version);
             const doc = mx.createDocument();
             if (typeof mx.readFromXmlString !== 'function') {
                 throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
@@ -43,7 +80,9 @@
             // bare surfaceshader nodes as a fallback (see listDocRenderables
             // in js/mtlx-engine.js for the caveat this works around).
             const renderables = listDocRenderables(doc);
-            return { mx, gen, genContext, lightData, doc, renderables };
+            // `path` rides along so the render effect can stamp what
+            // actually got rendered (renderedMtlx) once a view builds.
+            return { mx, gen, genContext, lightData, doc, renderables, path };
         };
 
         // bindDroppedTextures (plus its TEXTURE_CACHE/textureCacheKey
@@ -52,7 +91,28 @@
 
         // ---- App ------------------------------------------------------------
 
-        function MaterialViewerApp({ active = true } = {}) {
+        function MaterialViewerApp({
+            active = true, embed = false, controls = null,
+            // Optional controlled props for the embeddable viewer
+            // (embed/embed-boot.js's postMessage adapter). Every one
+            // defaults to today's uncontrolled behavior — js/shell.jsx
+            // passes only `active` — so the main app is bit-for-bit
+            // unaffected by their existence.
+            geometry, envRotation, envExposure, envBackground, autoRotate, wheelMode,
+            transparent = false,
+            documentUrl, mtlxVersion, material, onView, onRenderables, onReady, onError,
+        } = {}) {
+            // Embed mode: strips this down to a bare render surface — no
+            // Files sidebar, no site-shell-coupled buttons (Send to Graph
+            // Editor / Presets / Shader Code), no dialogs — for a future
+            // third-party iframe embed (embed/viewer.html, a later step).
+            // Named `chromeless` to mirror js/docs-app.jsx:91-99's identical
+            // concept (there: `inline || EMBED`); only one signal feeds it
+            // here today, but the name keeps the two views' vocabulary the
+            // same, and `chromeless` (not `embed`) is what the JSX below
+            // reads throughout. `controls` (below, near the HUD) separately
+            // opts specific ViewportControls buttons back in while chromeless.
+            const chromeless = embed;
             // True inside the VS Code extension webview (set by its bootstrap
             // before any site script runs). The editor is bound to one opened
             // .mtlx file, so browser-only affordances (drop zone, pickers) are hidden.
@@ -64,6 +124,28 @@
             activeRef.current = active;
             const canvasRef = React.useRef(null);
             const viewRef = React.useRef(null);
+            // Callback props, mirrored into refs (ingestRef/activeRef
+            // pattern, above) so the effects below can call the LATEST
+            // caller-supplied function without needing it in a dependency
+            // array — a fresh inline arrow from an embed host on every
+            // render must never retrigger a view rebuild.
+            const onViewRef = React.useRef(onView);
+            onViewRef.current = onView;
+            const onRenderablesRef = React.useRef(onRenderables);
+            onRenderablesRef.current = onRenderables;
+            const onReadyRef = React.useRef(onReady);
+            onReadyRef.current = onReady;
+            const onErrorRef = React.useRef(onError);
+            onErrorRef.current = onError;
+            // mtlxVersion controlled prop, mirrored into a ref so the async
+            // loadDocument closure always reads the latest value, matching
+            // the callback-prop refs above.
+            const mtlxVersionRef = React.useRef(mtlxVersion);
+            mtlxVersionRef.current = mtlxVersion;
+            // Non-fatal configuration notices (invalid geometry, a
+            // transparent+geometry combo that needed a fallback): reported
+            // to the host only, via onError, no local error banner.
+            const notify = (msg) => { if (onErrorRef.current) onErrorRef.current(msg); };
             const [fileMap, setFileMap] = React.useState({});          // relPath -> File|Blob
             // Ref mirror of fileMap: `ingest` and the async render effect
             // read it so rapid successive drops (and texture binding after a
@@ -71,11 +153,48 @@
             const fileMapRef = React.useRef({});
             const [mtlxPaths, setMtlxPaths] = React.useState([]);      // candidates
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
+            // Document actually on screen, vs chosenMtlx (the requested
+            // one), which flips immediately on picker change. Stamped by
+            // the render effect once a view builds from it.
+            const [renderedMtlx, setRenderedMtlx] = React.useState(null);
             const [renderables, setRenderables] = React.useState([]);
             const [chosenMat, setChosenMat] = React.useState(0);
-            const [geom, setGeom] = React.useState('shaderball-scene');
+            // Initial geometry: the `geometry` controlled prop when it names
+            // a geometry this component can render, else today's default —
+            // undefined (the uncontrolled case, every existing caller)
+            // always falls through to 'shaderball-scene' unchanged.
+            const [geom, setGeom] = React.useState(() => resolveViewerGeom(geometry, transparent).geom);
+            const geomRef = React.useRef(geom);
+            geomRef.current = geom;
+            // Reports the INITIAL geometry/transparent resolution once: an
+            // invalid `geometry`, or a transparent+room combo that needed
+            // a fallback, both get reported here, mount only.
+            React.useEffect(() => {
+                const r = resolveViewerGeom(geometry, transparent);
+                if (r.invalid) {
+                    notify(`Unknown geometry "${geometry}", using the default instead. Valid values: ${VIEWER_GEOM_NAMES.join(', ')}.`);
+                } else if (r.fellBackForTransparency) {
+                    notify('transparent cannot render "shaderball-scene" (an opaque room), so "shaderball" is used instead. Compatible geometries: shaderball, sphere, cube, cloth, shaderball-mtlx.');
+                }
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, []);
+            // Live transparent toggle: no-ops on mount (already resolved
+            // above), only reacts to `transparent` turning on while the
+            // CURRENT geom (geomRef, not the `geometry` prop) is the room.
+            React.useEffect(() => {
+                if (transparent && geomRef.current === TRANSPARENT_ROOM_GEOM) {
+                    notify('transparent cannot render "shaderball-scene", switching to "shaderball" instead.');
+                    setGeom('shaderball');
+                }
+            }, [transparent]);
             const [status, setStatus] = React.useState('Loading the default material…');
             const [error, setError] = React.useState(null);
+            // Reports a failure both to the local error banner (unchanged
+            // behavior) and to the optional onError controlled prop.
+            const reportError = (msg) => {
+                setError(msg);
+                if (onErrorRef.current) onErrorRef.current(msg);
+            };
             const [texReport, setTexReport] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             // Compact-mode threshold: drives the toolbar's label/icon switch
@@ -105,6 +224,10 @@
             // load AND every material/geometry regeneration.
             const [busy, setBusy] = React.useState(false);
             const loadedRef = React.useRef(null); // { mx, gen, genContext, lightData, doc, renderables }
+            // Monotonic guard: two loadDocument calls can be in flight at
+            // once (the document picker changed twice quickly). Whichever
+            // resolves LAST must not stomp state a newer call already wrote.
+            const runRef = React.useRef(0);
 
             // Viewport controls: shared with the previewers via
             // useViewportControls (js/shared/mtlx-ui.jsx). Fullscreen
@@ -123,7 +246,11 @@
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: onToggleFullscreen,
                 takeScreenshot: takeScreenshotRaw,
-            } = useViewportControls(viewRef, viewportRef, getSnapshotBase);
+            // autoRotate/envBackground: controlled props seed the hook's
+            // initial toggle state (`!!undefined` -> false for every
+            // existing, uncontrolled caller — see useViewportControls'
+            // header comment in js/shared/mtlx-ui.jsx).
+            } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground);
             // The hook's takeScreenshot has no internal try/catch (the
             // previewers swallow failures silently); here it surfaces as
             // an error banner instead, so the wrapping stays local.
@@ -134,10 +261,21 @@
                     setError('Save PNG preview failed: ' + errMsg(e));
                 }
             };
+            // Shared by ViewportControls (app) and EmbedControls (chromeless):
+            // resetCamera is absent for some geometries (e.g. flat2d).
+            const handleCameraReset = () => {
+                const v = viewRef.current;
+                if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
+            };
             // Hand the loaded document to the graph editor: serialize it,
             // stash loose files alongside, and let the shell's hash route
             // swap views (listens for 'mtlx-load-document', graph-app.jsx).
             const sendToEditor = () => {
+                // Embed mode has no site shell to navigate to — hashing to
+                // '#!graph' would drag the host page's iframe off the
+                // viewer. No-op the HANDLER (not just the button that
+                // calls it), so no other path can reach openInGraphEditor.
+                if (chromeless) return;
                 const loaded = loadedRef.current;
                 if (!loaded || !loaded.doc) return;
                 let xml;
@@ -152,7 +290,10 @@
                     return;
                 }
                 const files = looseFilesFrom(fileMapRef.current || {});
-                const name = (chosenMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
+                // Filename must match what's actually rendered
+                // (renderedMtlx), not the requested value (chosenMtlx);
+                // a failed switch leaves those two disagreeing.
+                const name = (renderedMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
                 openInGraphEditor({ xml, name, files });
             };
 
@@ -180,7 +321,7 @@
                 try {
                     await expandZips(map);
                 } catch (e) {
-                    setError(errMsg(e));
+                    reportError(errMsg(e));
                     return;
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
@@ -233,12 +374,14 @@
             ingestRef.current = ingest;
             // Disabled under VS Code: the editor is bound to a single opened
             // .mtlx file, so dropping other documents onto the page doesn't
-            // apply.
+            // apply. Also disabled in embed mode: the host page may run its
+            // own drag-and-drop, and there is no sidebar here to show a
+            // dropped file's result. Could be made opt-in later.
             useWindowFileDrop({
                 activeRef,
                 onFiles: (map) => ingestRef.current(map),
                 onDragState: setDragOver,
-                disabled: IN_VSCODE,
+                disabled: IN_VSCODE || chromeless,
             });
 
             // ---- Receives a material handed off by the graph editor's
@@ -305,17 +448,99 @@
 
             // Warm the MaterialX WASM + environment map on mount, instead of
             // paying for them on the first drop. Also resolves the version
-            // badge in the shared header right away.
+            // badge in the shared header right away. onReady/onError are
+            // additive: getMxEnv() still resolves/rejects exactly as before
+            // for every existing (non-embed) caller, which simply never
+            // passed those props.
             React.useEffect(() => {
-                getMxEnv().catch(() => {});
+                getMxEnv()
+                    .then(() => {
+                        if (onReadyRef.current) onReadyRef.current(window.__mtlxVersion || null);
+                    })
+                    .catch((e) => {
+                        if (onErrorRef.current) onErrorRef.current('MaterialX engine failed to load: ' + errMsg(e));
+                    });
                 try { getEnvironment(); } catch (e) { /* optional */ }
             }, []);
 
-            // Default material: page opens with open_pbr_default.mtlx
-            // fetched from the MaterialX repo, through the normal ingest()
-            // path. Skipped silently if offline or the user loaded first.
+            // Geometry controlled-prop sync: an embed host changing its
+            // `geometry` prop after mount (e.g. embed-boot.js's setGeometry
+            // postMessage handler re-rendering with a new value) updates
+            // `geom` here. Guarded so: (a) an uncontrolled caller (geometry
+            // always undefined) never fires this, and (b) the HUD's own
+            // GeomSelect (when `controls` opts it in) isn't fought — this
+            // only reacts to the PROP actually changing, not to `geom`
+            // drifting away from it via the user's own selection.
+            const geometryPropRef = React.useRef(geometry);
+            React.useEffect(() => {
+                if (geometry === geometryPropRef.current) return;
+                geometryPropRef.current = geometry;
+                const r = resolveViewerGeom(geometry, transparent);
+                if (r.invalid) {
+                    notify(`Unknown geometry "${geometry}" ignored. Valid values: ${VIEWER_GEOM_NAMES.join(', ')}.`);
+                    return;
+                }
+                if (r.fellBackForTransparency) {
+                    notify('transparent cannot render "shaderball-scene", using "shaderball" instead.');
+                }
+                setGeom(r.geom);
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [geometry]);
+
+            // `material` controlled-prop resolution: reruns on renderables
+            // change (new document) or prop change, mirroring the geometry
+            // sync effect. No-ops when `material` is undefined.
+            const materialReportedRef = React.useRef(null); // last reported "value|doc" key
+            React.useEffect(() => {
+                if (material == null || !renderables.length) return;
+                const idx = resolveMaterialIndex(material, renderables);
+                setChosenMat(idx === -1 ? 0 : idx);
+                if (idx === -1) {
+                    const docKey = (loadedRef.current && loadedRef.current.path) || '';
+                    const key = material + '::' + docKey;
+                    if (materialReportedRef.current !== key) {
+                        materialReportedRef.current = key;
+                        notify(`material "${material}" not found; showing the first material. Available: ${renderables.map((r) => r.name).join(', ')}`);
+                    }
+                }
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [material, renderables]);
+
+            // Default material: open_pbr_default.mtlx via ingest(), or
+            // documentUrl when supplied, crawled for includes/textures
+            // like the Presets flow so relative texture refs resolve.
             React.useEffect(() => {
                 setBusy(true); // bar from the very first paint until rendered
+                const hasSession = () => Object.keys(fileMapRef.current)
+                    .some((k) => /\.mtlx$/i.test(k));
+                if (documentUrl) {
+                    fetchRemoteDocumentFiles(documentUrl)
+                        .then(({ map, rootKey, skipped }) => {
+                            if (hasSession() || loadedRef.current) return;
+                            const failedRefs = [];
+                            const disallowedRefs = [];
+                            for (const s of skipped || []) {
+                                if (s.reason === 'fetch-failed') failedRefs.push(s.ref);
+                                else if (s.reason === 'disallowed') disallowedRefs.push(s.ref);
+                            }
+                            for (const ref of failedRefs) {
+                                notify('Could not fetch "' + ref + '" referenced by the document; it will use the checker fallback.');
+                            }
+                            if (disallowedRefs.length) {
+                                notify("Skipped reference(s) outside the document's origin (cross-origin fetches are blocked): " + disallowedRefs.join(', '));
+                            }
+                            ingestRef.current(map, rootKey);
+                            // ingest → loadDocument owns `busy` from here on.
+                        })
+                        .catch(() => {
+                            // Offline / blocked: back to the drop prompt, unless
+                            // the user's own load is already in flight.
+                            if (hasSession() || loadedRef.current) return;
+                            setBusy(false);
+                            setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+                        });
+                    return;
+                }
                 fetch(DEFAULT_MATERIAL_URL)
                     .then((r) => {
                         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -323,20 +548,16 @@
                     })
                     .then((xml) => {
                         // Don't stomp on anything the user loaded meanwhile.
-                        const hasSession = Object.keys(fileMapRef.current)
-                            .some((k) => /\.mtlx$/i.test(k));
-                        if (hasSession || loadedRef.current) return;
+                        if (hasSession() || loadedRef.current) return;
                         ingestRef.current({
                             'open_pbr_default.mtlx': new Blob([xml], { type: 'application/xml' }),
                         });
                         // ingest → loadDocument owns `busy` from here on.
                     })
                     .catch(() => {
-                        // Offline / blocked: back to the drop prompt — unless
+                        // Offline / blocked: back to the drop prompt, unless
                         // the user's own load is already in flight.
-                        const hasSession = Object.keys(fileMapRef.current)
-                            .some((k) => /\.mtlx$/i.test(k));
-                        if (hasSession || loadedRef.current) return;
+                        if (hasSession() || loadedRef.current) return;
                         setBusy(false);
                         setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
                     });
@@ -354,6 +575,7 @@
 
             const loadDocument = async (path, mapArg) => {
                 const map = mapArg || fileMapRef.current;
+                const id = ++runRef.current;
                 setError(null);
                 setTexReport(null);
                 setBusy(true); // stays on through the render effect below
@@ -361,24 +583,33 @@
                 try {
                     // readMtlxText resolves xi:includes; only the resolved
                     // text is used here (the raw half is for callers needing
-                    // as-authored text, e.g. the graph editor — unused here).
+                    // as-authored text, e.g. the graph editor, unused here).
                     const { resolved: xml } = await readMtlxText(map[path], path, map);
-                    const loaded = await loadMtlxDocument(xml);
-                    loadedRef.current = loaded;
-                    setRenderables(loaded.renderables);
+                    const loaded = await loadMtlxDocument(xml, path, mtlxVersionRef.current);
+                    if (runRef.current !== id) return; // superseded by a newer load
                     if (!loaded.renderables.length) {
                         setStatus(null);
                         setBusy(false);
-                        setError('The document parsed, but contains no renderable material (no surfacematerial or surfaceshader node).');
+                        // Same reasoning as the catch below: this document
+                        // parsed but has nothing to render, so the previous
+                        // one (still valid) stays on screen instead of blanking.
+                        reportError('The document parsed, but contains no renderable material (no surfacematerial or surfaceshader node).');
                         return;
                     }
+                    loadedRef.current = loaded;
+                    setRenderables(loaded.renderables);
+                    if (onRenderablesRef.current) onRenderablesRef.current(loaded.renderables);
                     setChosenMat(0);
                     setStatus(null);
                     // Rendering itself is driven by the effect below.
                 } catch (e2) {
+                    if (runRef.current !== id) return; // superseded by a newer load
                     setStatus(null);
                     setBusy(false);
-                    setError(errMsg(e2));
+                    // The document is still valid; only this switch failed.
+                    // Keep rendering the old one instead of blanking a
+                    // working view over an unrelated failure.
+                    reportError(errMsg(e2));
                 }
             };
 
@@ -388,7 +619,11 @@
                 if (!loaded || !loaded.renderables.length) return undefined;
                 let mounted = true;
                 const run = async () => {
-                    if (viewRef.current) { viewRef.current.dispose(); viewRef.current = null; }
+                    if (viewRef.current) {
+                        viewRef.current.dispose();
+                        viewRef.current = null;
+                        if (onViewRef.current) onViewRef.current(null);
+                    }
                     setError(null);
                     setTexReport(null);
                     setBusy(true);
@@ -406,6 +641,7 @@
                             // Constrained orbit for the full scene; ignored for other geoms.
                             sceneOrbit: geom === 'shaderball-scene',
                             autoRotate: rotating,
+                            wheelMode,
                             envBackground: envBg,
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
@@ -414,39 +650,101 @@
                         if (!view) return; // superseded: the new run drives `busy`
                         if (!mounted) { view.dispose(); return; }
                         viewRef.current = view;
+                        // Initial env rotation/exposure controlled props —
+                        // applied once per (re)build, same as autoRotate/
+                        // envBackground above. Live updates after this point
+                        // go straight through the handle onView hands the
+                        // caller, not through these props (see onView below).
+                        if (typeof envRotation === 'number' && view.setEnvRotation) {
+                            view.setEnvRotation(envRotation * Math.PI / 180);
+                        }
+                        if (typeof envExposure === 'number' && view.setEnvExposure) {
+                            view.setEnvExposure(envExposure);
+                        }
                         setViewEpoch((n) => n + 1);
+                        // What's on screen just changed; stamp the document
+                        // that produced it so sendToEditor and the sidebar
+                        // note never claim pixels that were never rendered.
+                        setRenderedMtlx(loaded.path);
                         const report = bindDroppedTextures(view, fileMapRef.current);
                         setTexReport(report);
                         setStatus(null);
                         setBusy(false);
+                        if (onViewRef.current) onViewRef.current(view);
                     } catch (e2) {
                         if (mounted) {
                             setStatus(null);
                             setBusy(false);
-                            setError(errMsg(e2));
+                            reportError(errMsg(e2));
                         }
                     }
                 };
                 run();
                 return () => {
                     mounted = false;
-                    if (viewRef.current) { viewRef.current.dispose(); viewRef.current = null; }
+                    if (viewRef.current) {
+                        viewRef.current.dispose();
+                        viewRef.current = null;
+                        if (onViewRef.current) onViewRef.current(null);
+                    }
                 };
             }, [renderables, chosenMat, geom]);
 
             const fileCount = Object.keys(fileMap).length;
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
+            // Embed HUD opt-in: which ViewportControls buttons chromeless
+            // mode shows. Recognized names: 'geometry', 'material', 'rotate',
+            // 'reset', 'env', 'screenshot', 'settings', 'fullscreen'. Ignored
+            // (every showCtl() call short-circuits true) when !chromeless, so
+            // the full app's HUD is unaffected.
+            const embedControls = Array.isArray(controls) ? controls : [];
+            const showCtl = (name) => !chromeless || embedControls.indexOf(name) !== -1;
+            // shaderball-scene has no working rotate/background-toggle. A
+            // REQUESTED control silently rendering nothing is the "looks
+            // broken" problem, so report it instead of just omitting it.
+            const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
+            const rotateSuppressed = chromeless && showCtl('rotate') && roomGeomActive;
+            const envBgSuppressed = chromeless && showCtl('env') && roomGeomActive;
+            React.useEffect(() => {
+                if (rotateSuppressed) notify('The Rotate control has no effect on "shaderball-scene" (turntable rotation is disabled for the full scene) and is hidden.');
+            }, [rotateSuppressed]);
+            React.useEffect(() => {
+                if (envBgSuppressed) notify('The Background toggle has no effect on "shaderball-scene" (the room occludes the sky sphere) and is hidden from Environment.');
+            }, [envBgSuppressed]);
+            // Per-control effective visibility, computed once so the mount
+            // gate and each EmbedControls prop agree (a control can be
+            // requested but still suppressed, e.g. rotate on the room geom).
+            const ctlFlags = {
+                geometry: showCtl('geometry'),
+                rotate: showCtl('rotate') && !roomGeomActive,
+                reset: showCtl('reset'),
+                env: showCtl('env'),
+                screenshot: showCtl('screenshot'),
+                settings: showCtl('settings'),
+                fullscreen: showCtl('fullscreen'),
+            };
+            // Material picker: opt-in like the rest of the HUD, but also
+            // hidden when there's nothing to switch between.
+            const showMaterial = showCtl('material') && renderables.length > 1;
+            const anyCtlVisible = Object.values(ctlFlags).some(Boolean) || showMaterial;
+            // Page-transparency CSS: requested AND resolved away from the
+            // room. Belt-and-suspenders alongside resolveViewerGeom's own
+            // guard above, in case geom ever drifts back to the room.
+            const transparentActive = chromeless && !!transparent && !roomGeomActive;
+            const bgClass = transparentActive ? 'bg-transparent' : 'bg-gray-900';
+
             return (
                 // IN_VSCODE: height chain fills the webview. Browser:
                 // graph-editor-style full-bleed stage via `absolute inset-0`
                 // (js/shell.jsx's viewer wrapClass is now empty).
-                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : 'absolute inset-0 bg-gray-900 overflow-hidden'}>
+                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden ${bgClass}`}>
                     {/* Full-page drop indicator, below the sticky header
-                        (top-14). z-40 matches the graph z-convention
+                        (top-14) — except in embed mode, which has no header
+                        to clear (top-0). z-40 matches the graph z-convention
                         (controls 10/30 < drop 40 < dialogs 50); pointer-events-none. */}
                     {dragOver && (
-                        <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
+                        <div className={`fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`}>
                             <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
                                 <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
                                     <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
@@ -474,7 +772,7 @@
                             {/* IN_VSCODE: sized off the card's remaining
                                 height, not the canvas child. Browser: fills
                                 the full-bleed viewport card via `absolute inset-0`. */}
-                            <div ref={viewportRef} className={`overflow-hidden bg-gray-900 ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
+                            <div ref={viewportRef} className={`overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
                                 <LoadingOverlay
                                     show={busy}
                                     label={status}
@@ -484,8 +782,50 @@
                                 />
                                 {/* Rendered even with nothing loaded (browser only) so
                                     the Presets button stays reachable if the default-material
-                                    fetch failed. IN_VSCODE keeps the original renderables-only gate. */}
-                                {(renderables.length > 0 || !IN_VSCODE) && (
+                                    fetch failed. IN_VSCODE keeps the original renderables-only gate.
+                                    Chromeless: only rendered at all once `controls` opts at least
+                                    one button in — showCtl() below then picks which ones. */}
+                                {(renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (
+                                    chromeless ? (
+                                    // Purpose-built compact strip (js/embed-controls.jsx):
+                                    // no portals, own CSS, degrades with width. See that
+                                    // file's header for why this isn't ViewportControls.
+                                    <EmbedControls
+                                        containerRef={viewportRef}
+                                        geom={geom}
+                                        // shaderball-scene is excluded while transparent is on:
+                                        // picking it back would just re-trigger the fallback
+                                        // above, so don't offer it in the first place.
+                                        geomList={transparent ? VIEWER_GEOM_NAMES.filter((g) => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES}
+                                        onGeomChange={setGeom}
+                                        showGeom={ctlFlags.geometry}
+                                        materialList={renderables.map((r) => r.name)}
+                                        chosenMat={chosenMat}
+                                        onMaterialChange={setChosenMat}
+                                        showMaterial={showMaterial}
+                                        rotating={rotating}
+                                        onToggleRotating={toggleRotating}
+                                        // Hidden for the room (rotateSuppressed/envBgSuppressed
+                                        // above report why).
+                                        showRotate={ctlFlags.rotate}
+                                        onCameraReset={handleCameraReset}
+                                        showReset={ctlFlags.reset}
+                                        envBg={envBg}
+                                        onToggleEnvBg={toggleEnvBg}
+                                        showBackgroundToggle={!roomGeomActive}
+                                        showEnv={ctlFlags.env}
+                                        initialEnvRotation={envRotation}
+                                        initialEnvExposure={envExposure}
+                                        viewRef={viewRef}
+                                        viewEpoch={viewEpoch}
+                                        onScreenshot={takeScreenshot}
+                                        showScreenshot={ctlFlags.screenshot}
+                                        showSettings={ctlFlags.settings}
+                                        isFullscreen={isFullscreen}
+                                        onToggleFullscreen={onToggleFullscreen}
+                                        showFullscreen={ctlFlags.fullscreen}
+                                    />
+                                    ) : (
                                     <ViewportControls
                                         containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
                                         selectClassName="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
@@ -497,27 +837,31 @@
                                         geom={geom}
                                         onGeomChange={setGeom}
                                         geomBadges={{ 'shaderball-scene': 'Default' }}
+                                        showGeomSelect={showCtl('geometry')}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Engine no-ops auto-rotate for the full scene, and the
                                         // backdrop box fully occludes the env-background sky
                                         // sphere - hide both controls while it's selected.
-                                        showRotate={geom !== 'shaderball-scene'}
+                                        showRotate={showCtl('rotate') && geom !== 'shaderball-scene'}
                                         showBackgroundToggle={geom !== 'shaderball-scene'}
-                                        onCameraReset={() => {
-                                            const v = viewRef.current;
-                                            if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
-                                        }}
+                                        onCameraReset={showCtl('reset') ? handleCameraReset : undefined}
+                                        envAvail={showCtl('env')}
                                         envBg={envBg}
                                         onToggleEnvBg={toggleEnvBg}
                                         viewRef={viewRef}
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
+                                        showScreenshot={showCtl('screenshot')}
+                                        showSettings={showCtl('settings')}
                                         isFullscreen={isFullscreen}
-                                        onToggleFullscreen={onToggleFullscreen}
+                                        onToggleFullscreen={showCtl('fullscreen') ? onToggleFullscreen : undefined}
                                         showLabels={!narrow}
                                         labelsClass={(!IN_VSCODE && sidebarOpen) ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'}
-                                        trailingChildren={(labels) => (
+                                        // Site-shell-coupled (hash-routes to another view, or
+                                        // opens a dialog that assumes it owns the window) —
+                                        // hidden entirely in embed mode, not opt-in via `controls`.
+                                        trailingChildren={chromeless ? undefined : (labels) => (
                                             <React.Fragment>
                                                 {/* Graph and viewer are always in sync in the
                                                     extension (one opened .mtlx file), so this
@@ -563,8 +907,10 @@
                                     >
                                         {/* Material picker surfaces here only in fullscreen
                                             (sidebar out of reach) or under VS Code, where the
-                                            left-column picker is hidden. */}
-                                        {(isFullscreen || IN_VSCODE) && renderables.length > 1 && (
+                                            left-column picker is hidden. Chromeless: always
+                                            hidden — there's no sidebar to lack in the first place,
+                                            and it's not one of the `controls` opt-in names. */}
+                                        {(isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && (
                                             <select
                                                 value={chosenMat}
                                                 onChange={(e) => setChosenMat(Number(e.target.value))}
@@ -577,6 +923,7 @@
                                             </select>
                                         )}
                                     </ViewportControls>
+                                    )
                                 )}
                                 <canvas
                                     ref={canvasRef}
@@ -602,8 +949,10 @@
 
                     {/* Floating left "Files" sidebar (browser only), mirroring the
                         graph editor's param panel but anchored left. May cover the
-                        HUD's left edge at narrow widths — collapse it to reach the HUD. */}
-                    {!IN_VSCODE && (sidebarOpen ? (
+                        HUD's left edge at narrow widths — collapse it to reach the HUD.
+                        Hidden entirely in embed mode (drop zone, pickers, document/
+                        material <select>, texture report, collapse chevron and all). */}
+                    {!IN_VSCODE && !chromeless && (sidebarOpen ? (
                         <div className="absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden">
                             <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
                                 <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Files</span>
@@ -658,6 +1007,11 @@
                                             {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
                                             {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
                                         </select>
+                                        {chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && (
+                                            <div className="text-[11px] text-amber-300/90 mt-1.5">
+                                                Showing {renderedMtlx.split('/').pop()} (last successful load)
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 
@@ -711,11 +1065,16 @@
 
                     {/* Both dialogs use the `fixed` overlay variant (not
                         DialogFrame's `absolute` default) so the backdrop covers
-                        the whole window, including the shared header/footer. */}
+                        the whole window, including the shared header/footer.
+                        Not rendered in embed mode: they assume they own the
+                        window, and there's no trigger button to reach them
+                        from anyway (both live in trailingChildren, above). */}
+                    {!chromeless && (
                     <PresetsDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} onPick={loadPreset}
                         busy={presetsBusy} busyPath={presetsBusyPath}
                         overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70" />
-                    {shaderExportOpen && loadedRef.current && (
+                    )}
+                    {!chromeless && shaderExportOpen && loadedRef.current && (
                         <ShaderExportDialog open={true} onClose={() => setShaderExportOpen(false)}
                             renderables={renderables} initialIndex={chosenMat}
                             overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"

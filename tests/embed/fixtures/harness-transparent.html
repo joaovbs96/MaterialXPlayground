@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MaterialX embed transparency test harness</title>
+</head>
+<body style="background:#ff0000;margin:0;">
+<script src="/embed/mtlx-viewer.js"></script>
+<script>
+  // Same test-only helpers as fixtures/harness.html, duplicated here so
+  // this page's body can carry a solid, known background color instead
+  // (see tests/embed/transparent.spec.mjs).
+  window.__viewers = [];
+  window.__iframes = [];
+  window.__msgs = [];
+
+  window.addEventListener('message', function (e) {
+    if (e.data && typeof e.data.type === 'string' && e.data.type.indexOf('mtlx-embed:') === 0) {
+      window.__msgs.push({ type: e.data.type, data: e.data });
+    }
+  });
+
+  window.createViewer = function (attrs) {
+    var el = document.createElement('materialx-viewer');
+    el.__events = [];
+    ['mtlx-ready', 'mtlx-renderables', 'mtlx-error'].forEach(function (type) {
+      el.addEventListener(type, function (e) {
+        el.__events.push({ type: type, detail: e.detail });
+      });
+    });
+    Object.keys(attrs || {}).forEach(function (k) {
+      var v = attrs[k];
+      if (v === true) el.setAttribute(k, '');
+      else if (v != null) el.setAttribute(k, String(v));
+    });
+    document.body.appendChild(el);
+    return window.__viewers.push(el) - 1;
+  };
+
+  window.createRawIframe = function (src) {
+    var f = document.createElement('iframe');
+    f.src = src;
+    f.setAttribute('allow', 'fullscreen');
+    f.setAttribute('allowfullscreen', '');
+    document.body.appendChild(f);
+    return window.__iframes.push(f) - 1;
+  };
+</script>
+</body>
+</html>

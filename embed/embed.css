@@ -1,0 +1,72 @@
+/* embed/embed.css: static Tailwind-utility replacement for the always-on
+   chromeless root/canvas/status/error/loading markup in js/viewer-app.jsx.
+   HUD controls now live in embed/embed-controls.css (js/embed-controls.jsx). */
+
+/* Mini-reset: box-sizing:border-box for #root and descendants (no
+   Preflight loaded here), so padded/max-w elements never overflow. */
+:where(#root, #root *) {
+    box-sizing: border-box;
+}
+
+/* ---- Layout / display -------------------------------------------- */
+.absolute { position: absolute; }
+.inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.block { display: block; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+
+/* ---- Stacking / positioning ---------------------------------------- */
+.z-20 { z-index: 20; }
+.z-30 { z-index: 30; }
+.top-2 { top: .5rem; }
+.top-12 { top: 3rem; }
+.left-1\/2 { left: 50%; }
+.-translate-x-1\/2 { transform: translateX(-50%); }
+
+/* ---- Sizing ---------------------------------------------------------- */
+.w-full { width: 100%; }
+.w-56 { width: 14rem; }
+.max-w-\[min\(42rem\,85\%\)\] { max-width: min(42rem, 85%); }
+
+/* ---- Spacing ----------------------------------------------------- */
+.gap-3 { gap: .75rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.py-2 { padding-top: .5rem; padding-bottom: .5rem; }
+.py-2\.5 { padding-top: .625rem; padding-bottom: .625rem; }
+
+/* ---- Borders / radius ------------------------------------------------ */
+.border { border-width: 1px; border-style: solid; }
+.rounded-lg { border-radius: .5rem; }
+.border-gray-600 { border-color: #4b5563; }
+.border-red-800\/60 { border-color: rgba(153, 27, 27, .6); }
+
+/* ---- Backgrounds ----------------------------------------------------- */
+.bg-gray-900 { background-color: #111827; }
+.bg-transparent { background-color: transparent; }
+.bg-gray-900\/70 { background-color: rgba(17, 24, 39, .7); }
+.bg-gray-800\/90 { background-color: rgba(31, 41, 55, .9); }
+.bg-red-950\/90 { background-color: rgba(69, 10, 10, .9); }
+
+/* ---- Text color -------------------------------------------------- */
+.text-gray-300 { color: #d1d5db; }
+.text-red-200 { color: #fecaca; }
+
+/* ---- Typography ---------------------------------------------------- */
+.text-sm { font-size: .875rem; line-height: 1.25rem; }
+.break-words { overflow-wrap: break-word; }
+
+/* ---- Effects ------------------------------------------------------- */
+.shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1); }
+.backdrop-blur { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.overflow-hidden { overflow: hidden; }
+.cursor-grab { cursor: grab; }
+.animate-pulse { animation: mtlx-embed-pulse 2s cubic-bezier(.4, 0, .6, 1) infinite; }
+@keyframes mtlx-embed-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+}
+
+/* ---- State variants ------------------------------------------------ */
+.active\:cursor-grabbing:active { cursor: grabbing; }

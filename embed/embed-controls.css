@@ -1,0 +1,161 @@
+/* embed/embed-controls.css: styles for js/embed-controls.jsx's HUD strip.
+   Plain CSS, own class names, no Tailwind. Everything here renders in-flow
+   inside the viewport container, so there is no popover/portal styling. */
+
+/* Theming surface (docs/EMBEDDING.md): the only appearance knobs a host
+   can override. A self-hosted copy of this file overrides these; a
+   cross-origin iframe embed cannot reach across the frame boundary. */
+:root {
+    --mtlx-accent: #3b82f6;
+    --mtlx-surface: #1f2937;
+    --mtlx-text: #d1d5db;
+    --mtlx-radius: 4px;
+}
+
+.mtlx-ec {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    pointer-events: none;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.mtlx-ec-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    max-width: 100%;
+}
+
+/* Shared trigger chrome (select/button/toggle). */
+.mtlx-ec-select,
+.mtlx-ec-btn,
+.mtlx-ec-toggle {
+    pointer-events: auto;
+    box-sizing: border-box;
+    margin: 0;
+    font: inherit;
+    color: var(--mtlx-text, #d1d5db);
+    background: color-mix(in srgb, var(--mtlx-surface, #1f2937) 80%, transparent);
+    border: 1px solid #4b5563;
+    border-radius: var(--mtlx-radius, 4px);
+    cursor: pointer;
+}
+.mtlx-ec-select:hover,
+.mtlx-ec-btn:hover {
+    background: color-mix(in srgb, var(--mtlx-surface, #1f2937) 95%, transparent);
+}
+.mtlx-ec-select:focus-visible,
+.mtlx-ec-btn:focus-visible,
+.mtlx-ec-toggle:focus-visible,
+.mtlx-ec-panel-row--slider input:focus-visible {
+    outline: 2px solid var(--mtlx-accent, #3b82f6);
+    outline-offset: 1px;
+}
+
+.mtlx-ec-select {
+    height: 24px;
+    max-width: 132px;
+    padding: 0 4px;
+    font-size: 11px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.mtlx-ec--compact .mtlx-ec-select {
+    max-width: 58px;
+}
+
+.mtlx-ec-btn {
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 7px;
+    font-size: 11px;
+    white-space: nowrap;
+    transition: background-color .15s, border-color .15s, color .15s;
+}
+.mtlx-ec--compact .mtlx-ec-btn {
+    padding: 0;
+    width: 24px;
+    justify-content: center;
+}
+.mtlx-ec-btn.is-active {
+    background: color-mix(in srgb, var(--mtlx-accent, #3b82f6) 80%, transparent);
+    border-color: var(--mtlx-accent, #3b82f6);
+    color: #fff;
+}
+
+.mtlx-ec-icon {
+    width: 14px;
+    height: 14px;
+    flex: none;
+}
+
+/* Inline env/settings panel: a normal flow child below the button row,
+   width-clamped by the wrapper (never wider than the viewport). */
+.mtlx-ec-panel {
+    pointer-events: auto;
+    box-sizing: border-box;
+    width: min(220px, 100%);
+    background: color-mix(in srgb, var(--mtlx-surface, #1f2937) 95%, transparent);
+    border: 1px solid #4b5563;
+    border-radius: calc(var(--mtlx-radius, 4px) + 2px);
+    box-shadow: 0 20px 40px -12px rgba(0, 0, 0, .4);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--mtlx-text, #d1d5db);
+}
+
+.mtlx-ec-panel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.mtlx-ec-panel-row--slider {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+}
+.mtlx-ec-slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-variant-numeric: tabular-nums;
+}
+.mtlx-ec-panel-row--slider input[type="range"] {
+    width: 100%;
+    accent-color: var(--mtlx-accent, #3b82f6);
+}
+
+.mtlx-ec-toggle {
+    height: 20px;
+    padding: 0 8px;
+    font-size: 11px;
+    flex: none;
+}
+.mtlx-ec-toggle:hover {
+    background: color-mix(in srgb, var(--mtlx-surface, #1f2937) 95%, transparent);
+}
+.mtlx-ec-toggle.is-on {
+    background: color-mix(in srgb, var(--mtlx-accent, #3b82f6) 80%, transparent);
+    border-color: var(--mtlx-accent, #3b82f6);
+    color: #fff;
+}
+
+.mtlx-ec-desc {
+    font-size: 10px;
+    color: #9ca3af;
+    line-height: 1.4;
+}

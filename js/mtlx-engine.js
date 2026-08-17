@@ -2795,6 +2795,10 @@ const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
     autoRotate = true, envBackground = false,
+    // 'zoom' (default): today's behavior, plain wheel zooms. 'scroll':
+    // plain wheel is gated (page scrolls instead); Ctrl/Cmd+wheel still
+    // zooms. See the wheel-gate block below, right before OrbitControls.
+    wheelMode = 'zoom',
     // isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
     // TEMPORARY visibility (backgrounded view skips render, keeps looping).
     // isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
@@ -2904,14 +2908,59 @@ const createMtlxRenderView = async ({
     // extractKeyLight/currentLights. rigCount fixes u_lightData's length.
     let envKeyLight = null;
     const rigCount = (lightData && lightData.length) || 0;
+    // Per-view state for the handle's setEnvMap(url): the textures from
+    // the last URL this view privately fetched, never shared with other
+    // views, so a later swap or teardown can free them safely.
+    let fetchedEnvMap = null;
+    let envMapCallId = 0; // guards latest-call-wins in setEnvMap()
+    // Frees a privately-fetched env's textures. Never call this on the
+    // shared default/override env from getEnvironment()/envOverride.
+    const disposeFetchedEnv = (env) => {
+        if (!env) return;
+        try { if (env.radiance) env.radiance.dispose(); } catch (e) { /* already disposed/invalid */ }
+        try { if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.background) env.background.dispose(); } catch (e) { /* ditto */ }
+    };
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
     let fallbackSpin = !!autoRotate;
+    // wheelMode 'scroll' state: the canvas wheel-gate listener plus the
+    // lazily-created zoom-hint overlay and its fade timer, all torn
+    // down in disposePartial below.
+    let wheelGateHandler = null;
+    let wheelHintEl = null, wheelHintTimer = null;
+    const isWheelHintMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+    // Shows (or refreshes) the "Use Ctrl/⌘ + scroll to zoom" pill,
+    // centered over the canvas's positioned parent; fades ~1.2s after
+    // the last gated wheel event. The node is created lazily, once.
+    const showWheelHint = () => {
+        if (!wheelHintEl) {
+            const parent = canvas.parentElement;
+            if (!parent) return;
+            wheelHintEl = document.createElement('div');
+            wheelHintEl.textContent = isWheelHintMac ? 'Use ⌘ + scroll to zoom' : 'Use Ctrl + scroll to zoom';
+            wheelHintEl.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'
+                + 'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'
+                + 'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'
+                + 'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';
+            parent.appendChild(wheelHintEl);
+        }
+        wheelHintEl.style.opacity = '1';
+        if (wheelHintTimer) clearTimeout(wheelHintTimer);
+        wheelHintTimer = setTimeout(() => {
+            if (wheelHintEl) wheelHintEl.style.opacity = '0';
+        }, 1200);
+    };
     const disposePartial = () => {
         stopped = true;
         if (reqId) cancelAnimationFrame(reqId);
         if (resizeObs) resizeObs.disconnect();
         if (controls) controls.dispose();
+        // wheelMode 'scroll' teardown: the capture listener and the
+        // hint overlay (plus its pending fade timer), if either exists.
+        if (wheelGateHandler) canvas.removeEventListener('wheel', wheelGateHandler, { capture: true });
+        if (wheelHintTimer) clearTimeout(wheelHintTimer);
+        if (wheelHintEl && wheelHintEl.parentElement) wheelHintEl.parentElement.removeChild(wheelHintEl);
         // Best-effort: renderer.dispose() below only frees the
         // renderer's OWN GL state, not material/geometry — dispose those
         // too (each swap already disposes its own previous ones).
@@ -2942,6 +2991,9 @@ const createMtlxRenderView = async ({
         // Do NOT dispose the PMREMGenerator instance itself: r128 shares
         // its LOD-plane geometries at MODULE scope across all instances.
         try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
+        // setEnvMap()'s privately-fetched env, if any: this view's own
+        // textures (unlike bgMesh.material.map above), safe to dispose.
+        try { if (fetchedEnvMap) disposeFetchedEnv(fetchedEnvMap); } catch (e) { /* already disposed/invalid */ }
         // Depth-peel render targets/quad materials (see freePeel's
         // declaration further down) — this view's OWN GPU resources,
         // same disposal rationale as pmremRT immediately above.
@@ -3081,6 +3133,21 @@ const createMtlxRenderView = async ({
                     camera.aspect = cw / ch;
                     camera.fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
                     camera.updateProjectionMatrix();
+                }
+
+                // wheelMode 'scroll': register the gate BEFORE OrbitControls
+                // exists, so it runs first on the canvas and can starve its
+                // wheel handler via stopImmediatePropagation. The `controls`
+                // check inside skips flat2d/fixed-camera views (no rig, no zoom).
+                if (wheelMode === 'scroll') {
+                    wheelGateHandler = (e) => {
+                        if (!controls || e.ctrlKey || e.metaKey) return;
+                        const fsEl = fullscreenElement();
+                        if (fsEl && fsEl.contains(canvas)) return;
+                        e.stopImmediatePropagation();
+                        showWheelHint();
+                    };
+                    canvas.addEventListener('wheel', wheelGateHandler, { capture: true, passive: false });
                 }
 
                 // Orbit + zoom + auto-rotate: rotating the CAMERA (not
@@ -4177,6 +4244,34 @@ const createMtlxRenderView = async ({
                 camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
                 camera.lookAt(0, 0, 0);
             },
+            // Current camera pose for URL/state persistence. null when
+            // there is no OrbitControls rig (flat2d, fixed full-scene).
+            // Rounded to 4 decimals, plenty of precision for a short URL.
+            getCamera: () => {
+                if (!controls) return null;
+                const r4 = (n) => Math.round(n * 10000) / 10000;
+                return {
+                    position: [camera.position.x, camera.position.y, camera.position.z].map(r4),
+                    target: [controls.target.x, controls.target.y, controls.target.z].map(r4),
+                };
+            },
+            // Applies a saved pose from getCamera(); invalid input is
+            // silently ignored. makeDefault also rebases resetCamera()'s
+            // saveState() snapshot onto this pose (default: off).
+            setCamera: (pose, makeDefault) => {
+                if (!controls || !pose) return false;
+                const isVec3 = (v) => Array.isArray(v) && v.length === 3
+                    && v.every((n) => typeof n === 'number' && isFinite(n));
+                if (pose.position !== undefined && !isVec3(pose.position)) return false;
+                if (pose.target !== undefined && !isVec3(pose.target)) return false;
+                if (pose.position) camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+                if (pose.target) controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+                controls.update();
+                // Rebases position0/target0/zoom0 so a later resetCamera()
+                // returns HERE instead of the original authored default.
+                if (makeDefault) controls.saveState();
+                return true;
+            },
             // Show/hide the environment map as the visible backdrop
             // (bgMesh). No-op when there is no env (unlit previews —
             // bgMesh is null, see its declaration above).
@@ -4288,6 +4383,52 @@ const createMtlxRenderView = async ({
                         console.warn('environment PMREM regeneration failed:', e);
                     }
                 }
+            },
+            // Fetches and applies an environment from a URL (decoder
+            // chosen by extension, same pipeline as HDR import). Falsy
+            // url restores the default; latest call always wins.
+            setEnvMap: (url) => {
+                const callId = ++envMapCallId;
+                // Applies env to this view via setEnvironment() (rotation/
+                // exposure/background all persist there already), then
+                // frees whatever WE previously fetched, if superseded.
+                const swapIn = (env, owned) => {
+                    if (callId !== envMapCallId) return; // a newer call already won
+                    handle.setEnvironment(env);
+                    if (fetchedEnvMap) disposeFetchedEnv(fetchedEnvMap);
+                    fetchedEnvMap = owned ? env : null;
+                };
+                if (!url) {
+                    if (!fetchedEnvMap) return Promise.resolve(true); // already default
+                    return getEnvironment().then((def) => {
+                        if (def) swapIn(def, false);
+                        return true;
+                    });
+                }
+                const clean = String(url).split('?')[0].split('#')[0];
+                const ext = clean.slice(clean.lastIndexOf('.')).toLowerCase();
+                if (ext !== '.hdr' && ext !== '.exr') {
+                    return Promise.reject(new Error('Unsupported environment URL "' + url + '". Expected .hdr or .exr.'));
+                }
+                if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+                    return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));
+                }
+                if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+                    return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));
+                }
+                return fetch(url)
+                    .then((r) => {
+                        if (!r.ok) throw new Error('Failed to fetch environment "' + url + '" (HTTP ' + r.status + ').');
+                        return r.arrayBuffer();
+                    })
+                    .then((buf) => {
+                        const raw = parseEnvBuffer(buf, ext);
+                        if (!raw || !raw.image || !raw.image.data) {
+                            throw new Error('Failed to parse the environment image "' + url + '".');
+                        }
+                        swapIn(buildEnvFromParsedTexture(raw), true);
+                        return true;
+                    });
             },
             // Applies a new (or already-generated) material into this
             // SAME shell, instead of calling createMtlxRenderView() again.

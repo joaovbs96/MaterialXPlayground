@@ -132,6 +132,17 @@ The packaged extension is fully self-contained: it bundles the MaterialX librari
 
 There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension local.materialx-playground`.
 
+## Embedding
+
+Drop a single material into any other web page as a lightweight, chromeless `<iframe>`:
+
+```html
+<iframe src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=YOUR_MTLX_URL&geometry=sphere"
+        width="640" height="480" loading="lazy" allow="fullscreen" allowfullscreen></iframe>
+```
+
+A `<materialx-viewer>` custom element is also available for pages with several materials (lazy-loading, capped concurrent WebGL contexts). See [docs/EMBEDDING.md](docs/EMBEDDING.md) for the full query-param/attribute reference, the element's API, and self-hosting instructions.
+
 ## Tech stack
 
 - [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) (WebAssembly build: core + GenShader)

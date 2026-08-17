@@ -141,23 +141,17 @@ const extractFilenameRefs = (xml) => {
     return refs;
 };
 
-// Crawls a preset's root doc plus xi:include siblings and fileprefix-
-// resolved filename refs (both can escape the preset's own directory);
-// fetches stay within window.MtlxAssets.resourcesRoot() as a safety guard.
-const fetchPresetFiles = async (preset) => {
-    const resourcesRoot = window.MtlxAssets.resourcesRoot();
-    const isSafePresetUrl = (url) => url.indexOf(resourcesRoot) === 0;
-    const isSchemeOrRootedRef = (ref) =>
-        /^[a-z][a-z0-9+.\-]*:\/\//i.test(ref) || ref.startsWith('/');
-
-    const docUrl = MTLX_PRESETS_BASE + preset.path;
-    const baseName = preset.path.split('/').pop();
+// Crawls docUrl plus xi:include siblings and fileprefix-resolved
+// filename refs. isAllowedUrl gates every resolved URL; a disallowed
+// one lands in `skipped` instead. Root doc fetch failure throws.
+const crawlDocumentFiles = async (docUrl, rootKey, isAllowedUrl) => {
     const map = {};
     const seenRefs = new Set();
+    const skipped = [];
     const textureFetches = [];
-    const MAX_DOCS = 12; // guard only — see comment above
+    const MAX_DOCS = 12; // guard only, see fetchPresetFiles history
     const visited = new Set([docUrl]);
-    const queue = [{ url: docUrl, key: baseName }];
+    const queue = [{ url: docUrl, key: rootKey }];
     while (queue.length) {
         const { url, key } = queue.shift();
         let xml;
@@ -166,23 +160,29 @@ const fetchPresetFiles = async (preset) => {
             if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
             xml = await res.text();
         } catch (e) {
-            if (key === baseName) throw e; // the root doc must load
-            mtlxWarn('preset include fetch failed (skipped):', url, e);
+            if (key === rootKey) throw e; // the root doc must load
+            mtlxWarn('document include fetch failed (skipped):', url, e);
+            skipped.push({ kind: 'include', ref: url, url, reason: 'fetch-failed', error: e });
             continue;
         }
         map[key] = new Blob([xml], { type: 'application/xml' });
 
-        // (a) xi:include siblings — same attribute-order/quote tolerant
+        // (a) xi:include siblings, same attribute-order/quote tolerant
         // href extraction as resolveIncludes (js/mtlx-engine.js:540),
         // resolved against THIS doc's own URL.
         const INC = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/g;
         let incM;
         while ((incM = INC.exec(xml)) !== null) {
             const href = incM[1] || incM[2];
-            if (!href || isSchemeOrRootedRef(href)) continue;
-            let incUrl;
-            try { incUrl = new URL(href, url).href; } catch (e) { continue; }
-            if (!isSafePresetUrl(incUrl)) continue;
+            if (!href) continue;
+            // Resolves relative, scheme'd, and rooted "/x" hrefs alike:
+            // new URL(href, url) is origin-aware for all three shapes.
+            let incUrl = null;
+            try { incUrl = new URL(href, url).href; } catch (e) { /* stays null, disallowed below */ }
+            if (!incUrl || !isAllowedUrl(incUrl)) {
+                skipped.push({ kind: 'include', ref: href, url: incUrl, reason: 'disallowed' });
+                continue;
+            }
             if (visited.has(incUrl) || visited.size >= MAX_DOCS) continue;
             visited.add(incUrl);
             const dirKey = key.indexOf('/') >= 0 ? key.slice(0, key.lastIndexOf('/')) : '';
@@ -191,27 +191,72 @@ const fetchPresetFiles = async (preset) => {
         }
 
         // (b) filename refs, fileprefix-resolved, fetched relative to
-        // THIS doc's own URL — best-effort, doesn't block the queue.
+        // THIS doc's own URL, best-effort, doesn't block the queue.
         for (const ref of extractFilenameRefs(xml)) {
-            if (isSchemeOrRootedRef(ref) || seenRefs.has(ref)) continue;
+            if (seenRefs.has(ref)) continue;
             seenRefs.add(ref);
-            let texUrl;
-            try { texUrl = new URL(ref, url).href; } catch (e) { continue; }
-            if (!isSafePresetUrl(texUrl)) continue;
+            let texUrl = null;
+            try { texUrl = new URL(ref, url).href; } catch (e) { /* stays null, disallowed below */ }
+            if (!texUrl || !isAllowedUrl(texUrl)) {
+                skipped.push({ kind: 'texture', ref, url: texUrl, reason: 'disallowed' });
+                continue;
+            }
             textureFetches.push((async () => {
                 try {
                     const r = await fetch(texUrl);
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     map[ref] = await r.blob();
                 } catch (texErr) {
-                    mtlxWarn('preset texture fetch failed (falls back to the checker):', ref, texErr);
+                    mtlxWarn('document texture fetch failed (falls back to the checker):', ref, texErr);
+                    skipped.push({ kind: 'texture', ref, url: texUrl, reason: 'fetch-failed', error: texErr });
                 }
             })());
         }
     }
     await Promise.all(textureFetches);
 
-    return { map, rootKey: baseName };
+    return { map, rootKey, skipped };
+};
+
+// Presets dialog crawl: fetches stay within window.MtlxAssets
+// .resourcesRoot() as a safety guard. Thin wrapper over
+// crawlDocumentFiles; return shape/behavior are unchanged.
+const fetchPresetFiles = async (preset) => {
+    const resourcesRoot = window.MtlxAssets.resourcesRoot();
+    const isSafePresetUrl = (url) => url.indexOf(resourcesRoot) === 0;
+    const docUrl = MTLX_PRESETS_BASE + preset.path;
+    const baseName = preset.path.split('/').pop();
+    const { map, rootKey } = await crawlDocumentFiles(docUrl, baseName, isSafePresetUrl);
+    return { map, rootKey };
+};
+
+// Root map key for a crawled document: the URL's last path segment,
+// decoded, or 'material.mtlx' when that segment is missing/empty.
+const remoteDocBaseName = (docUrl) => {
+    try {
+        const last = new URL(docUrl).pathname.split('/').pop();
+        return last ? decodeURIComponent(last) : 'material.mtlx';
+    } catch (e) {
+        return 'material.mtlx';
+    }
+};
+
+// Crawls an arbitrary remote document (the embeddable viewer's
+// documentUrl prop), same as fetchPresetFiles, but unpinned to a
+// known safe root: refs are followed only when http(s) same-origin.
+const fetchRemoteDocumentFiles = async (docUrl) => {
+    const absUrl = new URL(docUrl, document.baseURI).href;
+    let origin = null;
+    try { origin = new URL(absUrl).origin; } catch (e) { /* nothing allowed below */ }
+    const isSameOriginHttp = (url) => {
+        if (!origin) return false;
+        try {
+            const u = new URL(url);
+            return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === origin;
+        } catch (e) { return false; }
+    };
+    const rootKey = remoteDocBaseName(absUrl);
+    return crawlDocumentFiles(absUrl, rootKey, isSameOriginHttp);
 };
 
 // Presets dialog: a scrollable curated list of example docs. Clicking a
@@ -639,9 +684,14 @@ const downloadXml = (xml, filename) => {
 // Bundles the viewport-control state cluster shared by the three preview
 // surfaces: rotate/env toggles, env-availability, fullscreen, screenshot.
 // `getSnapshotBase` supplies the PNG base name; no try/catch here by design.
-const useViewportControls = (viewRef, viewportRef, getSnapshotBase) => {
-    const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', false);
-    const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', false);
+// `initialRotating`/`initialEnvBg`: optional seed values for the two
+// toggles (embed/viewer.html's `autorotate`/`background` query params, via
+// js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
+// every existing caller omits these, and `!!undefined` is `false`, so
+// today's default (both off) is unchanged.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg) => {
+    const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
+    const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
     const [envAvail, setEnvAvail] = React.useState(false);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
@@ -994,6 +1044,9 @@ const ViewportControls = ({
     showBackgroundToggle = true,
     viewRef, viewEpoch,
     onScreenshot,
+    // Hides the screenshot button. Additive — every existing caller omits
+    // this and keeps today's always-shown behavior.
+    showScreenshot = true,
     isFullscreen, onToggleFullscreen,
     children,
     trailingChildren,
@@ -1001,6 +1054,10 @@ const ViewportControls = ({
     // Force Transparency block. Node or render prop; docs previewer is
     // the only consumer today.
     settingsChildren,
+    // Hides the settings cog. Additive, like showScreenshot above; the
+    // popover it opens (SettingsDialog) already renders null while closed,
+    // so hiding just the trigger is enough.
+    showSettings = true,
     envDialogPlacement,
     containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
     selectClassName = 'h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300',
@@ -1148,6 +1205,7 @@ const ViewportControls = ({
                 )}
             </React.Fragment>
         )}
+        {showScreenshot && (
         <button
             onClick={onScreenshot}
             title="Save a PNG preview of the current view"
@@ -1156,7 +1214,9 @@ const ViewportControls = ({
             <MtlxIcon name="camera" className="w-3.5 h-3.5" />
             {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
         </button>
+        )}
         {typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren}
+        {showSettings && (
         <button
             ref={settingsBtnRef}
             onClick={() => setSettingsOpen((o) => !o)}
@@ -1166,6 +1226,7 @@ const ViewportControls = ({
             <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
             {showLabels && <span className="ml-1.5 whitespace-nowrap">Settings</span>}
         </button>
+        )}
         {onToggleFullscreen && (
         <button
             onClick={onToggleFullscreen}
@@ -1600,5 +1661,5 @@ Object.assign(window, {
     useWindowFileDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, GeomSelect, PreviewErrorBoundary,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
-    fetchPresetFiles, copyTextToClipboard, ShaderExportDialog,
+    fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
 });

@@ -39,6 +39,15 @@ const HOME_CARDS = [
         img: 'images/preview-nodegraph.jpg',
         cta: 'Open Node Graph Editor',
     },
+    {
+        href: '#!builder',
+        icon: 'code',
+        title: 'Embed Builder',
+        badge: 'Experimental',
+        desc: 'Configure an embeddable MaterialX viewer, preview it live, and copy a ready-made <iframe> or custom-element snippet to drop into any web page.',
+        img: 'images/preview-builder.jpg',
+        cta: 'Open Embed Builder',
+    },
 ];
 
 function HomeApp({ active } = {}) {
@@ -88,7 +97,14 @@ function HomeApp({ active } = {}) {
                         />
                         <div className="flex flex-col flex-1 p-5">
                             <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />
-                            <div className="mt-3 text-lg font-semibold text-gray-100">{card.title}</div>
+                            <div className="mt-3 flex items-center flex-wrap gap-2">
+                                <span className="text-lg font-semibold text-gray-100">{card.title}</span>
+                                {card.badge && (
+                                    <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300">
+                                        {card.badge}
+                                    </span>
+                                )}
+                            </div>
                             <p className="mt-1.5 text-sm text-gray-400 flex-1">{card.desc}</p>
                             <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
                                 {card.cta} <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MaterialX embed test harness</title>
+</head>
+<body>
+<script src="/embed/mtlx-viewer.js"></script>
+<script>
+  // Test-only helpers for the embed Playwright suite. Elements/iframes are
+  // kept in index-based registries (not returned as handles) so Node-side
+  // test code can reach them through plain page.evaluate() calls.
+  window.__viewers = [];
+  window.__iframes = [];
+  window.__msgs = []; // every mtlx-embed:* postMessage seen on this window
+
+  window.addEventListener('message', function (e) {
+    if (e.data && typeof e.data.type === 'string' && e.data.type.indexOf('mtlx-embed:') === 0) {
+      window.__msgs.push({ type: e.data.type, data: e.data });
+    }
+  });
+
+  // Creates a <materialx-viewer>, wires it to record every mtlx-* DOM
+  // event into el.__events, applies `attrs` as HTML attributes, and
+  // returns its index in window.__viewers.
+  window.createViewer = function (attrs) {
+    var el = document.createElement('materialx-viewer');
+    el.__events = [];
+    ['mtlx-ready', 'mtlx-renderables', 'mtlx-error'].forEach(function (type) {
+      el.addEventListener(type, function (e) {
+        el.__events.push({ type: type, detail: e.detail });
+      });
+    });
+    Object.keys(attrs || {}).forEach(function (k) {
+      var v = attrs[k];
+      if (v === true) el.setAttribute(k, '');
+      else if (v != null) el.setAttribute(k, String(v));
+    });
+    document.body.appendChild(el);
+    return window.__viewers.push(el) - 1;
+  };
+
+  // Creates a hand-written <iframe> (the plain, no-JS embed path) and
+  // returns its index in window.__iframes.
+  window.createRawIframe = function (src) {
+    var f = document.createElement('iframe');
+    f.src = src;
+    f.setAttribute('allow', 'fullscreen');
+    f.setAttribute('allowfullscreen', '');
+    document.body.appendChild(f);
+    return window.__iframes.push(f) - 1;
+  };
+</script>
+</body>
+</html>
