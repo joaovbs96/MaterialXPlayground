@@ -9,5 +9,8 @@ vendor/materialx/
 # `npm run vendor:versions` (scripts/fetch-mtlx-versions.mjs) and
 # intentionally left out of the repo. Explicit per-version lines rather
 # than a negation pattern — negation is fragile for directories.
-js/materialx/1.39.4/test-results/
+js/materialx/1.39.4/
+
+# Playwright output (npm run test:embed).
+test-results/
 playwright-report/
