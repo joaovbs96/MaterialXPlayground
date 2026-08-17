@@ -92,6 +92,14 @@ const EmbedControls = ({
     setForceT(next);
     if (window.setForceTransparency) window.setForceTransparency(next);
   };
+
+  // Reset camera and, if the host provided preset env values, restore
+  // those too. Without host-provided values, behavior is camera-only.
+  const handleReset = () => {
+    onCameraReset();
+    if (typeof initialEnvRotation === 'number') setEnvRotation(initialEnvRotation);
+    if (typeof initialEnvExposure === 'number') setEnvExposure(initialEnvExposure);
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: 'mtlx-ec' + (compact ? ' mtlx-ec--compact' : '')
   }, /*#__PURE__*/React.createElement("div", {
@@ -123,8 +131,8 @@ const EmbedControls = ({
   }), !compact && /*#__PURE__*/React.createElement("span", null, "Rotate")), showReset && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "mtlx-ec-btn",
-    onClick: onCameraReset,
-    title: "Reset camera"
+    onClick: handleReset,
+    title: "Reset the camera and any preset environment values"
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "camera-reset",
     className: "mtlx-ec-icon"

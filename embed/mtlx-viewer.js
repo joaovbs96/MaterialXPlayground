@@ -79,6 +79,7 @@
     var LIVE_ATTRS = {
         geometry: 1, env: 1, exposure: 1, background: 1, transparent: 1,
         accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
+        envmap: 1,
     };
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
@@ -91,7 +92,7 @@
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
             return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'transparent', 'base', 'poster',
-                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version'];
+                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap'];
         }
 
         constructor() {
@@ -211,6 +212,11 @@
         // MaterialX WASM build version: not live, joins the reload path.
         get version() { return this.getAttribute('version') || ''; }
         set version(v) { this._reflect('version', v); }
+
+        // Environment map URL (.hdr/.exr), live: see LIVE_ATTRS/_liveUpdate.
+        // Removing the attribute restores the default environment.
+        get envmap() { return this.getAttribute('envmap') || ''; }
+        set envmap(v) { this._reflect('envmap', v); }
 
         get base() {
             var b = this.getAttribute('base') || DEFAULT_BASE;
@@ -401,6 +407,7 @@
             if (this.camera) qp.set('camera', this.camera);
             if (this.wheel) qp.set('wheel', this.wheel);
             if (this.version) qp.set('version', this.version);
+            if (this.envmap) qp.set('envmap', this.envmap);
             Object.keys(THEME_ATTRS).forEach((name) => {
                 if (this[name]) qp.set(name, this[name]);
             });
@@ -427,6 +434,8 @@
                 this._send('setTransparent', { on: this.transparent });
             } else if (name === 'material') {
                 this._send('setMaterial', { material: this.material });
+            } else if (name === 'envmap') {
+                this._send('setEnvMap', { url: this.envmap });
             } else if (name === 'camera') {
                 var pose = this._parseCameraAttr(this.camera);
                 if (pose) this._send('setCamera', pose);

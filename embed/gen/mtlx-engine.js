@@ -3347,6 +3347,25 @@ const createMtlxRenderView = async ({
   // extractKeyLight/currentLights. rigCount fixes u_lightData's length.
   let envKeyLight = null;
   const rigCount = lightData && lightData.length || 0;
+  // Per-view state for the handle's setEnvMap(url): the textures from
+  // the last URL this view privately fetched, never shared with other
+  // views, so a later swap or teardown can free them safely.
+  let fetchedEnvMap = null;
+  let envMapCallId = 0; // guards latest-call-wins in setEnvMap()
+  // Frees a privately-fetched env's textures. Never call this on the
+  // shared default/override env from getEnvironment()/envOverride.
+  const disposeFetchedEnv = env => {
+    if (!env) return;
+    try {
+      if (env.radiance) env.radiance.dispose();
+    } catch (e) {/* already disposed/invalid */}
+    try {
+      if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose();
+    } catch (e) {/* ditto */}
+    try {
+      if (env.background) env.background.dispose();
+    } catch (e) {/* ditto */}
+  };
   // No-OrbitControls fallback only (script blocked): mirrors the
   // autoRotate state so the fallback spin can be toggled too.
   let fallbackSpin = !!autoRotate;
@@ -3424,6 +3443,11 @@ const createMtlxRenderView = async ({
     // its LOD-plane geometries at MODULE scope across all instances.
     try {
       if (pmremRT) pmremRT.dispose();
+    } catch (e) {/* already disposed/invalid */}
+    // setEnvMap()'s privately-fetched env, if any: this view's own
+    // textures (unlike bgMesh.material.map above), safe to dispose.
+    try {
+      if (fetchedEnvMap) disposeFetchedEnv(fetchedEnvMap);
     } catch (e) {/* already disposed/invalid */}
     // Depth-peel render targets/quad materials (see freePeel's
     // declaration further down) — this view's OWN GPU resources,
@@ -4771,11 +4795,10 @@ const createMtlxRenderView = async ({
           target: [controls.target.x, controls.target.y, controls.target.z].map(r4)
         };
       },
-      // Applies a saved pose from getCamera(). Either field is
-      // optional; invalid input (missing controls, not a 3-number
-      // finite array) is silently ignored. Never overwrites the
-      // resetCamera() snapshot (position0/target0 from saveState).
-      setCamera: pose => {
+      // Applies a saved pose from getCamera(); invalid input is
+      // silently ignored. makeDefault also rebases resetCamera()'s
+      // saveState() snapshot onto this pose (default: off).
+      setCamera: (pose, makeDefault) => {
         if (!controls || !pose) return false;
         const isVec3 = v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && isFinite(n));
         if (pose.position !== undefined && !isVec3(pose.position)) return false;
@@ -4783,6 +4806,9 @@ const createMtlxRenderView = async ({
         if (pose.position) camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
         if (pose.target) controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
         controls.update();
+        // Rebases position0/target0/zoom0 so a later resetCamera()
+        // returns HERE instead of the original authored default.
+        if (makeDefault) controls.saveState();
         return true;
       },
       // Show/hide the environment map as the visible backdrop
@@ -4896,6 +4922,50 @@ const createMtlxRenderView = async ({
             console.warn('environment PMREM regeneration failed:', e);
           }
         }
+      },
+      // Fetches and applies an environment from a URL (decoder
+      // chosen by extension, same pipeline as HDR import). Falsy
+      // url restores the default; latest call always wins.
+      setEnvMap: url => {
+        const callId = ++envMapCallId;
+        // Applies env to this view via setEnvironment() (rotation/
+        // exposure/background all persist there already), then
+        // frees whatever WE previously fetched, if superseded.
+        const swapIn = (env, owned) => {
+          if (callId !== envMapCallId) return; // a newer call already won
+          handle.setEnvironment(env);
+          if (fetchedEnvMap) disposeFetchedEnv(fetchedEnvMap);
+          fetchedEnvMap = owned ? env : null;
+        };
+        if (!url) {
+          if (!fetchedEnvMap) return Promise.resolve(true); // already default
+          return getEnvironment().then(def => {
+            if (def) swapIn(def, false);
+            return true;
+          });
+        }
+        const clean = String(url).split('?')[0].split('#')[0];
+        const ext = clean.slice(clean.lastIndexOf('.')).toLowerCase();
+        if (ext !== '.hdr' && ext !== '.exr') {
+          return Promise.reject(new Error('Unsupported environment URL "' + url + '". Expected .hdr or .exr.'));
+        }
+        if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+          return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));
+        }
+        if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+          return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));
+        }
+        return fetch(url).then(r => {
+          if (!r.ok) throw new Error('Failed to fetch environment "' + url + '" (HTTP ' + r.status + ').');
+          return r.arrayBuffer();
+        }).then(buf => {
+          const raw = parseEnvBuffer(buf, ext);
+          if (!raw || !raw.image || !raw.image.data) {
+            throw new Error('Failed to parse the environment image "' + url + '".');
+          }
+          swapIn(buildEnvFromParsedTexture(raw), true);
+          return true;
+        });
       },
       // Applies a new (or already-generated) material into this
       // SAME shell, instead of calling createMtlxRenderView() again.

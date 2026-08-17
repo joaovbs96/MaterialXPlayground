@@ -13,8 +13,8 @@
 // instead of accidentally reacting to a foreign message shaped like ours.
 //
 // Inbound (host -> iframe): load, setGeometry, setEnvRotation,
-// setEnvExposure, setEnvBackground, setTransparent, setTheme, resetCamera,
-// snapshot, setMaterial, setCamera, getCamera.
+// setEnvExposure, setEnvBackground, setEnvMap, setTransparent, setTheme,
+// resetCamera, snapshot, setMaterial, setCamera, getCamera.
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
 (function () {
     'use strict';
@@ -251,6 +251,7 @@
         rotationDeg: props.envRotation,
         exposure: props.envExposure,
         background: props.envBackground,
+        envMapUrl: qs.get('envmap') || undefined,
     };
 
     var currentHandle = null;
@@ -273,12 +274,19 @@
         if (typeof envState.background === 'boolean' && handle.setEnvBackground) {
             handle.setEnvBackground(envState.background);
         }
+        // `envmap` reapplication, same rebuild story as above; per-handle
+        // state, so a geometry/material switch loses it otherwise.
+        if (envState.envMapUrl && handle.setEnvMap) {
+            handle.setEnvMap(envState.envMapUrl).catch(function (e) {
+                post('error', { message: 'Environment map failed to load: ' + (e && e.message || e) });
+            });
+        }
         // Applies the `camera` query param's pose to the FIRST view build
-        // only, unlike envState above: later rebuilds (geometry/material
-        // switches) keep whatever pose the visitor has since orbited to.
+        // only, unlike envState above: later rebuilds keep whatever pose
+        // the visitor orbited to. makeDefault=true rebases resetCamera().
         if (initialCameraPose && !initialCameraApplied) {
             initialCameraApplied = true;
-            if (handle.setCamera) handle.setCamera(initialCameraPose);
+            if (handle.setCamera) handle.setCamera(initialCameraPose, true);
         }
     }
 
@@ -418,6 +426,18 @@
         }
     }
 
+    // Live `envmap` update: a falsy `url` clears envState (restoring the
+    // default environment); rejection is reported, never thrown, and
+    // never replied to on success (see the header's outbound list).
+    function handleSetEnvMap(msg) {
+        envState.envMapUrl = msg.url || undefined;
+        if (currentHandle && currentHandle.setEnvMap) {
+            currentHandle.setEnvMap(msg.url || '').catch(function (e) {
+                post('error', withId({ message: 'Environment map failed to load: ' + (e && e.message || e) }, msg));
+            });
+        }
+    }
+
     // Live `transparent` update (LIVE_ATTRS): flips layer 1 directly, then
     // re-renders so viewer-app.jsx's own class and geometry guard (layers
     // 2-3) follow.
@@ -452,12 +472,13 @@
 
     // Live camera positioning, host-driven (distinct from the `camera`
     // query param's one-time initial pose applied in onView()).
+    // makeDefault=true rebases what resetCamera() returns to.
     function handleSetCamera(msg) {
         if (!currentHandle || !currentHandle.setCamera) {
             post('error', withId({ message: 'No live view to position.' }, msg));
             return;
         }
-        var ok = currentHandle.setCamera({ position: msg.position, target: msg.target });
+        var ok = currentHandle.setCamera({ position: msg.position, target: msg.target }, true);
         if (!ok) {
             post('error', withId({ message: 'Invalid camera pose: `position`/`target` must each be a 3-number finite array.' }, msg));
         }
@@ -502,6 +523,7 @@
         setEnvRotation: handleSetEnvRotation,
         setEnvExposure: handleSetEnvExposure,
         setEnvBackground: handleSetEnvBackground,
+        setEnvMap: handleSetEnvMap,
         setTransparent: handleSetTransparent,
         setTheme: handleSetTheme,
         resetCamera: handleResetCamera,

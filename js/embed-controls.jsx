@@ -84,6 +84,14 @@ const EmbedControls = ({
         if (window.setForceTransparency) window.setForceTransparency(next);
     };
 
+    // Reset camera and, if the host provided preset env values, restore
+    // those too. Without host-provided values, behavior is camera-only.
+    const handleReset = () => {
+        onCameraReset();
+        if (typeof initialEnvRotation === 'number') setEnvRotation(initialEnvRotation);
+        if (typeof initialEnvExposure === 'number') setEnvExposure(initialEnvExposure);
+    };
+
     return (
         <div className={'mtlx-ec' + (compact ? ' mtlx-ec--compact' : '')}>
             <div className="mtlx-ec-row">
@@ -123,7 +131,12 @@ const EmbedControls = ({
                     </button>
                 )}
                 {showReset && (
-                    <button type="button" className="mtlx-ec-btn" onClick={onCameraReset} title="Reset camera">
+                    <button
+                        type="button"
+                        className="mtlx-ec-btn"
+                        onClick={handleReset}
+                        title="Reset the camera and any preset environment values"
+                    >
                         <MtlxIcon name="camera-reset" className="mtlx-ec-icon" />
                         {!compact && <span>Reset</span>}
                     </button>
