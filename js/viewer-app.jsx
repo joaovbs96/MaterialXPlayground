@@ -29,6 +29,21 @@
             return { geom: fellBackForTransparency ? 'shaderball' : base, invalid, fellBackForTransparency };
         }
 
+        // Resolves the `material` controlled prop against the current
+        // renderables list: exact name, then case-insensitive name, then
+        // a non-negative integer index ("2"). -1 when unresolved.
+        function resolveMaterialIndex(requested, renderables) {
+            let idx = renderables.findIndex((r) => r.name === requested);
+            if (idx === -1) {
+                idx = renderables.findIndex((r) => r.name.toLowerCase() === requested.toLowerCase());
+            }
+            if (idx === -1 && /^\d+$/.test(requested) && String(Number(requested)) === requested) {
+                const n = Number(requested);
+                if (n < renderables.length) idx = n;
+            }
+            return idx;
+        }
+
         // Official OpenPBR default material, resolved via window.MtlxAssets
         // (not a hardcoded URL) so a future offline build can serve it
         // locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
@@ -42,9 +57,10 @@
         // ---- Document loading ---------------------------------------------
 
         // Read an .mtlx string into a fresh document (data library attached),
-        // and list its renderable materials/shaders.
-        const loadMtlxDocument = async (xmlText, path) => {
-            const { mx, gen, genContext, stdlib, lightData } = await getMxEnv();
+        // and list its renderable materials/shaders. `version`, when given,
+        // selects which MaterialX build getMxEnv() resolves.
+        const loadMtlxDocument = async (xmlText, path, version) => {
+            const { mx, gen, genContext, stdlib, lightData } = await getMxEnv(version);
             const doc = mx.createDocument();
             if (typeof mx.readFromXmlString !== 'function') {
                 throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
@@ -82,9 +98,9 @@
             // defaults to today's uncontrolled behavior — js/shell.jsx
             // passes only `active` — so the main app is bit-for-bit
             // unaffected by their existence.
-            geometry, envRotation, envExposure, envBackground, autoRotate,
+            geometry, envRotation, envExposure, envBackground, autoRotate, wheelMode,
             transparent = false,
-            documentUrl, onView, onRenderables, onReady, onError,
+            documentUrl, mtlxVersion, material, onView, onRenderables, onReady, onError,
         } = {}) {
             // Embed mode: strips this down to a bare render surface — no
             // Files sidebar, no site-shell-coupled buttons (Send to Graph
@@ -121,6 +137,11 @@
             onReadyRef.current = onReady;
             const onErrorRef = React.useRef(onError);
             onErrorRef.current = onError;
+            // mtlxVersion controlled prop, mirrored into a ref so the async
+            // loadDocument closure always reads the latest value, matching
+            // the callback-prop refs above.
+            const mtlxVersionRef = React.useRef(mtlxVersion);
+            mtlxVersionRef.current = mtlxVersion;
             // Non-fatal configuration notices (invalid geometry, a
             // transparent+geometry combo that needed a fallback): reported
             // to the host only, via onError, no local error banner.
@@ -466,6 +487,25 @@
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [geometry]);
 
+            // `material` controlled-prop resolution: reruns on renderables
+            // change (new document) or prop change, mirroring the geometry
+            // sync effect. No-ops when `material` is undefined.
+            const materialReportedRef = React.useRef(null); // last reported "value|doc" key
+            React.useEffect(() => {
+                if (material == null || !renderables.length) return;
+                const idx = resolveMaterialIndex(material, renderables);
+                setChosenMat(idx === -1 ? 0 : idx);
+                if (idx === -1) {
+                    const docKey = (loadedRef.current && loadedRef.current.path) || '';
+                    const key = material + '::' + docKey;
+                    if (materialReportedRef.current !== key) {
+                        materialReportedRef.current = key;
+                        notify(`material "${material}" not found; showing the first material. Available: ${renderables.map((r) => r.name).join(', ')}`);
+                    }
+                }
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [material, renderables]);
+
             // Default material: page opens with open_pbr_default.mtlx
             // fetched from the MaterialX repo (or `documentUrl`, when the
             // caller supplies one), through the normal ingest() path.
@@ -520,7 +560,7 @@
                     // text is used here (the raw half is for callers needing
                     // as-authored text, e.g. the graph editor, unused here).
                     const { resolved: xml } = await readMtlxText(map[path], path, map);
-                    const loaded = await loadMtlxDocument(xml, path);
+                    const loaded = await loadMtlxDocument(xml, path, mtlxVersionRef.current);
                     if (runRef.current !== id) return; // superseded by a newer load
                     if (!loaded.renderables.length) {
                         setStatus(null);
@@ -576,6 +616,7 @@
                             // Constrained orbit for the full scene; ignored for other geoms.
                             sceneOrbit: geom === 'shaderball-scene',
                             autoRotate: rotating,
+                            wheelMode,
                             envBackground: envBg,
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
@@ -628,10 +669,10 @@
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
             // Embed HUD opt-in: which ViewportControls buttons chromeless
-            // mode shows. Recognized names: 'geometry', 'rotate', 'reset',
-            // 'env', 'screenshot', 'settings', 'fullscreen'. Ignored (every
-            // showCtl() call short-circuits true) when !chromeless, so the
-            // full app's HUD is unaffected.
+            // mode shows. Recognized names: 'geometry', 'material', 'rotate',
+            // 'reset', 'env', 'screenshot', 'settings', 'fullscreen'. Ignored
+            // (every showCtl() call short-circuits true) when !chromeless, so
+            // the full app's HUD is unaffected.
             const embedControls = Array.isArray(controls) ? controls : [];
             const showCtl = (name) => !chromeless || embedControls.indexOf(name) !== -1;
             // shaderball-scene has no working rotate/background-toggle. A
@@ -658,7 +699,10 @@
                 settings: showCtl('settings'),
                 fullscreen: showCtl('fullscreen'),
             };
-            const anyCtlVisible = Object.values(ctlFlags).some(Boolean);
+            // Material picker: opt-in like the rest of the HUD, but also
+            // hidden when there's nothing to switch between.
+            const showMaterial = showCtl('material') && renderables.length > 1;
+            const anyCtlVisible = Object.values(ctlFlags).some(Boolean) || showMaterial;
             // Page-transparency CSS: requested AND resolved away from the
             // room. Belt-and-suspenders alongside resolveViewerGeom's own
             // guard above, in case geom ever drifts back to the room.
@@ -730,6 +774,10 @@
                                         geomList={transparent ? VIEWER_GEOM_NAMES.filter((g) => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES}
                                         onGeomChange={setGeom}
                                         showGeom={ctlFlags.geometry}
+                                        materialList={renderables.map((r) => r.name)}
+                                        chosenMat={chosenMat}
+                                        onMaterialChange={setChosenMat}
+                                        showMaterial={showMaterial}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Hidden for the room (rotateSuppressed/envBgSuppressed

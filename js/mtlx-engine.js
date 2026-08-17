@@ -2749,6 +2749,10 @@ const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
     autoRotate = true, envBackground = false,
+    // 'zoom' (default): today's behavior, plain wheel zooms. 'scroll':
+    // plain wheel is gated (page scrolls instead); Ctrl/Cmd+wheel still
+    // zooms. See the wheel-gate block below, right before OrbitControls.
+    wheelMode = 'zoom',
     // isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
     // TEMPORARY visibility (backgrounded view skips render, keeps looping).
     // isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
@@ -2861,11 +2865,43 @@ const createMtlxRenderView = async ({
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
     let fallbackSpin = !!autoRotate;
+    // wheelMode 'scroll' state: the canvas wheel-gate listener plus the
+    // lazily-created zoom-hint overlay and its fade timer, all torn
+    // down in disposePartial below.
+    let wheelGateHandler = null;
+    let wheelHintEl = null, wheelHintTimer = null;
+    const isWheelHintMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+    // Shows (or refreshes) the "Use Ctrl/⌘ + scroll to zoom" pill,
+    // centered over the canvas's positioned parent; fades ~1.2s after
+    // the last gated wheel event. The node is created lazily, once.
+    const showWheelHint = () => {
+        if (!wheelHintEl) {
+            const parent = canvas.parentElement;
+            if (!parent) return;
+            wheelHintEl = document.createElement('div');
+            wheelHintEl.textContent = isWheelHintMac ? 'Use ⌘ + scroll to zoom' : 'Use Ctrl + scroll to zoom';
+            wheelHintEl.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'
+                + 'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'
+                + 'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'
+                + 'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';
+            parent.appendChild(wheelHintEl);
+        }
+        wheelHintEl.style.opacity = '1';
+        if (wheelHintTimer) clearTimeout(wheelHintTimer);
+        wheelHintTimer = setTimeout(() => {
+            if (wheelHintEl) wheelHintEl.style.opacity = '0';
+        }, 1200);
+    };
     const disposePartial = () => {
         stopped = true;
         if (reqId) cancelAnimationFrame(reqId);
         if (resizeObs) resizeObs.disconnect();
         if (controls) controls.dispose();
+        // wheelMode 'scroll' teardown: the capture listener and the
+        // hint overlay (plus its pending fade timer), if either exists.
+        if (wheelGateHandler) canvas.removeEventListener('wheel', wheelGateHandler, { capture: true });
+        if (wheelHintTimer) clearTimeout(wheelHintTimer);
+        if (wheelHintEl && wheelHintEl.parentElement) wheelHintEl.parentElement.removeChild(wheelHintEl);
         // Best-effort: renderer.dispose() below only frees the
         // renderer's OWN GL state, not material/geometry — dispose those
         // too (each swap already disposes its own previous ones).
@@ -3035,6 +3071,21 @@ const createMtlxRenderView = async ({
                     camera.aspect = cw / ch;
                     camera.fov = effectiveFullSceneVFov(fullSceneAuthoredFov, fullSceneAuthoredAspect, camera.aspect);
                     camera.updateProjectionMatrix();
+                }
+
+                // wheelMode 'scroll': register the gate BEFORE OrbitControls
+                // exists, so it runs first on the canvas and can starve its
+                // wheel handler via stopImmediatePropagation. The `controls`
+                // check inside skips flat2d/fixed-camera views (no rig, no zoom).
+                if (wheelMode === 'scroll') {
+                    wheelGateHandler = (e) => {
+                        if (!controls || e.ctrlKey || e.metaKey) return;
+                        const fsEl = fullscreenElement();
+                        if (fsEl && fsEl.contains(canvas)) return;
+                        e.stopImmediatePropagation();
+                        showWheelHint();
+                    };
+                    canvas.addEventListener('wheel', wheelGateHandler, { capture: true, passive: false });
                 }
 
                 // Orbit + zoom + auto-rotate: rotating the CAMERA (not
@@ -4130,6 +4181,32 @@ const createMtlxRenderView = async ({
                 if (fullScene || flat2d) return;
                 camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
                 camera.lookAt(0, 0, 0);
+            },
+            // Current camera pose for URL/state persistence. null when
+            // there is no OrbitControls rig (flat2d, fixed full-scene).
+            // Rounded to 4 decimals, plenty of precision for a short URL.
+            getCamera: () => {
+                if (!controls) return null;
+                const r4 = (n) => Math.round(n * 10000) / 10000;
+                return {
+                    position: [camera.position.x, camera.position.y, camera.position.z].map(r4),
+                    target: [controls.target.x, controls.target.y, controls.target.z].map(r4),
+                };
+            },
+            // Applies a saved pose from getCamera(). Either field is
+            // optional; invalid input (missing controls, not a 3-number
+            // finite array) is silently ignored. Never overwrites the
+            // resetCamera() snapshot (position0/target0 from saveState).
+            setCamera: (pose) => {
+                if (!controls || !pose) return false;
+                const isVec3 = (v) => Array.isArray(v) && v.length === 3
+                    && v.every((n) => typeof n === 'number' && isFinite(n));
+                if (pose.position !== undefined && !isVec3(pose.position)) return false;
+                if (pose.target !== undefined && !isVec3(pose.target)) return false;
+                if (pose.position) camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+                if (pose.target) controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+                controls.update();
+                return true;
             },
             // Show/hide the environment map as the visible backdrop
             // (bgMesh). No-op when there is no env (unlit previews —

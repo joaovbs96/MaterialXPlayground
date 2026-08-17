@@ -33,6 +33,10 @@ const EmbedControls = ({
   geomList,
   onGeomChange,
   showGeom,
+  materialList,
+  chosenMat,
+  onMaterialChange,
+  showMaterial,
   rotating,
   onToggleRotating,
   showRotate,
@@ -100,7 +104,15 @@ const EmbedControls = ({
   }, geomList.map(g => /*#__PURE__*/React.createElement("option", {
     key: g,
     value: g
-  }, window.GEOM_LABELS && window.GEOM_LABELS[g] || g))), showRotate && /*#__PURE__*/React.createElement("button", {
+  }, window.GEOM_LABELS && window.GEOM_LABELS[g] || g))), showMaterial && /*#__PURE__*/React.createElement("select", {
+    className: "mtlx-ec-select",
+    value: chosenMat,
+    onChange: e => onMaterialChange(Number(e.target.value)),
+    title: "Material"
+  }, materialList.map((name, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, name))), showRotate && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: 'mtlx-ec-btn' + (rotating ? ' is-active' : ''),
     onClick: onToggleRotating,

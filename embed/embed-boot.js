@@ -14,8 +14,8 @@
 //
 // Inbound (host -> iframe): load, setGeometry, setEnvRotation,
 // setEnvExposure, setEnvBackground, setTransparent, setTheme, resetCamera,
-// snapshot.
-// Outbound (iframe -> host): ready, renderables, error, snapshot.
+// snapshot, setMaterial, setCamera, getCamera.
+// Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
 (function () {
     'use strict';
 
@@ -97,7 +97,7 @@
         if (FALSE_WORDS.indexOf(s) !== -1) return false;
         return def;
     }
-    var KNOWN_CONTROLS = ['geometry', 'rotate', 'reset', 'env', 'screenshot', 'settings', 'fullscreen'];
+    var KNOWN_CONTROLS = ['geometry', 'material', 'rotate', 'reset', 'env', 'screenshot', 'settings', 'fullscreen'];
     // `none`/`all` are case-insensitive shorthands (TRUE_WORDS/FALSE_WORDS
     // spirit). `all` is derived from KNOWN_CONTROLS, not a second list, so
     // it can't drift if a control is added/removed later.
@@ -166,17 +166,68 @@
     }
     Object.keys(THEME_VARS).forEach(function (name) { applyTheme(name, qs.get(name)); });
 
+    // `wheel` -> props.wheelMode (js/mtlx-engine.js's view factory option).
+    // Defaults to 'scroll': an embed sitting inside a scrollable host page
+    // should not hijack the page's wheel scroll unless asked to via `zoom`.
+    var WHEEL_MODES = ['scroll', 'zoom'];
+    function parseWheelMode(v) {
+        if (v == null || v === '') return 'scroll';
+        var lower = String(v).trim().toLowerCase();
+        if (WHEEL_MODES.indexOf(lower) !== -1) return lower;
+        post('error', { message: 'Unknown `wheel` value "' + v + '". Valid values: ' + WHEEL_MODES.join(', ') + '.' });
+        return 'scroll';
+    }
+
+    // `version` -> props.mtlxVersion, validated against the known-version
+    // list (window.MtlxAssets is guaranteed populated: viewer.html awaits
+    // MtlxAssets.ready first). Invalid: prop stays unset, engine default applies.
+    function parseVersion(v) {
+        if (!v) return undefined;
+        var known = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
+        if (known.indexOf(v) === -1) {
+            post('error', { message: 'Unknown `version` value "' + v + '". Valid values: ' + known.join(', ') + '.' });
+            return undefined;
+        }
+        return v;
+    }
+
+    // `camera` -> an initial pose, "px,py,pz,tx,ty,tz" (six comma-separated
+    // finite numbers). Not a prop: applied to the view handle directly in
+    // onView(), once, since js/viewer-app.jsx has no controlled prop for it.
+    function parseCameraParam(v) {
+        if (!v) return undefined;
+        var parts = v.split(',').map(function (s) { return Number(s.trim()); });
+        var allFinite = parts.every(function (n) { return !isNaN(n) && isFinite(n); });
+        if (parts.length !== 6 || !allFinite) {
+            post('error', { message: 'Invalid `camera` value "' + v + '"; expected 6 comma-separated finite numbers: px,py,pz,tx,ty,tz.' });
+            return undefined;
+        }
+        return { position: parts.slice(0, 3), target: parts.slice(3, 6) };
+    }
+    var initialCameraPose = parseCameraParam(qs.get('camera'));
+    var initialCameraApplied = false; // applied once, to the first view build only, see onView().
+
     var props = {
         embed: true,
         documentUrl: qs.get('src') || undefined,
         geometry: qs.get('geometry') || undefined,
+        material: qs.get('material') || undefined,
         envRotation: parseNumber(qs.get('env')),
         envExposure: parseNumber(qs.get('exposure')),
         envBackground: parseBool(qs.get('background'), false),
         autoRotate: parseBool(qs.get('autorotate'), false),
         controls: parseControls(qs.get('controls')),
         transparent: parseBool(qs.get('transparent'), false),
+        wheelMode: parseWheelMode(qs.get('wheel')),
+        mtlxVersion: parseVersion(qs.get('version')),
     };
+
+    // Respects the OS-level motion preference: an embed that starts
+    // spinning unprompted is what this query exists to prevent. The HUD
+    // rotate button, if shown, still lets a visitor start it deliberately.
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        props.autoRotate = false;
+    }
 
     // Layer 1 of 4 (docs/EMBEDDING.md's transparent param note): an inline
     // style wins over embed/viewer.html's stylesheet rule. Layers 2-3 are
@@ -222,14 +273,31 @@
         if (typeof envState.background === 'boolean' && handle.setEnvBackground) {
             handle.setEnvBackground(envState.background);
         }
+        // Applies the `camera` query param's pose to the FIRST view build
+        // only, unlike envState above: later rebuilds (geometry/material
+        // switches) keep whatever pose the visitor has since orbited to.
+        if (initialCameraPose && !initialCameraApplied) {
+            initialCameraApplied = true;
+            if (handle.setCamera) handle.setCamera(initialCameraPose);
+        }
     }
 
+    // Correlates a 'load' call with the renderables/error it eventually
+    // produces (handleLoad/onRenderables/onError). Pragmatic: the app only
+    // ever processes one load at a time, so the NEXT one answers it.
+    var pendingLoadId = null;
+
     function onRenderables(list) {
-        post('renderables', {
+        var payload = {
             renderables: (list || []).map(function (r) {
                 return { name: r.name, type: r.type };
             }),
-        });
+        };
+        if (pendingLoadId != null) {
+            payload.id = pendingLoadId;
+            pendingLoadId = null;
+        }
+        post('renderables', payload);
     }
 
     function onReady(version) {
@@ -246,7 +314,12 @@
     }
 
     function onError(message) {
-        post('error', { message: String(message) });
+        var payload = { message: String(message) };
+        if (pendingLoadId != null) {
+            payload.id = pendingLoadId;
+            pendingLoadId = null;
+        }
+        post('error', payload);
     }
 
     // ------------------------------------------------------------------
@@ -299,6 +372,10 @@
             post('error', withId({ message: '"load" requires a string `xml` field.' }, msg));
             return;
         }
+        // See the pendingLoadId comment above onRenderables(): only set once
+        // the load actually proceeds, so a rejected load above never leaves
+        // a dangling id for some unrelated later renderables/error to catch.
+        if (msg.id !== undefined) pendingLoadId = msg.id;
         // Routes through the SAME contract the VS Code webview and the
         // site's own "Send to Viewer" button use (js/shared/mtlx-ui.jsx's
         // openInViewer(), consumed by js/viewer-app.jsx:326-354) — not a
@@ -365,6 +442,36 @@
         }
     }
 
+    // Live `material` update: js/viewer-app.jsx re-resolves the `material`
+    // controlled prop against the current renderables list on every render.
+    function handleSetMaterial(msg) {
+        if (typeof msg.material !== 'string') return;
+        props.material = msg.material;
+        render();
+    }
+
+    // Live camera positioning, host-driven (distinct from the `camera`
+    // query param's one-time initial pose applied in onView()).
+    function handleSetCamera(msg) {
+        if (!currentHandle || !currentHandle.setCamera) {
+            post('error', withId({ message: 'No live view to position.' }, msg));
+            return;
+        }
+        var ok = currentHandle.setCamera({ position: msg.position, target: msg.target });
+        if (!ok) {
+            post('error', withId({ message: 'Invalid camera pose: `position`/`target` must each be a 3-number finite array.' }, msg));
+        }
+    }
+
+    function handleGetCamera(msg) {
+        var pose = currentHandle && currentHandle.getCamera ? currentHandle.getCamera() : null;
+        if (!pose) {
+            post('error', withId({ message: 'No live view to read the camera from.' }, msg));
+            return;
+        }
+        post('camera', withId(pose, msg));
+    }
+
     // Snapshot: handle.snapshot() (js/mtlx-engine.js) returns a synchronous
     // data: URL (renderer.domElement.toDataURL). Converted to a Blob before
     // posting — a Blob structured-clones over postMessage without the ~33%
@@ -399,6 +506,9 @@
         setTheme: handleSetTheme,
         resetCamera: handleResetCamera,
         snapshot: handleSnapshot,
+        setMaterial: handleSetMaterial,
+        setCamera: handleSetCamera,
+        getCamera: handleGetCamera,
     };
 
     window.addEventListener('message', function (event) {

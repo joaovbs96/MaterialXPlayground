@@ -30,6 +30,7 @@ const useElementWidth = (ref) => {
 const EmbedControls = ({
     containerRef,
     geom, geomList, onGeomChange, showGeom,
+    materialList, chosenMat, onMaterialChange, showMaterial,
     rotating, onToggleRotating, showRotate,
     onCameraReset, showReset,
     envBg, onToggleEnvBg, showBackgroundToggle, showEnv,
@@ -95,6 +96,18 @@ const EmbedControls = ({
                     >
                         {geomList.map((g) => (
                             <option key={g} value={g}>{(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}</option>
+                        ))}
+                    </select>
+                )}
+                {showMaterial && (
+                    <select
+                        className="mtlx-ec-select"
+                        value={chosenMat}
+                        onChange={(e) => onMaterialChange(Number(e.target.value))}
+                        title="Material"
+                    >
+                        {materialList.map((name, i) => (
+                            <option key={i} value={i}>{name}</option>
                         ))}
                     </select>
                 )}

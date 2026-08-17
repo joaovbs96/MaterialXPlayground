@@ -72,13 +72,13 @@
     // Attributes with a live postMessage handler in embed-boot.js's
     // HANDLERS map — changing these after mount updates the running
     // viewer in place. Everything else observed (src, autorotate,
-    // controls, base) has no such handler, so a change instead rebuilds
-    // the iframe's query string and reloads it (a real navigation, with a
-    // fresh 'ready' handshake) — the only way to change those short of a
-    // parallel protocol embed-boot.js doesn't speak.
+    // controls, base, wheel, version) has no such handler, so a change
+    // instead rebuilds the iframe's query string and reloads it (a real
+    // navigation, with a fresh 'ready' handshake) — the only way to change
+    // those short of a parallel protocol embed-boot.js doesn't speak.
     var LIVE_ATTRS = {
         geometry: 1, env: 1, exposure: 1, background: 1, transparent: 1,
-        accent: 1, surface: 1, text: 1, radius: 1,
+        accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
     };
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
@@ -91,7 +91,7 @@
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
             return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'transparent', 'base', 'poster',
-                'accent', 'surface', 'text', 'radius'];
+                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version'];
         }
 
         constructor() {
@@ -100,7 +100,7 @@
             this._ready = false;
             this._reloadNeeded = false; // a reload was requested while a load was already in flight.
             this._queue = [];           // messages sent before 'ready'; flushed in order once it arrives.
-            this._pending = new Map();  // id -> {resolve, reject}, for snapshot()'s Promise<Blob>.
+            this._pending = new Map();  // id -> {resolve, reject}, for load()/getCamera()/snapshot()'s promises.
             this._idCounter = 0;
             this._visible = false;
             this._lastVisibleAt = 0;
@@ -143,7 +143,7 @@
                 return;
             }
             if (LIVE_ATTRS[name]) this._liveUpdate(name);
-            else this._reloadIfActive(); // src, autorotate, controls, base
+            else this._reloadIfActive(); // src, autorotate, controls, base, wheel, version
         }
 
         // ---- attribute/property reflection --------------------------------
@@ -193,6 +193,25 @@
         get radius() { return this.getAttribute('radius') || ''; }
         set radius(v) { this._reflect('radius', v); }
 
+        // Renderable name/index to show (js/viewer-app.jsx's `material`
+        // controlled prop), live, see LIVE_ATTRS.
+        get material() { return this.getAttribute('material') || ''; }
+        set material(v) { this._reflect('material', v); }
+
+        // "px,py,pz,tx,ty,tz", live: see LIVE_ATTRS/_liveUpdate. Setting
+        // this after mount repositions the camera; on initial load it seeds
+        // the starting pose (embed-boot.js's `camera` query param).
+        get camera() { return this.getAttribute('camera') || ''; }
+        set camera(v) { this._reflect('camera', v); }
+
+        // 'scroll' (default) or 'zoom': not live, joins the reload path.
+        get wheel() { return this.getAttribute('wheel') || ''; }
+        set wheel(v) { this._reflect('wheel', v); }
+
+        // MaterialX WASM build version: not live, joins the reload path.
+        get version() { return this.getAttribute('version') || ''; }
+        set version(v) { this._reflect('version', v); }
+
         get base() {
             var b = this.getAttribute('base') || DEFAULT_BASE;
             if (!b) return '';
@@ -225,6 +244,17 @@
             if (raw == null || raw === '') return undefined; // mirrors embed-boot.js's parseNumber().
             var n = Number(raw);
             return isNaN(n) ? undefined : n;
+        }
+
+        // "px,py,pz,tx,ty,tz" -> { position: [px,py,pz], target: [tx,ty,tz] },
+        // mirroring embed-boot.js's parseCameraParam(). Returns null (and lets
+        // the caller report) on the wrong count or a non-finite number.
+        _parseCameraAttr(raw) {
+            if (!raw) return null;
+            var parts = raw.split(',').map((s) => Number(s.trim()));
+            var allFinite = parts.every((n) => !isNaN(n) && isFinite(n));
+            if (parts.length !== 6 || !allFinite) return null;
+            return { position: parts.slice(0, 3), target: parts.slice(3, 6) };
         }
 
         // ---- shadow DOM chrome ---------------------------------------------
@@ -367,6 +397,10 @@
             if (this.controls) qp.set('controls', this.controls);
             if (this.background) qp.set('background', '1');
             if (this.transparent) qp.set('transparent', '1');
+            if (this.material) qp.set('material', this.material);
+            if (this.camera) qp.set('camera', this.camera);
+            if (this.wheel) qp.set('wheel', this.wheel);
+            if (this.version) qp.set('version', this.version);
             Object.keys(THEME_ATTRS).forEach((name) => {
                 if (this[name]) qp.set(name, this[name]);
             });
@@ -391,6 +425,12 @@
                 this._send('setEnvBackground', { on: this.background });
             } else if (name === 'transparent') {
                 this._send('setTransparent', { on: this.transparent });
+            } else if (name === 'material') {
+                this._send('setMaterial', { material: this.material });
+            } else if (name === 'camera') {
+                var pose = this._parseCameraAttr(this.camera);
+                if (pose) this._send('setCamera', pose);
+                else this._reportError(new Error('materialx-viewer: invalid `camera` attribute "' + this.camera + '"; expected 6 comma-separated finite numbers: px,py,pz,tx,ty,tz.'));
             } else if (THEME_ATTRS[name]) {
                 this._send('setTheme', { name: name, value: this[name] });
             }
@@ -526,6 +566,13 @@
                 this._flushQueue();
                 this.dispatchEvent(new CustomEvent('mtlx-ready', { detail: { version: msg.version || null } }));
             } else if (name === 'renderables') {
+                // Resolves a pending load() (see below) when this renderables
+                // message is its answer; dispatched as a DOM event regardless,
+                // including the initial page-load document, which carries no id.
+                if (msg.id != null && this._pending.has(msg.id)) {
+                    this._pending.get(msg.id).resolve(msg.renderables || []);
+                    this._pending.delete(msg.id);
+                }
                 this.dispatchEvent(new CustomEvent('mtlx-renderables', { detail: msg.renderables || [] }));
             } else if (name === 'error') {
                 if (msg.id != null && this._pending.has(msg.id)) {
@@ -538,6 +585,11 @@
                     this._pending.get(msg.id).resolve(msg.blob);
                     this._pending.delete(msg.id);
                 }
+            } else if (name === 'camera') {
+                if (msg.id != null && this._pending.has(msg.id)) {
+                    this._pending.get(msg.id).resolve({ position: msg.position, target: msg.target });
+                    this._pending.delete(msg.id);
+                }
             }
         }
 
@@ -546,9 +598,15 @@
         // before the iframe is ready are queued (_send) and flushed in
         // order once 'ready' arrives.
 
+        // Resolves with the new document's renderables array once the
+        // embed answers this load (id-correlated, like snapshot() below);
+        // rejects on a matching 'error'. Teardown/reload rejects it too.
         load(xml, opts) {
             opts = opts || {};
-            this._send('load', { xml: xml, textures: opts.textures, name: opts.name });
+            return new Promise((resolve, reject) => {
+                var id = this._send('load', { xml: xml, textures: opts.textures, name: opts.name });
+                this._pending.set(id, { resolve: resolve, reject: reject });
+            });
         }
 
         // Takes RADIANS — matches js/mtlx-engine.js's handle.setEnvRotation(rad)
@@ -570,6 +628,23 @@
 
         resetCamera() {
             this._send('resetCamera', {});
+        }
+
+        // Resolves with { position: [x,y,z], target: [x,y,z] }, or rejects
+        // if there's no live view (a flat2d/fixed-scene geometry, or the
+        // iframe isn't up yet). Same id-correlated pattern as snapshot().
+        getCamera() {
+            return new Promise((resolve, reject) => {
+                var id = this._send('getCamera', {});
+                this._pending.set(id, { resolve: resolve, reject: reject });
+            });
+        }
+
+        // Fire-and-forget: embed-boot.js validates and reports a bad pose
+        // via 'error' (surfaced as an mtlx-error event), not a rejection.
+        setCamera(pose) {
+            pose = pose || {};
+            this._send('setCamera', { position: pose.position, target: pose.target });
         }
 
         snapshot() {
