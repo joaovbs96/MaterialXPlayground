@@ -230,8 +230,10 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tbody></table>
 <p><code>rotate</code> and the Environment panel&#39;s background toggle have no effect on the default
 <code>shaderball-scene</code> geometry (auto-rotate is disabled for the full scene, and its walls
-occlude the sky sphere), so both are hidden while it&#39;s selected. Requesting either one
-against that geometry is reported through <code>mtlx-error</code> rather than silently doing nothing.</p>
+occlude the sky sphere), so both are hidden while it&#39;s selected and come back as soon as
+the geometry changes to something else. Neither is reported through <code>mtlx-error</code>:
+<code>shaderball-scene</code> is the default geometry, so reporting it would make every
+<code>controls=all</code> embed noisy from the moment it loads.</p>
 <p>Two extra keywords, both case-insensitive (<code>ALL</code>/<code>None</code> work the same as <code>all</code>/<code>none</code>):</p>
 <ul>
 <li><strong><code>none</code></strong> - no controls at all. This is also what an absent <code>controls</code> param means, so

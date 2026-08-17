@@ -92,8 +92,10 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 
 `rotate` and the Environment panel's background toggle have no effect on the default
 `shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its walls
-occlude the sky sphere), so both are hidden while it's selected. Requesting either one
-against that geometry is reported through `mtlx-error` rather than silently doing nothing.
+occlude the sky sphere), so both are hidden while it's selected and come back as soon as
+the geometry changes to something else. Neither is reported through `mtlx-error`:
+`shaderball-scene` is the default geometry, so reporting it would make every
+`controls=all` embed noisy from the moment it loads.
 
 Two extra keywords, both case-insensitive (`ALL`/`None` work the same as `all`/`none`):
 

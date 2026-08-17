@@ -701,17 +701,9 @@
             const embedControls = Array.isArray(controls) ? controls : [];
             const showCtl = (name) => !chromeless || embedControls.indexOf(name) !== -1;
             // shaderball-scene has no working rotate/background-toggle. A
-            // REQUESTED control silently rendering nothing is the "looks
-            // broken" problem, so report it instead of just omitting it.
+            // REQUESTED control just stays hidden while that geometry is
+            // active; it's the default, so reporting it would be noisy.
             const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
-            const rotateSuppressed = chromeless && showCtl('rotate') && roomGeomActive;
-            const envBgSuppressed = chromeless && showCtl('env') && roomGeomActive;
-            React.useEffect(() => {
-                if (rotateSuppressed) notify('The Rotate control has no effect on "shaderball-scene" (turntable rotation is disabled for the full scene) and is hidden.');
-            }, [rotateSuppressed]);
-            React.useEffect(() => {
-                if (envBgSuppressed) notify('The Background toggle has no effect on "shaderball-scene" (the room occludes the sky sphere) and is hidden from Environment.');
-            }, [envBgSuppressed]);
             // Per-control effective visibility, computed once so the mount
             // gate and each EmbedControls prop agree (a control can be
             // requested but still suppressed, e.g. rotate on the room geom).
@@ -805,8 +797,9 @@
                                         showMaterial={showMaterial}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
-                                        // Hidden for the room (rotateSuppressed/envBgSuppressed
-                                        // above report why).
+                                        // Hidden while shaderball-scene is active
+                                        // (roomGeomActive above), same for the
+                                        // background toggle below; not reported.
                                         showRotate={ctlFlags.rotate}
                                         onCameraReset={handleCameraReset}
                                         showReset={ctlFlags.reset}
