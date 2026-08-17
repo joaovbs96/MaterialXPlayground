@@ -38,7 +38,7 @@ in-page, for reference while you work.
 
 | Param | Type / values | Default | Description |
 | --- | --- | --- | --- |
-| `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers — see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). |
+| `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). The iframe also crawls the document for the textures and `xi:include` files it references, fetching each one resolved against the document's own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the built-in checker texture and is reported through `mtlx-error`. |
 | `version` | one of the versions in `js/gen/mtlx-versions.json` (currently `1.39.5`, `1.39.4`) | `1.39.5` | Which MaterialX engine build parses and renders the document. Validated against that version list; an unrecognized value falls back to the default and is reported through `mtlx-error`. See [Self-hosting](#self-hosting) for where non-default builds come from on a self-hosted deploy. |
 | `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes a full backdrop scene and is the heaviest option (1.86 MB GLB); `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default and is also reported through the `mtlx-error` event (see [Events](#events)), so a typo doesn't fail silently. |
 | `material` | string: a renderable name, or an index | *(the first renderable)* | Which renderable to display in a multi-material document. Resolved in order: an exact name match, then a case-insensitive name match, then a non-negative integer index (`"0"`, `"1"`, …). An unresolved value falls back to the first renderable and is reported through `mtlx-error`. Re-resolved every time a new document loads. |
@@ -303,6 +303,16 @@ stylesheet after it that redeclares the variables:
 `src=`/`.src` makes the **iframe** fetch the document, which only works if it's same-origin
 with the embed or served with CORS headers that allow it (GitHub's `raw.githubusercontent.com`
 does; a plain S3 bucket or internal file server often doesn't).
+
+That same fetch also covers any textures or `xi:include` files the document itself
+references, but only when they resolve to an http(s) URL on the document's own origin, not
+just anywhere CORS happens to allow; a document and its textures need to live together on
+one host for `src=` alone to render it with textures intact. The
+[wood-tiled MaterialX example](https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_wood_tiled.mtlx)
+is a working case for this: `raw.githubusercontent.com` hosts both the document and its
+texture images on one origin, so `src=` renders it fully textured with no extra work. When
+your textures live somewhere else, `el.load()` with an explicit `opts.textures` map (below)
+remains the path for handing them across.
 
 `el.load(xmlString)` sidesteps this entirely: you read/fetch the `.mtlx` text yourself, on
 your own page — no cross-origin restriction applies there, since you're not making a

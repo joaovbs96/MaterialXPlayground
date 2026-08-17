@@ -506,33 +506,58 @@
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [material, renderables]);
 
-            // Default material: page opens with open_pbr_default.mtlx
-            // fetched from the MaterialX repo (or `documentUrl`, when the
-            // caller supplies one), through the normal ingest() path.
-            // Skipped silently if offline or the user loaded first.
+            // Default material: open_pbr_default.mtlx via ingest(), or
+            // documentUrl when supplied, crawled for includes/textures
+            // like the Presets flow so relative texture refs resolve.
             React.useEffect(() => {
                 setBusy(true); // bar from the very first paint until rendered
-                fetch(documentUrl || DEFAULT_MATERIAL_URL)
+                const hasSession = () => Object.keys(fileMapRef.current)
+                    .some((k) => /\.mtlx$/i.test(k));
+                if (documentUrl) {
+                    fetchRemoteDocumentFiles(documentUrl)
+                        .then(({ map, rootKey, skipped }) => {
+                            if (hasSession() || loadedRef.current) return;
+                            const failedRefs = [];
+                            const disallowedRefs = [];
+                            for (const s of skipped || []) {
+                                if (s.reason === 'fetch-failed') failedRefs.push(s.ref);
+                                else if (s.reason === 'disallowed') disallowedRefs.push(s.ref);
+                            }
+                            for (const ref of failedRefs) {
+                                notify('Could not fetch "' + ref + '" referenced by the document; it will use the checker fallback.');
+                            }
+                            if (disallowedRefs.length) {
+                                notify("Skipped reference(s) outside the document's origin (cross-origin fetches are blocked): " + disallowedRefs.join(', '));
+                            }
+                            ingestRef.current(map, rootKey);
+                            // ingest → loadDocument owns `busy` from here on.
+                        })
+                        .catch(() => {
+                            // Offline / blocked: back to the drop prompt, unless
+                            // the user's own load is already in flight.
+                            if (hasSession() || loadedRef.current) return;
+                            setBusy(false);
+                            setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+                        });
+                    return;
+                }
+                fetch(DEFAULT_MATERIAL_URL)
                     .then((r) => {
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         return r.text();
                     })
                     .then((xml) => {
                         // Don't stomp on anything the user loaded meanwhile.
-                        const hasSession = Object.keys(fileMapRef.current)
-                            .some((k) => /\.mtlx$/i.test(k));
-                        if (hasSession || loadedRef.current) return;
+                        if (hasSession() || loadedRef.current) return;
                         ingestRef.current({
                             'open_pbr_default.mtlx': new Blob([xml], { type: 'application/xml' }),
                         });
                         // ingest → loadDocument owns `busy` from here on.
                     })
                     .catch(() => {
-                        // Offline / blocked: back to the drop prompt — unless
+                        // Offline / blocked: back to the drop prompt, unless
                         // the user's own load is already in flight.
-                        const hasSession = Object.keys(fileMapRef.current)
-                            .some((k) => /\.mtlx$/i.test(k));
-                        if (hasSession || loadedRef.current) return;
+                        if (hasSession() || loadedRef.current) return;
                         setBusy(false);
                         setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
                     });

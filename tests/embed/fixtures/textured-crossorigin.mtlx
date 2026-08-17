@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- Cross-origin regression fixture. OTHER_ORIGIN_REF_PLACEHOLDER is
+     substituted at test time with the full texture URL on the second
+     test server (see textures.spec.mjs), never served as-is. -->
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_basecolor" type="color3">
+    <input name="file" type="filename" value="OTHER_ORIGIN_REF_PLACEHOLDER" />
+  </image>
+  <standard_surface name="SR_Textured" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="img_basecolor" />
+    <input name="specular_roughness" type="float" value="0.3" />
+  </standard_surface>
+  <surfacematerial name="Textured" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_Textured" />
+  </surfacematerial>
+</materialx>

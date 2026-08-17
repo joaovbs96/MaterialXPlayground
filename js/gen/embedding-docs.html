@@ -42,7 +42,7 @@ in-page, for reference while you work.</p>
 <td><code>src</code></td>
 <td>URL</td>
 <td><em>(the built-in default material)</em></td>
-<td>The <code>.mtlx</code> document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers — see <a href="#loading-a-document-without-cors">Loading a document without CORS</a> if it isn&#39;t).</td>
+<td>The <code>.mtlx</code> document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see <a href="#loading-a-document-without-cors">Loading a document without CORS</a> if it isn&#39;t). The iframe also crawls the document for the textures and <code>xi:include</code> files it references, fetching each one resolved against the document&#39;s own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the built-in checker texture and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>version</code></td>
@@ -622,6 +622,15 @@ stylesheet after it that redeclares the variables:</p>
 <p><code>src=</code>/<code>.src</code> makes the <strong>iframe</strong> fetch the document, which only works if it&#39;s same-origin
 with the embed or served with CORS headers that allow it (GitHub&#39;s <code>raw.githubusercontent.com</code>
 does; a plain S3 bucket or internal file server often doesn&#39;t).</p>
+<p>That same fetch also covers any textures or <code>xi:include</code> files the document itself
+references, but only when they resolve to an http(s) URL on the document&#39;s own origin, not
+just anywhere CORS happens to allow; a document and its textures need to live together on
+one host for <code>src=</code> alone to render it with textures intact. The
+<a href="https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_wood_tiled.mtlx" target="_blank" rel="noopener">wood-tiled MaterialX example</a>
+is a working case for this: <code>raw.githubusercontent.com</code> hosts both the document and its
+texture images on one origin, so <code>src=</code> renders it fully textured with no extra work. When
+your textures live somewhere else, <code>el.load()</code> with an explicit <code>opts.textures</code> map (below)
+remains the path for handing them across.</p>
 <p><code>el.load(xmlString)</code> sidesteps this entirely: you read/fetch the <code>.mtlx</code> text yourself, on
 your own page — no cross-origin restriction applies there, since you&#39;re not making a
 cross-origin request <em>into</em> the iframe — and hand the resulting string across over

@@ -211,23 +211,19 @@ const extractFilenameRefs = xml => {
   return refs;
 };
 
-// Crawls a preset's root doc plus xi:include siblings and fileprefix-
-// resolved filename refs (both can escape the preset's own directory);
-// fetches stay within window.MtlxAssets.resourcesRoot() as a safety guard.
-const fetchPresetFiles = async preset => {
-  const resourcesRoot = window.MtlxAssets.resourcesRoot();
-  const isSafePresetUrl = url => url.indexOf(resourcesRoot) === 0;
-  const isSchemeOrRootedRef = ref => /^[a-z][a-z0-9+.\-]*:\/\//i.test(ref) || ref.startsWith('/');
-  const docUrl = MTLX_PRESETS_BASE + preset.path;
-  const baseName = preset.path.split('/').pop();
+// Crawls docUrl plus xi:include siblings and fileprefix-resolved
+// filename refs. isAllowedUrl gates every resolved URL; a disallowed
+// one lands in `skipped` instead. Root doc fetch failure throws.
+const crawlDocumentFiles = async (docUrl, rootKey, isAllowedUrl) => {
   const map = {};
   const seenRefs = new Set();
+  const skipped = [];
   const textureFetches = [];
-  const MAX_DOCS = 12; // guard only — see comment above
+  const MAX_DOCS = 12; // guard only, see fetchPresetFiles history
   const visited = new Set([docUrl]);
   const queue = [{
     url: docUrl,
-    key: baseName
+    key: rootKey
   }];
   while (queue.length) {
     const {
@@ -240,29 +236,44 @@ const fetchPresetFiles = async preset => {
       if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
       xml = await res.text();
     } catch (e) {
-      if (key === baseName) throw e; // the root doc must load
-      mtlxWarn('preset include fetch failed (skipped):', url, e);
+      if (key === rootKey) throw e; // the root doc must load
+      mtlxWarn('document include fetch failed (skipped):', url, e);
+      skipped.push({
+        kind: 'include',
+        ref: url,
+        url,
+        reason: 'fetch-failed',
+        error: e
+      });
       continue;
     }
     map[key] = new Blob([xml], {
       type: 'application/xml'
     });
 
-    // (a) xi:include siblings — same attribute-order/quote tolerant
+    // (a) xi:include siblings, same attribute-order/quote tolerant
     // href extraction as resolveIncludes (js/mtlx-engine.js:540),
     // resolved against THIS doc's own URL.
     const INC = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/g;
     let incM;
     while ((incM = INC.exec(xml)) !== null) {
       const href = incM[1] || incM[2];
-      if (!href || isSchemeOrRootedRef(href)) continue;
-      let incUrl;
+      if (!href) continue;
+      // Resolves relative, scheme'd, and rooted "/x" hrefs alike:
+      // new URL(href, url) is origin-aware for all three shapes.
+      let incUrl = null;
       try {
         incUrl = new URL(href, url).href;
-      } catch (e) {
+      } catch (e) {/* stays null, disallowed below */}
+      if (!incUrl || !isAllowedUrl(incUrl)) {
+        skipped.push({
+          kind: 'include',
+          ref: href,
+          url: incUrl,
+          reason: 'disallowed'
+        });
         continue;
       }
-      if (!isSafePresetUrl(incUrl)) continue;
       if (visited.has(incUrl) || visited.size >= MAX_DOCS) continue;
       visited.add(incUrl);
       const dirKey = key.indexOf('/') >= 0 ? key.slice(0, key.lastIndexOf('/')) : '';
@@ -274,24 +285,37 @@ const fetchPresetFiles = async preset => {
     }
 
     // (b) filename refs, fileprefix-resolved, fetched relative to
-    // THIS doc's own URL — best-effort, doesn't block the queue.
+    // THIS doc's own URL, best-effort, doesn't block the queue.
     for (const ref of extractFilenameRefs(xml)) {
-      if (isSchemeOrRootedRef(ref) || seenRefs.has(ref)) continue;
+      if (seenRefs.has(ref)) continue;
       seenRefs.add(ref);
-      let texUrl;
+      let texUrl = null;
       try {
         texUrl = new URL(ref, url).href;
-      } catch (e) {
+      } catch (e) {/* stays null, disallowed below */}
+      if (!texUrl || !isAllowedUrl(texUrl)) {
+        skipped.push({
+          kind: 'texture',
+          ref,
+          url: texUrl,
+          reason: 'disallowed'
+        });
         continue;
       }
-      if (!isSafePresetUrl(texUrl)) continue;
       textureFetches.push((async () => {
         try {
           const r = await fetch(texUrl);
           if (!r.ok) throw new Error('HTTP ' + r.status);
           map[ref] = await r.blob();
         } catch (texErr) {
-          mtlxWarn('preset texture fetch failed (falls back to the checker):', ref, texErr);
+          mtlxWarn('document texture fetch failed (falls back to the checker):', ref, texErr);
+          skipped.push({
+            kind: 'texture',
+            ref,
+            url: texUrl,
+            reason: 'fetch-failed',
+            error: texErr
+          });
         }
       })());
     }
@@ -299,8 +323,60 @@ const fetchPresetFiles = async preset => {
   await Promise.all(textureFetches);
   return {
     map,
-    rootKey: baseName
+    rootKey,
+    skipped
   };
+};
+
+// Presets dialog crawl: fetches stay within window.MtlxAssets
+// .resourcesRoot() as a safety guard. Thin wrapper over
+// crawlDocumentFiles; return shape/behavior are unchanged.
+const fetchPresetFiles = async preset => {
+  const resourcesRoot = window.MtlxAssets.resourcesRoot();
+  const isSafePresetUrl = url => url.indexOf(resourcesRoot) === 0;
+  const docUrl = MTLX_PRESETS_BASE + preset.path;
+  const baseName = preset.path.split('/').pop();
+  const {
+    map,
+    rootKey
+  } = await crawlDocumentFiles(docUrl, baseName, isSafePresetUrl);
+  return {
+    map,
+    rootKey
+  };
+};
+
+// Root map key for a crawled document: the URL's last path segment,
+// decoded, or 'material.mtlx' when that segment is missing/empty.
+const remoteDocBaseName = docUrl => {
+  try {
+    const last = new URL(docUrl).pathname.split('/').pop();
+    return last ? decodeURIComponent(last) : 'material.mtlx';
+  } catch (e) {
+    return 'material.mtlx';
+  }
+};
+
+// Crawls an arbitrary remote document (the embeddable viewer's
+// documentUrl prop), same as fetchPresetFiles, but unpinned to a
+// known safe root: refs are followed only when http(s) same-origin.
+const fetchRemoteDocumentFiles = async docUrl => {
+  const absUrl = new URL(docUrl, document.baseURI).href;
+  let origin = null;
+  try {
+    origin = new URL(absUrl).origin;
+  } catch (e) {/* nothing allowed below */}
+  const isSameOriginHttp = url => {
+    if (!origin) return false;
+    try {
+      const u = new URL(url);
+      return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === origin;
+    } catch (e) {
+      return false;
+    }
+  };
+  const rootKey = remoteDocBaseName(absUrl);
+  return crawlDocumentFiles(absUrl, rootKey, isSameOriginHttp);
 };
 
 // Presets dialog: a scrollable curated list of example docs. Clicking a
@@ -1778,6 +1854,7 @@ Object.assign(window, {
   MTLX_PRESETS,
   MTLX_PRESETS_BASE,
   fetchPresetFiles,
+  fetchRemoteDocumentFiles,
   copyTextToClipboard,
   ShaderExportDialog
 });
