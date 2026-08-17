@@ -26,6 +26,7 @@
     "build:embed": "node scripts/build.mjs embed",
     "build:embeddocs": "node scripts/build.mjs embeddocs",
     "build:tutorials": "node scripts/build.mjs tutorials",
+    "build:buildid": "node scripts/build.mjs buildid",
     "build:webview": "node scripts/build.mjs webview",
     "check": "node scripts/build.mjs --check",
     "test:embed": "playwright test"

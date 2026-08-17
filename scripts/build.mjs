@@ -3,14 +3,13 @@
 // derived/committed artifact in this repo and verifies none drifted.
 //
 // Usage: node scripts/build.mjs [step] [--check] [--with-materialx]
-//   step: all | version | versions | stamp | vendor | nodelib | embed | embeddocs | tutorials | webview
+//   step: all | version | versions | stamp | vendor | nodelib | embed | embeddocs | tutorials | buildid | webview
 //
-// Order for `all`: version -> versions -> vendor -> nodelib -> embed -> embeddocs -> tutorials -> webview.
+// Order for `all`: version -> versions -> vendor -> nodelib -> embed -> embeddocs -> tutorials -> buildid -> webview.
 // version runs first: vendor/nodelib read js/gen/mtlx-version.json. embed runs after
-// nodelib (both are source-derived generators) and before webview; it depends only on
-// the js/ sources, not on anything vendor/nodelib produce. embeddocs runs right after
-// embed; it's also a source-derived generator, depending only on docs/EMBEDDING.md, not
-// on anything embed produces.
+// nodelib (both are source-derived generators); it depends only on the js/ sources.
+// embeddocs runs right after embed, depending only on docs/EMBEDDING.md. buildid runs
+// after version/nodelib (its hash inputs) and before webview (which splices index.html).
 //
 // `versions` is the non-default MaterialX WASM builds (js/materialx/<v>/
 // for every entry in scripts/lib/mtlx-versions.mjs other than the
@@ -23,6 +22,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readVersionMeta, stampAll, checkStamps } from "./lib/version.mjs";
+import { computeBuildId, stampBuildId, checkBuildId } from "./lib/build-id.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,7 +33,7 @@ const CHECK_MODE = argv.includes("--check");
 const WITH_MATERIALX = argv.includes("--with-materialx");
 const STEP = argv.find((a) => !a.startsWith("--")) || "all";
 
-const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "embed", "embeddocs", "tutorials", "webview"];
+const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "embed", "embeddocs", "tutorials", "buildid", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
   console.error(`error: unknown step "${STEP}" — expected one of: ${VALID_STEPS.join(", ")}`);
   process.exit(1);
@@ -165,6 +165,28 @@ async function runTutorialsStep() {
   runNodeScript("tutorials", BUILD_TUTORIALS_PATH, CHECK_MODE ? ["--check"] : []);
 }
 
+async function runBuildIdStep() {
+  log(`buildid: ${CHECK_MODE ? "verifying" : "computing"} deterministic build id ...`);
+  if (CHECK_MODE) {
+    let problems;
+    try {
+      problems = await checkBuildId();
+    } catch (err) {
+      failStep("buildid", err.message);
+    }
+    if (problems.length > 0) {
+      failStep("buildid", ["build id artifacts out of sync:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+    }
+  } else {
+    try {
+      const id = await computeBuildId();
+      await stampBuildId(id);
+    } catch (err) {
+      failStep("buildid", err.message);
+    }
+  }
+}
+
 async function runWebviewStep() {
   log(`webview: ${CHECK_MODE ? "verifying" : "generating"} vscode_extension/media/webview.html from index.html ...`);
   runNodeScript(
@@ -186,6 +208,9 @@ async function main() {
     await runEmbedStep();
     await runEmbedDocsStep();
     await runTutorialsStep();
+    // Must run after version/nodelib (both write files it hashes) and
+    // before webview (which splices index.html, including this step's stamp).
+    await runBuildIdStep();
     await runWebviewStep();
   } else if (STEP === "version") {
     await runVersionStep();
@@ -203,6 +228,8 @@ async function main() {
     await runEmbedDocsStep();
   } else if (STEP === "tutorials") {
     await runTutorialsStep();
+  } else if (STEP === "buildid") {
+    await runBuildIdStep();
   } else if (STEP === "webview") {
     await runWebviewStep();
   }

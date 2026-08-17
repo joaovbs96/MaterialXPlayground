@@ -55,6 +55,15 @@ js/gen/** text eol=lf
 # comparison spuriously fail.
 embed/gen/** text eol=lf
 
+# js/** is forced to LF: js/gen/build-id.json's deterministic hash walks
+# every js/**.{js,jsx,css,json} file, and js/** is otherwise unspecified
+# here, so a Windows checkout's autocrlf=true would hash bytes CI never
+# sees. js/materialx/** is re-exempted right after: it holds the *.data
+# archive from the binary-detection note above, which this broader rule
+# would otherwise override, reintroducing that corruption.
+js/** text eol=lf
+js/materialx/** -text
+
 # tutorials/ is committed mkdocs build output, byte-compared against a fresh
 # rebuild by CI. mkdocs writes LF on every platform; force LF here too so a
 # Windows checkout's autocrlf=true can't check these files out as CRLF and

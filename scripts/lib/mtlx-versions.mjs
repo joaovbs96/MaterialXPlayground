@@ -11,6 +11,10 @@
 // scripts/vendor.mjs does a top-level `await readVersionMeta()` — an
 // import cycle here would break the whole build at module-load time.
 
+// `files` pins the ENTIRE upstream distribution, not just what the site
+// loads. GenShader is a superset of Core, so Core is unused today and is
+// shipped only so the option exists without re-deriving the file list.
+//
 // Newest first by convention; DEFAULT_MTLX_VERSION below is computed,
 // not read off this ordering, so the ordering itself carries no meaning.
 export const MTLX_VERSIONS = [
@@ -23,6 +27,10 @@ export const MTLX_VERSIONS = [
       "JsMaterialXGenShader.js": 169263,
       "JsMaterialXGenShader.wasm": 2190442,
       "JsMaterialXGenShader.data": 1481718,
+      "JsMaterialXCore.js": 135267,
+      "JsMaterialXCore.wasm": 1134120,
+      "JsMaterialXCore-1.39.5.js": 135267,
+      "JsMaterialXGenShader-1.39.5.js": 169263,
     },
   },
   {
@@ -34,6 +42,10 @@ export const MTLX_VERSIONS = [
       "JsMaterialXGenShader.js": 194647,
       "JsMaterialXGenShader.wasm": 2642151,
       "JsMaterialXGenShader.data": 1512004,
+      "JsMaterialXCore.js": 157279,
+      "JsMaterialXCore.wasm": 1429549,
+      "JsMaterialXCore-1.39.4.js": 157279,
+      "JsMaterialXGenShader-1.39.4.js": 194647,
     },
   },
 ];

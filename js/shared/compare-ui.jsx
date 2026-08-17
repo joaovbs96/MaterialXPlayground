@@ -101,7 +101,9 @@ const useCameraSync = (getHandles, epoch) => {
                 dst.object.updateProjectionMatrix();
             }
             dst.update();
-            // Skip the repaint when the peer canvas is hidden (e.g. diff mode) — nobody sees it.
+            // No-op guard today: checkVisibility() only fails on
+            // display:none, which styleFor never emits (it would zero the
+            // drawing buffer). Kept for callers that might.
             const el = dstHandle.renderer && dstHandle.renderer.domElement;
             const visible = el && (typeof el.checkVisibility !== 'function' || el.checkVisibility());
             if (visible && typeof dstHandle.renderNow === 'function') dstHandle.renderNow();
