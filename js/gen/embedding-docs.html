@@ -15,13 +15,16 @@ Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (opti
 <h2 id="quick-start-no-javascript">Quick start (no JavaScript)</h2>
 <pre><code class="language-html">&lt;iframe
   src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&amp;geometry=sphere&amp;controls=geometry,env,fullscreen&quot;
-  width=&quot;640&quot; height=&quot;480&quot;
+  width=&quot;640&quot; height=&quot;480&quot; style=&quot;border:0&quot;
   loading=&quot;lazy&quot; allow=&quot;fullscreen&quot; allowfullscreen
   title=&quot;MaterialX material preview&quot;&gt;
 &lt;/iframe&gt;
 </code></pre>
 <p>That&#39;s it — no <code>src=</code> on <code>.mtlx</code> at all also works: with no <code>src</code> param the viewer loads a
 default OpenPBR material, which is a fine sanity check while you wire things up.</p>
+<p>Every <code>&lt;iframe&gt;</code> example in this doc sets <code>style=&quot;border:0&quot;</code>, since browsers draw a default
+border around iframes; that matters especially for a <code>transparent</code> embed (see
+<a href="#transparent-background">Transparent background</a>).</p>
 <p>The site&#39;s Embed Builder page (linked from the home page) builds one of these snippets
 interactively instead: configure every option below through a form, plus the
 custom-element-only <code>poster</code>/<code>eager</code> attributes and a fixed-or-responsive sizing choice,
@@ -90,7 +93,7 @@ in-page, for reference while you work.</p>
 <td><code>camera</code></td>
 <td><code>&quot;px,py,pz,tx,ty,tz&quot;</code> (six comma-separated numbers)</td>
 <td><em>(the engine&#39;s default framing)</em></td>
-<td>Initial camera position (<code>px,py,pz</code>) and orbit target (<code>tx,ty,tz</code>), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. A malformed value (wrong count, non-numeric) is ignored and reported through <code>mtlx-error</code>. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with <code>el.getCamera()</code> (see <a href="#methods">Methods</a>). The site&#39;s Embed Builder page does this for you: its &quot;Use current view&quot; button reads the live preview&#39;s pose and fills it into the generated snippets.</td>
+<td>Initial camera position (<code>px,py,pz</code>) and orbit target (<code>tx,ty,tz</code>), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. It also becomes the pose the HUD Reset button and the <code>resetCamera</code> message return to, in place of the engine&#39;s authored default framing; a later <code>setCamera</code> call, or a live <code>.camera</code> attribute change, rebases that pose again to wherever it moved the camera. A malformed value (wrong count, non-numeric) is ignored and reported through <code>mtlx-error</code>. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with <code>el.getCamera()</code> (see <a href="#methods">Methods</a>). The site&#39;s Embed Builder page does this for you: its &quot;Use current view&quot; button reads the live preview&#39;s pose and fills it into the generated snippets, so the resulting embed&#39;s Reset returns to that captured view.</td>
 </tr>
 <tr>
 <td><code>controls</code></td>
@@ -103,6 +106,12 @@ in-page, for reference while you work.</p>
 <td>boolean</td>
 <td>off</td>
 <td>Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as <code>transparent</code> below.</td>
+</tr>
+<tr>
+<td><code>envmap</code></td>
+<td>URL to a <code>.hdr</code> or <code>.exr</code> file</td>
+<td><em>(the default HDRI environment)</em></td>
+<td>Custom environment map. Fetched by the iframe itself, under the same CORS requirement as <code>src</code>; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when <code>background</code> is on) the visible backdrop; the current <code>env</code>/<code>exposure</code>/<code>background</code> settings carry over, and it&#39;s reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than <code>.hdr</code>/<code>.exr</code>, leaves whatever environment was already showing untouched and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>transparent</code></td>
@@ -200,7 +209,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>reset</code></td>
-<td>A &quot;reset camera&quot; button.</td>
+<td>A &quot;reset camera&quot; button. Returns to the pose set via <code>camera</code>/<code>setCamera</code> (or the <code>.camera</code> attribute), if one was ever provided, instead of the engine&#39;s default framing; also restores the host-provided <code>env</code>/<code>exposure</code> values, if any.</td>
 </tr>
 <tr>
 <td><code>env</code></td>
@@ -263,7 +272,7 @@ always reported through the <code>mtlx-error</code> event so the mistake isn&#39
 rendered geometry instead of the viewer&#39;s usual dark backdrop:</p>
 <pre><code class="language-html">&lt;iframe
   src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;transparent=1&quot;
-  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot;
+  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
   title=&quot;MaterialX material preview&quot;&gt;
 &lt;/iframe&gt;
 </code></pre>
@@ -384,6 +393,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>envmap</code></td>
+<td><code>.envmap</code></td>
+<td>URL string (<code>.hdr</code>/<code>.exr</code>)</td>
+<td>(none)</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>transparent</code></td>
 <td><code>.transparent</code></td>
 <td>boolean</td>
@@ -444,6 +460,9 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 query param on a plain <code>&lt;iframe&gt;</code> it only ever seeds the <em>initial</em> pose (see the table above).
 As a <code>&lt;materialx-viewer&gt;</code> attribute it also does that on first load, but changing it afterward
 repositions the running camera in place (a <code>setCamera</code> postMessage, not a reload).</p>
+<p><code>envmap</code> live-updates the same way: changing the attribute afterward swaps the environment in
+place through a <code>setEnvMap { url }</code> postMessage, not a reload; clearing the attribute restores
+the default environment.</p>
 <p>Setting <code>autorotate</code> doesn&#39;t override a visitor&#39;s OS-level &quot;reduce motion&quot; preference: with
 that preference on, rotation still starts paused and only spins if the visitor presses the
 Rotate HUD control themselves (when <code>rotate</code> is in <code>controls</code>).</p>
@@ -491,7 +510,7 @@ was loaded from.</p>
 <tr>
 <td><code>el.resetCamera()</code></td>
 <td>—</td>
-<td></td>
+<td>Returns to the <code>camera</code>-baseline pose (see the <code>camera</code> param above) if one was ever set, otherwise the engine&#39;s default framing.</td>
 </tr>
 <tr>
 <td><code>el.getCamera()</code></td>
@@ -501,7 +520,7 @@ was loaded from.</p>
 <tr>
 <td><code>el.setCamera(pose)</code></td>
 <td>(none)</td>
-<td>Repositions the camera live. <code>pose.position</code>/<code>pose.target</code> are each an optional 3-number array; either can be omitted to leave that half alone. Fire-and-forget: an invalid pose is reported through <code>mtlx-error</code> rather than a rejection.</td>
+<td>Repositions the camera live and rebases what the HUD Reset button/<code>resetCamera</code> return to, onto this new pose. <code>pose.position</code>/<code>pose.target</code> are each an optional 3-number array; either can be omitted to leave that half alone. Fire-and-forget: an invalid pose is reported through <code>mtlx-error</code> rather than a rejection.</td>
 </tr>
 <tr>
 <td><code>el.snapshot()</code></td>
@@ -536,7 +555,7 @@ calling these.</p>
 <tr>
 <td><code>mtlx-error</code></td>
 <td><code>{ message: string }</code></td>
-<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, or an unrecognized <code>wheel</code>/<code>version</code> value.</td>
+<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, or an unrecognized <code>wheel</code>/<code>version</code> value.</td>
 </tr>
 </tbody></table>
 <pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);
@@ -596,7 +615,7 @@ leaves whatever was already applied (the default, or a prior valid value) untouc
 other, valid params in the same request still apply normally.</p>
 <pre><code class="language-html">&lt;iframe
   src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;controls=geometry,env&amp;accent=%232563eb&amp;surface=%23ffffff&amp;text=%23111111&amp;radius=2px&quot;
-  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot;
+  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
   title=&quot;MaterialX material preview&quot;&gt;
 &lt;/iframe&gt;
 </code></pre>

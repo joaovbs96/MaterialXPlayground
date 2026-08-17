@@ -18,7 +18,7 @@ Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (opti
 ```html
 <iframe
   src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&geometry=sphere&controls=geometry,env,fullscreen"
-  width="640" height="480"
+  width="640" height="480" style="border:0"
   loading="lazy" allow="fullscreen" allowfullscreen
   title="MaterialX material preview">
 </iframe>
@@ -26,6 +26,10 @@ Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (opti
 
 That's it — no `src=` on `.mtlx` at all also works: with no `src` param the viewer loads a
 default OpenPBR material, which is a fine sanity check while you wire things up.
+
+Every `<iframe>` example in this doc sets `style="border:0"`, since browsers draw a default
+border around iframes; that matters especially for a `transparent` embed (see
+[Transparent background](#transparent-background)).
 
 The site's Embed Builder page (linked from the home page) builds one of these snippets
 interactively instead: configure every option below through a form, plus the
@@ -46,9 +50,10 @@ in-page, for reference while you work.
 | `exposure` | number | *(engine default)* | Environment exposure multiplier. |
 | `autorotate` | boolean | off | Turntable auto-rotation. If the visitor's OS has "reduce motion" turned on, rotation starts paused regardless of this value; the Rotate HUD control, if shown, still starts it on request. |
 | `wheel` | `scroll`, `zoom` | `scroll` | Plain mouse-wheel behavior over the viewport. `scroll` (the default) leaves a plain wheel event to scroll the *host page*, since an embed has no business hijacking the scroll of the page it's sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there's no host page left to scroll at that point. `zoom` restores plain-wheel zooming everywhere. An unrecognized value falls back to `scroll` and is reported through `mtlx-error`. |
-| `camera` | `"px,py,pz,tx,ty,tz"` (six comma-separated numbers) | *(the engine's default framing)* | Initial camera position (`px,py,pz`) and orbit target (`tx,ty,tz`), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. A malformed value (wrong count, non-numeric) is ignored and reported through `mtlx-error`. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with `el.getCamera()` (see [Methods](#methods)). The site's Embed Builder page does this for you: its "Use current view" button reads the live preview's pose and fills it into the generated snippets. |
+| `camera` | `"px,py,pz,tx,ty,tz"` (six comma-separated numbers) | *(the engine's default framing)* | Initial camera position (`px,py,pz`) and orbit target (`tx,ty,tz`), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. It also becomes the pose the HUD Reset button and the `resetCamera` message return to, in place of the engine's authored default framing; a later `setCamera` call, or a live `.camera` attribute change, rebases that pose again to wherever it moved the camera. A malformed value (wrong count, non-numeric) is ignored and reported through `mtlx-error`. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with `el.getCamera()` (see [Methods](#methods)). The site's Embed Builder page does this for you: its "Use current view" button reads the live preview's pose and fills it into the generated snippets, so the resulting embed's Reset returns to that captured view. |
 | `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the eight names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
 | `background` | boolean | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as `transparent` below. |
+| `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `background` is on) the visible backdrop; the current `env`/`exposure`/`background` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of the viewer's usual dark backdrop. See [Transparent background](#transparent-background). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
@@ -79,7 +84,7 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | `geometry` | The geometry-picker dropdown. |
 | `material` | The material-picker dropdown. Shown only when the loaded document has two or more renderables; otherwise there's nothing to switch between, so it's hidden even if requested. |
 | `rotate` | The auto-rotate toggle. |
-| `reset` | A "reset camera" button. |
+| `reset` | A "reset camera" button. Returns to the pose set via `camera`/`setCamera` (or the `.camera` attribute), if one was ever provided, instead of the engine's default framing; also restores the host-provided `env`/`exposure` values, if any. |
 | `env` | The environment popover (rotation, exposure, background toggle, HDR import, key-light toggle). |
 | `screenshot` | A "save PNG" button. |
 | `settings` | The settings popover (force-transparency, etc.). |
@@ -116,7 +121,7 @@ rendered geometry instead of the viewer's usual dark backdrop:
 ```html
 <iframe
   src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&transparent=1"
-  width="480" height="360" loading="lazy"
+  width="480" height="360" loading="lazy" style="border:0"
   title="MaterialX material preview">
 </iframe>
 ```
@@ -171,6 +176,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `camera` | `.camera` | `"px,py,pz,tx,ty,tz"` | (none) | Yes |
 | `controls` | `.controls` | comma list (or an array via the property), plus `all`/`none` | `none` | No (reload) |
 | `background` | `.background` | boolean | off | Yes |
+| `envmap` | `.envmap` | URL string (`.hdr`/`.exr`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
@@ -184,6 +190,10 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 query param on a plain `<iframe>` it only ever seeds the *initial* pose (see the table above).
 As a `<materialx-viewer>` attribute it also does that on first load, but changing it afterward
 repositions the running camera in place (a `setCamera` postMessage, not a reload).
+
+`envmap` live-updates the same way: changing the attribute afterward swaps the environment in
+place through a `setEnvMap { url }` postMessage, not a reload; clearing the attribute restores
+the default environment.
 
 Setting `autorotate` doesn't override a visitor's OS-level "reduce motion" preference: with
 that preference on, rotation still starts paused and only spins if the visitor presses the
@@ -212,9 +222,9 @@ was loaded from.
 | `el.setEnvRotation(radians)` | — | **Radians**, matching the underlying engine API — note this differs from the `env` attribute/query param, which is degrees. |
 | `el.setEnvExposure(value)` | — | |
 | `el.setEnvBackground(bool)` | — | |
-| `el.resetCamera()` | — | |
+| `el.resetCamera()` | — | Returns to the `camera`-baseline pose (see the `camera` param above) if one was ever set, otherwise the engine's default framing. |
 | `el.getCamera()` | `Promise<{ position: [x,y,z], target: [tx,ty,tz] }>` | Resolves with the current camera pose. Rejects if there's no live view to read it from (a fixed-camera geometry, or the iframe isn't up yet). |
-| `el.setCamera(pose)` | (none) | Repositions the camera live. `pose.position`/`pose.target` are each an optional 3-number array; either can be omitted to leave that half alone. Fire-and-forget: an invalid pose is reported through `mtlx-error` rather than a rejection. |
+| `el.setCamera(pose)` | (none) | Repositions the camera live and rebases what the HUD Reset button/`resetCamera` return to, onto this new pose. `pose.position`/`pose.target` are each an optional 3-number array; either can be omitted to leave that half alone. Fire-and-forget: an invalid pose is reported through `mtlx-error` rather than a rejection. |
 | `el.snapshot()` | `Promise<Blob>` | Resolves with a PNG snapshot of the current frame. |
 
 Calls made before the iframe reports `ready` (including calls that trigger the iframe's
@@ -230,7 +240,7 @@ Dispatched as `CustomEvent`s on the element itself:
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
 | `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, or an unrecognized `wheel`/`version` value. |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, or an unrecognized `wheel`/`version` value. |
 
 ```js
 const el = document.querySelector('materialx-viewer');
@@ -269,7 +279,7 @@ other, valid params in the same request still apply normally.
 ```html
 <iframe
   src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&controls=geometry,env&accent=%232563eb&surface=%23ffffff&text=%23111111&radius=2px"
-  width="480" height="360" loading="lazy"
+  width="480" height="360" loading="lazy" style="border:0"
   title="MaterialX material preview">
 </iframe>
 ```
