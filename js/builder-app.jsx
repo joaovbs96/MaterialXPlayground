@@ -23,6 +23,18 @@ const BUILDER_CONTROLS = [
 const BUILDER_THEME_DEFAULTS = { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4' };
 const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); return t ? t + 'px' : ''; };
 
+// Checkerboard backdrop shown behind the preview element while Transparent
+// is checked, so an actually-transparent render is visible (the
+// image-editor alpha convention) instead of blending into the page.
+const BUILDER_CHECKERBOARD_STYLE = {
+    backgroundImage:
+        'linear-gradient(45deg, #3f3f46 25%, transparent 25%, transparent 75%, #3f3f46 75%, #3f3f46), '
+        + 'linear-gradient(45deg, #3f3f46 25%, transparent 25%, transparent 75%, #3f3f46 75%, #3f3f46)',
+    backgroundSize: '24px 24px',
+    backgroundPosition: '0 0, 12px 12px',
+    backgroundColor: '#27272a',
+};
+
 // The directory index.html lives in, e.g. "https://host/MaterialXPlayground/".
 // Both snippet types resolve embed/* against this, same as a real host page.
 const BUILDER_SITE_BASE = new URL('.', window.location.href).href;
@@ -206,6 +218,7 @@ function BuilderApp({ active } = {}) {
     const [autorotate, setAutorotate] = React.useState(false);
     const [env, setEnv] = React.useState('');
     const [exposure, setExposure] = React.useState('');
+    const [envmap, setEnvmap] = React.useState('');
     const [accent, setAccent] = React.useState(BUILDER_THEME_DEFAULTS.accent);
     const [surface, setSurface] = React.useState(BUILDER_THEME_DEFAULTS.surface);
     const [text, setText] = React.useState(BUILDER_THEME_DEFAULTS.text);
@@ -276,6 +289,7 @@ function BuilderApp({ active } = {}) {
         if (wheelZoom) el.wheel = 'zoom';
         if (version) el.version = version;
         if (poster.trim()) el.poster = poster.trim();
+        if (envmap.trim()) el.envmap = envmap.trim();
         const handleError = (e) => {
             const message = (e && e.detail && e.detail.message) || 'Unknown error';
             setErrors((prev) => [...prev.slice(-5), { id: Math.random(), message }]);
@@ -359,6 +373,17 @@ function BuilderApp({ active } = {}) {
     };
     const commitSrc = () => commitSrcValue(src);
 
+    // envmap is LIVE but every change fetches/decodes inside the iframe, so
+    // commit on blur/Enter only, same as src. Empty commits a removal via
+    // the element's own reflection, restoring the default environment.
+    const commitEnvmapValue = (raw) => {
+        if (!previewElRef.current) return;
+        const next = String(raw == null ? '' : raw).trim();
+        if (previewElRef.current.envmap === next) return;
+        previewElRef.current.envmap = next;
+    };
+    const commitEnvmap = () => commitEnvmapValue(envmap);
+
     // Picking a preset fills the src field and commits it immediately,
     // same as typing a URL then pressing Enter. Typing in the src field
     // afterwards resets this select back to its placeholder (see below).
@@ -410,6 +435,7 @@ function BuilderApp({ active } = {}) {
         if (geometry !== BUILDER_DEFAULT_GEOM) entries.push(['geometry', geometry]);
         if (env.trim() !== '') entries.push(['env', env.trim()]);
         if (exposure.trim() !== '') entries.push(['exposure', exposure.trim()]);
+        if (envmap.trim()) entries.push(['envmap', envmap.trim()]);
         if (autorotate) entries.push(['autorotate', '1']);
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (background) entries.push(['background', '1']);
@@ -437,7 +463,7 @@ function BuilderApp({ active } = {}) {
         const lines = [`src="${builderEscAttr(iframeUrl)}"`];
         lines.push(sizing === 'responsive'
             ? `style="width:100%;aspect-ratio:${width}/${height};height:auto;border:0"`
-            : `width="${width}" height="${height}"`);
+            : `width="${width}" height="${height}" style="border:0"`);
         const flags = [];
         if (!eager) flags.push('loading="lazy"');
         flags.push('allow="fullscreen"', 'allowfullscreen');
@@ -452,6 +478,7 @@ function BuilderApp({ active } = {}) {
         if (geometry !== BUILDER_DEFAULT_GEOM) attrs.push(`geometry="${geometry}"`);
         if (env.trim() !== '') attrs.push(`env="${env.trim()}"`);
         if (exposure.trim() !== '') attrs.push(`exposure="${exposure.trim()}"`);
+        if (envmap.trim()) attrs.push(`envmap="${builderEscAttr(envmap.trim())}"`);
         if (autorotate) attrs.push('autorotate');
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (background) attrs.push('background');
@@ -522,6 +549,9 @@ function BuilderApp({ active } = {}) {
                                 </select>
                             </div>
                         )}
+                    </div>
+
+                    <div className="space-y-3 border-t border-gray-800 pt-4">
                         <div>
                             <label className={FIELD_LABEL_CLS}>Geometry</label>
                             <select value={geometry} onChange={(e) => setGeometry(e.target.value)} className={TEXT_INPUT_CLS}>
@@ -540,6 +570,15 @@ function BuilderApp({ active } = {}) {
                             </div>
                         )}
                     </div>
+
+                    {BUILDER_VERSIONS.length > 0 && (
+                        <div className="border-t border-gray-800 pt-4">
+                            <label className={FIELD_LABEL_CLS}>MaterialX version</label>
+                            <select value={version} onChange={(e) => setVersion(e.target.value)} className={TEXT_INPUT_CLS}>
+                                {BUILDER_VERSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                            </select>
+                        </div>
+                    )}
 
                     <div className="space-y-2 border-t border-gray-800 pt-4">
                         <label className={FIELD_LABEL_CLS}>Controls (HUD buttons)</label>
@@ -586,14 +625,29 @@ function BuilderApp({ active } = {}) {
                         </label>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 border-t border-gray-800 pt-4">
-                        <div>
-                            <label className={FIELD_LABEL_CLS}>Env rotation (deg)</label>
-                            <input type="number" step="1" value={env} onChange={(e) => setEnv(e.target.value)} placeholder="default" className={TEXT_INPUT_CLS} />
+                    <div className="space-y-3 border-t border-gray-800 pt-4">
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className={FIELD_LABEL_CLS}>Env rotation (deg)</label>
+                                <input type="number" step="1" value={env} onChange={(e) => setEnv(e.target.value)} placeholder="default" className={TEXT_INPUT_CLS} />
+                            </div>
+                            <div>
+                                <label className={FIELD_LABEL_CLS}>Exposure</label>
+                                <input type="number" step="0.05" value={exposure} onChange={(e) => setExposure(e.target.value)} placeholder="default" className={TEXT_INPUT_CLS} />
+                            </div>
                         </div>
                         <div>
-                            <label className={FIELD_LABEL_CLS}>Exposure</label>
-                            <input type="number" step="0.05" value={exposure} onChange={(e) => setExposure(e.target.value)} placeholder="default" className={TEXT_INPUT_CLS} />
+                            <label className={FIELD_LABEL_CLS}>Environment map URL (.hdr / .exr)</label>
+                            <input
+                                type="text"
+                                value={envmap}
+                                onChange={(e) => setEnvmap(e.target.value)}
+                                onBlur={commitEnvmap}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
+                                placeholder="(default environment)"
+                                className={TEXT_INPUT_CLS}
+                            />
+                            <p className="text-[11px] text-gray-500 mt-1">Applies on blur or Enter (this one does not reload the preview).</p>
                         </div>
                     </div>
 
@@ -617,15 +671,6 @@ function BuilderApp({ active } = {}) {
                             </div>
                         </div>
                     </div>
-
-                    {BUILDER_VERSIONS.length > 0 && (
-                        <div className="border-t border-gray-800 pt-4">
-                            <label className={FIELD_LABEL_CLS}>MaterialX version</label>
-                            <select value={version} onChange={(e) => setVersion(e.target.value)} className={TEXT_INPUT_CLS}>
-                                {BUILDER_VERSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-                            </select>
-                        </div>
-                    )}
 
                     <div className="space-y-2 border-t border-gray-800 pt-4">
                         <div>
@@ -677,8 +722,12 @@ function BuilderApp({ active } = {}) {
                     </div>
                     <div
                         ref={previewMountRef}
-                        style={{ width: '100%', maxWidth: width, aspectRatio: `${width} / ${height}` }}
-                        className="rounded-lg overflow-hidden border border-gray-700 bg-gray-950 mx-auto lg:mx-0"
+                        style={{
+                            width: '100%', maxWidth: width, aspectRatio: `${width} / ${height}`,
+                            ...(transparent ? BUILDER_CHECKERBOARD_STYLE : {}),
+                        }}
+                        className={'rounded-lg overflow-hidden mx-auto lg:mx-0 '
+                            + (transparent ? '' : 'border border-gray-700 bg-gray-950')}
                     />
                     <div>
                         <label className={FIELD_LABEL_CLS}>Camera</label>
@@ -693,6 +742,7 @@ function BuilderApp({ active } = {}) {
                             <button type="button" onClick={handleUseCurrentView} className={BTN_SECONDARY + ' shrink-0'}>Use current view</button>
                             <button type="button" onClick={() => setCamera('')} className={BTN_SECONDARY + ' shrink-0'}>Clear</button>
                         </div>
+                        <p className="text-[11px] text-gray-500 mt-1">The HUD Reset button returns to this captured view.</p>
                     </div>
                     {errors.length > 0 && (
                         <div className="rounded-lg border border-amber-700/50 bg-amber-900/20 text-amber-200 text-xs p-3 space-y-1.5">
@@ -711,6 +761,7 @@ function BuilderApp({ active } = {}) {
                     <p className="text-[11px] text-gray-500">
                         Geometry, env, exposure, background, transparent, the theme colors, material and camera
                         update instantly. Document URL, auto-rotate, controls, wheel and version reload the preview frame.
+                        The environment map applies on commit (blur or Enter) without reloading the preview.
                     </p>
                 </div>
             </div>
