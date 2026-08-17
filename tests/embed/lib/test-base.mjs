@@ -108,6 +108,10 @@ export async function setCamera(page, idx, pose) {
   return page.evaluate(({ i, pose }) => window.__viewers[i].setCamera(pose), { i: idx, pose });
 }
 
+export async function resetCamera(page, idx) {
+  return page.evaluate((i) => window.__viewers[i].resetCamera(), idx);
+}
+
 export async function waitForMsg(page, type, timeout = 45000) {
   await page.waitForFunction((type) => window.__msgs.some((m) => m.type === type), type, { timeout });
 }
