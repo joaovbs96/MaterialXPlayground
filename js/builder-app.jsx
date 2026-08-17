@@ -505,7 +505,12 @@ function BuilderApp({ active } = {}) {
         <div className="max-w-6xl mx-auto space-y-6">
             <div className="flex items-start justify-between gap-3">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-100">Embed Builder</h1>
+                    <div className="flex items-center gap-2">
+                        <h1 className="text-2xl font-bold text-gray-100">Embed Builder</h1>
+                        <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300">
+                            Experimental
+                        </span>
+                    </div>
                     <p className="text-sm text-gray-400 mt-1">
                         Configure an embeddable MaterialX viewer, preview it live, and copy a ready-made snippet.
                     </p>
