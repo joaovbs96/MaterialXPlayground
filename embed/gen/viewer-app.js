@@ -48,9 +48,9 @@ function resolveMaterialIndex(requested, renderables) {
   return idx;
 }
 
-// Official OpenPBR default material, resolved via window.MtlxAssets
-// (not a hardcoded URL) so a future offline build can serve it
-// locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
+// Remote fallback for the default material; the effect below tries
+// materials/open_pbr_default.mtlx (repo root) first, falling back to
+// this URL. Safe at module-load: shell.jsx awaited MtlxAssets.ready.
 const DEFAULT_MATERIAL_URL = window.MtlxAssets.repoUrl('resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx');
 
 // normPath, readDroppedItems, expandZips, findFileForRef,
@@ -587,7 +587,13 @@ function MaterialViewerApp({
       });
       return;
     }
-    fetch(DEFAULT_MATERIAL_URL).then(r => {
+    // Local-first: materials/open_pbr_default.mtlx (repo root),
+    // falling back to DEFAULT_MATERIAL_URL on any failure (a
+    // non-ok response or a thrown network error), as before.
+    fetch('materials/open_pbr_default.mtlx').then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r;
+    }).catch(() => fetch(DEFAULT_MATERIAL_URL)).then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     }).then(xml => {
