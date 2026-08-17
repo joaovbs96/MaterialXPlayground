@@ -27,16 +27,27 @@ Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (opti
 That's it — no `src=` on `.mtlx` at all also works: with no `src` param the viewer loads a
 default OpenPBR material, which is a fine sanity check while you wire things up.
 
+The site's Embed Builder page (linked from the home page) builds one of these snippets
+interactively instead: configure every option below through a form, plus the
+custom-element-only `poster`/`eager` attributes and a fixed-or-responsive sizing choice,
+preview it live against the real custom element, then copy a ready-to-paste `<iframe>` or
+`<script>`+`<materialx-viewer>` snippet. Its Help button opens this document rendered
+in-page, for reference while you work.
+
 ### Query parameters
 
 | Param | Type / values | Default | Description |
 | --- | --- | --- | --- |
 | `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers — see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). |
+| `version` | one of the versions in `js/gen/mtlx-versions.json` (currently `1.39.5`, `1.39.4`) | `1.39.5` | Which MaterialX engine build parses and renders the document. Validated against that version list; an unrecognized value falls back to the default and is reported through `mtlx-error`. See [Self-hosting](#self-hosting) for where non-default builds come from on a self-hosted deploy. |
 | `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes a full backdrop scene and is the heaviest option (1.86 MB GLB); `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default and is also reported through the `mtlx-error` event (see [Events](#events)), so a typo doesn't fail silently. |
+| `material` | string: a renderable name, or an index | *(the first renderable)* | Which renderable to display in a multi-material document. Resolved in order: an exact name match, then a case-insensitive name match, then a non-negative integer index (`"0"`, `"1"`, …). An unresolved value falls back to the first renderable and is reported through `mtlx-error`. Re-resolved every time a new document loads. |
 | `env` | number (degrees) | *(engine default)* | Environment map rotation. |
 | `exposure` | number | *(engine default)* | Environment exposure multiplier. |
-| `autorotate` | boolean | off | Turntable auto-rotation. |
-| `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the seven names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
+| `autorotate` | boolean | off | Turntable auto-rotation. If the visitor's OS has "reduce motion" turned on, rotation starts paused regardless of this value; the Rotate HUD control, if shown, still starts it on request. |
+| `wheel` | `scroll`, `zoom` | `scroll` | Plain mouse-wheel behavior over the viewport. `scroll` (the default) leaves a plain wheel event to scroll the *host page*, since an embed has no business hijacking the scroll of the page it's sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there's no host page left to scroll at that point. `zoom` restores plain-wheel zooming everywhere. An unrecognized value falls back to `scroll` and is reported through `mtlx-error`. |
+| `camera` | `"px,py,pz,tx,ty,tz"` (six comma-separated numbers) | *(the engine's default framing)* | Initial camera position (`px,py,pz`) and orbit target (`tx,ty,tz`), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. A malformed value (wrong count, non-numeric) is ignored and reported through `mtlx-error`. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with `el.getCamera()` (see [Methods](#methods)). The site's Embed Builder page does this for you: its "Use current view" button reads the live preview's pose and fills it into the generated snippets. |
+| `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the eight names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
 | `background` | boolean | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as `transparent` below. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of the viewer's usual dark backdrop. See [Transparent background](#transparent-background). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
@@ -66,6 +77,7 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | Name | Adds |
 | --- | --- |
 | `geometry` | The geometry-picker dropdown. |
+| `material` | The material-picker dropdown. Shown only when the loaded document has two or more renderables; otherwise there's nothing to switch between, so it's hidden even if requested. |
 | `rotate` | The auto-rotate toggle. |
 | `reset` | A "reset camera" button. |
 | `env` | The environment popover (rotation, exposure, background toggle, HDR import, key-light toggle). |
@@ -83,7 +95,7 @@ Two extra keywords, both case-insensitive (`ALL`/`None` work the same as `all`/`
 - **`none`** - no controls at all. This is also what an absent `controls` param means, so
   `controls=none` and omitting the param entirely are exactly the same thing; `none` just
   makes that choice explicit and self-documenting in the URL.
-- **`all`** - every control above, equivalent to spelling out all seven names. It's derived
+- **`all`** - every control above, equivalent to spelling out all eight names. It's derived
   from the actual list of controls internally, so it stays correct automatically if a control
   is ever added or removed.
 
@@ -92,8 +104,8 @@ always reported through the `mtlx-error` event so the mistake isn't silent:
 
 | Combination | Result | Why |
 | --- | --- | --- |
-| `none,all` (either order) | All seven controls | A direct contradiction between the two keywords; `all` is the more permissive reading, so it wins. |
-| `all,geometry` (`all` plus specific names) | All seven controls | The named controls are already included in `all`, so they're redundant rather than conflicting - reported, then ignored. |
+| `none,all` (either order) | All eight controls | A direct contradiction between the two keywords; `all` is the more permissive reading, so it wins. |
+| `all,geometry` (`all` plus specific names) | All eight controls | The named controls are already included in `all`, so they're redundant rather than conflicting - reported, then ignored. |
 | `none,geometry` (`none` plus specific names) | Just `geometry` | Contradictory, but naming a control is a clear, specific positive intent, so the explicit name(s) win over `none`. |
 
 ### Transparent background
@@ -149,10 +161,14 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | Attribute | Property | Type | Default | Live-updates? |
 | --- | --- | --- | --- | --- |
 | `src` | `.src` | URL string | — | No (reload) |
+| `version` | `.version` | see the `version` query param above | `1.39.5` | No (reload) |
 | `geometry` | `.geometry` | see table above | `shaderball-scene` | Yes |
+| `material` | `.material` | string: a renderable name, or an index | (first renderable) | Yes |
 | `env` | `.env` | number (degrees) | — | Yes |
 | `exposure` | `.exposure` | number | — | Yes |
 | `autorotate` | `.autorotate` | boolean | off | No (reload) |
+| `wheel` | `.wheel` | `scroll`, `zoom` | `scroll` | No (reload) |
+| `camera` | `.camera` | `"px,py,pz,tx,ty,tz"` | (none) | Yes |
 | `controls` | `.controls` | comma list (or an array via the property), plus `all`/`none` | `none` | No (reload) |
 | `background` | `.background` | boolean | off | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
@@ -163,6 +179,15 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `base` | `.base` | URL string | the directory `mtlx-viewer.js` was loaded from | — (read once per activation) |
 | `poster` | `.poster` | URL string | — | — (placeholder image only, before the iframe activates) |
 | `eager` | `.eager` | boolean | off | — (read once, on connect — skips the `IntersectionObserver` and creates the iframe immediately instead of waiting for scroll) |
+
+`camera`, unlike the rest of the live-updating attributes, has a one-time-vs-live split: as a
+query param on a plain `<iframe>` it only ever seeds the *initial* pose (see the table above).
+As a `<materialx-viewer>` attribute it also does that on first load, but changing it afterward
+repositions the running camera in place (a `setCamera` postMessage, not a reload).
+
+Setting `autorotate` doesn't override a visitor's OS-level "reduce motion" preference: with
+that preference on, rotation still starts paused and only spins if the visitor presses the
+Rotate HUD control themselves (when `rotate` is in `controls`).
 
 Two read-only diagnostic properties, not reflected as attributes: `el.ready` (`true` once the
 iframe has posted `ready`) and `el.active` (`true` while the element currently owns a live
@@ -183,11 +208,13 @@ was loaded from.
 
 | Method | Returns | Notes |
 | --- | --- | --- |
-| `el.load(xml, opts?)` | — | Loads a `.mtlx` document by sending its XML text over `postMessage` — see [Loading a document without CORS](#loading-a-document-without-cors). `opts.textures` is an optional `{ relPath: Blob \| ArrayBuffer \| base64-string }` map; `opts.name` sets the material's display name. |
+| `el.load(xml, opts?)` | `Promise<{ name, type }[]>` | Loads a `.mtlx` document by sending its XML text over `postMessage` — see [Loading a document without CORS](#loading-a-document-without-cors). `opts.textures` is an optional `{ relPath: Blob \| ArrayBuffer \| base64-string }` map; `opts.name` sets the material's display name. The promise resolves with that document's renderables array once it finishes parsing (the same array `mtlx-renderables` carries), or rejects if the embed reports a load error, or if the iframe is torn down or reloaded before it answers. |
 | `el.setEnvRotation(radians)` | — | **Radians**, matching the underlying engine API — note this differs from the `env` attribute/query param, which is degrees. |
 | `el.setEnvExposure(value)` | — | |
 | `el.setEnvBackground(bool)` | — | |
 | `el.resetCamera()` | — | |
+| `el.getCamera()` | `Promise<{ position: [x,y,z], target: [tx,ty,tz] }>` | Resolves with the current camera pose. Rejects if there's no live view to read it from (a fixed-camera geometry, or the iframe isn't up yet). |
+| `el.setCamera(pose)` | (none) | Repositions the camera live. `pose.position`/`pose.target` are each an optional 3-number array; either can be omitted to leave that half alone. Fire-and-forget: an invalid pose is reported through `mtlx-error` rather than a rejection. |
 | `el.snapshot()` | `Promise<Blob>` | Resolves with a PNG snapshot of the current frame. |
 
 Calls made before the iframe reports `ready` (including calls that trigger the iframe's
@@ -202,8 +229,8 @@ Dispatched as `CustomEvent`s on the element itself:
 | Event | `detail` | Fires when |
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
-| `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, or an `accent`/`surface`/`text`/`radius` value that failed validation. |
+| `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, or an unrecognized `wheel`/`version` value. |
 
 ```js
 const el = document.querySelector('materialx-viewer');
@@ -248,8 +275,9 @@ other, valid params in the same request still apply normally.
 ```
 
 That example themes the HUD to a light, blue-accented look, e.g. to match a host page's own
-light theme (note the colors are URL-encoded: `#` becomes `%23`). The same four values work as
-`<materialx-viewer>` attributes:
+light theme (note the colors are URL-encoded: `#` becomes `%23`). The Embed Builder page has
+color pickers for all four and URL-encodes them for you, if you'd rather not hand-encode
+hex values. The same four values work as `<materialx-viewer>` attributes:
 
 ```html
 <materialx-viewer
@@ -289,10 +317,15 @@ cross-origin request *into* the iframe — and hand the resulting string across 
   const el = document.getElementById('v');
   fetch('/private/my-material.mtlx') // same-origin with YOUR page, not the embed
     .then((r) => r.text())
-    .then((xml) => el.load(xml));
+    .then((xml) => el.load(xml))
+    .then((renderables) => console.log('loaded, renderables:', renderables))
+    .catch((err) => console.error('load failed:', err));
 
   // With textures:
   // el.load(xml, { textures: { 'textures/brick_albedo.png': someBlob } });
+
+  // Or with await, inside an async function:
+  // const renderables = await el.load(xml);
 </script>
 ```
 
@@ -367,13 +400,32 @@ The [offline release zip](https://github.com/joaovbs96/MaterialXPlayground/relea
 attached to every GitHub release already contains the full tree in this shape — unzip it and
 serve the folder as-is with any static file server.
 
+### Non-default MaterialX engine versions
+
+Only the default engine build, `js/materialx/1.39.5/`, is committed to the repo, so it's
+always present. Every other version in `js/gen/mtlx-versions.json` (currently just
+`1.39.4`) is fetched from upstream at build time instead and isn't committed: a plain
+`git clone` doesn't have it on disk. The offline release zip already has that fetch baked
+into its build, so it bundles every supported version; the hosted site's own deploy runs
+the same step before publishing. If you're self-hosting from a fresh clone rather than the
+zip, run `npm run vendor:versions` before building, or `version=` requests for anything but
+the default will fail to load. The param itself still validates fine (it's checked
+against the version list, not against what's actually on disk), so the failure surfaces as
+an ordinary load error through `mtlx-error` rather than the "unknown version" one.
+
+Separately, and unrelated to which engine `version` you request: `js/mtlx-assets.js`
+resolves other MaterialX resources, like the built-in default material `src` falls back to,
+from a local `vendor/materialx/` mirror when one's present (the offline build ships one),
+or a pinned `raw.githubusercontent.com` URL otherwise. The engine build itself is always
+fetched same-origin, as described above, regardless of that mode.
+
 ### Your server must preserve query strings
 
-Every param in this doc (`src`, `geometry`, `controls`, `origin`, the theme colors, all of it)
-travels as a query string on the request for `embed/viewer.html`. If your server rewrites or
-redirects that URL and drops the query string, the viewer boots with zero params: no `src`
-falls back to the built-in default material, no `controls` means fully chromeless, and so on,
-with nothing visibly erroring.
+Every param in this doc (`src`, `version`, `geometry`, `material`, `controls`, `origin`, the
+theme colors, all of it) travels as a query string on the request for `embed/viewer.html`. If
+your server rewrites or redirects that URL and drops the query string, the viewer boots with
+zero params: no `src` falls back to the built-in default material, no `controls` means fully
+chromeless, and so on, with nothing visibly erroring.
 
 The common cause is a "clean URLs" feature: `serve` (the npm package) has `cleanUrls` on by
 default since v14, and Vercel has its own `cleanUrls` setting; both 301-redirect
