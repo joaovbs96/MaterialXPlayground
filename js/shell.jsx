@@ -109,7 +109,9 @@ __scriptCache.set('js/mtlx-engine.js', Promise.resolve());
 const VIEW_DEPS = {
     home: {
         css: [],
-        scripts: [],
+        // Same dependency-free custom element as builder (docs/EMBEDDING.md);
+        // loadScript memoizes by URL, so the two views share one load.
+        scripts: ['embed/mtlx-viewer.js'],
         babelScripts: [],
         app: 'js/home-app.jsx',
         globalName: 'HomeApp',
@@ -559,3 +561,6 @@ window.Shell = Shell;
 // (bypassing the shell). Shares the mount effect's memo map, so
 // whichever caller asks first does the loading; the other just awaits.
 window.mtlxLoadViewDeps = loadViewDeps;
+// Exposed so home-app.jsx's hero can fall back to a static image when
+// WebGL2 is unavailable, without duplicating this probe.
+window.mtlxHasWebGL2 = hasWebGL2;
