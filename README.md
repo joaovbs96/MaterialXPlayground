@@ -132,17 +132,16 @@ The packaged extension is fully self-contained: it bundles the MaterialX librari
 
 There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension local.materialx-playground`.
 
-## Embedding
+## Embedding (experimental)
 
-Drop a single material into any other web page as a lightweight, chromeless `<iframe>`:
+Drop a single material into any other web page as a lightweight, chromeless viewer, the same idea as embedding a YouTube video. The easiest way to start is the **Embed Builder** on the home page: configure the embed against a live preview and copy a ready-made snippet.
 
-```html
-<iframe src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=YOUR_MTLX_URL&geometry=sphere"
-        width="640" height="480" loading="lazy" allow="fullscreen" allowfullscreen></iframe>
-```
+- **Two ways to embed**: a plain `<iframe>` configured entirely through the query string (no JavaScript needed), or the `<materialx-viewer>` custom element, one `<script>` tag with an HTML attribute API. The element also lazy-loads and caps how many viewers run at once, which matters for pages showing many materials.
+- **Everything is configurable**: document URL, geometry, which material to show, initial camera, environment map, lighting, auto-rotate, an opt-in HUD, transparent backgrounds, theming, and the MaterialX version.
+- **Sane defaults for someone else's page**: plain scrolling reaches the host page (zoom is Ctrl/Cmd+wheel), reduced-motion settings pause auto-rotate, and configuration mistakes fall back safely and report through an event instead of failing silently.
+- **Self-hostable**: the offline release zip ships everything the embed needs.
 
-A `<materialx-viewer>` custom element is also available for pages with several materials (lazy-loading, capped concurrent WebGL contexts). See [docs/EMBEDDING.md](docs/EMBEDDING.md) for the full query-param/attribute reference, the element's API, and self-hosting instructions.
-
+See [docs/EMBEDDING.md](docs/EMBEDDING.md) for the full reference: every query parameter and attribute, the element's methods and events, loading documents the embed can't fetch itself, performance notes, and self-hosting instructions.
 ## Tech stack
 
 - [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) (WebAssembly build: core + GenShader)
@@ -156,7 +155,7 @@ All third-party JS/CSS libraries are vendored into a committed `vendor/` folder 
 
 ## Generated files
 
-Some files in this repo are produced by scripts rather than written by hand: the vendored third-party libraries in `vendor/`, the pre-parsed node-library data in `js/gen/`, the extracted MaterialX version, and the VS Code webview mirror. All of them are committed, which is why a clone runs without any build step. They only need to be regenerated when one of their inputs changes (for example, bumping a library version), using `npm run build`; `npm run check` and CI then verify that the committed files match their inputs, so the two can't drift apart. See [docs/BUILDING.md](docs/BUILDING.md) for the full pipeline, deployment details, and a "what changed → what to run" table.
+Some files in this repo are produced by scripts rather than written by hand: the vendored third-party libraries in `vendor/`, the pre-parsed node-library data in `js/gen/`, the extracted MaterialX version, the precompiled embed viewer bundles in `embed/gen/`, and the VS Code webview mirror. All of them are committed, which is why a clone runs without any build step. They only need to be regenerated when one of their inputs changes (for example, bumping a library version), using `npm run build`; `npm run check` and CI then verify that the committed files match their inputs, so the two can't drift apart. See [docs/BUILDING.md](docs/BUILDING.md) for the full pipeline, deployment details, and a "what changed → what to run" table.
 
 ---
 
