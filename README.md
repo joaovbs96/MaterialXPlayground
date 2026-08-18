@@ -98,6 +98,7 @@ The app is a hash-routed single page:
 | Material Viewer | `index.html#!viewer` |
 | Material Compare | `index.html#!compare` |
 | Node Graph Editor | `index.html#!graph` |
+| VS Code extension | `index.html#!vscode` |
 
 ### Debugging
 
@@ -120,7 +121,7 @@ The playground also ships as a VS Code extension: opening a `.mtlx` file brings 
 
 Requires VS Code 1.85 or newer.
 
-1. Download the `.vsix` asset (named like `materialx-playground-vscode-v2026.8.3.vsix`) from the [latest release](https://github.com/joaovbs96/MaterialXPlayground/releases/latest).
+1. Download the `.vsix` asset (named like `materialx-playground-vscode-v2026.8.3.vsix`) from the [VS Code extension page](https://joaovbs96.github.io/MaterialXPlayground/#!vscode) or the [latest release](https://github.com/joaovbs96/MaterialXPlayground/releases/latest).
 2. Install it either way:
    - **VS Code UI:** Extensions view → `···` (Views and More Actions) menu → **Install from VSIX…** → pick the downloaded file. Equivalently, run **"Extensions: Install from VSIX…"** from the Command Palette, or just drag the `.vsix` file onto the Extensions view.
    - **Command line:** `code --install-extension path/to/materialx-playground-vscode-<version>.vsix`
