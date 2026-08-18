@@ -147,6 +147,7 @@ function HeroStage({ active, busy, onOpen }) {
             el.transparent = true;
             el.autorotate = true;
             el.geometry = 'shaderball';
+            el.wheel = 'none';
             // Slightly closer than the engine's default framing (0,0.5,3.6)
             // so the shaderball fills the stage without clipping while turning.
             el.camera = HERO_CAMERA;

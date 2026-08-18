@@ -167,9 +167,9 @@
     Object.keys(THEME_VARS).forEach(function (name) { applyTheme(name, qs.get(name)); });
 
     // `wheel` -> props.wheelMode (js/mtlx-engine.js's view factory option).
-    // Defaults to 'scroll': an embed sitting inside a scrollable host page
-    // should not hijack the page's wheel scroll unless asked to via `zoom`.
-    var WHEEL_MODES = ['scroll', 'zoom'];
+    // Defaults to 'scroll': an embed inside a scrollable host page should
+    // not hijack the page's wheel scroll; `zoom` opts in, `none` disables zoom.
+    var WHEEL_MODES = ['scroll', 'zoom', 'none'];
     function parseWheelMode(v) {
         if (v == null || v === '') return 'scroll';
         var lower = String(v).trim().toLowerCase();
