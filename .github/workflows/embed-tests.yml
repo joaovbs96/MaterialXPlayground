@@ -57,8 +57,12 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # A hang (e.g. apt inside install-deps) must fail fast, never
-    # burn 40+ minutes like the last cache-hit run did.
+    # Playwright's own image ships Chromium plus every system library it
+    # needs, so no browser download and no apt step run in the job. Both
+    # hung or ran 4+ minutes on the bare runner. Tag matches package.json.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
+    # A hang anywhere must fail fast, never burn 40+ minutes as
+    # the old cache-hit install-deps run did.
     timeout-minutes: 8
     steps:
       - name: Checkout
@@ -74,11 +78,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      # No cache: a fresh chromium download is ~20s and never hangs,
-      # unlike the old cache-hit path's install-deps apt call.
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
 
       - name: Regenerate embed bundles
         run: node scripts/build.mjs embed
