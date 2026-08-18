@@ -112,7 +112,7 @@ const VIEW_DEPS = {
         // Same dependency-free custom element as builder (docs/EMBEDDING.md);
         // loadScript memoizes by URL, so the two views share one load.
         scripts: ['embed/mtlx-viewer.js'],
-        babelScripts: [],
+        babelScripts: ['js/shared/hero-grid.jsx'],
         app: 'js/home-app.jsx',
         globalName: 'HomeApp',
     },
@@ -187,6 +187,13 @@ const VIEW_DEPS = {
         babelScripts: ['js/shared/mtlx-ui.jsx'],
         app: 'js/builder-app.jsx',
         globalName: 'BuilderApp',
+    },
+    vscode: {
+        css: [],
+        scripts: [],
+        babelScripts: ['js/shared/hero-grid.jsx'],
+        app: 'js/vscode-app.jsx',
+        globalName: 'VscodeApp',
     },
 };
 
@@ -350,6 +357,7 @@ function Shell() {
         graph: { mounted: false, status: 'idle' },
         compare: { mounted: false, status: 'idle' },
         builder: { mounted: false, status: 'idle' },
+        vscode: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -421,6 +429,7 @@ function Shell() {
             graph: 'MaterialX Playground — Node Graph Editor',
             compare: 'MaterialX Playground — Material Compare',
             builder: 'MaterialX Playground - Embed Builder',
+            vscode: 'MaterialX Playground - VS Code extension',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -443,6 +452,7 @@ function Shell() {
             graph: '',
             compare: '',
             builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -523,9 +533,9 @@ function Shell() {
                 // inset-0` root positions directly against #root. VS
                 // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
-            } else if (view === 'builder') {
+            } else if (view === 'builder' || view === 'vscode') {
                 // Same wrapper contract as home: a static, scrollable
-                // content page, not a full-bleed canvas.
+                // content page, not a full-bleed canvas (builder/vscode).
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
@@ -552,6 +562,7 @@ function Shell() {
             {renderView('graph')}
             {renderView('compare')}
             {renderView('builder')}
+            {renderView('vscode')}
         </div>
     );
 }

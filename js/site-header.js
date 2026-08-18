@@ -150,7 +150,9 @@
         '</svg>';
     var ICON_NAV_VSCODE =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-            '<path d="M4 7h3a1 1 0 0 0 1 -1v-1a2 2 0 0 1 4 0v1a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0 -1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-1a2 2 0 0 0 -4 0v1a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h1a2 2 0 0 0 0 -4h-1a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1" />' +
+            '<path d="M16 3v18l4 -2.5v-13l-4 -2.5" />' +
+            '<path d="M9.165 13.903l-4.165 3.597l-2 -1l4.333 -4.5m1.735 -1.802l6.932 -7.198v5l-4.795 4.141" />' +
+            '<path d="M16 16.5l-11 -10l-2 1l13 13.5" />' +
         '</svg>';
     var ICON_CHEVRON_DOWN =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-tab-chevron">' +
@@ -177,7 +179,7 @@
         ] },
         { id: 'integrate', label: 'Integrate', group: true, icon: ICON_NAV_INTEGRATE, items: [
             { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER, badge: 'Experimental' },
-            { id: 'vscode', label: 'VS Code extension', href: LINKS.releases, external: true, icon: ICON_NAV_VSCODE, badge: 'Experimental' },
+            { id: 'vscode', label: 'VS Code extension', shellHref: '#!vscode', icon: ICON_NAV_VSCODE, badge: 'Experimental' },
         ] },
     ];
 
@@ -204,6 +206,7 @@
         if (hash === '#!graph') { return 'graph'; }
         if (hash === '#!compare') { return 'compare'; }
         if (hash === '#!builder') { return 'builder'; }
+        if (hash === '#!vscode') { return 'vscode'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
     }
@@ -663,6 +666,11 @@
     // cached in sessionStorage for the tab's lifetime. Best-effort
     // throughout: a failure must never leave more than a plain icon+name link.
     (function initSourceFacts() {
+        // Resolves with the facts (or null) so js/vscode-app.jsx can reuse
+        // this fetch for its download link instead of a second API call.
+        var resolveFacts;
+        window.mtlxSourceFacts = new Promise(function (r) { resolveFacts = r; });
+
         // Two independent facts-row mounts (desktop + mobile hamburger
         // copy) get the same data, rendered as fresh spans into each: a
         // DOM node can't be shared between the two containers.
@@ -670,14 +678,14 @@
             document.getElementById('mtlx-source-facts'),
             document.getElementById('mtlx-source-facts-mobile'),
         ].filter(function (el) { return el; });
-        if (!factsEls.length) return;
+        if (!factsEls.length) { resolveFacts(null); return; }
         // No CSP-friendly api.github.com access from the VS Code webview
         // (webview.html's connect-src disallows it) — stay a plain link
         // there. Also skip the fetch outright in embed mode, not just via CSS.
-        if (window.__MTLX_VSCODE__) return;
-        if (document.documentElement.classList.contains('embed-mode')) return;
+        if (window.__MTLX_VSCODE__) { resolveFacts(null); return; }
+        if (document.documentElement.classList.contains('embed-mode')) { resolveFacts(null); return; }
 
-        var CACHE_KEY = 'mtlx_source_facts';
+        var CACHE_KEY = 'mtlx_source_facts_v2';
 
         // mkdocs-material's own >999 formatter, verbatim: rounds to one
         // decimal place unless doing so would land exactly on a whole
@@ -715,7 +723,7 @@
 
         var cached = null;
         try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; }
-        if (cached) { render(cached); return; }
+        if (cached) { render(cached); resolveFacts(cached); return; }
 
         Promise.all([
             fetch('https://api.github.com/repos/' + REPO_SLUG)
@@ -727,14 +735,26 @@
         ]).then(function (results) {
             var repoData = results[0];
             var releaseData = results[1];
-            if (!repoData && !releaseData) return; // offline/rate-limited: stay a plain link, nothing cached, retry next reload
+            if (!repoData && !releaseData) { resolveFacts(null); return; } // offline/rate-limited: stay a plain link, nothing cached, retry next reload
+            var vsix = null;
+            if (releaseData && Array.isArray(releaseData.assets)) {
+                for (var i = 0; i < releaseData.assets.length; i++) {
+                    var a = releaseData.assets[i];
+                    if (a && typeof a.name === 'string' && /\.vsix$/i.test(a.name)) {
+                        vsix = { name: a.name, url: a.browser_download_url, size: a.size };
+                        break;
+                    }
+                }
+            }
             var facts = {
                 version: releaseData ? releaseData.tag_name : null,
                 stars: repoData ? repoData.stargazers_count : undefined,
                 forks: repoData ? repoData.forks_count : undefined,
+                vsix: vsix,
             };
             try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(facts)); } catch (e) { /* best-effort */ }
             render(facts);
+            resolveFacts(facts);
         });
     })();
 
