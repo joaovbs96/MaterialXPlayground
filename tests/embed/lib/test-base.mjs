@@ -14,6 +14,10 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 export const HARNESS_PATH = '/tests/embed/fixtures/harness.html';
 export const FIXTURE_MTLX_PATH = '/tests/embed/fixtures/multi-material.mtlx';
 
+// CI's software-rendered WebGL is much slower than local; scale the
+// shared wait helpers' default timeout so CI gets headroom too.
+export const WAIT_TIMEOUT = process.env.CI ? 90000 : 45000;
+
 /** Reads tests/embed/fixtures/multi-material.mtlx's raw text, for
  * tests that pass it directly to el.load() instead of via `src`. */
 export function readMultiMaterialXml() {
@@ -55,7 +59,7 @@ export async function createRawIframe(page, src) {
   return page.evaluate((src) => window.createRawIframe(src), src);
 }
 
-export async function waitForReady(page, idx, timeout = 45000) {
+export async function waitForReady(page, idx, timeout = WAIT_TIMEOUT) {
   await page.waitForFunction(
     (i) => window.__viewers[i].__events.some((e) => e.type === 'mtlx-ready'),
     idx,
@@ -63,7 +67,7 @@ export async function waitForReady(page, idx, timeout = 45000) {
   );
 }
 
-export async function waitForEventCount(page, idx, type, count, timeout = 45000) {
+export async function waitForEventCount(page, idx, type, count, timeout = WAIT_TIMEOUT) {
   await page.waitForFunction(
     ({ i, type, count }) => window.__viewers[i].__events.filter((e) => e.type === type).length >= count,
     { i: idx, type, count },
@@ -112,7 +116,7 @@ export async function resetCamera(page, idx) {
   return page.evaluate((i) => window.__viewers[i].resetCamera(), idx);
 }
 
-export async function waitForMsg(page, type, timeout = 45000) {
+export async function waitForMsg(page, type, timeout = WAIT_TIMEOUT) {
   await page.waitForFunction((type) => window.__msgs.some((m) => m.type === type), type, { timeout });
 }
 

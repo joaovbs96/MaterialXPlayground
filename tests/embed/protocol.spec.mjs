@@ -6,7 +6,7 @@
 // list, since earlier steps in the same run may have already reported.
 
 import {
-  test, expect, gotoHarness, FIXTURE_MTLX_PATH,
+  test, expect, gotoHarness, FIXTURE_MTLX_PATH, WAIT_TIMEOUT,
   createViewer, waitForReady, waitForEventCount, getEvents,
   getCamera, setCamera, resetCamera, setProp, callLoad, readMultiMaterialXml,
 } from './lib/test-base.mjs';
@@ -21,6 +21,11 @@ function expectPose(pose, position, target) {
 }
 
 test('protocol walkthrough shares one boot: handshake, camera, geometry, material, envmap, load', async ({ page, embedURL }) => {
+  // Shares one boot across ~9 steps (the scope of ~7 former single
+  // tests); CI's software-rendered WebGL runs several times slower
+  // than local. 480000ms = 4x the config's local default timeout.
+  test.setTimeout(480000);
+
   await gotoHarness(page, embedURL);
 
   const idx = await createViewer(page, {
@@ -89,7 +94,7 @@ test('protocol walkthrough shares one boot: handshake, camera, geometry, materia
     await page.waitForFunction(
       (i) => window.__viewers[i].__events.some((e) => e.type === 'mtlx-error' && /not found/i.test(e.detail.message)),
       idx,
-      { timeout: 30000 }
+      { timeout: WAIT_TIMEOUT }
     );
   });
 
