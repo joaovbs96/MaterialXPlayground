@@ -40,6 +40,9 @@ const HERO_PRESETS = [
 ];
 const HERO_PRESET = HERO_PRESETS[Math.floor(Math.random() * HERO_PRESETS.length)]; // one pick per page load
 const HERO_CAMERA = '0,0.35,2.5,0,0,0'; // px,py,pz,tx,ty,tz, see docs/EMBEDDING.md
+// Decorative grid behind the hero: 40px cells, faint gray-500 lines. It
+// fades into the page background across the featured band's own height.
+const HOME_GRID = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
 
 // 1x1 transparent PNG data URI, used as the hero element's poster so
 // there's no placeholder flash before the first real frame renders.
@@ -252,10 +255,51 @@ function HomeApp({ active } = {}) {
     const featuredCard = HOME_FEATURED ? HOME_CARDS.find((c) => c.id === HOME_FEATURED.card) : null;
     const chips = [{ id: 'all', label: 'All' }, ...HOME_GROUPS];
 
+    // Grid extent, measured: spans the shell's scroll wrapper edge to edge
+    // (two levels up, see shell.jsx's home wrapper) and fades from the
+    // featured band's top to its bottom (or across the hero's lower half).
+    const rootRef = React.useRef(null);
+    const fadeRef = React.useRef(null);
+    const [grid, setGrid] = React.useState(null);
+    React.useEffect(() => {
+        const root = rootRef.current;
+        const el = fadeRef.current;
+        const wrap = root && root.parentElement && root.parentElement.parentElement;
+        if (!root || !el || !wrap) return undefined;
+        const measure = () => {
+            const rr = root.getBoundingClientRect();
+            const wr = wrap.getBoundingClientRect();
+            const fr = el.getBoundingClientRect();
+            const top = wr.top - rr.top - wrap.scrollTop;
+            const fadeStart = (featuredCard ? fr.top : fr.top + fr.height * 0.5) - rr.top - top;
+            setGrid({
+                top: Math.round(top),
+                left: Math.round(wr.left - rr.left),
+                width: wrap.clientWidth,
+                height: Math.round(fr.bottom - rr.top - top),
+                fadeStart: Math.round(fadeStart),
+            });
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(root);
+        ro.observe(wrap);
+        return () => ro.disconnect();
+    }, [featuredCard]);
+    const gridMask = grid ? `linear-gradient(to bottom, rgba(0,0,0,1) 0px, rgba(0,0,0,1) ${grid.fadeStart}px, rgba(0,0,0,0) ${grid.height}px)` : 'none';
+
     return (
-        <div className="max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-10 sm:space-y-14">
+        <div ref={rootRef} className="relative">
+            {grid && (
+                <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute"
+                    style={{ top: grid.top, left: grid.left, width: grid.width, height: grid.height, backgroundImage: HOME_GRID, backgroundSize: '40px 40px', backgroundPosition: 'center top', maskImage: gridMask, WebkitMaskImage: gridMask }}
+                />
+            )}
+        <div className="relative max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-10 sm:space-y-14">
             {/* Hero */}
-            <div className="flex flex-col lg:flex-row lg:items-center gap-8">
+            <div ref={featuredCard ? null : fadeRef} className="flex flex-col lg:flex-row lg:items-center gap-8">
                 <div className="flex-1 min-w-0 space-y-4">
                     <div className="flex items-center gap-3">
                         <svg
@@ -301,6 +345,7 @@ function HomeApp({ active } = {}) {
             {/* Featured band */}
             {featuredCard && (
                 <a
+                    ref={fadeRef}
                     href={featuredCard.href}
                     className="block rounded-2xl border border-blue-500/35 bg-gray-800 ring-4 ring-blue-500/[0.06] p-6 sm:p-8 hover:border-blue-500/60 transition-colors"
                 >
@@ -371,6 +416,7 @@ function HomeApp({ active } = {}) {
                     </div>
                 </section>
             ))}
+        </div>
         </div>
     );
 }
