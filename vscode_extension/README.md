@@ -1,18 +1,19 @@
 # MaterialX Playground (VS Code extension, v1)
 
 Opens `.mtlx` files in this repo's MaterialX Playground web app (Material
-Viewer or Node Graph Editor) inside a VS Code webview — sibling textures
+Viewer or Node Graph Editor) inside a VS Code webview: sibling textures
 and `xi:include` docs are resolved automatically, and the view live-
 reloads as you edit the text. The **Material Viewer is read/view only**,
-and switching to it always shows the Graph editor's current state — see
-"Viewer/Graph sync" under Usage below. The **Node Graph Editor can write
-back**: press **Ctrl+S** (Cmd+S on macOS) while it's the visible view to
-save the current graph to the open `.mtlx` file — see "Node Graph Editor:
-saving" under Usage below for what that does and doesn't do.
-**Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y** (Cmd+Z / Cmd+Shift+Z on macOS) map to
-the Node Graph Editor's own undo/redo while the editor is focused, instead
-of VS Code's text-document undo/redo — see "Node Graph Editor: undo/redo"
-under Usage below.
+and switching to it always shows the Graph editor's current state (see
+"Viewer/Graph sync" under Usage below). The **Node Graph Editor edits the
+document**: every settled graph edit is written straight into the open
+`.mtlx` document buffer, so a text editor on the same file updates live
+and the tab shows unsaved changes; **Ctrl+S** (Cmd+S on macOS) saves the
+file to disk (see "Node Graph Editor: editing and saving" under Usage
+below). **Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y** (Cmd+Z / Cmd+Shift+Z on macOS)
+while the Node Graph Editor is focused run VS Code's own document
+undo/redo, so graph edits and hand-typed edits share one history (see
+"Node Graph Editor: undo/redo" under Usage below).
 
 This extension is plain CommonJS JavaScript, no build step, no npm
 dependencies — it runs directly out of a checkout of this repo.
@@ -69,50 +70,59 @@ dependencies — it runs directly out of a checkout of this repo.
   to the same `.mtlx` editor — only closing and reopening the `.mtlx`
   file itself re-arms it.
 
-### Node Graph Editor: saving
+### Node Graph Editor: editing and saving
 
+- **Graph edits sync into the document buffer as you make them.**
+  Whenever a coalesced graph edit settles (a short debounce after the
+  last change: dragging a slider only updates the live preview, and the
+  edit lands in the document once, shortly after you release it), the
+  Node Graph Editor serializes the whole document and the extension
+  replaces the open `.mtlx` document's text with it via a
+  `WorkspaceEdit`. Nothing is written to disk at that point: the tab
+  shows the unsaved-changes dot, any text editor open on the same file
+  updates live, and VS Code's normal dirty-file handling applies from
+  there. The written XML is the app's own canonical serialization:
+  attribute order and whitespace may differ from what hand-editing the
+  file would produce, even when the graph itself is unchanged.
 - **Ctrl+S / Cmd+S** while the Node Graph Editor is the visible view
-  serializes the current graph and writes it back to the open `.mtlx`
-  file (then saves the file to disk) — the same document VS Code's tab
-  and the text editor show. This is wired as a real VS Code keybinding
-  (scoped to the MaterialX Playground editor being active), not just an
-  in-webview key listener, so it works reliably rather than racing VS
-  Code's own webview-save handling — see "How Ctrl+S saves the Node
-  Graph Editor" below. The written XML is the app's own canonical
-  serialization: attribute order and whitespace may differ from what
-  hand-editing the file would produce, even when the graph itself is
-  unchanged. Ctrl+S in the Material Viewer or the docs view is a no-op
-  (there's nothing there to save).
-- Because the `.mtlx` file is the source of truth, any external change to
-  it — hand-editing the text, another tool writing the file, `git
-  checkout`, etc. — is picked up by live reload and replaces whatever's
-  currently in the graph editor, **silently, with no "unsaved changes?"
-  confirmation**. Save graph edits you want to keep with Ctrl+S before
-  making (or accepting) an external change to the same file, or they'll
-  be lost without warning.
+  serializes the current graph, writes it to the document, and saves the
+  file to disk. This is wired as a real VS Code keybinding (scoped to
+  the MaterialX Playground editor being active), not just an in-webview
+  key listener, so it works reliably rather than racing VS Code's own
+  webview-save handling (see "How Ctrl+S saves the Node Graph Editor"
+  below). Because the buffer is already in sync, plain Ctrl+S in the
+  text editor saves the same content. Ctrl+S in the Material Viewer or
+  the docs view is a no-op (there's nothing there to save).
+- **Live reload runs the other way.** Any change to the open document's
+  text (typing in the text editor, a formatter, VS Code reloading a
+  clean file after an on-disk change) is picked up on a short debounce
+  and reloaded into both views. The extension's own buffer syncs and
+  saves are excluded from that reload, so the graph editor never
+  re-ingests its own output.
 
 ### Node Graph Editor: undo/redo
 
-- **Ctrl+Z** (undo) and **Ctrl+Shift+Z** / **Ctrl+Y** (redo) — Cmd+Z /
-  Cmd+Shift+Z on macOS — while the Node Graph Editor is the visible view
+- **Ctrl+Z** (undo) and **Ctrl+Shift+Z** / **Ctrl+Y** (redo), Cmd+Z /
+  Cmd+Shift+Z on macOS, while the Node Graph Editor is the visible view
   are wired as real VS Code keybindings, same as Ctrl+S, scoped to the
-  MaterialX Playground editor being active. They intentionally **shadow VS
-  Code's own text-document undo/redo**: without this, those chords would
-  hit the open `.mtlx` document's text-undo stack instead (Ctrl+S's own
-  `WorkspaceEdit` writes push onto that same stack), silently reverting
-  the file's text underneath the live graph session and letting live
-  reload clobber whatever the graph editor had in memory. Instead they're
-  routed to the graph editor's own in-page undo/redo, so the file on disk
-  is untouched until you next press Ctrl+S. A focused text field (e.g. a
-  parameter's label input) handles the chord itself first, as usual — its
-  native undo, not the graph's. Outside the Node Graph Editor (Viewer,
-  docs view, or no MaterialX Playground editor active) this is a no-op.
+  MaterialX Playground editor being active. They run **VS Code's own
+  document undo/redo** on the open `.mtlx` document; the graph editor
+  keeps no separate undo stack under VS Code. Because every graph edit is
+  already synced into that document, its native undo history holds graph
+  edits and hand-typed edits alike, in one sequence. The resulting text
+  change flows back into the webview through the normal live-reload path,
+  immediately (the reload debounce is skipped for undo/redo), so the
+  graph re-renders the undone or redone state. A focused text field (e.g.
+  a parameter's label input) handles the chord itself first, as usual:
+  its native undo, not the document's. Outside the Node Graph Editor
+  (Viewer, docs view, or no MaterialX Playground editor active) this is a
+  no-op.
 
 ### Viewer/Graph sync
 
 - Both views load the same document, but only one is mounted/visible at a
   time. Switching to the **Material Viewer always shows the Node Graph
-  Editor's current state** — including edits not yet saved with Ctrl+S —
+  Editor's current state** — including edits not yet saved to disk —
   at the moment you switch: it's a one-way sync (Graph -> Viewer), read
   the instant the Viewer becomes visible. The Viewer never edits, so
   nothing needs to flow back the other way, and an external file change
@@ -121,11 +131,14 @@ dependencies — it runs directly out of a checkout of this repo.
   (same cost as any fresh load) — the site's background WASM warm-up is
   what keeps that from stalling the UI, not something instantaneous.
 
-### Making it the default editor for `.mtlx` files
+### Optional: opening `.mtlx` files straight into the Playground
 
-The custom editor is registered with `"priority": "option"`, so it won't
-auto-take-over `.mtlx` files (it shows up in *Open With…* instead of
-replacing the default text editor). To make it the default, add to your
+Nothing needs configuring for the default experience: the custom editor
+is registered with `"priority": "option"`, so a `.mtlx` file opens in VS
+Code's normal text editor, and `materialx.autoOpenPlayground` (default
+`true`, see "Opening the playground" above) opens the Playground beside
+it. If you would rather have `.mtlx` files open straight into the
+Playground with no text editor, make it the default editor in your
 `settings.json`:
 
 ```json
@@ -133,6 +146,10 @@ replacing the default text editor). To make it the default, add to your
     "*.mtlx": "materialxPlayground.editor"
 }
 ```
+
+Auto-open only triggers when a `.mtlx` text editor becomes active, so in
+this mode the Playground opens on its own; the text editor stays
+reachable through *Open With…* -> *Text Editor*.
 
 ## Language features (`.mtlx` editing, validation, hover docs)
 
@@ -146,7 +163,7 @@ editor.
   (the bundled grammar just includes VS Code's own built-in `text.xml`
   grammar — no MaterialX-specific tokenizing to maintain) plus
   language-aware editing behavior: `Ctrl+/` toggles `<!-- -->` block
-  comments, and `<>`/quotes auto-close and surround a selection. The
+  comments, quotes auto-close, and `<>`/quotes surround a selection. The
   language mode shows as "MaterialX" in the status bar.
 - **Live validation** (Problems squiggles + status bar), in two tiers,
   re-run on a 400ms debounce as you type:
@@ -159,12 +176,13 @@ editor.
     clean: loads the same bundled MaterialX WASM build the Material
     Viewer/Node Graph Editor use (headless, inside the extension host)
     and actually parses + `validate()`s the document — catching things
-    like a node graph referencing a nonexistent node. Because this
-    build's `validate()` binding is boolean-only (no message strings) and
-    the WASM binding hands back no character offsets at all, the
-    resulting diagnostics are a best-effort scan for dangling references
-    and their squiggle lands near the *named* element rather than at an
-    exact reported column — an accepted approximation, not a bug.
+    like a node graph referencing a nonexistent node. The message-holder
+    overload of `validate()` gives back MaterialX's real diagnostic text
+    but no character offsets, so each squiggle is placed by locating the
+    named element in the document text (when several elements share a
+    name, the one whose other attributes best match wins); it can
+    occasionally land on the wrong occurrence of a common name. That is
+    an accepted approximation of the binding, not a bug.
   - If the WASM build fails to load — most commonly a CRLF-corrupted
     `JsMaterialXGenShader.data` archive from a bad Windows checkout of
     this binary file — tier 2 silently and **permanently** degrades to
@@ -176,38 +194,40 @@ editor.
     shows `$(check) MaterialX` when the open document is clean or
     `$(error) MaterialX: N` with a tooltip listing the first few issues;
     click it to jump to the Problems panel.
-- **Hover documentation**: hovering a node **category** — an element tag
-  name like `<standard_surface>` or `<mix>` (MaterialX nodes are just
-  elements named by category), or the value of a `node="..."` attribute
-  (`<nodedef>`/`<materialassign>` references) — shows that node's
-  description plus its port table (inputs/outputs, matched to the hovered
-  element's own signature when derivable) straight from the MaterialX
-  specification (parsed from the
+- **Hover documentation**: hovering a node **category** in a `.mtlx`
+  text editor, an element tag name like `<standard_surface>` or `<mix>`
+  (MaterialX nodes are just elements named by category), or the value of
+  a `node="..."` attribute (`<nodedef>`/`<materialassign>` references),
+  shows that node's description plus its port table (inputs/outputs,
+  matched to the hovered element's own signature when derivable)
+  straight from the MaterialX specification (parsed from the
   `MaterialX.PBRSpec.md` / `MaterialX.NPRSpec.md` /
   `MaterialX.StandardNodes.md` files — read from `vendor/materialx/` when
   present (the offline build, populated by `npm run vendor:offline`),
   otherwise fetched once from the MaterialX repository on GitHub and
   cached in memory for the rest of the session) plus an
-  **Open documentation** link that opens/reuses the
-  `MaterialX Playground: Open Node Library Documentation` panel scoped directly to that
-  node. Structural/document elements — `<materialx>`, `<nodegraph>`,
-  `<input>`, `<output>`, `<nodedef>`, `<look>`, `<xi:include>`, and
-  similar schema scaffolding — never produce a hover, only actual node
-  categories do. A category with no matching spec entry (e.g. a custom
-  node defined outside the standard libraries) still gets a headline plus
-  the Open documentation link; the docs site resolves name-only
-  permalinks by search rather than requiring an exact spec match.
+  **Interactive Documentation** link that opens/reuses the
+  `MaterialX Playground: Open Node Library Documentation` panel scoped
+  directly to that node. When the node has a known spec page, an
+  **Official Specification** link to it follows. Structural/document
+  elements — `<materialx>`, `<nodegraph>`, `<input>`, `<output>`,
+  `<nodedef>`, `<look>`, `<xi:include>`, and similar schema scaffolding —
+  never produce a hover, only actual node categories do. A category with
+  no matching spec entry (e.g. a custom node defined outside the
+  standard libraries) still gets a headline plus the Interactive
+  Documentation link; the docs site resolves name-only permalinks by
+  search rather than requiring an exact spec match.
 - **Docs panels default to 3D previews off**: the node documentation
   panel's per-node 3D previews — whether opened via
-  `MaterialX Playground: Open Node Library Documentation` or a hover's Open documentation
-  link above — start with 3D previews switched OFF. Each preview is its
-  own WASM shader-gen + WebGL context, which is heavy to pile on top of a
-  VS Code webview that, in practice, often already has a live MaterialX
-  Playground editor tab running its own such session. Toggling previews
-  on in the docs view's own UI sticks for the rest of that webview's
-  session (it does not silently flip back off); this default is scoped
-  to docs panels only — the Material Viewer/Node Graph Editor views never
-  read this preference at all.
+  `MaterialX Playground: Open Node Library Documentation` or a hover's
+  Interactive Documentation link above — start with 3D previews switched
+  OFF. Each preview is its own WASM shader-gen + WebGL context, which is
+  heavy to pile on top of a VS Code webview that, in practice, often
+  already has a live MaterialX Playground editor tab running its own
+  such session. Toggling previews on in the docs view's own UI sticks
+  for the rest of that webview's session (it does not silently flip back
+  off); this default is scoped to docs panels only — the Material
+  Viewer/Node Graph Editor views never read this preference at all.
 
 ## Settings
 
@@ -258,15 +278,12 @@ editor.
   node-documentation dialog and hover links, or the separate
   `MaterialX Playground: Open Node Library Documentation` command, rather
   than through a nav tab duplicating that content in-line.
-- **Write-back is Node Graph Editor-only, and only on Ctrl+S.** The
-  webview holds an in-memory copy of the document (plus any resolved
-  includes/textures); nothing is saved back to the `.mtlx` file until you
-  press Ctrl+S while the Node Graph Editor is the visible view (see "Node
-  Graph Editor: saving" under Usage). The Material Viewer has no
-  write-back at all. Live reload still flows text editor -> webview the
-  rest of the time — and, unlike a normal unsaved-changes prompt, an
-  external edit **silently replaces** unsaved graph-editor changes rather
-  than asking first.
+- **Only the Node Graph Editor edits the document; the Material Viewer
+  is read-only.** Graph edits sync into the open `.mtlx` document buffer
+  as they settle and Ctrl+S saves to disk (see "Node Graph Editor:
+  editing and saving" under Usage). Each sync replaces the whole
+  document with the app's own serialization, so attribute order and
+  formatting can differ from hand-written XML.
 - The graph editor's **node-documentation dialog** (the "?" button on the
   parameter panel) renders the docs view INLINE inside the same webview —
   no iframe, no separate panel — identical to the website. The
@@ -283,6 +300,10 @@ editor.
   instance, own WebGL context) — memory and GPU context usage multiply
   per open tab. `retainContextWhenHidden` is enabled so backgrounded tabs
   don't lose their state, at the cost of keeping that memory around.
+- **Only the default MaterialX version ships in the `.vsix`**
+  (`.vscodeignore` drops the others), so the Material Comparison view,
+  the one feature that needs several versions side by side, stays
+  web-only; the webview nav has just Viewer and Graph.
 - The repo root is the extension's `package.json`/install root, so a
   packaged `.vsix` (`vsce package`) bundles the site's files alongside
   `vscode_extension/` automatically — no separate copy step needed.
@@ -328,7 +349,8 @@ editor.
   category under the cursor (an element tag name, excluding structural/
   document elements, or a `node="..."` attribute value), looks it up via
   `src/specDocs.js`, and renders a trusted `MarkdownString` with the
-  description and an `Open documentation` command link.
+  description, an `Interactive Documentation` command link, and, when
+  the node has a known spec page, an `Official Specification` link.
 - `media/bootstrap.js` runs first inside the webview and adapts the
   extension's message into the exact
   `window.__mtlxPendingImport`/`__mtlxPendingViewerImport` +
@@ -337,7 +359,11 @@ editor.
   (`js/shared/mtlx-ui.jsx`), setting BOTH globals and dispatching BOTH
   events so the document is loaded into both views — the webview is, as
   far as the site's own code can tell, just another caller of that same
-  hand-off, once per view.
+  hand-off, once per view. It also exposes `window.__mtlxNotifyEdit`,
+  which `js/graph-app.jsx`'s `flushUndoSnapshot` calls with the
+  serialized document each time a coalesced edit settles; bootstrap
+  posts that as `'mtlx-sync'` and `resolveCustomTextEditor` applies it
+  to the document with a `WorkspaceEdit` (no `document.save()`).
 
 ### How the extension serves the MaterialX WASM payloads
 
@@ -387,11 +413,28 @@ open document's full text with that XML via a `WorkspaceEdit`, calls
 `document.save()`, and replies `{ type: 'mtlx-save-result', ok }`; on
 success the webview also calls `window.__mtlxMarkGraphSaved()` so the
 graph editor's own unsaved-changes tracking agrees the session is saved.
-That write-back fires the same `onDidChangeTextDocument` event live
-reload watches, so `editorProvider.js` records the text it just wrote and
-skips the resend for that one change — otherwise the graph editor would
-immediately re-ingest its own just-saved output and lose undo
-history/selection over data it JUST wrote.
+Both the `'mtlx-save'` and `'mtlx-sync'` writes fire the same
+`onDidChangeTextDocument` event live reload watches, as do any
+save-participant edits VS Code applies inside `document.save()`.
+`editorProvider.js` therefore keeps a `hostEditDepth` counter,
+incremented before each of its own `applyEdit` calls and decremented
+once the operation settles, and skips scheduling a resend while it is
+above zero; otherwise the graph editor would immediately re-ingest its
+own just-written output and lose undo history/selection over data it
+JUST wrote.
+
+### How undo/redo works
+
+`materialxPlayground.undoGraph` / `redoGraph` (Ctrl+Z / Ctrl+Shift+Z /
+Ctrl+Y, gated with the same `activeCustomEditorId` `when` clause as
+Ctrl+S) post `'mtlx-request-undo'` / `'mtlx-request-redo'` to the active
+panel. `media/bootstrap.js` no-ops unless the Graph view is visible and
+focus is not in an editable element, then posts `'mtlx-native-undo'` /
+`'mtlx-native-redo'` back. `editorProvider.js` runs VS Code's own `undo`
+/ `redo` command on the document, deliberately outside the
+`hostEditDepth` suppression, cancels any pending debounced resend, and
+calls `sendUpdate()` right away so the graph re-renders the result
+without waiting for the debounce.
 
 ### How the Viewer stays in sync with the Graph editor
 
