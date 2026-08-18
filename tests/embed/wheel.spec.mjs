@@ -1,6 +1,6 @@
 // tests/embed/wheel.spec.mjs: default wheel mode gates a plain wheel
-// on the canvas; Ctrl/Cmd+wheel still zooms. Untrusted WheelEvents
-// still reach OrbitControls, which never checks event.isTrusted.
+// on the canvas; Ctrl/Cmd+wheel still zooms; wheel=none zooms on neither.
+// Untrusted WheelEvents still reach OrbitControls (no isTrusted check).
 
 import {
   test, expect, gotoHarness, FIXTURE_MTLX_PATH,
@@ -48,4 +48,31 @@ test('plain wheel is gated; Ctrl+wheel zooms', async ({ page, embedURL }) => {
   await page.waitForTimeout(500);
   const afterCtrl = distance(await getCamera(page, idx));
   expect(Math.abs(afterCtrl - afterPlain)).toBeGreaterThan(0.01);
+});
+
+test('wheel=none: neither plain nor Ctrl+wheel zooms', async ({ page, embedURL }) => {
+  await gotoHarness(page, embedURL);
+
+  const idx = await createViewer(page, {
+    base: embedURL + '/embed/',
+    src: embedURL + FIXTURE_MTLX_PATH,
+    geometry: 'sphere',
+    wheel: 'none',
+    eager: true,
+  });
+
+  await waitForReady(page, idx);
+  await waitForEventCount(page, idx, 'mtlx-renderables', 1);
+
+  const before = distance(await getCamera(page, idx));
+
+  await dispatchWheel(page, idx, { deltaY: 120, ctrlKey: false });
+  await page.waitForTimeout(500);
+  const afterPlain = distance(await getCamera(page, idx));
+  expect(Math.abs(afterPlain - before)).toBeLessThan(0.01);
+
+  await dispatchWheel(page, idx, { deltaY: 120, ctrlKey: true });
+  await page.waitForTimeout(500);
+  const afterCtrl = distance(await getCamera(page, idx));
+  expect(Math.abs(afterCtrl - before)).toBeLessThan(0.01);
 });

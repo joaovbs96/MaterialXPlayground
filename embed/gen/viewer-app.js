@@ -933,9 +933,11 @@ function MaterialViewerApp({
       className: "w-full block cursor-grab active:cursor-grabbing"
       // Always fills its container: VS Code, fullscreen, and
       // the full-bleed browser default all resolve to 100% here.
+      // No focus ring: on a transparent embed it reads as a border.
       ,
       style: {
-        height: '100%'
+        height: '100%',
+        outline: 'none'
       },
       tabIndex: -1
     })))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {

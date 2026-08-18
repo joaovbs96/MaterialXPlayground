@@ -2795,9 +2795,9 @@ const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
     label, needsLighting, geomName,
     autoRotate = true, envBackground = false,
-    // 'zoom' (default): today's behavior, plain wheel zooms. 'scroll':
-    // plain wheel is gated (page scrolls instead); Ctrl/Cmd+wheel still
-    // zooms. See the wheel-gate block below, right before OrbitControls.
+    // 'zoom' (default): plain wheel zooms. 'scroll': plain wheel is gated
+    // (page scrolls), Ctrl/Cmd+wheel zooms; see the wheel-gate block below.
+    // 'none': no zoom at all (wheel, Ctrl+wheel, pinch), orbit still works.
     wheelMode = 'zoom',
     // isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
     // TEMPORARY visibility (backgrounded view skips render, keeps looping).
@@ -3159,6 +3159,7 @@ const createMtlxRenderView = async ({
                     controls.enableDamping = true;
                     controls.dampingFactor = 0.08;
                     controls.enablePan = false;
+                    controls.enableZoom = wheelMode !== 'none';
                     controls.minDistance = 1.4;
                     controls.maxDistance = 9;
                     // Camera auto-orbit (off by default): pins the

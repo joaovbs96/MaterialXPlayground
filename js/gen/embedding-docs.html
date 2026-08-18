@@ -85,9 +85,9 @@ in-page, for reference while you work.</p>
 </tr>
 <tr>
 <td><code>wheel</code></td>
-<td><code>scroll</code>, <code>zoom</code></td>
+<td><code>scroll</code>, <code>zoom</code>, <code>none</code></td>
 <td><code>scroll</code></td>
-<td>Plain mouse-wheel behavior over the viewport. <code>scroll</code> (the default) leaves a plain wheel event to scroll the <em>host page</em>, since an embed has no business hijacking the scroll of the page it&#39;s sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there&#39;s no host page left to scroll at that point. <code>zoom</code> restores plain-wheel zooming everywhere. An unrecognized value falls back to <code>scroll</code> and is reported through <code>mtlx-error</code>.</td>
+<td>Plain mouse-wheel behavior over the viewport. <code>scroll</code> (the default) leaves a plain wheel event to scroll the <em>host page</em>, since an embed has no business hijacking the scroll of the page it&#39;s sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there&#39;s no host page left to scroll at that point. <code>zoom</code> restores plain-wheel zooming everywhere. <code>none</code> disables zooming entirely (wheel, Ctrl+wheel and touch pinch); dragging to orbit still works and a plain wheel scrolls the host page. An unrecognized value falls back to <code>scroll</code> and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>camera</code></td>
@@ -369,7 +369,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <tr>
 <td><code>wheel</code></td>
 <td><code>.wheel</code></td>
-<td><code>scroll</code>, <code>zoom</code></td>
+<td><code>scroll</code>, <code>zoom</code>, <code>none</code></td>
 <td><code>scroll</code></td>
 <td>No (reload)</td>
 </tr>

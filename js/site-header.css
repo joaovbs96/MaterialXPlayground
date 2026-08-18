@@ -90,6 +90,14 @@
     }
 }
 
+/* Compact stage (js/site-header.js's measure()): hides the abbreviatable
+   half of the version/source pills before falling back to the hamburger,
+   see .mtlx-badge-word / .mtlx-source-owner further down. */
+.mtlx-header-bar.is-compact .mtlx-badge-word,
+.mtlx-header-bar.is-compact .mtlx-source-owner {
+    display: none;
+}
+
 /* Brand: logo mark + site title. Color lives on the outer element
    (anchor in the SPA/tutorials, a plain span under VS Code — same class
    either way) and cascades to the icon/title via normal CSS
@@ -161,6 +169,127 @@
 .mtlx-tab.is-active {
     border-bottom-color: var(--site-blue-500);
     color: var(--site-blue-300);
+}
+
+/* Dropdown-trigger tabs (Learn/Integrate groups): a <button> styled like
+   the <a> tabs above (.mtlx-tab supplies padding/border-bottom, the
+   button reset up top supplies bg/cursor), plus a chevron that flips. */
+.mtlx-nav-group {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+}
+.mtlx-tab-trigger {
+    gap: 4px;
+}
+.mtlx-tab-trigger[aria-expanded="true"] {
+    color: var(--site-gray-200);
+    border-bottom-color: var(--site-gray-600);
+}
+.mtlx-tab-chevron {
+    width: 14px;
+    height: 14px;
+    opacity: 0.8;
+    transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-tab-trigger[aria-expanded="true"] .mtlx-tab-chevron {
+    transform: rotate(180deg);
+}
+
+/* Popup menu panel + its items (site-header.js's initNavGroups opens it
+   via .is-open, on hover-intent, click, or keyboard). */
+.mtlx-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 1px);
+    left: 0;
+    z-index: 50;
+    min-width: 240px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid var(--site-gray-700);
+    background-color: var(--site-gray-800);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.mtlx-menu.is-open {
+    display: block;
+}
+.mtlx-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--site-gray-200);
+    white-space: nowrap;
+}
+.mtlx-menu-item:hover,
+.mtlx-menu-item:focus-visible {
+    background-color: var(--site-gray-700);
+    outline: none;
+}
+.mtlx-menu-item.is-active {
+    color: var(--site-blue-300);
+}
+.mtlx-menu-item.is-disabled {
+    color: var(--site-gray-500);
+    cursor: default;
+}
+.mtlx-menu-item.is-disabled:hover {
+    background-color: transparent;
+}
+.mtlx-menu-item svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+.mtlx-menu-label {
+    flex: 1 1 auto;
+}
+/* Experimental/Coming-soon pills, shared shape (rounded, uppercase,
+   11-ish px), different color per meaning. */
+.mtlx-menu-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+    padding: 1px 8px;
+    border-radius: 9999px;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    background-color: rgba(245, 158, 11, 0.1);
+    color: var(--site-amber-300);
+    white-space: nowrap;
+}
+.mtlx-menu-soon {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+    padding: 1px 8px;
+    border-radius: 9999px;
+    border: 1px solid rgba(75, 85, 99, 0.5);
+    background-color: rgba(55, 65, 81, 0.4);
+    color: var(--site-gray-500);
+    white-space: nowrap;
+}
+.mtlx-menu-ext {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--site-gray-500);
+}
+.mtlx-menu-item .mtlx-menu-ext {
+    width: 14px;
+    height: 14px;
 }
 
 /* align-items: stretch (not center) so the version pill below always
@@ -410,6 +539,49 @@
     border-left-color: var(--site-blue-500);
     color: var(--site-blue-300);
     background-color: rgba(31, 41, 55, 0.6); /* gray-800/60 */
+}
+
+/* Group label row (Learn/Integrate), mobile-panel-only: desktop groups
+   get a popup menu instead (.mtlx-menu above), so this has no counterpart
+   there. Its items are plain .mtlx-tab-mobile rows, flattened below it. */
+.mtlx-mobile-group-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px 4px;
+    font-size: 11px;
+    line-height: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--site-gray-500);
+}
+.mtlx-mobile-group-label svg {
+    width: 14px;
+    height: 14px;
+}
+.mtlx-tab-mobile.is-disabled {
+    color: var(--site-gray-500);
+    cursor: default;
+}
+.mtlx-tab-mobile.is-disabled:hover {
+    color: var(--site-gray-500);
+    background-color: transparent;
+}
+/* Two classes beat .mtlx-tab-mobile svg's one-class-plus-type above, so
+   this re-pins the external-link glyph to 14px (not 18px) as well as
+   pushing it, and badge/soon pills, flush right. */
+.mtlx-tab-mobile .mtlx-menu-ext {
+    width: 14px;
+    height: 14px;
+    margin-left: auto;
+}
+.mtlx-tab-mobile .mtlx-menu-badge,
+.mtlx-tab-mobile .mtlx-menu-soon {
+    margin-left: auto;
+}
+.mtlx-tab-mobile .mtlx-menu-badge + .mtlx-menu-ext {
+    margin-left: 0;
 }
 
 .mtlx-mobile-links {
