@@ -1,5 +1,11 @@
 # Runs the Playwright suite for the embeddable MaterialX viewer
-# (tests/embed/**) on headless Chromium, on every push and PR.
+# (tests/embed/**) on headless Chromium.
+#
+# Two tiers: PRs and pushes run only the @smoke test (one engine
+# boot, well under a minute). CI's software-rendered WebGL makes a
+# full boot 6-7x slower than local, so the 12-spec full suite is a
+# local/workflow_dispatch tool, not a per-PR check.
+#
 # Rebuilds embed/gen/*.js from source first, so tests exercise current code.
 
 name: Embed tests
@@ -7,7 +13,39 @@ name: Embed tests
 on:
   push:
     branches: [main]
+    paths:
+      - 'embed/**'
+      - 'js/viewer-app.jsx'
+      - 'js/mtlx-engine.js'
+      - 'js/embed-controls.jsx'
+      - 'js/shared/**'
+      - 'js/mtlx-assets.js'
+      - 'materials/**'
+      - 'tests/embed/**'
+      - 'playwright.config.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/embed-tests.yml'
   pull_request:
+    paths:
+      - 'embed/**'
+      - 'js/viewer-app.jsx'
+      - 'js/mtlx-engine.js'
+      - 'js/embed-controls.jsx'
+      - 'js/shared/**'
+      - 'js/mtlx-assets.js'
+      - 'materials/**'
+      - 'tests/embed/**'
+      - 'playwright.config.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/embed-tests.yml'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Run the full embed suite instead of the smoke test'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,6 +57,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A hang (e.g. apt inside install-deps) must fail fast, never
+    # burn 40+ minutes like the last cache-hit run did.
+    timeout-minutes: 8
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -34,23 +75,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-
+      # No cache: a fresh chromium download is ~20s and never hangs,
+      # unlike the old cache-hit path's install-deps apt call.
       - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright system dependencies
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
 
       - name: Regenerate embed bundles
         run: node scripts/build.mjs embed
 
-      - name: Run embed tests
+      - name: Run full embed suite
+        if: github.event_name == 'workflow_dispatch' && inputs.full == true
         run: npm run test:embed
+
+      - name: Run smoke embed test
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.full == true)"
+        run: npm run test:embed:smoke

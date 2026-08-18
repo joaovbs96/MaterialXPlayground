@@ -1,6 +1,10 @@
 // playwright.config.mjs: embed viewer test suite (tests/embed/**).
 // Chromium only, single worker: the embed is heavy (WASM engine
 // load), so serializing keeps runs deterministic.
+//
+// Two tiers: `npm run test:embed:smoke` runs just @smoke (one boot);
+// `npm run test:embed` runs the full suite. CI runs only the smoke
+// tier per PR; the full suite is local/workflow_dispatch only.
 
 import { defineConfig, devices } from '@playwright/test';
 
