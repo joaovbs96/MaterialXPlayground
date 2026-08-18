@@ -15,8 +15,17 @@ test('@smoke eager viewer boots, lists renderables, stays hermetic and error-fre
 
   // Iframe console output surfaces on the parent `page` object in
   // Playwright, so this also catches errors logged inside the embed.
+  // js/mtlx-assets.js probes vendor/materialx/manifest.json at boot to
+  // pick local vs remote mode; that 404 is by design on any non-offline
+  // build (the dir is gitignored), so it is not counted as an error.
+  const PROBE_404 = /vendor[/]materialx[/]manifest[.]json/;
   const consoleErrors = [];
-  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const loc = (msg.location() && msg.location().url) || '';
+    if (PROBE_404.test(loc) && /404/.test(msg.text())) return;
+    consoleErrors.push(msg.text() + ' @ ' + loc);
+  });
   const pageErrors = [];
   page.on('pageerror', (err) => pageErrors.push(String(err)));
 
