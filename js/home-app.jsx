@@ -18,7 +18,7 @@ const HOME_CARDS = [
     { id: 'docs', group: 'learn', href: '#!docs', icon: 'file-code', title: 'Node Specs', desc: 'Every standard MaterialX node, with per-signature docs, port tables, live 3D previews, and shareable permalinks.', img: 'images/preview-docs.jpg', cta: 'Browse Node Specs' },
     { id: 'tutorials', group: 'learn', status: 'soon', icon: 'book', title: 'Tutorials', badge: 'In progress', desc: 'Guided, hands-on MaterialX tutorials, from what MaterialX is to your first node graph, served alongside the app.', cta: 'Coming soon' },
     { id: 'builder', group: 'integrate', href: '#!builder', icon: 'code', title: 'Embed Builder', badge: 'Experimental', desc: 'Configure an embeddable viewer, preview it live, and copy an <iframe> or custom-element snippet for any web page.', img: 'images/preview-builder.jpg', cta: 'Open Embed Builder' },
-    { id: 'vscode', group: 'integrate', status: 'soon', external: true, href: window.SITE_LINKS.releases, icon: 'puzzle', title: 'VS Code extension', badge: 'Experimental', desc: 'Edit .mtlx files in VS Code with live preview, validation, and hover docs, built on the same engine as the web app.', cta: 'Get it from GitHub Releases' },
+    { id: 'vscode', group: 'integrate', external: true, href: window.SITE_LINKS.releases, icon: 'puzzle', title: 'VS Code extension', badge: 'Experimental', desc: 'Edit .mtlx files in VS Code with live preview, validation, and hover docs, built on the same engine as the web app.', img: 'images/preview-vscode.jpg', cta: 'Get it from GitHub Releases' },
 ];
 // Featured band: any card id + free-text kicker (e.g. 'New in v2026.9.0'); null hides the band.
 const HOME_FEATURED = { card: 'builder', kicker: 'New' };
