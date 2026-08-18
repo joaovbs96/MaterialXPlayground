@@ -5,7 +5,8 @@
 // The footer is shared the same way but isn't paint-critical, so it's
 // injected at DOMContentLoaded into <div id="site-footer"> instead (a page
 // that omits it gets one auto-created). Single source of truth for site
-// title/links: doc-ui.jsx reads window.SITE_LINKS / window.SITE_TITLE.
+// title/links: home-app.jsx, js/docs/doc-links.jsx and js/docs/sidebar.jsx
+// read window.SITE_LINKS / window.SITE_TITLE.
 
 (function () {
     'use strict';
@@ -41,11 +42,15 @@
         libBlobBase: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/' + MTLX_TAG + '/',
     };
     LINKS.issues = LINKS.repo + '/issues';
+    LINKS.releases = LINKS.repo + '/releases/latest';
 
     // Repo slug ("owner/name"), derived from LINKS.repo rather than
     // hardcoded — consumed by the GitHub repo widget markup below and by
     // initSourceFacts' api.github.com calls.
     var REPO_SLUG = LINKS.repo.replace(/^https?:\/\/github\.com\//, '');
+    // Split for the desktop widget's owner/name styling (D below).
+    var REPO_OWNER = REPO_SLUG.split('/')[0];
+    var REPO_NAME = REPO_SLUG.split('/').slice(1).join('/');
 
     // Logo mark paths, shared verbatim with home-app.jsx (rendered via
     // dangerouslySetInnerHTML) so the brand mark can't drift. The two
@@ -128,19 +133,68 @@
             '<path d="M17 8l4 4l-4 4" />' +
             '<path d="M14 4l-4 16" />' +
         '</svg>';
+    var ICON_NAV_LEARN =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0" />' +
+            '<path d="M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0" />' +
+            '<path d="M3 6l0 13" />' +
+            '<path d="M12 6l0 13" />' +
+            '<path d="M21 6l0 13" />' +
+        '</svg>';
+    var ICON_NAV_INTEGRATE =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M9.785 6l8.215 8.215l-2.054 2.054a5.81 5.81 0 1 1 -8.215 -8.215l2.054 -2.054z" />' +
+            '<path d="M4 20l3.5 -3.5" />' +
+            '<path d="M15 4l-3.5 3.5" />' +
+            '<path d="M20 9l-3.5 3.5" />' +
+        '</svg>';
+    var ICON_NAV_VSCODE =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M4 7h3a1 1 0 0 0 1 -1v-1a2 2 0 0 1 4 0v1a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0 -1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-1a2 2 0 0 0 -4 0v1a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h1a2 2 0 0 0 0 -4h-1a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1" />' +
+        '</svg>';
+    var ICON_CHEVRON_DOWN =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-tab-chevron">' +
+            '<path d="M6 9l6 6l6 -6" />' +
+        '</svg>';
+    var ICON_EXTERNAL_LINK =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-menu-ext">' +
+            '<path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6" />' +
+            '<path d="M11 13l9 -9" />' +
+            '<path d="M15 4h5v5" />' +
+        '</svg>';
 
-    // Pages of the site, in nav order. shellHref-only now that the old
-    // standalone pages are gone: docs/viewer/graph/compare live behind hash
-    // routes (#!docs/#!viewer/#!graph/#!compare). `icon` is consumed by the
-    // mobile panel only.
+    // Pages of the site, in nav order. Plain entries are shellHref-only, as
+    // before; `group: true` entries instead carry `items` (own shellHref/
+    // href/icon/badge/status), rendered as a dropdown by B/C below.
     var NAV = [
-        { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME },
-        { id: 'docs', label: 'Node Library & Documentation', shellHref: '#!docs', icon: ICON_NAV_DOCS },
-        { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
-        { id: 'compare', label: 'Material Comparison', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
-        { id: 'graph', label: 'Node Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
-        { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER },
+        { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME, mobileOnly: true },
+        { id: 'docs', label: 'Node Specs', shellHref: '#!docs', icon: ICON_NAV_DOCS },
+        { id: 'viewer', label: 'Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
+        { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
+        { id: 'graph', label: 'Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
+        { id: 'learn', label: 'Learn', group: true, icon: ICON_NAV_LEARN, items: [
+            { id: 'tutorials', label: 'Tutorials', icon: ICON_NAV_LEARN, status: 'soon' },
+        ] },
+        { id: 'integrate', label: 'Integrate', group: true, icon: ICON_NAV_INTEGRATE, items: [
+            { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER, badge: 'Experimental' },
+            { id: 'vscode', label: 'VS Code extension', href: LINKS.releases, external: true, icon: ICON_NAV_VSCODE, badge: 'Experimental' },
+        ] },
     ];
+
+    // Flattened nav entries (plain items + every group's items), used by
+    // the hashchange handler (G) to toggle `is-active` on all data-nav
+    // copies regardless of nesting.
+    function navLeaves(list) {
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].group) {
+                out = out.concat(list[i].items);
+            } else {
+                out.push(list[i]);
+            }
+        }
+        return out;
+    }
 
     // Given the current hash, which shell view is active? Shared with
     // js/shell.jsx's parseHash (calls window.shellRouteFor directly) so
@@ -161,25 +215,95 @@
     // hash (see IS_SHELL's own comment).
     var activeId = shellActiveId(window.location.hash || '');
 
-    // VS Code nav filtering: the webview always drops Home (single-document
-    // editor, no landing page). The custom editor also drops Docs (already
-    // reachable via in-app links); the standalone docs panel keeps only Docs.
+    // VS Code nav filtering: the webview always drops Home (no landing
+    // page) and the Learn/Integrate dropdowns (browser-only surfaces). The
+    // custom editor also drops Docs; the standalone docs panel keeps only Docs.
     var navItems = window.__MTLX_VSCODE__
         ? NAV.filter(function (t) {
-            if (t.id === 'home') return false;
-            if (window.__MTLX_DOCS_ONLY__) {
-                return t.id === 'docs';
-            }
-            // Compare and Builder are browser-only features (drag-and-drop,
-            // an iframe-based live preview) - excluded here same as docs.
-            return t.id !== 'docs' && t.id !== 'compare' && t.id !== 'builder';
+            if (t.group || t.id === 'home') return false;
+            if (window.__MTLX_DOCS_ONLY__) return t.id === 'docs';
+            return t.id === 'viewer' || t.id === 'graph';
         })
         : NAV;
 
-    // Active/inactive styling lives entirely in js/site-header.css
-    // (`is-active` modifier class) — this script only decides WHETHER a
-    // tab is active, never how that looks.
-    var tabs = navItems.map(function (item) {
+    // One dropdown menu item, desktop flavor: internal items share data-nav
+    // with the plain tabs above; external ones append the external-link
+    // glyph; a 'soon' status renders as a disabled, non-interactive item.
+    function renderMenuItem(item) {
+        if (item.status === 'soon') {
+            return '<div role="menuitem" aria-disabled="true" class="mtlx-menu-item is-disabled">' +
+                item.icon +
+                '<span class="mtlx-menu-label">' + item.label + '</span>' +
+                '<span class="mtlx-menu-soon">Coming soon</span>' +
+                '</div>';
+        }
+        var active = item.id === activeId;
+        var badge = item.badge ? '<span class="mtlx-menu-badge">' + item.badge + '</span>' : '';
+        if (item.external) {
+            return '<a role="menuitem" tabindex="-1" href="' + item.href + '" target="_blank" rel="noopener noreferrer"' +
+                ' class="mtlx-menu-item">' +
+                item.icon +
+                '<span class="mtlx-menu-label">' + item.label + '</span>' +
+                badge + ICON_EXTERNAL_LINK +
+                '</a>';
+        }
+        return '<a role="menuitem" tabindex="-1" href="' + item.shellHref + '"' +
+            (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
+            (active ? ' aria-current="page"' : '') +
+            ' class="mtlx-menu-item' + (active ? ' is-active' : '') + '">' +
+            item.icon +
+            '<span class="mtlx-menu-label">' + item.label + '</span>' +
+            badge +
+            '</a>';
+    }
+
+    // Same, mobile-panel flavor: plain stacked rows instead of a popup
+    // menu, badge/external-link glyph pushed flush right by the CSS
+    // margin-left:auto rules on .mtlx-tab-mobile's own children.
+    function renderMobileItem(item) {
+        if (item.status === 'soon') {
+            return '<div class="mtlx-tab-mobile is-disabled" aria-disabled="true">' +
+                item.icon + '<span>' + item.label + '</span>' +
+                '<span class="mtlx-menu-soon">Coming soon</span>' +
+                '</div>';
+        }
+        var active = item.id === activeId;
+        var badge = item.badge ? '<span class="mtlx-menu-badge">' + item.badge + '</span>' : '';
+        if (item.external) {
+            return '<a href="' + item.href + '" target="_blank" rel="noopener noreferrer"' +
+                ' class="mtlx-tab-mobile">' +
+                item.icon + '<span>' + item.label + '</span>' +
+                badge + ICON_EXTERNAL_LINK +
+                '</a>';
+        }
+        return '<a href="' + item.shellHref + '"' +
+            (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
+            (active ? ' aria-current="page"' : '') +
+            ' class="mtlx-tab-mobile' + (active ? ' is-active' : '') + '">' +
+            item.icon + '<span>' + item.label + '</span>' +
+            badge +
+            '</a>';
+    }
+
+    // Active/inactive styling lives in CSS's `is-active` modifier: this
+    // script only decides WHETHER something is active. Home (mobileOnly)
+    // is skipped here; groups render as a trigger button + popup menu.
+    var tabs = navItems.filter(function (item) { return !item.mobileOnly; }).map(function (item) {
+        if (item.group) {
+            var groupActive = item.items.some(function (i) { return i.id === activeId; });
+            return '<div class="mtlx-nav-group" data-menu="' + item.id + '">' +
+                '<button type="button" id="mtlx-menu-trigger-' + item.id + '"' +
+                    ' class="mtlx-tab mtlx-tab-trigger' + (groupActive ? ' is-active' : '') + '"' +
+                    ' data-nav-group="' + item.id + '" aria-haspopup="menu" aria-expanded="false"' +
+                    ' aria-controls="mtlx-menu-' + item.id + '">' +
+                    item.label + ICON_CHEVRON_DOWN +
+                '</button>' +
+                '<div id="mtlx-menu-' + item.id + '" class="mtlx-menu" role="menu"' +
+                    ' aria-labelledby="mtlx-menu-trigger-' + item.id + '">' +
+                    item.items.map(renderMenuItem).join('') +
+                '</div>' +
+            '</div>';
+        }
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
@@ -190,9 +314,13 @@
     }).join('');
 
     // Mobile dropdown panel's copies of the nav links: stacked, share
-    // `data-nav` with the desktop tabs so hashchange re-styling updates
-    // both, with a leading icon + label wrapped in its own <span> (flex gap).
+    // `data-nav` with the desktop tabs. Groups become a label row
+    // followed by their items, flattened into the stack (no nested popup).
     var mobileTabs = navItems.map(function (item) {
+        if (item.group) {
+            return '<div class="mtlx-mobile-group-label">' + item.icon + '<span>' + item.label + '</span></div>' +
+                item.items.map(renderMobileItem).join('');
+        }
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
         return '<a href="' + href + '"' +
@@ -239,7 +367,7 @@
                         // Label + version wrapped in ONE flex item so the
                         // pill's column-gap (between flex items) doesn't
                         // double up with the space already between them.
-                        '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
+                        '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // GitHub repo widget (mkdocs-material style): octocat +
                     // repo slug + async facts row, filled in below.
@@ -250,7 +378,7 @@
                             ICON_OCTOCAT +
                         '</svg>' +
                         '<span class="mtlx-source-meta">' +
-                            '<span class="mtlx-source-repo">' + REPO_SLUG + '</span>' +
+                            '<span class="mtlx-source-repo"><span class="mtlx-source-owner">' + REPO_OWNER + '/</span>' + REPO_NAME + '</span>' +
                             '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
@@ -284,7 +412,7 @@
                         // Same "MaterialX" label as the desktop pill,
                         // wrapped in ONE flex item so this row's gap:10px
                         // doesn't double up with the space already there.
-                        '<span>MaterialX <span data-role="ver">\u2026</span></span>' +
+                        '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // Flat copy of the desktop GitHub widget (octocat +
                     // repo slug + facts row) instead of a plain "Source"
@@ -336,6 +464,139 @@
         });
     }
 
+    // ---- Nav dropdown menus (Learn/Integrate groups) ---------------------
+    // Hover-intent open/close delays, full keyboard support (arrows, Home/
+    // End, Escape, Tab) and click-outside dismissal. No-op where there are
+    // no groups (e.g. under VS Code), so measure()/hashchange stay safe.
+    var closeAllMenus = function () {};
+    (function initNavGroups() {
+        var wrappers = document.querySelectorAll('#mtlx-nav-desktop .mtlx-nav-group');
+        if (!wrappers.length) return;
+
+        var OPEN_DELAY = 120;
+        var CLOSE_DELAY = 180;
+        var openGroup = null;
+
+        function enabledItems(g) {
+            return Array.prototype.slice.call(
+                g.panel.querySelectorAll('[role="menuitem"]:not([aria-disabled="true"])')
+            );
+        }
+
+        function closeMenu(g, restoreFocus) {
+            clearTimeout(g.openTimer);
+            clearTimeout(g.closeTimer);
+            g.panel.classList.remove('is-open');
+            g.trigger.setAttribute('aria-expanded', 'false');
+            if (openGroup === g) openGroup = null;
+            if (restoreFocus) g.trigger.focus();
+        }
+
+        function openMenu(g, focus) {
+            if (openGroup && openGroup !== g) closeMenu(openGroup, false);
+            g.panel.classList.add('is-open');
+            g.trigger.setAttribute('aria-expanded', 'true');
+            openGroup = g;
+            if (focus === 'first' || focus === 'last') {
+                var items = enabledItems(g);
+                if (items.length) items[focus === 'first' ? 0 : items.length - 1].focus();
+            }
+        }
+
+        var groups = Array.prototype.map.call(wrappers, function (wrapper) {
+            var g = {
+                wrapper: wrapper,
+                trigger: wrapper.querySelector('.mtlx-tab-trigger'),
+                panel: wrapper.querySelector('.mtlx-menu'),
+                openTimer: null,
+                closeTimer: null,
+            };
+
+            g.trigger.addEventListener('click', function () {
+                if (openGroup === g) closeMenu(g, false);
+                else openMenu(g, null);
+            });
+
+            g.trigger.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openMenu(g, 'first');
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    openMenu(g, 'first');
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    openMenu(g, 'last');
+                }
+            });
+
+            // Escape always closes (restoring focus to the trigger); the
+            // arrow/Home/End roving-focus keys only apply while this
+            // group's own menu is the open one.
+            wrapper.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeMenu(g, true);
+                    return;
+                }
+                if (openGroup !== g) return;
+                var items = enabledItems(g);
+                if (!items.length) return;
+                var idx = items.indexOf(document.activeElement);
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    items[idx < 0 || idx === items.length - 1 ? 0 : idx + 1].focus();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    items[idx <= 0 ? items.length - 1 : idx - 1].focus();
+                } else if (e.key === 'Home') {
+                    e.preventDefault();
+                    items[0].focus();
+                } else if (e.key === 'End') {
+                    e.preventDefault();
+                    items[items.length - 1].focus();
+                } else if (e.key === 'Tab') {
+                    closeMenu(g, false);
+                }
+            });
+
+            wrapper.addEventListener('pointerenter', function (e) {
+                if (e.pointerType === 'touch') return;
+                clearTimeout(g.closeTimer);
+                if (openGroup !== g) {
+                    g.openTimer = setTimeout(function () { openMenu(g, null); }, OPEN_DELAY);
+                }
+            });
+
+            wrapper.addEventListener('pointerleave', function () {
+                clearTimeout(g.openTimer);
+                if (openGroup === g) {
+                    g.closeTimer = setTimeout(function () { closeMenu(g, false); }, CLOSE_DELAY);
+                }
+            });
+
+            wrapper.addEventListener('focusout', function (e) {
+                if (!wrapper.contains(e.relatedTarget)) closeMenu(g, false);
+            });
+
+            g.panel.addEventListener('click', function (e) {
+                if (e.target && e.target.closest && e.target.closest('[role="menuitem"]:not([aria-disabled="true"])')) {
+                    closeMenu(g, false);
+                }
+            });
+
+            return g;
+        });
+
+        document.addEventListener('pointerdown', function (e) {
+            if (openGroup && !openGroup.wrapper.contains(e.target)) closeMenu(openGroup, false);
+        });
+
+        closeAllMenus = function () {
+            for (var i = 0; i < groups.length; i++) closeMenu(groups[i], false);
+        };
+    })();
+
     // ---- Measured collapse to hamburger ---------------------------------
     // 768px alone leaves a band where tabs technically fit but wrap to
     // two lines; measure real overflow instead of guessing a second
@@ -347,11 +608,20 @@
     if (headerBar && navDesktop && navRight && navToggle) {
         var rafId = null;
         var measure = function () {
+            // Three stages: (1) full-width desktop nav, (2) `is-compact`
+            // (CSS hides the pills' abbreviatable text) if that alone
+            // doesn't fit, (3) collapse to the hamburger as a last resort.
+            closeAllMenus();
+            headerBar.classList.remove('is-compact');
             navDesktop.style.display = 'flex';
             navRight.style.display = 'flex';
             navToggle.style.display = 'none';
-            var collapse = headerBar.scrollWidth > headerBar.clientWidth;
-            if (collapse) {
+            var overflow = headerBar.scrollWidth > headerBar.clientWidth;
+            if (overflow) {
+                headerBar.classList.add('is-compact');
+                overflow = headerBar.scrollWidth > headerBar.clientWidth;
+            }
+            if (overflow) {
                 navDesktop.style.display = 'none';
                 navRight.style.display = 'none';
                 navToggle.style.display = 'flex';
@@ -360,7 +630,7 @@
             } else {
                 // Empty string restores site-header.css's own 768px rules,
                 // so narrow (sub-768px) widths still collapse even though
-                // the bar "fits" (it fits because the stylesheet did that).
+                // the bar "fits" (the stylesheet or is-compact did that).
                 navDesktop.style.display = '';
                 navRight.style.display = '';
                 navToggle.style.display = '';
@@ -609,14 +879,15 @@
     })();
 
     // Shell only: on hashchange, re-apply the `is-active` class by hand
-    // instead of re-rendering the header. Each nav item has TWO DOM copies
-    // (desktop tab + mobile link) sharing `data-nav`, so both get updated.
+    // instead of re-rendering the header. Each leaf nav item has multiple
+    // DOM copies (desktop tab/menu item + mobile row) sharing `data-nav`.
     if (IS_SHELL) {
         window.addEventListener('hashchange', function () {
             var newActiveId = shellActiveId(window.location.hash || '');
-            for (var j = 0; j < NAV.length; j++) {
-                var els = document.querySelectorAll('[data-nav="' + NAV[j].id + '"]');
-                var isActive = NAV[j].id === newActiveId;
+            var leaves = navLeaves(NAV);
+            for (var j = 0; j < leaves.length; j++) {
+                var els = document.querySelectorAll('[data-nav="' + leaves[j].id + '"]');
+                var isActive = leaves[j].id === newActiveId;
                 for (var k = 0; k < els.length; k++) {
                     var el = els[k];
                     el.classList.toggle('is-active', isActive);
@@ -627,6 +898,18 @@
                     }
                 }
             }
+            // Group triggers (desktop only): is-active when one of their
+            // own items is the new active id, no aria-current since a
+            // trigger button isn't itself a page.
+            for (var g = 0; g < NAV.length; g++) {
+                if (!NAV[g].group) continue;
+                var groupActive = NAV[g].items.some(function (i) { return i.id === newActiveId; });
+                var triggers = document.querySelectorAll('[data-nav-group="' + NAV[g].id + '"]');
+                for (var t = 0; t < triggers.length; t++) {
+                    triggers[t].classList.toggle('is-active', groupActive);
+                }
+            }
+            closeAllMenus();
             // Switching views closes the mobile panel, same as clicking a
             // link inside it (hashchange already fires for that click).
             closeMobileMenu();
