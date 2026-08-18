@@ -1,19 +1,69 @@
 # Runs the Playwright suite for the embeddable MaterialX viewer
-# (tests/embed/**) on headless Chromium, on every push and PR.
+# (tests/embed/**) on headless Chromium.
+#
+# Two tiers: PRs and pushes run only the @smoke test (one engine
+# boot, well under a minute). CI's software-rendered WebGL makes a
+# full boot 6-7x slower than local, so the 12-spec full suite is a
+# local/workflow_dispatch tool, not a per-PR check.
+#
 # Rebuilds embed/gen/*.js from source first, so tests exercise current code.
 
 name: Embed tests
 
 on:
   push:
+    branches: [main]
+    paths:
+      - 'embed/**'
+      - 'js/viewer-app.jsx'
+      - 'js/mtlx-engine.js'
+      - 'js/embed-controls.jsx'
+      - 'js/shared/**'
+      - 'js/mtlx-assets.js'
+      - 'materials/**'
+      - 'tests/embed/**'
+      - 'playwright.config.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/embed-tests.yml'
   pull_request:
+    paths:
+      - 'embed/**'
+      - 'js/viewer-app.jsx'
+      - 'js/mtlx-engine.js'
+      - 'js/embed-controls.jsx'
+      - 'js/shared/**'
+      - 'js/mtlx-assets.js'
+      - 'materials/**'
+      - 'tests/embed/**'
+      - 'playwright.config.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/embed-tests.yml'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Run the full embed suite instead of the smoke test'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: embed-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Playwright's own image ships Chromium plus every system library it
+    # needs, so no browser download and no apt step run in the job. Both
+    # hung or ran 4+ minutes on the bare runner. Tag matches package.json.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
+    # A hang anywhere must fail fast, never burn 40+ minutes as
+    # the old cache-hit install-deps run did.
+    timeout-minutes: 8
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -29,11 +79,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
       - name: Regenerate embed bundles
         run: node scripts/build.mjs embed
 
-      - name: Run embed tests
+      - name: Run full embed suite
+        if: github.event_name == 'workflow_dispatch' && inputs.full == true
         run: npm run test:embed
+
+      - name: Run smoke embed test
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.full == true)"
+        run: npm run test:embed:smoke

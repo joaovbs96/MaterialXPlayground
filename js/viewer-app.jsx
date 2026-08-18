@@ -44,9 +44,9 @@
             return idx;
         }
 
-        // Official OpenPBR default material, resolved via window.MtlxAssets
-        // (not a hardcoded URL) so a future offline build can serve it
-        // locally. Safe at module-load: shell.jsx already awaited MtlxAssets.ready.
+        // Remote fallback for the default material; the effect below tries
+        // materials/open_pbr_default.mtlx (repo root) first, falling back to
+        // this URL. Safe at module-load: shell.jsx awaited MtlxAssets.ready.
         const DEFAULT_MATERIAL_URL =
             window.MtlxAssets.repoUrl('resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx');
 
@@ -541,7 +541,15 @@
                         });
                     return;
                 }
-                fetch(DEFAULT_MATERIAL_URL)
+                // Local-first: materials/open_pbr_default.mtlx (repo root),
+                // falling back to DEFAULT_MATERIAL_URL on any failure (a
+                // non-ok response or a thrown network error), as before.
+                fetch('materials/open_pbr_default.mtlx')
+                    .then((r) => {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r;
+                    })
+                    .catch(() => fetch(DEFAULT_MATERIAL_URL))
                     .then((r) => {
                         if (!r.ok) throw new Error('HTTP ' + r.status);
                         return r.text();
@@ -701,17 +709,9 @@
             const embedControls = Array.isArray(controls) ? controls : [];
             const showCtl = (name) => !chromeless || embedControls.indexOf(name) !== -1;
             // shaderball-scene has no working rotate/background-toggle. A
-            // REQUESTED control silently rendering nothing is the "looks
-            // broken" problem, so report it instead of just omitting it.
+            // REQUESTED control just stays hidden while that geometry is
+            // active; it's the default, so reporting it would be noisy.
             const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
-            const rotateSuppressed = chromeless && showCtl('rotate') && roomGeomActive;
-            const envBgSuppressed = chromeless && showCtl('env') && roomGeomActive;
-            React.useEffect(() => {
-                if (rotateSuppressed) notify('The Rotate control has no effect on "shaderball-scene" (turntable rotation is disabled for the full scene) and is hidden.');
-            }, [rotateSuppressed]);
-            React.useEffect(() => {
-                if (envBgSuppressed) notify('The Background toggle has no effect on "shaderball-scene" (the room occludes the sky sphere) and is hidden from Environment.');
-            }, [envBgSuppressed]);
             // Per-control effective visibility, computed once so the mount
             // gate and each EmbedControls prop agree (a control can be
             // requested but still suppressed, e.g. rotate on the room geom).
@@ -805,8 +805,9 @@
                                         showMaterial={showMaterial}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
-                                        // Hidden for the room (rotateSuppressed/envBgSuppressed
-                                        // above report why).
+                                        // Hidden while shaderball-scene is active
+                                        // (roomGeomActive above), same for the
+                                        // background toggle below; not reported.
                                         showRotate={ctlFlags.rotate}
                                         onCameraReset={handleCameraReset}
                                         showReset={ctlFlags.reset}

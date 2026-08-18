@@ -1,15 +1,16 @@
 // tests/embed/envmap.spec.mjs: `envmap` fetches and applies a custom
-// .hdr environment (js/mtlx-engine.js's handle.setEnvMap), and a live
-// update to a bad URL reports mtlx-error without breaking the viewer.
+// .hdr environment at boot (js/mtlx-engine.js's handle.setEnvMap), with
+// zero errors. The live-update-to-a-bad-URL path is covered by
+// protocol.spec.mjs, which already has a booted element to reuse.
 
 import {
   test, expect, gotoHarness, FIXTURE_MTLX_PATH,
-  createViewer, waitForReady, waitForEventCount, getEvents, setProp,
+  createViewer, waitForReady, waitForEventCount, getEvents,
 } from './lib/test-base.mjs';
 
 const ENV_HDR_PATH = '/tests/embed/fixtures/env/test-env.hdr';
 
-test('envmap fetches and applies the given .hdr; a bad live update reports mtlx-error without breaking the viewer', async ({ page, embedURL }) => {
+test('envmap fetches and applies the given .hdr with no errors', async ({ page, embedURL }) => {
   await gotoHarness(page, embedURL);
 
   const requests = [];
@@ -31,19 +32,4 @@ test('envmap fetches and applies the given .hdr; a bad live update reports mtlx-
 
   const errors = await getEvents(page, idx, 'mtlx-error');
   expect(errors).toEqual([]);
-
-  // Live-update to a URL that 404s: reported via mtlx-error, and the
-  // viewer must stay functional (getCamera still resolves) afterward.
-  const badUrl = embedURL + '/tests/embed/fixtures/env/does-not-exist.hdr';
-  await setProp(page, idx, 'envmap', badUrl);
-  await waitForEventCount(page, idx, 'mtlx-error', 1);
-
-  const errorsAfter = await getEvents(page, idx, 'mtlx-error');
-  expect(errorsAfter.length).toBeGreaterThanOrEqual(1);
-  expect(errorsAfter[0].detail.message).toMatch(/environment/i);
-
-  const camera = await page.evaluate((i) => window.__viewers[i].getCamera(), idx);
-  expect(camera).toBeTruthy();
-  expect(Array.isArray(camera.position)).toBe(true);
-  expect(camera.position.every((n) => Number.isFinite(n))).toBe(true);
 });
