@@ -1191,8 +1191,7 @@ function MaterialViewerApp({
       name: "file-upload",
       className: "w-6 h-6"
     }), " Drop to load"))), !IN_VSCODE && !chromeless && sidebarOpen && /*#__PURE__*/React.createElement("div", {
-      className: "flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden",
-      style: panelGridStyle()
+      className: "flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex-none flex items-center px-3 py-2 border-b border-gray-700"
     }, /*#__PURE__*/React.createElement("span", {

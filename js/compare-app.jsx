@@ -1163,7 +1163,7 @@ function MaterialCompareApp({ active = true } = {}) {
 
             {/* Floating left sidebar, mirroring viewer-app.jsx's Files panel. */}
             {sidebarOpen ? (
-                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden" style={panelGridStyle()}>
+                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
                     <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
                         <span className="text-[13px] font-semibold text-gray-200">Compare</span>
                         <button

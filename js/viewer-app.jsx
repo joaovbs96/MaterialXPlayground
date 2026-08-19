@@ -1199,7 +1199,7 @@
                         so the stage column fills the remainder. Hidden in
                         embed mode; collapses to the pill in the stage below. */}
                     {!IN_VSCODE && !chromeless && sidebarOpen && (
-                        <div className="flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden" style={panelGridStyle()}>
+                        <div className="flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
                             <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
                                 <span className="text-[13px] font-semibold text-gray-200">Files</span>
                                 <button

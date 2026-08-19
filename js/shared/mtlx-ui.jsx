@@ -17,20 +17,6 @@ const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
 const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0';
 
-// Style object for a bg-gray-900 sidebar panel: the same 40px grid tokens
-// as js/shared/hero-grid.jsx, faded into the panel's own gray-900 color
-// via a top background layer instead of a mask, so it can sit directly
-// on the panel and paint behind its content.
-const panelGridStyle = () => ({
-    backgroundImage:
-        'linear-gradient(to bottom, rgba(17,24,39,0) 0px, rgba(17,24,39,1) 360px), '
-        + 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), '
-        + 'linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)',
-    backgroundSize: 'auto, 40px 40px, 40px 40px',
-    backgroundPosition: 'center top',
-    backgroundRepeat: 'no-repeat, repeat, repeat',
-});
-
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
 const errMsg = (e) => String((e && e.message) || e);
@@ -1859,7 +1845,7 @@ class PreviewErrorBoundary extends React.Component {
 }
 
 Object.assign(window, {
-    BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR, panelGridStyle,
+    BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
     GEOM_LABELS, GEOM_ICONS, defaultGeomFor,
     errMsg,
     useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
