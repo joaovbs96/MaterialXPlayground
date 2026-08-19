@@ -17,7 +17,7 @@ const BUILDER_GEOM_ICONS = {
 };
 const BUILDER_CONTROLS = [
     { id: 'geometry', chip: 'Geometry', icon: 'cube' },
-    { id: 'material', chip: 'Material', icon: 'droplet' },
+    { id: 'material', chip: 'Material selection', icon: 'color-swatch' },
     { id: 'rotate', chip: 'Auto-rotate', icon: 'rotate' },
     { id: 'reset', chip: 'Reset camera', icon: 'focus-2' },
     { id: 'env', chip: 'Environment', icon: 'world' },
@@ -37,7 +37,7 @@ const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); re
 const BUILDER_THEME_PRESETS = [
     { id: 'dark', label: 'Dark', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4', transparent: false },
     { id: 'light', label: 'Light', accent: '#2563eb', surface: '#f9fafb', text: '#374151', radius: '4', transparent: false },
-    { id: 'card', label: 'Card', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '8', transparent: true },
+    { id: 'card', label: 'Transparent Card', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '8', transparent: true },
 ];
 
 // Checkerboard backdrop shown behind the preview element while Transparent
@@ -153,7 +153,8 @@ const BUILDER_TEMPLATES = [
     {
         id: 'product-card', name: 'Product card', icon: 'id',
         desc: 'Square, transparent, no HUD. Sits inside your own card.',
-        tags: ['1:1', 'transparent'], values: { width: 480, height: 480, transparent: true },
+        // geometry: transparent can't render the default backdrop room.
+        tags: ['1:1', 'transparent'], values: { width: 480, height: 480, transparent: true, geometry: 'shaderball' },
     },
     {
         id: 'blog', name: 'Inline in a blog', icon: 'article',
@@ -163,7 +164,8 @@ const BUILDER_TEMPLATES = [
     {
         id: 'hero', name: 'Full-width hero', icon: 'layout-navbar',
         desc: 'Responsive 21:9, auto-rotate, chromeless, transparent.',
-        tags: ['responsive', 'auto-rotate'], values: { sizing: 'responsive', width: 21, height: 9, autorotate: true, transparent: true },
+        // geometry: transparent can't render the default backdrop room.
+        tags: ['responsive', 'auto-rotate'], values: { sizing: 'responsive', width: 21, height: 9, autorotate: true, transparent: true, geometry: 'shaderball' },
     },
 ];
 const isTemplateActive = (t, settings) => Object.keys(BUILDER_DEFAULTS).every((key) => {
@@ -221,6 +223,10 @@ const parseBuilderHashSettings = () => {
     if (params.has('w')) patch.width = Math.max(1, Number(params.get('w')) || BUILDER_DEFAULTS.width);
     if (params.has('h')) patch.height = Math.max(1, Number(params.get('h')) || BUILDER_DEFAULTS.height);
     if (params.has('sizing')) patch.sizing = params.get('sizing') === 'responsive' ? 'responsive' : 'fixed';
+    // Same geometry constraint the Look card enforces interactively: a
+    // pasted link can't resurrect the transparent + backdrop-room combo.
+    const effectiveGeometry = params.has('geometry') ? patch.geometry : BUILDER_DEFAULTS.geometry;
+    if (patch.transparent && effectiveGeometry === 'shaderball-scene') patch.geometry = 'shaderball';
     return patch;
 };
 const buildShareParams = (s) => {
@@ -455,13 +461,16 @@ function SectionCard({ icon, title, pill, summary, defaultOpen, children }) {
 
 // One geometry option in the Scene card's 3-column grid. Icon row sits at
 // a fixed top offset so icons line up whether the label wraps to 1 or 2 lines.
-function GeometryTile({ label, icon, selected, onClick }) {
+function GeometryTile({ label, icon, selected, disabled, title, onClick }) {
     return (
         <button
             type="button"
+            disabled={disabled}
+            title={title}
             onClick={onClick}
             className={'h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
-                + (selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')}
+                + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700 text-gray-500'
+                    : selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')}
         >
             <MtlxIcon name={icon} className="w-5 h-5 shrink-0" />
             <span className="text-[11px] leading-tight text-center min-h-[26px] flex items-center">{label}</span>
@@ -471,13 +480,16 @@ function GeometryTile({ label, icon, selected, onClick }) {
 
 // One Look theme preset (58px tall, fills its grid column): three small
 // color squares + a label.
-function ThemeTile({ preset, active, onClick }) {
+function ThemeTile({ preset, active, disabled, title, onClick }) {
     return (
         <button
             type="button"
+            disabled={disabled}
+            title={title}
             onClick={onClick}
             className={'h-[58px] w-full rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors '
-                + (active ? 'border-blue-500 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 hover:border-gray-600')}
+                + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700'
+                    : active ? 'border-blue-500 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 hover:border-gray-600')}
         >
             <div className="flex gap-1">
                 <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: preset.accent }} />
@@ -1010,6 +1022,9 @@ function BuilderApp({ active } = {}) {
         if (envmap.trim()) el.envmap = envmap.trim();
         const handleError = (e) => {
             const message = (e && e.detail && e.detail.message) || 'Unknown error';
+            // The Scene/Look cards keep transparent + shaderball-scene
+            // unreachable, so this warning would only ever be stale noise.
+            if (/^transparent cannot render/i.test(message)) return;
             setErrors((prev) => [...prev.slice(-5), { id: Math.random(), message }]);
             if (/fetch|network|cors/i.test(message)) pushHint(BUILDER_CORS_HINT);
         };
@@ -1249,6 +1264,10 @@ function BuilderApp({ active } = {}) {
     const themeSummary = activeThemePreset ? activeThemePreset.label : 'Custom';
     const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
     const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
+    // shaderball-scene is an opaque room the engine can't render transparent
+    // (docs/EMBEDDING.md's Geometry constraint) - keep that combo unreachable
+    // instead of letting the embed silently swap geometry and warn.
+    const transparentDisabled = geometry === 'shaderball-scene';
 
     const previewFrameWidthForSpan = sizing === 'responsive' ? 800 : width;
     const previewSpan = columns === 1 ? 1 : ((previewFrameWidthForSpan + 32 > columnWidth) ? 2 : 1);
@@ -1343,15 +1362,20 @@ function BuilderApp({ active } = {}) {
                 <div>
                     <FieldLabel label="Geometry" />
                     <div className="grid grid-cols-3 gap-2">
-                        {BUILDER_GEOM_OPTIONS.map((g) => (
-                            <GeometryTile
-                                key={g}
-                                label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
-                                icon={BUILDER_GEOM_ICONS[g]}
-                                selected={geometry === g}
-                                onClick={() => patch({ geometry: g })}
-                            />
-                        ))}
+                        {BUILDER_GEOM_OPTIONS.map((g) => {
+                            const geomDisabled = g === 'shaderball-scene' && transparent;
+                            return (
+                                <GeometryTile
+                                    key={g}
+                                    label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
+                                    icon={BUILDER_GEOM_ICONS[g]}
+                                    selected={geometry === g}
+                                    disabled={geomDisabled}
+                                    title={geomDisabled ? 'Not available with a transparent page background' : undefined}
+                                    onClick={() => patch({ geometry: g })}
+                                />
+                            );
+                        })}
                     </div>
                 </div>
             </SectionCard>
@@ -1403,12 +1427,17 @@ function BuilderApp({ active } = {}) {
                 <div>
                     <FieldLabel label="Theme preset" />
                     <div className="grid grid-cols-3 gap-2">
-                        {BUILDER_THEME_PRESETS.map((p) => (
-                            <ThemeTile
-                                key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
-                                onClick={() => patch({ accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
-                            />
-                        ))}
+                        {BUILDER_THEME_PRESETS.map((p) => {
+                            const presetDisabled = p.id === 'card' && geometry === 'shaderball-scene';
+                            return (
+                                <ThemeTile
+                                    key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
+                                    disabled={presetDisabled}
+                                    title={presetDisabled ? 'Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable this preset.' : undefined}
+                                    onClick={() => patch({ accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
+                                />
+                            );
+                        })}
                     </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2.5">
@@ -1421,10 +1450,17 @@ function BuilderApp({ active } = {}) {
                     onSlider={(v) => patch({ radius: v })}
                     onNumber={(v) => patch({ radius: v })}
                 />
-                <label className="flex items-center justify-between gap-3 cursor-pointer">
-                    <span className="text-xs font-medium text-gray-400">Transparent page background</span>
-                    <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} />
-                </label>
+                <div>
+                    <label className={'flex items-center justify-between gap-3 ' + (transparentDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
+                        <span className="text-xs font-medium text-gray-400">Transparent page background</span>
+                        <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} disabled={transparentDisabled} />
+                    </label>
+                    <p className={'text-[11px] mt-1' + (transparentDisabled ? ' text-amber-300/80' : ' text-gray-500')}>
+                        {transparentDisabled
+                            ? 'Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.'
+                            : 'Not compatible with Std. Shader Ball w/ Backdrop.'}
+                    </p>
+                </div>
                 <HudMiniPreview accent={accent} surface={surface} text={text} radius={radius} />
             </SectionCard>
         </MasonryItem>,
@@ -1445,7 +1481,7 @@ function BuilderApp({ active } = {}) {
                         );
                     })}
                 </div>
-                <p className="text-[11px] text-gray-500">Material picker unlocks for documents with 2 or more materials.</p>
+                <p className="text-[11px] text-gray-500">Material selection unlocks for documents with 2 or more materials.</p>
                 <div className="flex items-center gap-3 text-[11px]">
                     <button
                         type="button" className="text-blue-400 hover:text-blue-300"

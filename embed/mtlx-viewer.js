@@ -424,10 +424,12 @@
                 this._send('setGeometry', { geometry: this.geometry });
             } else if (name === 'env') {
                 var deg = this._num('env');
-                if (deg !== undefined) this._send('setEnvRotation', { degrees: deg });
+                // Absent/cleared: send the engine default, not nothing, so
+                // resetting to default actually moves the live preview back.
+                this._send('setEnvRotation', { degrees: deg !== undefined ? deg : 0 });
             } else if (name === 'exposure') {
                 var v = this._num('exposure');
-                if (v !== undefined) this._send('setEnvExposure', { value: v });
+                this._send('setEnvExposure', { value: v !== undefined ? v : 1 });
             } else if (name === 'background') {
                 this._send('setEnvBackground', { on: this.background });
             } else if (name === 'transparent') {
