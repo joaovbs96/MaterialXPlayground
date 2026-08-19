@@ -542,6 +542,9 @@
             const versionLabels = {};
             mtlxVersions.forEach((v) => { versionLabels[v] = v; });
             const versionBadges = { [mtlxDefaultVersion]: 'Default' };
+            // Narrow popover: rows are just a version string + Default badge,
+            // nowhere near GeomSelect's default badge width (long geo labels).
+            const VERSION_POP_W = 144;
 
             // Non-default versions are gitignored and may be absent from a
             // plain clone, so probe once per version (js/compare-app.jsx's
@@ -855,6 +858,7 @@
                                     options={availableVersionOptions}
                                     labels={versionLabels}
                                     badges={versionBadges}
+                                    popWidth={VERSION_POP_W}
                                     onChange={(v) => {
                                         setVersion(v);
                                         // A Document belongs to the mx instance that parsed

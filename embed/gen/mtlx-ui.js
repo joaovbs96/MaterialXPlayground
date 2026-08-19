@@ -1933,15 +1933,17 @@ const GeomSelect = ({
   badges,
   onChange,
   title,
-  className
+  className,
+  popWidth
 }) => {
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState(null);
   const [hi, setHi] = React.useState(0);
   const btnRef = React.useRef(null);
   const popRef = React.useRef(null);
-  // Wider popover when badge pills share the rows with the labels.
-  const popW = badges ? 240 : GEOM_POP_W;
+  // Wider popover when badge pills share the rows with the labels,
+  // unless the caller knows its content is narrower and overrides it.
+  const popW = popWidth || (badges ? 240 : GEOM_POP_W);
   const openPopover = () => {
     setHi(Math.max(0, options.indexOf(value)));
     const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;

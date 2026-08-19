@@ -488,6 +488,9 @@ function MaterialCompareApp({ active = true } = {}) {
     const versionLabels = {};
     mtlxVersions.forEach((v) => { versionLabels[v] = v; });
     const versionBadges = { [mtlxDefaultVersion]: 'Default' };
+    // Narrow popover: rows are just a version string + Default badge,
+    // nowhere near GeomSelect's default badge width (long geo labels).
+    const VERSION_POP_W = 144;
 
     // Non-default versions are gitignored and may simply be absent from a
     // plain clone — probe once per version so the dropdown never offers a
@@ -911,6 +914,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             options={availableVersionOptions}
                             labels={versionLabels}
                             badges={versionBadges}
+                            popWidth={VERSION_POP_W}
                             onChange={(v) => {
                                 slot.setVersion(v);
                                 // A Document belongs to the mx instance that parsed it, so

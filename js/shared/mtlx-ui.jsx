@@ -1718,14 +1718,15 @@ const GEOM_POP_W = 190, GEOM_POP_ROW_H = 26;
 // `badges`: optional { value: text } — renders a small amber pill after
 // that option's ROW label (popover only, never the trigger), for calling
 // out e.g. an experimental entry without branding the whole control.
-const GeomSelect = ({ value, options, labels = GEOM_LABELS, badges, onChange, title, className }) => {
+const GeomSelect = ({ value, options, labels = GEOM_LABELS, badges, onChange, title, className, popWidth }) => {
     const [open, setOpen] = React.useState(false);
     const [pos, setPos] = React.useState(null);
     const [hi, setHi] = React.useState(0);
     const btnRef = React.useRef(null);
     const popRef = React.useRef(null);
-    // Wider popover when badge pills share the rows with the labels.
-    const popW = badges ? 240 : GEOM_POP_W;
+    // Wider popover when badge pills share the rows with the labels,
+    // unless the caller knows its content is narrower and overrides it.
+    const popW = popWidth || (badges ? 240 : GEOM_POP_W);
 
     const openPopover = () => {
         setHi(Math.max(0, options.indexOf(value)));
