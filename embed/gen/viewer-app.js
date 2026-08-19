@@ -911,12 +911,8 @@ function MaterialViewerApp({
     className: "hidden",
     onChange: onPickFiles
   })))), chosenMtlx && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "font-mono text-gray-200 truncate"
-  }, docBasename), /*#__PURE__*/React.createElement("div", {
-    className: "text-gray-500 mt-0.5"
-  }, mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500"
+  }, mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's'), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-medium text-gray-400"

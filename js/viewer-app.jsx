@@ -842,9 +842,8 @@
                         </div>
 
                         {chosenMtlx && (
-                            <div className="text-xs">
-                                <div className="font-mono text-gray-200 truncate">{docBasename}</div>
-                                <div className="text-gray-500 mt-0.5">{mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'}</div>
+                            <div className="text-xs text-gray-500">
+                                {mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'}
                             </div>
                         )}
 

@@ -903,10 +903,6 @@ function MaterialCompareApp({ active = true } = {}) {
                 summary={docBasename}
                 defaultOpen
             >
-                <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5">
-                    <MtlxIcon name="file-text" className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-                    <span className="text-sm font-mono text-gray-200 truncate">{docBasename}</span>
-                </div>
                 <div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">MaterialX version</span>
