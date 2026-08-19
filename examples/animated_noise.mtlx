@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+
+  <!-- Animated: scrolls 3D fractal noise along Z with the time node, then
+       drives standard_surface base color and roughness with it. Needs the
+       viewer's u_time clock; the values upstream of the noise exceed 1.0,
+       so previewing those nodes alone shows white (expected). -->
+
+  <nodegraph name="NG_animated_noise">
+
+    <!-- time outputs seconds since the host started; its fps input is unused in MaterialX 1.39 -->
+    <time name="time1" type="float">
+      <input name="fps" type="float" value="24.0" />
+    </time>
+
+    <multiply name="speed" type="float">
+      <input name="in1" type="float" nodename="time1" />
+      <input name="in2" type="float" value="0.35" />
+    </multiply>
+
+    <position name="pos" type="vector3">
+      <input name="space" type="string" value="object" />
+    </position>
+
+    <!-- Scroll the noise domain along Z over time -->
+    <combine3 name="offset" type="vector3">
+      <input name="in1" type="float" value="0.0" />
+      <input name="in2" type="float" value="0.0" />
+      <input name="in3" type="float" nodename="speed" />
+    </combine3>
+
+    <add name="animpos" type="vector3">
+      <input name="in1" type="vector3" nodename="pos" />
+      <input name="in2" type="vector3" nodename="offset" />
+    </add>
+
+    <fractal3d name="noise" type="float">
+      <input name="position" type="vector3" nodename="animpos" />
+      <input name="amplitude" type="float" value="1.0" />
+      <input name="octaves" type="integer" value="4" />
+      <input name="lacunarity" type="float" value="2.0" />
+      <input name="diminish" type="float" value="0.5" />
+    </fractal3d>
+
+    <!-- fractal3d is signed; remap to [0,1] before using as a mix weight -->
+    <remap name="noise01" type="float">
+      <input name="in" type="float" nodename="noise" />
+      <input name="inlow" type="float" value="-1.0" />
+      <input name="inhigh" type="float" value="1.0" />
+      <input name="outlow" type="float" value="0.0" />
+      <input name="outhigh" type="float" value="1.0" />
+    </remap>
+
+    <mix name="colmix" type="color3">
+      <input name="fg" type="color3" value="1.0, 0.35, 0.05" />
+      <input name="bg" type="color3" value="0.02, 0.05, 0.20" />
+      <input name="mix" type="float" nodename="noise01" />
+    </mix>
+
+    <output name="basecolor_out" type="color3" nodename="colmix" />
+    <output name="roughness_out" type="float" nodename="noise01" />
+
+  </nodegraph>
+
+  <standard_surface name="SR_animated_noise" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_animated_noise" output="basecolor_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_animated_noise" output="roughness_out" />
+  </standard_surface>
+
+  <surfacematerial name="M_animated_noise" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_animated_noise" />
+  </surfacematerial>
+
+</materialx>

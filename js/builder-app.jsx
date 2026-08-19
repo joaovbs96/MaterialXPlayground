@@ -543,13 +543,13 @@ function BuilderApp({ active } = {}) {
                             />
                             <p className="text-[11px] text-gray-500 mt-1">Applies on blur or Enter (this one reloads the preview).</p>
                         </div>
-                        {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
+                        {window.MTLX_PRESETS && window.presetDocUrl && (
                             <div>
                                 <label className={FIELD_LABEL_CLS}>Or pick an example</label>
                                 <select value={presetPick} onChange={handlePresetPick} className={TEXT_INPUT_CLS}>
                                     <option value="">(choose a preset)</option>
                                     {window.MTLX_PRESETS.map((p) => (
-                                        <option key={p.path} value={window.MTLX_PRESETS_BASE + p.path}>{p.label}</option>
+                                        <option key={window.presetKey(p)} value={window.presetDocUrl(p)}>{p.label}</option>
                                     ))}
                                 </select>
                             </div>

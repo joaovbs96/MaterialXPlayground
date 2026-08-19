@@ -302,7 +302,7 @@
             // graph-app.jsx's loadPreset: the viewer has no unsaved edits.
             const loadPreset = async (preset) => {
                 setPresetsBusy(true);
-                setPresetsBusyPath(preset.path);
+                setPresetsBusyPath(presetKey(preset));
                 setError(null);
                 try {
                     const { map, rootKey } = await fetchPresetFiles(preset);

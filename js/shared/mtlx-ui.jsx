@@ -85,9 +85,9 @@ const DialogFrame = ({
     );
 };
 
-// Curated MaterialX example docs for the "Presets" button, resolved via
-// window.MtlxAssets (same base as the default startup doc). Every path
-// below was verified to exist (HTTP 200) at the pinned tag before adding.
+// Curated example docs for the "Presets" button. Entries have either
+// `path` (relative to MTLX_PRESETS_BASE, the MaterialX repo examples) or
+// `src` (a site-relative URL to one of this repo's own examples/).
 const MTLX_PRESETS_BASE = window.MtlxAssets.repoUrl('resources/Materials/Examples/');
 const MTLX_PRESETS = [
     { label: 'Marble (solid)', desc: 'Noise-driven solid marble veining', path: 'StandardSurface/standard_surface_marble_solid.mtlx' },
@@ -108,7 +108,16 @@ const MTLX_PRESETS = [
     { label: 'OpenPBR velvet', desc: 'Sheen-driven velvet fabric (OpenPBR)', path: 'OpenPbr/open_pbr_velvet.mtlx' },
     { label: 'OpenPBR pearl', desc: 'Iridescent pearl surface (OpenPBR)', path: 'OpenPbr/open_pbr_pearl.mtlx' },
     { label: 'OpenPBR soap bubble', desc: 'Thin-film iridescence on a soap bubble (OpenPBR)', path: 'OpenPbr/open_pbr_soapbubble.mtlx' },
+    { label: 'Animated noise', desc: 'Time-driven scrolling noise that animates; a MaterialX Playground example', src: 'examples/animated_noise.mtlx' },
 ];
+
+// Absolute document URL for a preset: `src` presets resolve against this
+// page (site-relative), `path` presets against the MaterialX examples base.
+const presetDocUrl = (preset) => (preset.src
+    ? new URL(preset.src, document.baseURI).href
+    : MTLX_PRESETS_BASE + preset.path);
+// Stable identity for keys/busy state, whichever field the entry uses.
+const presetKey = (preset) => preset.src || preset.path;
 
 // Filename refs in a preset doc, resolved against inherited
 // <materialx fileprefix> / <nodegraph fileprefix> ancestors. Splits the
@@ -219,13 +228,14 @@ const crawlDocumentFiles = async (docUrl, rootKey, isAllowedUrl) => {
 };
 
 // Presets dialog crawl: fetches stay within window.MtlxAssets
-// .resourcesRoot() as a safety guard. Thin wrapper over
-// crawlDocumentFiles; return shape/behavior are unchanged.
+// .resourcesRoot() or this site's own examples/ folder as a safety guard.
+// Thin wrapper over crawlDocumentFiles; return shape/behavior are unchanged.
 const fetchPresetFiles = async (preset) => {
     const resourcesRoot = window.MtlxAssets.resourcesRoot();
-    const isSafePresetUrl = (url) => url.indexOf(resourcesRoot) === 0;
-    const docUrl = MTLX_PRESETS_BASE + preset.path;
-    const baseName = preset.path.split('/').pop();
+    const examplesRoot = new URL('examples/', document.baseURI).href;
+    const isSafePresetUrl = (url) => url.indexOf(resourcesRoot) === 0 || url.indexOf(examplesRoot) === 0;
+    const docUrl = presetDocUrl(preset);
+    const baseName = presetKey(preset).split('/').pop();
     const { map, rootKey } = await crawlDocumentFiles(docUrl, baseName, isSafePresetUrl);
     return { map, rootKey };
 };
@@ -277,13 +287,13 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
         >
             <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
                 {MTLX_PRESETS.map((preset) => {
-                    const rowBusy = busy && busyPath === preset.path;
+                    const rowBusy = busy && busyPath === presetKey(preset);
                     return (
                         <button
-                            key={preset.path}
+                            key={presetKey(preset)}
                             onClick={() => onPick(preset)}
                             disabled={busy}
-                            title={preset.path}
+                            title={presetKey(preset)}
                             className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
                                 + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-700/70 cursor-pointer')}
                         >
@@ -1661,5 +1671,6 @@ Object.assign(window, {
     useWindowFileDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, GeomSelect, PreviewErrorBoundary,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    presetDocUrl, presetKey,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
 });
