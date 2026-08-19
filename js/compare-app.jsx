@@ -14,6 +14,12 @@ const COMPARE_SIDEBAR_INSET = 320;
 // Slot identity colors (blue for A, amber for B), used for the small dot
 // markers on document labels/pills across the stage and sidebar cards.
 const SLOT_COLORS = { A: '#60a5fa', B: '#fbbf24' };
+
+// Empty-stage grid backdrop: same 40px/gray-500 tokens as the builder's
+// HeroGrid, but masked with a radial fade (the pane is a bounded box, not
+// a page edge) so it dissolves before the pane borders instead of cutting off.
+const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
+const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
 const SlotDot = ({ color, className }) => (
     <span className={'inline-block w-1.5 h-1.5 rounded-full shrink-0 ' + (className || '')} style={{ background: color }} />
 );
@@ -889,9 +895,21 @@ function MaterialCompareApp({ active = true } = {}) {
                 </div>
             )}
             {!slot.chosenMtlx && !slot.busy && !slot.error && (
-                <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
-                    {'Drop a .mtlx / .zip here or use the sidebar'}
-                </div>
+                <React.Fragment>
+                    <div
+                        aria-hidden="true"
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                            backgroundImage: EMPTY_STAGE_GRID_IMAGE,
+                            backgroundSize: '40px 40px',
+                            maskImage: EMPTY_STAGE_GRID_MASK,
+                            WebkitMaskImage: EMPTY_STAGE_GRID_MASK,
+                        }}
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
+                        {'Drop a .mtlx / .zip here or use the sidebar'}
+                    </div>
+                </React.Fragment>
             )}
         </React.Fragment>
     );
