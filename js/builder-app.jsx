@@ -261,6 +261,21 @@ const builderFileNameFromUrl = (url) => {
     }
 };
 
+// `exposure` always stores the linear multiplier the embed attribute takes
+// ('' = default/1x); the builder's own slider shows it in EV stops instead
+// (0 = no change, +1 = double, -1 = half) and converts at the edges.
+const builderExposureEv = (exposure) => {
+    const t = exposure.trim();
+    if (t === '') return '0';
+    const ev = Math.log2(Number(t));
+    return Number.isFinite(ev) ? String(Math.round(ev * 100) / 100) : '0';
+};
+const builderEvToExposure = (ev) => {
+    const n = Number(ev);
+    if (!Number.isFinite(n) || n === 0) return '';
+    return String(Math.round(Math.pow(2, n) * 1000) / 1000);
+};
+
 // ---- Section-card summary lines (right-aligned, collapsed-state hint) ----
 const builderLightingSummary = (env, exposure) => {
     const hasEnv = env.trim() !== '' && Number(env) !== 0;
@@ -268,7 +283,11 @@ const builderLightingSummary = (env, exposure) => {
     if (!hasEnv && !hasExp) return 'Default environment';
     const parts = [];
     if (hasEnv) parts.push(`Rotated ${env.trim()} deg`);
-    if (hasExp) parts.push(`${hasEnv ? 'exposure' : 'Exposure'} ${Number(exposure)}x`);
+    if (hasExp) {
+        const rounded = Math.round(Math.log2(Number(exposure)) * 10) / 10;
+        const evText = `${rounded >= 0 ? '+' : ''}${rounded.toFixed(1)} EV`;
+        parts.push(hasEnv ? evText : `Exposure ${evText}`);
+    }
     return parts.join(', ');
 };
 const builderHudSummary = (controls) => {
@@ -1229,6 +1248,7 @@ function BuilderApp({ active } = {}) {
     const activeThemePreset = builderActiveThemePreset(settings);
     const themeSummary = activeThemePreset ? activeThemePreset.label : 'Custom';
     const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
+    const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
 
     const previewFrameWidthForSpan = sizing === 'responsive' ? 800 : width;
     const previewSpan = columns === 1 ? 1 : ((previewFrameWidthForSpan + 32 > columnWidth) ? 2 : 1);
@@ -1345,10 +1365,21 @@ function BuilderApp({ active } = {}) {
                     onNumber={(v) => patch({ env: v })}
                 />
                 <SliderField
-                    label="Exposure" unit="x" value={exposure} min={0} max={4} step={0.05} placeholder="1.0"
-                    onSlider={(v) => patch({ exposure: Number(v) === 1 ? '' : v })}
-                    onNumber={(v) => patch({ exposure: v })}
+                    label="Exposure" unit="EV" value={builderExposureEv(exposure)} min={-3} max={3} step={0.1} placeholder="0"
+                    onSlider={(v) => patch({ exposure: builderEvToExposure(v) })}
+                    onNumber={(v) => patch({ exposure: builderEvToExposure(v) })}
                 />
+                <div className="flex justify-end">
+                    <button
+                        type="button"
+                        disabled={lightingAtDefault}
+                        onClick={() => patch({ env: '', exposure: '' })}
+                        className={BTN_SECONDARY + ' inline-flex items-center gap-1.5' + (lightingAtDefault ? ' opacity-50 cursor-not-allowed' : '')}
+                    >
+                        <MtlxIcon name="refresh" className="w-3.5 h-3.5" />
+                        Reset rotation and exposure
+                    </button>
+                </div>
                 <div>
                     <FieldLabel label="Environment map URL (.hdr / .exr)" />
                     <input
@@ -1390,6 +1421,10 @@ function BuilderApp({ active } = {}) {
                     onSlider={(v) => patch({ radius: v })}
                     onNumber={(v) => patch({ radius: v })}
                 />
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                    <span className="text-xs font-medium text-gray-400">Transparent page background</span>
+                    <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} />
+                </label>
                 <HudMiniPreview accent={accent} surface={surface} text={text} radius={radius} />
             </SectionCard>
         </MasonryItem>,
@@ -1433,10 +1468,6 @@ function BuilderApp({ active } = {}) {
                 <label className="flex items-center justify-between gap-3 cursor-pointer">
                     <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Direct wheel zoom, no Ctrl needed <ReloadsPill /></span>
                     <Toggle checked={wheelZoom} onChange={(v) => patch({ wheelZoom: v })} />
-                </label>
-                <label className="flex items-center justify-between gap-3 cursor-pointer">
-                    <span className="text-xs font-medium text-gray-400">Transparent page background</span>
-                    <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} />
                 </label>
                 <div className="border-t border-gray-700/60 pt-3.5 space-y-3">
                     <div>

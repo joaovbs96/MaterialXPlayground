@@ -437,6 +437,7 @@
             } else if (name === 'envmap') {
                 this._send('setEnvMap', { url: this.envmap });
             } else if (name === 'camera') {
+                if (!this.camera) return; // cleared/absent: nothing to apply, nothing to report
                 var pose = this._parseCameraAttr(this.camera);
                 if (pose) this._send('setCamera', pose);
                 else this._reportError(new Error('materialx-viewer: invalid `camera` attribute "' + this.camera + '"; expected 6 comma-separated finite numbers: px,py,pz,tx,ty,tz.'));
