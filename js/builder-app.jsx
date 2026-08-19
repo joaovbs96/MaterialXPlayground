@@ -1455,11 +1455,14 @@ function BuilderApp({ active } = {}) {
                         <span className="text-xs font-medium text-gray-400">Transparent page background</span>
                         <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} disabled={transparentDisabled} />
                     </label>
-                    <p className={'text-[11px] mt-1' + (transparentDisabled ? ' text-amber-300/80' : ' text-gray-500')}>
-                        {transparentDisabled
-                            ? 'Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.'
-                            : 'Not compatible with Std. Shader Ball w/ Backdrop.'}
-                    </p>
+                    {transparentDisabled ? (
+                        <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                            <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
+                            <span>Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.</span>
+                        </div>
+                    ) : (
+                        <p className="text-[11px] mt-1 text-gray-500">Not compatible with Std. Shader Ball w/ Backdrop.</p>
+                    )}
                 </div>
                 <HudMiniPreview accent={accent} surface={surface} text={text} radius={radius} />
             </SectionCard>
