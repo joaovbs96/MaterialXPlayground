@@ -205,7 +205,7 @@
         if (hash === '#!viewer') { return 'viewer'; }
         if (hash === '#!graph') { return 'graph'; }
         if (hash === '#!compare') { return 'compare'; }
-        if (hash === '#!builder') { return 'builder'; }
+        if (hash === '#!builder' || hash.indexOf('#!builder?') === 0) { return 'builder'; }
         if (hash === '#!vscode') { return 'vscode'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
