@@ -146,22 +146,22 @@ const isBuilderDefault = (key, value) => normForCompare(key, value) === normForC
 // selected only when every key it omits is ALSO still at its default.
 const BUILDER_TEMPLATES = [
     {
-        id: 'defaults', name: 'Defaults',
+        id: 'defaults', name: 'Defaults', icon: 'restore',
         desc: 'Every setting at its default value. Plain viewer, no HUD, 640 x 480.',
         tags: ['640x480', 'no HUD'], values: {},
     },
     {
-        id: 'product-card', name: 'Product card',
+        id: 'product-card', name: 'Product card', icon: 'id',
         desc: 'Square, transparent, no HUD. Sits inside your own card.',
         tags: ['1:1', 'transparent'], values: { width: 480, height: 480, transparent: true },
     },
     {
-        id: 'blog', name: 'Inline in a blog',
+        id: 'blog', name: 'Inline in a blog', icon: 'article',
         desc: '16:9, geometry picker and fullscreen. Scroll passes through.',
         tags: ['16:9', '2 controls'], values: { width: 640, height: 360, controls: { geometry: true, fullscreen: true } },
     },
     {
-        id: 'hero', name: 'Full-width hero',
+        id: 'hero', name: 'Full-width hero', icon: 'layout-navbar',
         desc: 'Responsive 21:9, auto-rotate, chromeless, transparent.',
         tags: ['responsive', 'auto-rotate'], values: { sizing: 'responsive', width: 21, height: 9, autorotate: true, transparent: true },
     },
@@ -264,11 +264,11 @@ const builderFileNameFromUrl = (url) => {
 // ---- Section-card summary lines (right-aligned, collapsed-state hint) ----
 const builderLightingSummary = (env, exposure) => {
     const hasEnv = env.trim() !== '' && Number(env) !== 0;
-    const hasExp = exposure.trim() !== '' && Number(exposure) !== 0;
+    const hasExp = exposure.trim() !== '' && Number(exposure) !== 1;
     if (!hasEnv && !hasExp) return 'Default environment';
     const parts = [];
     if (hasEnv) parts.push(`Rotated ${env.trim()} deg`);
-    if (hasExp) { const n = Number(exposure); parts.push(`${n > 0 ? '+' : ''}${n} EV`); }
+    if (hasExp) parts.push(`${hasEnv ? 'exposure' : 'Exposure'} ${Number(exposure)}x`);
     return parts.join(', ');
 };
 const builderHudSummary = (controls) => {
@@ -289,8 +289,24 @@ const builderActiveThemePreset = (s) => BUILDER_THEME_PRESETS.find((p) =>
     && normForCompare('radius', p.radius) === normForCompare('radius', s.radius)
     && !!p.transparent === !!s.transparent) || null;
 
-const FIELD_LABEL_CLS = 'block text-xs font-medium text-gray-400 mb-1';
 const TEXT_INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500';
+
+// Fixed-height (20px) field label row shared by every field on the page,
+// so a label with a ReloadsPill lines up exactly with one that has none
+// (a bare text label used to be a few px shorter, misaligning neighbours).
+function FieldLabel({ label, pill, hint }) {
+    return (
+        <div className="h-5 flex items-center justify-between mb-1">
+            <span className="text-xs font-medium text-gray-400">{label}</span>
+            {(hint || pill) && (
+                <span className="flex items-center gap-1.5 shrink-0">
+                    {hint && <span className="text-[11px] text-gray-500">{hint}</span>}
+                    {pill}
+                </span>
+            )}
+        </div>
+    );
+}
 
 // A CSS-color text field paired with a native swatch (hex-only). The
 // text field is the source of truth and accepts any CSS color, including
@@ -299,7 +315,7 @@ function ColorField({ label, value, onChange, placeholder }) {
     const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#000000';
     return (
         <div className="min-w-0">
-            <label className={FIELD_LABEL_CLS}>{label}</label>
+            <FieldLabel label={label} />
             <div className="flex items-center gap-1.5">
                 <input
                     type="color"
@@ -324,7 +340,7 @@ function ColorField({ label, value, onChange, placeholder }) {
 // label or a section title (BUILDER's live/reload split, docs/EMBEDDING.md).
 function ReloadsPill({ className }) {
     return (
-        <span className={'inline-flex items-center gap-1 shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-full border border-amber-300/35 bg-amber-300/10 text-amber-300 ' + (className || '')}>
+        <span className={'inline-flex items-center gap-1 shrink-0 h-4 leading-none text-[10px] px-1.5 rounded-full border border-amber-300/35 bg-amber-300/10 text-amber-300 ' + (className || '')}>
             <MtlxIcon name="refresh" className="w-2.5 h-2.5" />
             reloads
         </span>
@@ -355,13 +371,13 @@ function Toggle({ checked, onChange, disabled }) {
 // the same value. `onSlider`/`onNumber` are separate so a caller can, e.g.,
 // collapse a slider-at-default back to '' without doing that mid-typing.
 function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, placeholder }) {
-    const sliderVal = Number(value) || 0;
+    // A blank value (the field at its default sentinel) reflects the
+    // handle at `placeholder`'s position, not 0 - exposure's default is
+    // 1.0, not the bottom of its 0..4 range.
+    const sliderVal = value.trim() !== '' ? (Number(value) || 0) : (Number(placeholder) || 0);
     return (
         <div>
-            <div className="flex items-center justify-between mb-1">
-                <label className={FIELD_LABEL_CLS + ' mb-0'}>{label}</label>
-                <span className="text-[11px] text-gray-500">{unit}</span>
-            </div>
+            <FieldLabel label={label} hint={unit} />
             <div className="flex items-center gap-2.5">
                 <input
                     type="range" min={min} max={max} step={step} value={sliderVal}
@@ -434,13 +450,14 @@ function GeometryTile({ label, icon, selected, onClick }) {
     );
 }
 
-// One Look theme preset (58px tall): three small color squares + a label.
+// One Look theme preset (58px tall, fills its grid column): three small
+// color squares + a label.
 function ThemeTile({ preset, active, onClick }) {
     return (
         <button
             type="button"
             onClick={onClick}
-            className={'h-[58px] w-[72px] rounded-lg border flex flex-col items-center justify-center gap-1.5 shrink-0 transition-colors '
+            className={'h-[58px] w-full rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors '
                 + (active ? 'border-blue-500 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 hover:border-gray-600')}
         >
             <div className="flex gap-1">
@@ -475,7 +492,8 @@ function HudMiniPreview({ accent, surface, text, radius }) {
     );
 }
 
-// One "Start from a template" card: thumbnail + name + description + tags.
+// One "Start from a template" card: icon box + name + description + tags.
+// The icon box is self-stretch so it always matches the text block's height.
 function TemplateCard({ t, active, onClick }) {
     return (
         <button
@@ -485,14 +503,11 @@ function TemplateCard({ t, active, onClick }) {
                 + (active ? 'border-blue-500/70 bg-gray-800 ring-1 ring-blue-500/20' : 'border-gray-700 bg-gray-800/40 hover:border-gray-600')}
         >
             <div
-                className="w-16 h-16 rounded-md border border-gray-700 shrink-0"
-                style={{
-                    backgroundImage: "url(images/preview-builder.jpg)",
-                    backgroundSize: "300% auto",
-                    backgroundPosition: "62% 26%",
-                    backgroundRepeat: "no-repeat",
-                }}
-            />
+                className={'self-stretch w-14 rounded-md border bg-gray-900 flex items-center justify-center shrink-0 '
+                    + (active ? 'border-blue-500/60' : 'border-gray-700')}
+            >
+                <MtlxIcon name={t.icon} className={'w-[22px] h-[22px] ' + (active ? 'text-blue-300' : 'text-gray-300')} />
+            </div>
             <div className="min-w-0 flex-1 space-y-1">
                 <div className="text-[13px] font-semibold text-gray-100">{t.name}</div>
                 <p className="text-[11px] leading-snug text-gray-500">{t.desc}</p>
@@ -506,31 +521,45 @@ function TemplateCard({ t, active, onClick }) {
     );
 }
 
-// One snippet output: a header with an icon, title and copy button, plus a
-// wrapping code block. Highlights under "xml" only if highlight.js already
-// happens to be loaded (see js/graph/dialogs.jsx's XmlDialog for the fallback).
-function SnippetPanel({ icon, title, code, copied, onCopy, primary, anchorId }) {
+// Both generated snippets behind tabs, one Copy button for whichever
+// tab is active. Fixed-height code area so the card never resizes as
+// a snippet grows/shrinks.
+const SNIPPET_TABS = [
+    { id: 'iframe', label: 'Plain iframe' },
+    { id: 'element', label: 'Custom element' },
+];
+function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCopy }) {
+    const code = tab === 'iframe' ? iframeSnippet : elementSnippet;
     const highlighted = React.useMemo(() => {
         if (typeof window === 'undefined' || !window.hljs || typeof window.hljs.highlight !== 'function') return null;
         try { return window.hljs.highlight(code, { language: 'xml' }).value; } catch (e) { return null; }
     }, [code]);
     return (
-        <div id={anchorId} className="rounded-lg border border-gray-700 bg-gray-900 overflow-hidden">
-            <div className="h-9 flex items-center justify-between gap-2 px-3 border-b border-gray-700 bg-gray-800/60">
-                <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-gray-200 min-w-0">
-                    <MtlxIcon name={icon} className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                    <span className="truncate">{title}</span>
-                </span>
+        <div id="builder-snippets" className="rounded-lg border border-gray-700 bg-gray-900 overflow-hidden">
+            <div className="flex items-center justify-between gap-2 bg-gray-800/60">
+                <div className="flex items-stretch">
+                    {SNIPPET_TABS.map((s) => (
+                        <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => onTab(s.id)}
+                            className={'h-9 px-3 text-xs border-b-2 transition-colors '
+                                + (tab === s.id ? 'border-blue-500 text-gray-100' : 'border-transparent text-gray-400 hover:text-gray-200')}
+                        >
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
                 <button
                     type="button"
                     onClick={onCopy}
-                    className={(primary ? BTN_PRIMARY : BTN_SECONDARY) + ' inline-flex items-center gap-1.5 shrink-0'}
+                    className={BTN_PRIMARY + ' inline-flex items-center gap-1.5 shrink-0 mr-3'}
                 >
                     <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
                     {copied ? 'Copied!' : 'Copy'}
                 </button>
             </div>
-            <pre className="p-3 text-xs leading-relaxed text-gray-300 whitespace-pre-wrap break-all max-h-72 overflow-y-auto custom-scrollbar">
+            <pre className="p-3 text-xs leading-relaxed text-gray-300 h-[200px] whitespace-pre overflow-auto custom-scrollbar">
                 {highlighted ? <code dangerouslySetInnerHTML={{ __html: highlighted }} /> : <code>{code}</code>}
             </pre>
         </div>
@@ -544,11 +573,11 @@ function LegendBlock() {
         <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3 space-y-2">
             <div className="flex items-center gap-1.5 text-[11px] text-gray-500 flex-wrap">
                 <span className="shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-full border border-gray-600 text-gray-400">live</span>
-                geometry, lighting, look, camera, size update in place
+                lighting, look, camera, size update in place
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-gray-500 flex-wrap">
                 <ReloadsPill />
-                document, version, HUD, auto-rotate, wheel restart the frame
+                geometry, document, version, HUD, auto-rotate, wheel restart the frame
             </div>
             <p className="text-[11px] text-gray-500">Only non-default settings are emitted.</p>
             <p className="text-[11px] text-gray-500">Embeds larger than the preview area are shrunk to fit, keeping their aspect ratio.</p>
@@ -791,7 +820,7 @@ function PreviewStage({
                 className="rounded-lg border border-gray-700 overflow-hidden bg-gray-900 flex items-center justify-center"
             >
                 <div
-                    className="flex items-center justify-center p-6 rounded-md"
+                    className="flex flex-col items-center gap-2 p-6 rounded-md"
                     style={{
                         width: pageBoxWidth,
                         backgroundColor: '#0b1220',
@@ -805,37 +834,6 @@ function PreviewStage({
                     >
                         <div ref={previewMountRef} style={{ width: frameW, height: frameH, transform: `scale(${scale})`, transformOrigin: 'top left' }} />
 
-                        <div className="absolute left-1.5 bottom-1.5 flex items-center gap-1">
-                            <button
-                                type="button" onClick={onUseCurrentView}
-                                className="h-6 inline-flex items-center gap-1 px-2 rounded bg-gray-800/85 border border-gray-600 text-gray-200 text-[11px] hover:bg-gray-700/85 transition-colors"
-                            >
-                                <MtlxIcon name="camera" className="w-3 h-3" />
-                                {compact ? 'Use view' : 'Use current view'}
-                            </button>
-                            {!compact && (
-                                <React.Fragment>
-                                    <button
-                                        type="button" disabled={!camera.trim()} onClick={() => patch({ camera: '' })}
-                                        className={'h-6 inline-flex items-center gap-1 px-2 rounded bg-gray-800/85 border border-gray-600 text-[11px] transition-colors '
-                                            + (camera.trim() ? 'text-gray-200 hover:bg-gray-700/85' : 'text-gray-500 cursor-not-allowed opacity-60')}
-                                    >
-                                        <MtlxIcon name="refresh" className="w-3 h-3" />
-                                        Reset
-                                    </button>
-                                    <span className="h-6 inline-flex items-center px-2 rounded bg-gray-800/60 border border-gray-700 text-gray-400 text-[11px]">
-                                        Start camera: {camera.trim() ? 'custom' : 'default'}
-                                    </span>
-                                </React.Fragment>
-                            )}
-                        </div>
-
-                        {compact && (
-                            <span className="absolute right-1.5 bottom-1.5 h-6 inline-flex items-center px-2 rounded bg-gray-800/85 border border-gray-600 text-gray-300 text-[11px] whitespace-nowrap">
-                                {width} x {height}, scaled to fit
-                            </span>
-                        )}
-
                         {sizing === 'fixed' && !compact && (
                             <div
                                 onPointerDown={startDrag}
@@ -848,15 +846,34 @@ function PreviewStage({
                             </div>
                         )}
                     </div>
+
+                    {/* Builder-only camera controls + size readout: kept out of the
+                        frame itself so they never read as part of the embed's own HUD. */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap" style={{ width: scaledW }}>
+                        <div className="flex items-center gap-1.5">
+                            <button
+                                type="button" title="Use current view" onClick={onUseCurrentView}
+                                className={BTN_SECONDARY + ' inline-flex items-center gap-1.5'}
+                            >
+                                <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                                {!compact && 'Use current view'}
+                            </button>
+                            <button
+                                type="button" title="Reset" disabled={!camera.trim()} onClick={() => patch({ camera: '' })}
+                                className={BTN_SECONDARY + ' inline-flex items-center gap-1.5' + (!camera.trim() ? ' opacity-50 cursor-not-allowed' : '')}
+                            >
+                                <MtlxIcon name="refresh" className="w-3.5 h-3.5" />
+                                {!compact && 'Reset'}
+                            </button>
+                            <span className="text-[11px] text-gray-500 whitespace-nowrap">Start camera: {camera.trim() ? 'custom' : 'default'}</span>
+                        </div>
+                        <p className="text-[11px] text-gray-500 whitespace-nowrap">
+                            {width} x {height} <span className="text-gray-700">|</span> {builderAspectLabel(width, height)}{' '}
+                            <span className="text-gray-700">|</span> Shown at {shownPct}% inside a {device}-width page
+                        </p>
+                    </div>
                 </div>
             </div>
-
-            {!compact && (
-                <p className="text-[11px] text-gray-500 text-center">
-                    {width} x {height} <span className="text-gray-700">|</span> {builderAspectLabel(width, height)}{' '}
-                    <span className="text-gray-700">|</span> Shown at {shownPct}% inside a {device}-width page
-                </p>
-            )}
 
             {compact && (
                 <div className="flex items-center gap-2">
@@ -914,6 +931,7 @@ function BuilderApp({ active } = {}) {
     const [ready, setReady] = React.useState(false);
     const [errors, setErrors] = React.useState([]);
     const [copiedKey, setCopiedKey] = React.useState(null);
+    const [snippetTab, setSnippetTab] = React.useState('iframe');
     const copyTimerRef = React.useRef(null);
 
     const previewMountRef = React.useRef(null);
@@ -1232,27 +1250,15 @@ function BuilderApp({ active } = {}) {
             />
         </MasonryItem>
     );
-    const iframeItem = (
-        <MasonryItem key="iframe-snippet" span={1}>
-            <SnippetPanel
-                icon="code"
-                title="Plain iframe, no script tag needed"
-                code={iframeSnippet}
-                copied={copiedKey === 'iframe'}
-                onCopy={() => copySnippet('iframe', iframeSnippet)}
-                primary
-                anchorId="builder-snippets"
-            />
-        </MasonryItem>
-    );
-    const elementItem = (
-        <MasonryItem key="element-snippet" span={1}>
-            <SnippetPanel
-                icon="puzzle"
-                title="Custom element, script + <materialx-viewer>"
-                code={elementSnippet}
-                copied={copiedKey === 'element'}
-                onCopy={() => copySnippet('element', elementSnippet)}
+    const snippetsItem = (
+        <MasonryItem key="snippets" span={1}>
+            <SnippetsCard
+                tab={snippetTab}
+                onTab={setSnippetTab}
+                iframeSnippet={iframeSnippet}
+                elementSnippet={elementSnippet}
+                copied={copiedKey === snippetTab}
+                onCopy={() => copySnippet(snippetTab, snippetTab === 'iframe' ? iframeSnippet : elementSnippet)}
             />
         </MasonryItem>
     );
@@ -1262,10 +1268,7 @@ function BuilderApp({ active } = {}) {
         <MasonryItem key="doc" span={1}>
             <SectionCard icon="file-text" title="Document" summary={docSummary} defaultOpen={defaultOpen}>
                 <div>
-                    <div className="flex items-center justify-between mb-1">
-                        <label className={FIELD_LABEL_CLS + ' mb-0'}>Document URL (src)</label>
-                        <ReloadsPill />
-                    </div>
+                    <FieldLabel label="Document URL (src)" pill={<ReloadsPill />} />
                     <input
                         type="text" value={src}
                         onChange={(e) => { patch({ src: e.target.value }); setPresetPick(''); }}
@@ -1278,7 +1281,7 @@ function BuilderApp({ active } = {}) {
                 </div>
                 {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
                     <div>
-                        <label className={FIELD_LABEL_CLS}>Or pick a curated example</label>
+                        <FieldLabel label="Or pick a curated example" />
                         <select value={presetPick} onChange={handlePresetPick} className={TEXT_INPUT_CLS}>
                             <option value="">Choose a curated example</option>
                             {window.MTLX_PRESETS.map((p) => (
@@ -1289,7 +1292,7 @@ function BuilderApp({ active } = {}) {
                 )}
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <label className={FIELD_LABEL_CLS}>Material</label>
+                        <FieldLabel label="Material" />
                         {renderables.length >= 2 ? (
                             <select value={material} onChange={(e) => patch({ material: e.target.value })} className={TEXT_INPUT_CLS}>
                                 <option value="">First material</option>
@@ -1303,10 +1306,7 @@ function BuilderApp({ active } = {}) {
                         )}
                     </div>
                     <div>
-                        <div className="flex items-center justify-between mb-1">
-                            <label className={FIELD_LABEL_CLS + ' mb-0'}>MaterialX version</label>
-                            <ReloadsPill />
-                        </div>
+                        <FieldLabel label="MaterialX version" pill={<ReloadsPill />} />
                         {BUILDER_VERSIONS.length > 0 && (
                             <select value={version} onChange={(e) => patch({ version: e.target.value })} className={TEXT_INPUT_CLS}>
                                 {BUILDER_VERSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
@@ -1319,9 +1319,9 @@ function BuilderApp({ active } = {}) {
         </MasonryItem>,
 
         <MasonryItem key="scene" span={1}>
-            <SectionCard icon="cube" title="Scene" summary={(window.GEOM_LABELS && window.GEOM_LABELS[geometry]) || geometry} defaultOpen={defaultOpen}>
+            <SectionCard icon="cube" title="Scene" pill={<ReloadsPill />} summary={(window.GEOM_LABELS && window.GEOM_LABELS[geometry]) || geometry} defaultOpen={defaultOpen}>
                 <div>
-                    <label className={FIELD_LABEL_CLS}>Geometry</label>
+                    <FieldLabel label="Geometry" />
                     <div className="grid grid-cols-3 gap-2">
                         {BUILDER_GEOM_OPTIONS.map((g) => (
                             <GeometryTile
@@ -1345,12 +1345,12 @@ function BuilderApp({ active } = {}) {
                     onNumber={(v) => patch({ env: v })}
                 />
                 <SliderField
-                    label="Exposure" unit="stops" value={exposure} min={-3} max={3} step={0.05} placeholder="0.0"
-                    onSlider={(v) => patch({ exposure: Number(v) === 0 ? '' : v })}
+                    label="Exposure" unit="x" value={exposure} min={0} max={4} step={0.05} placeholder="1.0"
+                    onSlider={(v) => patch({ exposure: Number(v) === 1 ? '' : v })}
                     onNumber={(v) => patch({ exposure: v })}
                 />
                 <div>
-                    <label className={FIELD_LABEL_CLS}>Environment map URL (.hdr / .exr)</label>
+                    <FieldLabel label="Environment map URL (.hdr / .exr)" />
                     <input
                         type="text" value={envmap}
                         onChange={(e) => patch({ envmap: e.target.value })}
@@ -1370,8 +1370,8 @@ function BuilderApp({ active } = {}) {
         <MasonryItem key="look" span={1}>
             <SectionCard icon="palette" title="Look" summary={themeSummary} defaultOpen={defaultOpen}>
                 <div>
-                    <label className={FIELD_LABEL_CLS}>Theme preset</label>
-                    <div className="flex gap-2">
+                    <FieldLabel label="Theme preset" />
+                    <div className="grid grid-cols-3 gap-2">
                         {BUILDER_THEME_PRESETS.map((p) => (
                             <ThemeTile
                                 key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
@@ -1444,7 +1444,7 @@ function BuilderApp({ active } = {}) {
                         <p className="text-[11px] text-gray-500 mt-0.5">Poster shows until the viewer activates, eager skips waiting for it to scroll into view.</p>
                     </div>
                     <div>
-                        <label className={FIELD_LABEL_CLS}>Poster image URL</label>
+                        <FieldLabel label="Poster image URL" />
                         <input type="text" value={poster} onChange={(e) => patch({ poster: e.target.value })} placeholder="(none)" className={TEXT_INPUT_CLS} />
                     </div>
                     <label className="flex items-center justify-between gap-3 cursor-pointer">
@@ -1458,7 +1458,7 @@ function BuilderApp({ active } = {}) {
         <MasonryItem key="size" span={1}>
             <SectionCard icon="dimensions" title="Size" summary={builderSizeSummary(settings)} defaultOpen={defaultOpen}>
                 <div>
-                    <label className={FIELD_LABEL_CLS}>Sizing</label>
+                    <FieldLabel label="Sizing" />
                     <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden">
                         <button
                             type="button" onClick={() => patch({ sizing: 'fixed' })}
@@ -1477,7 +1477,7 @@ function BuilderApp({ active } = {}) {
                     </div>
                 </div>
                 <div>
-                    <label className={FIELD_LABEL_CLS}>Aspect presets</label>
+                    <FieldLabel label="Aspect presets" />
                     <div className="flex flex-wrap gap-1.5">
                         {ASPECT_PRESETS.map((p) => (
                             <Chip
@@ -1492,11 +1492,11 @@ function BuilderApp({ active } = {}) {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <label className={FIELD_LABEL_CLS}>{sizing === 'responsive' ? 'Aspect W' : 'Width (px)'}</label>
+                        <FieldLabel label={sizing === 'responsive' ? 'Aspect W' : 'Width (px)'} />
                         <input type="number" min="1" value={width} onChange={(e) => patch({ width: Math.max(1, Number(e.target.value) || 1) })} className={TEXT_INPUT_CLS} />
                     </div>
                     <div>
-                        <label className={FIELD_LABEL_CLS}>{sizing === 'responsive' ? 'Aspect H' : 'Height (px)'}</label>
+                        <FieldLabel label={sizing === 'responsive' ? 'Aspect H' : 'Height (px)'} />
                         <input type="number" min="1" value={height} onChange={(e) => patch({ height: Math.max(1, Number(e.target.value) || 1) })} className={TEXT_INPUT_CLS} />
                     </div>
                 </div>
@@ -1505,12 +1505,12 @@ function BuilderApp({ active } = {}) {
         </MasonryItem>,
     ];
 
-    // Phone (1 column): the snippet panels/legend render AFTER the cards
+    // Phone (1 column): the snippets card/legend render AFTER the cards
     // (reachable via the sticky stage's "View snippets" button) instead of
     // right after the preview, per the brief's compact layout.
     const masonryItems = columns === 1
-        ? [previewItem, ...cardItems, iframeItem, elementItem, legendItem]
-        : [previewItem, iframeItem, elementItem, legendItem, ...cardItems];
+        ? [previewItem, ...cardItems, snippetsItem, legendItem]
+        : [previewItem, snippetsItem, legendItem, ...cardItems];
 
     return (
         <div ref={rootRef} className="relative">
