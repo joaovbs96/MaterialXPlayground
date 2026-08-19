@@ -80,9 +80,10 @@
             // bare surfaceshader nodes as a fallback (see listDocRenderables
             // in js/mtlx-engine.js for the caveat this works around).
             const renderables = listDocRenderables(doc);
-            // `path` rides along so the render effect can stamp what
-            // actually got rendered (renderedMtlx) once a view builds.
-            return { mx, gen, genContext, lightData, doc, renderables, path };
+            // `path`/`version` ride along so the render effect can stamp what
+            // actually got rendered (renderedMtlx/renderedVersion) once a
+            // view builds.
+            return { mx, gen, genContext, lightData, doc, renderables, path, version: version || window.MtlxAssets.MTLX_DEFAULT_VERSION };
         };
 
         // bindDroppedTextures (plus its TEXTURE_CACHE/textureCacheKey
@@ -157,6 +158,14 @@
             // one), which flips immediately on picker change. Stamped by
             // the render effect once a view builds from it.
             const [renderedMtlx, setRenderedMtlx] = React.useState(null);
+            // MaterialX engine version: local UI state, seeded from the
+            // mtlxVersion controlled prop (embed) or the stamped default.
+            // Reconciled with the prop below, like the geometry sync above.
+            const [version, setVersion] = React.useState(() => mtlxVersion || window.MtlxAssets.MTLX_DEFAULT_VERSION);
+            // Version that actually finished rendering (vs `version`, the
+            // requested one). Stamped alongside renderedMtlx in the render
+            // effect; the status chip reads this, not the global badge.
+            const [renderedVersion, setRenderedVersion] = React.useState(null);
             const [renderables, setRenderables] = React.useState([]);
             const [chosenMat, setChosenMat] = React.useState(0);
             // Initial geometry: the `geometry` controlled prop when it names
@@ -512,6 +521,51 @@
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [material, renderables]);
 
+            // mtlxVersion controlled-prop sync: keeps local `version` state
+            // (and any already-loaded document) in sync with a later prop
+            // change, mirroring the geometry sync above; no-ops when unset.
+            const mtlxVersionPropRef = React.useRef(mtlxVersion);
+            React.useEffect(() => {
+                if (mtlxVersion === mtlxVersionPropRef.current) return;
+                mtlxVersionPropRef.current = mtlxVersion;
+                if (!mtlxVersion) return;
+                setVersion(mtlxVersion);
+                if (chosenMtlx) loadDocument(chosenMtlx, undefined, mtlxVersion);
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [mtlxVersion]);
+
+            // ---- MaterialX version registry + availability probe ----------
+            // MtlxAssets.ready (awaited by shell.jsx before any view mounts)
+            // has already populated these by the time this component exists.
+            const mtlxVersions = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
+            const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
+            const versionLabels = {};
+            mtlxVersions.forEach((v) => { versionLabels[v] = v; });
+            const versionBadges = { [mtlxDefaultVersion]: 'Default' };
+
+            // Non-default versions are gitignored and may be absent from a
+            // plain clone, so probe once per version (js/compare-app.jsx's
+            // recipe): undecided counts as unavailable until confirmed.
+            const [versionAvailable, setVersionAvailable] = React.useState({});
+            React.useEffect(() => {
+                let cancelled = false;
+                mtlxVersions.filter((v) => v !== mtlxDefaultVersion).forEach((v) => {
+                    fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', { method: 'HEAD', cache: 'no-store' })
+                        .then((res) => {
+                            if (cancelled) return;
+                            setVersionAvailable((prev) => Object.assign({}, prev, { [v]: !!(res && res.ok) }));
+                        })
+                        .catch(() => {
+                            if (cancelled) return;
+                            setVersionAvailable((prev) => Object.assign({}, prev, { [v]: false }));
+                        });
+                });
+                return () => { cancelled = true; };
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, []);
+            const availableVersionOptions = mtlxVersions.filter((v) => v === mtlxDefaultVersion || versionAvailable[v] === true);
+            const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+
             // Default material: open_pbr_default.mtlx via ingest(), or
             // documentUrl when supplied, crawled for includes/textures
             // like the Presets flow so relative texture refs resolve.
@@ -588,8 +642,12 @@
                 ingest(map);
             };
 
-            const loadDocument = async (path, mapArg) => {
+            const loadDocument = async (path, mapArg, versionArg) => {
                 const map = mapArg || fileMapRef.current;
+                // versionArg forces the FRESH version into this tick (the
+                // `version` state closure hasn't re-rendered yet), same
+                // reason ingest() passes `merged` instead of the fileMap closure.
+                const ver = versionArg || version;
                 const id = ++runRef.current;
                 setError(null);
                 setTexReport(null);
@@ -600,7 +658,7 @@
                     // text is used here (the raw half is for callers needing
                     // as-authored text, e.g. the graph editor, unused here).
                     const { resolved: xml } = await readMtlxText(map[path], path, map);
-                    const loaded = await loadMtlxDocument(xml, path, mtlxVersionRef.current);
+                    const loaded = await loadMtlxDocument(xml, path, ver);
                     if (runRef.current !== id) return; // superseded by a newer load
                     if (!loaded.renderables.length) {
                         setStatus(null);
@@ -678,9 +736,11 @@
                         }
                         setViewEpoch((n) => n + 1);
                         // What's on screen just changed; stamp the document
-                        // that produced it so sendToEditor and the sidebar
-                        // note never claim pixels that were never rendered.
+                        // (and version) that produced it so sendToEditor, the
+                        // sidebar note and the status chip never claim pixels
+                        // that were never rendered.
                         setRenderedMtlx(loaded.path);
+                        setRenderedVersion(loaded.version);
                         const report = bindDroppedTextures(view, fileMapRef.current);
                         setTexReport(report);
                         setStatus(null);
@@ -787,6 +847,33 @@
                                 <div className="text-gray-500 mt-0.5">{mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'}</div>
                             </div>
                         )}
+
+                        <div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-gray-400">MaterialX version</span>
+                                <GeomSelect
+                                    value={version}
+                                    options={availableVersionOptions}
+                                    labels={versionLabels}
+                                    badges={versionBadges}
+                                    onChange={(v) => {
+                                        setVersion(v);
+                                        // A Document belongs to the mx instance that parsed
+                                        // it, so switching versions re-parses the already
+                                        // chosen file. Nothing to reload if none is chosen yet.
+                                        if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
+                                    }}
+                                    className={'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300'
+                                        + (busy ? ' opacity-50 pointer-events-none' : '')}
+                                />
+                            </div>
+                            {unavailableVersions.length > 0 && (
+                                <div className="text-[10px] text-gray-500 mt-1">
+                                    {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
+                                    {unavailableVersions.length === 1 ? ' is' : ' are'} not available in this build.
+                                </div>
+                            )}
+                        </div>
 
                         {mtlxPaths.length > 1 && (
                             <div>
@@ -1044,7 +1131,10 @@
                                     const segments = [
                                         renderables[chosenMat] && renderables[chosenMat].name,
                                         mxSafe(() => renderables[chosenMat].node.getCategory(), ''),
-                                        window.__mtlxVersion ? 'v' + window.__mtlxVersion : null,
+                                        // renderedVersion reflects what actually rendered; window.__mtlxVersion
+                                        // is only ever stamped for the DEFAULT build (js/mtlx-engine.js), so it's
+                                        // just the fallback for "nothing has rendered under a version yet".
+                                        (renderedVersion || window.__mtlxVersion) ? 'v' + (renderedVersion || window.__mtlxVersion) : null,
                                     ].filter(Boolean);
                                     if (!segments.length) return null;
                                     return (
