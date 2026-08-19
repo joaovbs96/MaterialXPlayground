@@ -192,13 +192,13 @@ const EmbedControls = ({
     className: "mtlx-ec-panel-row mtlx-ec-panel-row--slider"
   }, /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-slider-label"
-  }, /*#__PURE__*/React.createElement("span", null, "Exposure"), /*#__PURE__*/React.createElement("span", null, envExposure.toFixed(2))), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("span", null, "Exposure"), /*#__PURE__*/React.createElement("span", null, formatEv(linearToEv(envExposure)))), /*#__PURE__*/React.createElement("input", {
     type: "range",
-    min: "0",
-    max: "4",
-    step: "0.05",
-    value: envExposure,
-    onChange: e => setEnvExposure(Number(e.target.value))
+    min: EV_MIN,
+    max: EV_MAX,
+    step: EV_STEP,
+    value: linearToEv(envExposure),
+    onChange: e => setEnvExposure(evToLinear(e.target.value))
   }))), openPanel === 'settings' && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel"
   }, /*#__PURE__*/React.createElement("div", {

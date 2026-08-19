@@ -7,14 +7,6 @@
 // compare-app.jsx's loadMtlxDocument comment for the same rationale).
 const BUILDER_GEOM_OPTIONS = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
 const BUILDER_DEFAULT_GEOM = 'shaderball-scene';
-const BUILDER_GEOM_ICONS = {
-    'shaderball-scene': 'inner-shadow-bottom-right',
-    'shaderball': 'inner-shadow-bottom-right',
-    'shaderball-mtlx': 'inner-shadow-bottom-right',
-    sphere: 'circle',
-    cube: 'cube',
-    cloth: 'wave',
-};
 const BUILDER_CONTROLS = [
     { id: 'geometry', chip: 'Geometry', icon: 'cube' },
     { id: 'material', chip: 'Material selection', icon: 'color-swatch' },
@@ -269,17 +261,17 @@ const builderFileNameFromUrl = (url) => {
 
 // `exposure` always stores the linear multiplier the embed attribute takes
 // ('' = default/1x); the builder's own slider shows it in EV stops instead
-// (0 = no change, +1 = double, -1 = half) and converts at the edges.
+// (0 = no change, +1 = double, -1 = half). Thin wrappers over the shared
+// linear<->EV helpers, keeping the builder's string and ''-sentinel semantics.
 const builderExposureEv = (exposure) => {
     const t = exposure.trim();
     if (t === '') return '0';
-    const ev = Math.log2(Number(t));
-    return Number.isFinite(ev) ? String(Math.round(ev * 100) / 100) : '0';
+    return String(Math.round(linearToEv(t) * 100) / 100);
 };
 const builderEvToExposure = (ev) => {
     const n = Number(ev);
     if (!Number.isFinite(n) || n === 0) return '';
-    return String(Math.round(Math.pow(2, n) * 1000) / 1000);
+    return String(Math.round(evToLinear(n) * 1000) / 1000);
 };
 
 // ---- Section-card summary lines (right-aligned, collapsed-state hint) ----
@@ -290,8 +282,7 @@ const builderLightingSummary = (env, exposure) => {
     const parts = [];
     if (hasEnv) parts.push(`Rotated ${env.trim()} deg`);
     if (hasExp) {
-        const rounded = Math.round(Math.log2(Number(exposure)) * 10) / 10;
-        const evText = `${rounded >= 0 ? '+' : ''}${rounded.toFixed(1)} EV`;
+        const evText = formatEv(linearToEv(Number(exposure)));
         parts.push(hasEnv ? evText : `Exposure ${evText}`);
     }
     return parts.join(', ');
@@ -313,25 +304,6 @@ const builderActiveThemePreset = (s) => BUILDER_THEME_PRESETS.find((p) =>
     && builderNorm(p.text) === builderNorm(s.text)
     && normForCompare('radius', p.radius) === normForCompare('radius', s.radius)
     && !!p.transparent === !!s.transparent) || null;
-
-const TEXT_INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500';
-
-// Fixed-height (20px) field label row shared by every field on the page,
-// so a label with a ReloadsPill lines up exactly with one that has none
-// (a bare text label used to be a few px shorter, misaligning neighbours).
-function FieldLabel({ label, pill, hint }) {
-    return (
-        <div className="h-5 flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-gray-400">{label}</span>
-            {(hint || pill) && (
-                <span className="flex items-center gap-1.5 shrink-0">
-                    {hint && <span className="text-[11px] text-gray-500">{hint}</span>}
-                    {pill}
-                </span>
-            )}
-        </div>
-    );
-}
 
 // A CSS-color text field paired with a native swatch (hex-only). The
 // text field is the source of truth and accepts any CSS color, including
@@ -369,112 +341,6 @@ function ReloadsPill({ className }) {
             <MtlxIcon name="refresh" className="w-2.5 h-2.5" />
             reloads
         </span>
-    );
-}
-
-// 34x20 pill switch for boolean fields (Show environment as background,
-// Auto-rotate, Transparent, Eager, ...).
-function Toggle({ checked, onChange, disabled }) {
-    return (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={checked}
-            disabled={disabled}
-            onClick={() => onChange(!checked)}
-            className={'relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border transition-colors '
-                + (disabled ? 'opacity-40 cursor-not-allowed ' : 'cursor-pointer ')
-                + (checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')}
-        >
-            <span className={'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform '
-                + (checked ? 'translate-x-[15px]' : 'translate-x-[2px]')} />
-        </button>
-    );
-}
-
-// A range input paired with a small right-aligned number box, both driving
-// the same value. `onSlider`/`onNumber` are separate so a caller can, e.g.,
-// collapse a slider-at-default back to '' without doing that mid-typing.
-function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, placeholder }) {
-    // A blank value (the field at its default sentinel) reflects the
-    // handle at `placeholder`'s position, not 0 - exposure's default is
-    // 1.0, not the bottom of its 0..4 range.
-    const sliderVal = value.trim() !== '' ? (Number(value) || 0) : (Number(placeholder) || 0);
-    return (
-        <div>
-            <FieldLabel label={label} hint={unit} />
-            <div className="flex items-center gap-2.5">
-                <input
-                    type="range" min={min} max={max} step={step} value={sliderVal}
-                    onChange={(e) => onSlider(e.target.value)}
-                    className="flex-1 accent-blue-500 h-1.5"
-                />
-                <input
-                    type="number" min={min} max={max} step={step} value={value} placeholder={placeholder}
-                    onChange={(e) => onNumber(e.target.value)}
-                    className={TEXT_INPUT_CLS + ' w-[58px] text-right px-1.5 shrink-0'}
-                />
-            </div>
-        </div>
-    );
-}
-
-// Generic pill toggle/button (HUD control chips, aspect presets). `dashed`
-// pairs with `disabled` for the "unlocks with 2+ materials" locked look.
-function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
-    const base = 'h-[30px] inline-flex items-center gap-1.5 px-3 rounded-full border text-[11px] transition-colors whitespace-nowrap';
-    const cls = disabled
-        ? base + ' opacity-40 cursor-not-allowed text-gray-500 border-gray-700' + (dashed ? ' border-dashed' : '')
-        : active
-            ? base + ' border-blue-500/70 bg-blue-500/10 text-blue-200'
-            : base + ' border-gray-600 text-gray-300 hover:border-gray-500 cursor-pointer';
-    return (
-        <button type="button" title={title} disabled={disabled} onClick={onClick} className={cls}>
-            {icon && <MtlxIcon name={icon} className="w-3.5 h-3.5" />}
-            {children}
-        </button>
-    );
-}
-
-// Collapsible settings card shell shared by all seven fields cards. Open
-// state is local (per brief) so it survives re-renders but always starts
-// from `defaultOpen`, which the caller sets from the current column count.
-function SectionCard({ icon, title, pill, summary, defaultOpen, children }) {
-    const [open, setOpen] = React.useState(defaultOpen);
-    return (
-        <div className="rounded-lg border border-gray-700 bg-gray-800/35">
-            <button
-                type="button"
-                onClick={() => setOpen((o) => !o)}
-                className="w-full h-[42px] flex items-center gap-2 px-3.5 text-left"
-            >
-                <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
-                <span className="text-[13px] font-semibold text-gray-200 shrink-0">{title}</span>
-                {pill}
-                <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate">{summary}</span>
-                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-            </button>
-            {open && <div className="px-3.5 pb-3.5 pt-3.5 space-y-3.5 border-t border-gray-700/60">{children}</div>}
-        </div>
-    );
-}
-
-// One geometry option in the Scene card's 3-column grid. Icon row sits at
-// a fixed top offset so icons line up whether the label wraps to 1 or 2 lines.
-function GeometryTile({ label, icon, selected, disabled, title, onClick }) {
-    return (
-        <button
-            type="button"
-            disabled={disabled}
-            title={title}
-            onClick={onClick}
-            className={'h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
-                + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700 text-gray-500'
-                    : selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')}
-        >
-            <MtlxIcon name={icon} className="w-5 h-5 shrink-0" />
-            <span className="text-[11px] leading-tight text-center min-h-[26px] flex items-center">{label}</span>
-        </button>
     );
 }
 
@@ -1368,7 +1234,7 @@ function BuilderApp({ active } = {}) {
                                 <GeometryTile
                                     key={g}
                                     label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
-                                    icon={BUILDER_GEOM_ICONS[g]}
+                                    icon={GEOM_ICONS[g]}
                                     selected={geometry === g}
                                     disabled={geomDisabled}
                                     title={geomDisabled ? 'Not available with a transparent page background' : undefined}

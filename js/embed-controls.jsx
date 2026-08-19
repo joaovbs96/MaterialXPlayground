@@ -210,12 +210,12 @@ const EmbedControls = ({
                     <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider">
                         <div className="mtlx-ec-slider-label">
                             <span>Exposure</span>
-                            <span>{envExposure.toFixed(2)}</span>
+                            <span>{formatEv(linearToEv(envExposure))}</span>
                         </div>
                         <input
-                            type="range" min="0" max="4" step="0.05"
-                            value={envExposure}
-                            onChange={(e) => setEnvExposure(Number(e.target.value))}
+                            type="range" min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                            value={linearToEv(envExposure)}
+                            onChange={(e) => setEnvExposure(evToLinear(e.target.value))}
                         />
                     </div>
                 </div>

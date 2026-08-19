@@ -825,6 +825,13 @@ const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass 
 // to document.body since backdrop-blur ancestors break `position: fixed`.
 const ENV_DIALOG_W = 224, ENV_DIALOG_H = 240; // approx footprint, used for edge clamping/flip below
 
+// EV stops <-> the engine's linear exposure multiplier.
+// 0 EV = 1.0x, +1 = double, -1 = half.
+const EV_MIN = -3, EV_MAX = 3, EV_STEP = 0.1;
+const evToLinear = (ev) => { const n = Number(ev); return Number.isFinite(n) ? Math.pow(2, n) : 1; };
+const linearToEv = (x) => { const n = Number(x); return (Number.isFinite(n) && n > 0) ? Math.log2(n) : 0; };
+const formatEv = (ev) => (ev >= 0 ? '+' : '') + (Math.round(ev * 10) / 10).toFixed(1) + ' EV';
+
 const EnvDialog = ({
     anchorRef, open, onClose,
     envBg, onToggleEnvBg,
@@ -952,12 +959,12 @@ const EnvDialog = ({
             <div>
                 <div className="flex items-center justify-between mb-0.5">
                     <span>Exposure</span>
-                    <span className="font-mono text-gray-400">{exposure.toFixed(2)}</span>
+                    <span className="font-mono text-gray-400">{formatEv(linearToEv(exposure))}</span>
                 </div>
                 <input
-                    type="range" min="0" max="4" step="0.05"
-                    value={exposure}
-                    onChange={(e) => onExposureChange(Number(e.target.value))}
+                    type="range" min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                    value={linearToEv(exposure)}
+                    onChange={(e) => onExposureChange(evToLinear(e.target.value))}
                     className="w-full accent-blue-500"
                 />
             </div>
@@ -1014,6 +1021,16 @@ const GEOM_LABELS = {
     'default': 'Auto (by node type)',
 };
 
+// Icons for the preview-geometry options (GeometryTile / GeomSelect rows).
+const GEOM_ICONS = {
+    'shaderball-scene': 'inner-shadow-bottom-right',
+    'shaderball': 'inner-shadow-bottom-right',
+    'shaderball-mtlx': 'inner-shadow-bottom-right',
+    sphere: 'circle',
+    cube: 'cube',
+    cloth: 'wave',
+};
+
 // Per-node-type default preview geometry (docs previewer + graph
 // editor's preview). Groups whose output depends on geometry/lighting
 // (BXDF closures, materials, shaders, lights), view-dependent npr
@@ -1026,6 +1043,139 @@ const SHADERBALL_GROUPS = ['pbr', 'translation', 'material', 'shader', 'light', 
 const defaultGeomFor = (nodegroup) => (
     SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d'
 );
+
+const TEXT_INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500';
+
+// Fixed-height (20px) field label row shared by every field on the page,
+// so a label with a ReloadsPill lines up exactly with one that has none
+// (a bare text label used to be a few px shorter, misaligning neighbours).
+function FieldLabel({ label, pill, hint }) {
+    return (
+        <div className="h-5 flex items-center justify-between mb-1">
+            <span className="text-xs font-medium text-gray-400">{label}</span>
+            {(hint || pill) && (
+                <span className="flex items-center gap-1.5 shrink-0">
+                    {hint && <span className="text-[11px] text-gray-500">{hint}</span>}
+                    {pill}
+                </span>
+            )}
+        </div>
+    );
+}
+
+// 34x20 pill switch for boolean fields (Show environment as background,
+// Auto-rotate, Transparent, Eager, ...).
+function Toggle({ checked, onChange, disabled }) {
+    return (
+        <button
+            type="button"
+            role="switch"
+            aria-checked={checked}
+            disabled={disabled}
+            onClick={() => onChange(!checked)}
+            className={'relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border transition-colors '
+                + (disabled ? 'opacity-40 cursor-not-allowed ' : 'cursor-pointer ')
+                + (checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')}
+        >
+            <span className={'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform '
+                + (checked ? 'translate-x-[15px]' : 'translate-x-[2px]')} />
+        </button>
+    );
+}
+
+// A range input paired with a small right-aligned number box, both driving
+// the same value. `onSlider`/`onNumber` are separate so a caller can, e.g.,
+// collapse a slider-at-default back to '' without doing that mid-typing.
+function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, placeholder }) {
+    // Normalized to a string up front so a caller may pass either a string
+    // (builder's existing ''-sentinel fields) or a bare number.
+    const raw = value == null ? '' : String(value);
+    // A blank value (the field at its default sentinel) reflects the
+    // handle at `placeholder`'s position, not 0 - exposure's default is
+    // 1.0, not the bottom of its 0..4 range.
+    const sliderVal = raw.trim() !== '' ? (Number(raw) || 0) : (Number(placeholder) || 0);
+    return (
+        <div>
+            <FieldLabel label={label} hint={unit} />
+            <div className="flex items-center gap-2.5">
+                <input
+                    type="range" min={min} max={max} step={step} value={sliderVal}
+                    onChange={(e) => onSlider(e.target.value)}
+                    className="flex-1 accent-blue-500 h-1.5"
+                />
+                <input
+                    type="number" min={min} max={max} step={step} value={raw} placeholder={placeholder}
+                    onChange={(e) => onNumber(e.target.value)}
+                    className={TEXT_INPUT_CLS + ' w-[58px] text-right px-1.5 shrink-0'}
+                />
+            </div>
+        </div>
+    );
+}
+
+// Generic pill toggle/button (HUD control chips, aspect presets). `dashed`
+// pairs with `disabled` for the "unlocks with 2+ materials" locked look.
+function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
+    const base = 'h-[30px] inline-flex items-center gap-1.5 px-3 rounded-full border text-[11px] transition-colors whitespace-nowrap';
+    const cls = disabled
+        ? base + ' opacity-40 cursor-not-allowed text-gray-500 border-gray-700' + (dashed ? ' border-dashed' : '')
+        : active
+            ? base + ' border-blue-500/70 bg-blue-500/10 text-blue-200'
+            : base + ' border-gray-600 text-gray-300 hover:border-gray-500 cursor-pointer';
+    return (
+        <button type="button" title={title} disabled={disabled} onClick={onClick} className={cls}>
+            {icon && <MtlxIcon name={icon} className="w-3.5 h-3.5" />}
+            {children}
+        </button>
+    );
+}
+
+// Collapsible settings card shell shared by all seven fields cards. Open
+// state is local (per brief) so it survives re-renders but always starts
+// from `defaultOpen`, which the caller sets from the current column count.
+function SectionCard({ icon, title, pill, summary, defaultOpen, children }) {
+    const [open, setOpen] = React.useState(defaultOpen);
+    return (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/35">
+            <button
+                type="button"
+                onClick={() => setOpen((o) => !o)}
+                className="w-full h-[42px] flex items-center gap-2 px-3.5 text-left"
+            >
+                <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
+                <span className="text-[13px] font-semibold text-gray-200 shrink-0">{title}</span>
+                {pill}
+                <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate">{summary}</span>
+                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+            </button>
+            {open && <div className="px-3.5 pb-3.5 pt-3.5 space-y-3.5 border-t border-gray-700/60">{children}</div>}
+        </div>
+    );
+}
+
+// One geometry option in the Scene card's 3-column grid. Icon row sits at
+// a fixed top offset so icons line up whether the label wraps to 1 or 2 lines.
+// `badge` is optional (a small neutral pill in the top-right corner); every
+// builder call site omits it today, which renders nothing.
+function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }) {
+    return (
+        <button
+            type="button"
+            disabled={disabled}
+            title={title}
+            onClick={onClick}
+            className={'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
+                + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700 text-gray-500'
+                    : selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')}
+        >
+            {badge && (
+                <span className="absolute top-1 right-1 flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300">{badge}</span>
+            )}
+            <MtlxIcon name={icon} className="w-5 h-5 shrink-0" />
+            <span className="text-[11px] leading-tight text-center min-h-[26px] flex items-center">{label}</span>
+        </button>
+    );
+}
 
 const ViewportControls = ({
     geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'],
@@ -1066,6 +1216,12 @@ const ViewportControls = ({
             ? 'bg-blue-600/80 border-blue-500 text-white'
             : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
     }`,
+    // Optional grouped layout. `clusters` is an array of arrays of slot ids;
+    // each inner array becomes one <div className={clusterClassName}>.
+    // Absent (every existing caller) => today's flat strip, same order.
+    clusters = null,
+    slots = null,
+    clusterClassName = 'flex items-center gap-1',
 }) => {
     const envBtnRef = React.useRef(null);
     // Spans the full strip width (which spans the panel in the graph
@@ -1124,119 +1280,152 @@ const ViewportControls = ({
 
     // When labels are shown the strip is wider, so let it wrap to a second
     // line (right-aligned) and cap its width. Other consumers don't pass
-    // showLabels, so they keep containerClassName unchanged.
-    const stripClassName = showLabels
+    // showLabels, so they keep containerClassName unchanged. The hack only
+    // applies to the flat strip - a clustered layout wraps per cluster.
+    const stripClassName = showLabels && !clusters
         ? `${containerClassName} ${labelsClass}`
         : containerClassName;
+
+    // Returns the JSX for one control slot by id, or null when its own
+    // visibility flag says to hide it (same flags the flat strip always
+    // checked). Used to build both the flat order below and any `clusters`.
+    const renderSlot = (id) => {
+        switch (id) {
+            case 'geom':
+                return showGeomSelect ? (
+                    <GeomSelect
+                        key="geom"
+                        value={geom}
+                        options={geomList}
+                        badges={geomBadges}
+                        onChange={onGeomChange}
+                        title="Preview geometry"
+                        className={selectClassName}
+                    />
+                ) : null;
+            case 'rotate':
+                return showRotate ? (
+                    <button
+                        key="rotate"
+                        onClick={onToggleRotating}
+                        title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
+                        className={buttonClassName(rotating)}
+                    >
+                        <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Rotate</span>}
+                    </button>
+                ) : null;
+            case 'cameraReset':
+                return onCameraReset ? (
+                    <button
+                        key="cameraReset"
+                        onClick={onCameraReset}
+                        title="Reset camera"
+                        className={buttonClassName(false)}
+                    >
+                        <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Reset Camera</span>}
+                    </button>
+                ) : null;
+            case 'env':
+                return envAvail ? (
+                    <React.Fragment key="env">
+                        <button
+                            ref={envBtnRef}
+                            onClick={() => (viewRef ? setEnvOpen((o) => !o) : onToggleEnvBg())}
+                            title="Environment…"
+                            className={buttonClassName(envBg || envOpen)}
+                        >
+                            <MtlxIcon name="environment" className="w-3.5 h-3.5" />
+                            {showLabels && <span className="ml-1.5 whitespace-nowrap">Environment</span>}
+                        </button>
+                        {viewRef && (
+                            <EnvDialog
+                                anchorRef={envBtnRef}
+                                edgeRef={panelEdgeRef}
+                                open={envOpen}
+                                onClose={() => setEnvOpen(false)}
+                                placement={envDialogPlacement}
+                                envBg={envBg}
+                                onToggleEnvBg={onToggleEnvBg}
+                                showBackgroundToggle={showBackgroundToggle}
+                                rotation={envRotation}
+                                onRotationChange={(deg) => {
+                                    setEnvRotation(deg);
+                                    if (viewRef.current && viewRef.current.setEnvRotation) {
+                                        viewRef.current.setEnvRotation(deg * Math.PI / 180);
+                                    }
+                                }}
+                                exposure={envExposure}
+                                onExposureChange={(v) => {
+                                    setEnvExposure(v);
+                                    if (viewRef.current && viewRef.current.setEnvExposure) {
+                                        viewRef.current.setEnvExposure(v);
+                                    }
+                                }}
+                                onImportFile={handleImportFile}
+                                onReset={handleReset}
+                                importError={envImportError}
+                            />
+                        )}
+                    </React.Fragment>
+                ) : null;
+            case 'screenshot':
+                return showScreenshot ? (
+                    <button
+                        key="screenshot"
+                        onClick={onScreenshot}
+                        title="Save a PNG preview of the current view"
+                        className={buttonClassName(false)}
+                    >
+                        <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
+                    </button>
+                ) : null;
+            case 'settings':
+                return showSettings ? (
+                    <button
+                        key="settings"
+                        ref={settingsBtnRef}
+                        onClick={() => setSettingsOpen((o) => !o)}
+                        title="Settings"
+                        className={buttonClassName(settingsOpen)}
+                    >
+                        <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Settings</span>}
+                    </button>
+                ) : null;
+            case 'fullscreen':
+                return onToggleFullscreen ? (
+                    <button
+                        key="fullscreen"
+                        onClick={onToggleFullscreen}
+                        title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                        className={buttonClassName(false)}
+                    >
+                        <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>}
+                    </button>
+                ) : null;
+            default:
+                return (slots && slots[id] != null) ? slots[id] : null;
+        }
+    };
+
+    const FLAT_ORDER = ['geom', 'rotate', 'cameraReset', 'env', 'screenshot'];
+    const TAIL_ORDER = ['settings', 'fullscreen'];
+    const tail = typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren;
+    const body = clusters
+        ? [children, ...clusters.map((ids, i) => {
+              const nodes = ids.map(renderSlot).filter(Boolean);
+              return nodes.length ? <div key={'c' + i} className={clusterClassName}>{nodes}</div> : null;
+          }), tail]
+        : [children, ...FLAT_ORDER.map(renderSlot), tail, ...TAIL_ORDER.map(renderSlot)];
 
     return (
     <React.Fragment>
     <div ref={panelEdgeRef} className={stripClassName}>
-        {children}
-        {showGeomSelect && (
-            <GeomSelect
-                value={geom}
-                options={geomList}
-                badges={geomBadges}
-                onChange={onGeomChange}
-                title="Preview geometry"
-                className={selectClassName}
-            />
-        )}
-        {showRotate && (
-            <button
-                onClick={onToggleRotating}
-                title={rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)'}
-                className={buttonClassName(rotating)}
-            >
-                <MtlxIcon name="rotate" className="w-3.5 h-3.5" />
-                {showLabels && <span className="ml-1.5 whitespace-nowrap">Rotate</span>}
-            </button>
-        )}
-        {onCameraReset && (
-            <button
-                onClick={onCameraReset}
-                title="Reset camera"
-                className={buttonClassName(false)}
-            >
-                <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
-                {showLabels && <span className="ml-1.5 whitespace-nowrap">Reset Camera</span>}
-            </button>
-        )}
-        {envAvail && (
-            <React.Fragment>
-                <button
-                    ref={envBtnRef}
-                    onClick={() => (viewRef ? setEnvOpen((o) => !o) : onToggleEnvBg())}
-                    title="Environment…"
-                    className={buttonClassName(envBg || envOpen)}
-                >
-                    <MtlxIcon name="environment" className="w-3.5 h-3.5" />
-                    {showLabels && <span className="ml-1.5 whitespace-nowrap">Environment</span>}
-                </button>
-                {viewRef && (
-                    <EnvDialog
-                        anchorRef={envBtnRef}
-                        edgeRef={panelEdgeRef}
-                        open={envOpen}
-                        onClose={() => setEnvOpen(false)}
-                        placement={envDialogPlacement}
-                        envBg={envBg}
-                        onToggleEnvBg={onToggleEnvBg}
-                        showBackgroundToggle={showBackgroundToggle}
-                        rotation={envRotation}
-                        onRotationChange={(deg) => {
-                            setEnvRotation(deg);
-                            if (viewRef.current && viewRef.current.setEnvRotation) {
-                                viewRef.current.setEnvRotation(deg * Math.PI / 180);
-                            }
-                        }}
-                        exposure={envExposure}
-                        onExposureChange={(v) => {
-                            setEnvExposure(v);
-                            if (viewRef.current && viewRef.current.setEnvExposure) {
-                                viewRef.current.setEnvExposure(v);
-                            }
-                        }}
-                        onImportFile={handleImportFile}
-                        onReset={handleReset}
-                        importError={envImportError}
-                    />
-                )}
-            </React.Fragment>
-        )}
-        {showScreenshot && (
-        <button
-            onClick={onScreenshot}
-            title="Save a PNG preview of the current view"
-            className={buttonClassName(false)}
-        >
-            <MtlxIcon name="camera" className="w-3.5 h-3.5" />
-            {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
-        </button>
-        )}
-        {typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren}
-        {showSettings && (
-        <button
-            ref={settingsBtnRef}
-            onClick={() => setSettingsOpen((o) => !o)}
-            title="Settings"
-            className={buttonClassName(settingsOpen)}
-        >
-            <MtlxIcon name="settings-cog" className="w-3.5 h-3.5" />
-            {showLabels && <span className="ml-1.5 whitespace-nowrap">Settings</span>}
-        </button>
-        )}
-        {onToggleFullscreen && (
-        <button
-            onClick={onToggleFullscreen}
-            title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-            className={buttonClassName(false)}
-        >
-            <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-            {showLabels && <span className="ml-1.5 whitespace-nowrap">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>}
-        </button>
-        )}
+        {body}
     </div>
     {/* Anchored popover (portaled to the fullscreen root, like EnvDialog)
         rather than a full-screen modal, so it stays visible in native
@@ -1652,7 +1841,7 @@ class PreviewErrorBoundary extends React.Component {
 
 Object.assign(window, {
     BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
-    GEOM_LABELS, defaultGeomFor,
+    GEOM_LABELS, GEOM_ICONS, defaultGeomFor,
     errMsg,
     useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
     downloadSnapshot, downloadBlob, downloadXml,
@@ -1662,4 +1851,6 @@ Object.assign(window, {
     ColorSwatch, GeomSelect, PreviewErrorBoundary,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
+    TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile,
+    EV_MIN, EV_MAX, EV_STEP, evToLinear, linearToEv, formatEv,
 });
