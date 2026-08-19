@@ -1296,7 +1296,8 @@ function SectionCard({
   }), /*#__PURE__*/React.createElement("span", {
     className: "text-[13px] font-semibold text-gray-200 shrink-0"
   }, title), pill, /*#__PURE__*/React.createElement("span", {
-    className: "flex-1 min-w-0 text-right text-xs text-gray-500 truncate"
+    className: "flex-1 min-w-0 text-right text-xs text-gray-500 truncate",
+    title: typeof summary === 'string' ? summary : undefined
   }, summary), /*#__PURE__*/React.createElement(MtlxIcon, {
     name: open ? 'chevron-down' : 'chevron-right',
     className: "w-3.5 h-3.5 text-gray-500 shrink-0"

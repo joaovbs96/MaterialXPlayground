@@ -1145,7 +1145,7 @@ function SectionCard({ icon, title, pill, summary, defaultOpen, dense, children 
                 <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
                 <span className="text-[13px] font-semibold text-gray-200 shrink-0">{title}</span>
                 {pill}
-                <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate">{summary}</span>
+                <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate" title={typeof summary === 'string' ? summary : undefined}>{summary}</span>
                 <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-gray-500 shrink-0" />
             </button>
             {open && (
