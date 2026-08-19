@@ -363,9 +363,9 @@ const createGpuDiffView = (canvas) => {
         const onLost = (e) => { e.preventDefault(); lost = true; };
         canvas.addEventListener('webglcontextlost', onLost);
         return {
-            render(canvasA, canvasB, viewA, viewB) {
+            render(canvasA, canvasB, viewA, viewB, ts) {
                 if (lost) return;
-                viewA.renderNow(); viewB.renderNow();
+                viewA.renderNow(ts); viewB.renderNow(ts);
                 // Textures are created lazily from the (stable) canvas elements
                 // and reused across frames — only needsUpdate toggles per frame.
                 if (!texA) {
@@ -683,7 +683,7 @@ function MaterialCompareApp({ active = true } = {}) {
     // srcStale() below — it re-arms `forced` as dirty and bails.
     React.useEffect(() => {
         if (displayMode !== 'diff' && !effShowDiff) return undefined;
-        let reqId = requestAnimationFrame(function loop() {
+        let reqId = requestAnimationFrame(function loop(ts) {
             reqId = requestAnimationFrame(loop);
             if (!activeRef.current) return;
             const gpu = gpuDiffViewRef.current;
@@ -716,9 +716,12 @@ function MaterialCompareApp({ active = true } = {}) {
             // out (srcStale is hoisted above the component — computeComparison
             // shares this exact same guard for the CPU/stats path).
             if (srcStale(va) || srcStale(vb)) { if (forced) diffDirtyRef.current = true; return; }
-            if (!forced && !diffDirtyRef.current) return;
+            // Animated materials change every frame, so they never settle
+            // into "clean": keep re-diffing them even without a dirty flag.
+            const animated = (va.isAnimated && va.isAnimated()) || (vb.isAnimated && vb.isAnimated());
+            if (!forced && !animated && !diffDirtyRef.current) return;
             diffDirtyRef.current = false;
-            gpu.render(va.renderer.domElement, vb.renderer.domElement, va, vb);
+            gpu.render(va.renderer.domElement, vb.renderer.domElement, va, vb, ts);
         });
         return () => cancelAnimationFrame(reqId);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -731,7 +734,11 @@ function MaterialCompareApp({ active = true } = {}) {
         const id = setInterval(() => {
             if (!activeRef.current) return;
             if (!slotA.viewRef.current || !slotB.viewRef.current) return;
-            if (!statsDirtyRef.current) return;
+            const va = slotA.viewRef.current, vb = slotB.viewRef.current;
+            // Animated materials change every frame, so while either view is
+            // animated the stats recompute continuously at this 5 Hz cadence.
+            const animated = (va.isAnimated && va.isAnimated()) || (vb.isAnimated && vb.isAnimated());
+            if (!statsDirtyRef.current && !animated) return;
             computeRef.current();
         }, 200);
         return () => clearInterval(id);

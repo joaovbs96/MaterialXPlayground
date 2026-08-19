@@ -503,3 +503,7 @@ Stated plainly, so nothing here surprises you at integration time:
   `<materialx-viewer>` element sets this (and `allow="fullscreen"`) on its iframe
   automatically; a hand-written `<iframe>` must add both attributes itself, as in every
   example above.
+- **Animated materials.** `time` and `frame` nodes run on a clock that matches MaterialXView:
+  seconds since the page loaded and a per-frame counter, sent to the shader as 32-bit
+  floats. After a couple of days with the same page open (kiosk-style embeds), the animation
+  timing gets coarser; reloading the page resets it.
