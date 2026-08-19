@@ -486,7 +486,7 @@ function MaterialCompareApp({ active = true } = {}) {
     const mtlxVersions = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
     const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
     const versionLabels = {};
-    mtlxVersions.forEach((v) => { versionLabels[v] = 'MaterialX ' + v; });
+    mtlxVersions.forEach((v) => { versionLabels[v] = v; });
     const versionBadges = { [mtlxDefaultVersion]: 'Default' };
 
     // Non-default versions are gitignored and may simply be absent from a
@@ -908,23 +908,24 @@ function MaterialCompareApp({ active = true } = {}) {
                     <span className="text-sm font-mono text-gray-200 truncate">{docBasename}</span>
                 </div>
                 <div>
-                    <FieldLabel label="MaterialX version" />
-                    <GeomSelect
-                        value={slot.version}
-                        options={availableVersionOptions}
-                        labels={versionLabels}
-                        badges={versionBadges}
-                        onChange={(v) => {
-                            slot.setVersion(v);
-                            // A Document belongs to the mx instance that
-                            // parsed it, so switching versions re-parses
-                            // the already-chosen file with the new engine.
-                            // Nothing to reload if no document is loaded yet.
-                            if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
-                        }}
-                        className={TEXT_INPUT_CLS + ' justify-between'
-                            + (slot.busy ? ' opacity-50 pointer-events-none' : '')}
-                    />
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-400">MaterialX version</span>
+                        <GeomSelect
+                            value={slot.version}
+                            options={availableVersionOptions}
+                            labels={versionLabels}
+                            badges={versionBadges}
+                            onChange={(v) => {
+                                slot.setVersion(v);
+                                // A Document belongs to the mx instance that parsed it, so
+                                // switching versions re-parses the already-chosen file with
+                                // the new engine. Nothing to reload if none is loaded yet.
+                                if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
+                            }}
+                            className={'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300'
+                                + (slot.busy ? ' opacity-50 pointer-events-none' : '')}
+                        />
+                    </div>
                     {unavailableVersions.length > 0 && (
                         <div className="text-[10px] text-gray-500 mt-1">
                             {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
@@ -1175,7 +1176,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         {renderSlotSection(slotA, 'A', 'Document A', 'or drop on the left half')}
                         {renderSlotSection(slotB, 'B', 'Document B', 'or drop on the right half')}
 
-                        <SectionCard icon="layout-columns" title="Display" summary={modeLabel}>
+                        <SectionCard icon="layout-columns" title="Display" summary={modeLabel} defaultOpen>
                             <div className="flex rounded border border-gray-600 overflow-hidden text-[11px]">
                                 {[['side', 'Side by side'], ['slider', 'Swipe'], ['diff', 'Difference']].map(([id, label]) => (
                                     <button
@@ -1218,7 +1219,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                         </SectionCard>
 
-                        <SectionCard icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom}>
+                        <SectionCard icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom} defaultOpen>
                             <div className="grid grid-cols-3 gap-2">
                                 {GEOM_OPTIONS.map((g) => (
                                     <GeometryTile
@@ -1233,7 +1234,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                         </SectionCard>
 
-                        <SectionCard icon="sun" title="Environment" summary={envSummary}>
+                        <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
                             <SliderField
                                 label="Environment rotation" unit="deg"
                                 value={envUI.rotation} min={0} max={360} step={1}
@@ -1262,7 +1263,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     title="Also clears an imported .hdr/.exr and restores the default environment"
                                     className={BTN_SECONDARY + ' flex-1'}
                                 >
-                                    Reset rotation and exposure
+                                    Reset
                                 </button>
                                 <input
                                     ref={envFileInputRef}
@@ -1284,6 +1285,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             title="Statistics"
                             pill={bothLive ? <span className="shrink-0 text-[10px] text-gray-500">live</span> : null}
                             summary={stats ? stats.metrics.ssim.toFixed(3) : '—'}
+                            defaultOpen
                         >
                             <div className="space-y-1 text-[11px] text-gray-300">
                                 <div className="flex justify-between"><span>SSIM</span><span className="font-mono">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>

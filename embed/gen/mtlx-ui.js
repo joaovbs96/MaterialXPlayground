@@ -11,8 +11,8 @@
 // Recurring Tailwind button strings, pulled out because the exact same
 // string (verbatim) repeats across files. Near-twin variants elsewhere
 // (different opacity/sizing) are NOT this — leave those inline.
-const BTN_SECONDARY = 'h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
-const BTN_PRIMARY = 'h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
@@ -463,7 +463,7 @@ function SettingsDialog({
   // Right-align to the cog and clamp both axes to the viewport, flipping
   // above if it would overflow the bottom — identical math to EnvDialog's
   // default branch. No placement="left" variant needed here.
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!open) return undefined;
     const rect = anchorRef && anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
     if (rect) {
@@ -1010,7 +1010,7 @@ const EnvDialog = ({
   // Right-align to the anchor and clamp both axes, flipping above if it
   // would overflow the bottom. `placement="left"` (graph preview only)
   // anchors to the panel's left edge instead of dropping on the canvas.
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!open) return undefined;
     const rect = anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
     if (rect) {
@@ -1280,6 +1280,7 @@ function SectionCard({
   pill,
   summary,
   defaultOpen,
+  dense,
   children
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
@@ -1300,7 +1301,7 @@ function SectionCard({
     name: open ? 'chevron-down' : 'chevron-right',
     className: "w-3.5 h-3.5 text-gray-500 shrink-0"
   })), open && /*#__PURE__*/React.createElement("div", {
-    className: "px-3.5 pb-3.5 pt-3.5 space-y-3.5 border-t border-gray-700/60"
+    className: (dense ? 'px-3.5 pb-3 pt-3 space-y-2.5' : 'px-3.5 pb-3.5 pt-3.5 space-y-3.5') + ' border-t border-gray-700/60'
   }, children));
 }
 
