@@ -1325,7 +1325,7 @@ function GeometryTile({
     onClick: onClick,
     className: 'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors ' + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700 text-gray-500' : selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')
   }, badge && /*#__PURE__*/React.createElement("span", {
-    className: "absolute top-1 right-1 flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300"
+    className: "absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300"
   }, badge), /*#__PURE__*/React.createElement(MtlxIcon, {
     name: icon,
     className: "w-5 h-5 shrink-0"

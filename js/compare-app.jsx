@@ -1220,7 +1220,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         </SectionCard>
 
                         <SectionCard icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom} defaultOpen>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 gap-2">
                                 {GEOM_OPTIONS.map((g) => (
                                     <GeometryTile
                                         key={g}
