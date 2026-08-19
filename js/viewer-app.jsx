@@ -217,6 +217,10 @@
             const [presetsOpen, setPresetsOpen] = React.useState(false);
             const [presetsBusy, setPresetsBusy] = React.useState(false);
             const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+            // Selected MTLX_PRESETS path for the Document card's curated
+            // select, mirrored with PresetsDialog's picks via loadPreset
+            // (cleared at the three non-preset ingest entry points only).
+            const [presetPick, setPresetPick] = React.useState('');
             // Shader export dialog ("Export Shader Code" overlay button).
             const [shaderExportOpen, setShaderExportOpen] = React.useState(false);
             // True from "parsing a document" until the render view is live (or
@@ -308,6 +312,7 @@
                     const { map, rootKey } = await fetchPresetFiles(preset);
                     await ingestRef.current(map, rootKey);
                     setPresetsOpen(false);
+                    setPresetPick(preset.path);
                 } catch (e) {
                     setError('Could not load preset: ' + errMsg(e));
                 } finally {
@@ -379,7 +384,7 @@
             // dropped file's result. Could be made opt-in later.
             useWindowFileDrop({
                 activeRef,
-                onFiles: (map) => ingestRef.current(map),
+                onFiles: (map) => { setPresetPick(''); ingestRef.current(map); },
                 onDragState: setDragOver,
                 disabled: IN_VSCODE || chromeless,
             });
@@ -400,6 +405,7 @@
                 const map = Object.assign({}, payload.files || {}, {
                     [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                 });
+                setPresetPick('');
                 ingestRef.current(map);
             };
             React.useEffect(() => {
@@ -578,6 +584,7 @@
                     map[f.webkitRelativePath || f.name] = f;
                 }
                 e.target.value = '';
+                setPresetPick('');
                 ingest(map);
             };
 
@@ -587,7 +594,7 @@
                 setError(null);
                 setTexReport(null);
                 setBusy(true); // stays on through the render effect below
-                setStatus('Parsing ' + path + ' \u2026');
+                setStatus('Parsing ' + path + ' …');
                 try {
                     // readMtlxText resolves xi:includes; only the resolved
                     // text is used here (the raw half is for callers needing
@@ -635,7 +642,7 @@
                     setError(null);
                     setTexReport(null);
                     setBusy(true);
-                    setStatus('Generating shader\u2026');
+                    setStatus('Generating shader…');
                     try {
                         const target = loaded.renderables[Math.min(chosenMat, loaded.renderables.length - 1)];
                         const view = await createMtlxRenderView({
@@ -734,28 +741,128 @@
             const transparentActive = chromeless && !!transparent && !roomGeomActive;
             const bgClass = transparentActive ? 'bg-transparent' : 'bg-gray-900';
 
-            return (
-                // IN_VSCODE: height chain fills the webview. Browser:
-                // graph-editor-style full-bleed stage via `absolute inset-0`
-                // (js/shell.jsx's viewer wrapClass is now empty).
-                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden ${bgClass}`}>
-                    {/* Full-page drop indicator, below the sticky header
-                        (top-14) — except in embed mode, which has no header
-                        to clear (top-0). z-40 matches the graph z-convention
-                        (controls 10/30 < drop 40 < dialogs 50); pointer-events-none. */}
-                    {dragOver && (
-                        <div className={`fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`}>
-                            <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
-                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
-                                    <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
-                                </div>
+            // Document/Materials card summaries and the HUD status chip
+            // all read the same "what's currently on screen" values.
+            const currentMtlxPath = chosenMtlx || renderedMtlx;
+            const docBasename = currentMtlxPath ? currentMtlxPath.split('/').pop() : 'No document';
+            const currentMaterialName = (renderables[chosenMat] && renderables[chosenMat].name) || '';
+
+            // 28px HUD chip classes, shared by ViewportControls' built-in
+            // slots (via buttonClassName) and the custom sendToGraph/
+            // presets/shaderCode buttons below.
+            const hudChipClass = (active) => `h-7 w-7 inline-flex items-center justify-center rounded border transition-colors ${
+                active
+                    ? 'bg-blue-600/80 border-blue-500 text-white'
+                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
+            }`;
+
+            // Files sidebar body: Document/Materials/Textures cards, split
+            // out so the docked panel's own JSX (below) stays flat.
+            const filesPanelBody = (
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
+                    <SectionCard icon="file-text" title="Document" summary={docBasename} defaultOpen>
+                        <div
+                            className={`rounded-lg border-2 border-dashed p-4 text-center transition-colors ${
+                                dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'
+                            }`}
+                        >
+                            <MtlxIcon name="file-upload" className="w-8 h-8 block mx-auto mb-2 text-gray-400" />
+                            <div className="text-sm text-gray-300 font-medium">Drop .mtlx, textures, a folder or a .zip</div>
+                            <div className="text-xs text-gray-500 mt-1">anywhere on the page, or</div>
+                            <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
+                                <label className={BTN_SECONDARY + ' cursor-pointer'}>
+                                    Choose files
+                                    <input type="file" multiple className="hidden" onChange={onPickFiles} />
+                                </label>
+                                <label className={BTN_SECONDARY + ' cursor-pointer'}>
+                                    Choose folder
+                                    <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
+                                </label>
                             </div>
                         </div>
+
+                        {chosenMtlx && (
+                            <div className="text-xs">
+                                <div className="font-mono text-gray-200 truncate">{docBasename}</div>
+                                <div className="text-gray-500 mt-0.5">{mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'}</div>
+                            </div>
+                        )}
+
+                        {mtlxPaths.length > 1 && (
+                            <div>
+                                <FieldLabel label="Pick a document" />
+                                <select
+                                    className={TEXT_INPUT_CLS}
+                                    value={chosenMtlx || ''}
+                                    onChange={(e) => { setChosenMtlx(e.target.value); loadDocument(e.target.value); }}
+                                >
+                                    {!chosenMtlx && <option value="">{'Pick a .mtlx…'}</option>}
+                                    {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                                {chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && (
+                                    <div className="text-[11px] text-amber-300/90 mt-1.5">
+                                        Showing {renderedMtlx.split('/').pop()} (last successful load)
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
+                            <div>
+                                <FieldLabel label="Or pick a curated example" />
+                                <select
+                                    className={TEXT_INPUT_CLS}
+                                    value={presetPick}
+                                    disabled={presetsBusy || busy}
+                                    onChange={(e) => {
+                                        const path = e.target.value;
+                                        setPresetPick(path);
+                                        if (!path) return;
+                                        const preset = window.MTLX_PRESETS.find((p) => p.path === path);
+                                        if (preset) loadPreset(preset);
+                                    }}
+                                >
+                                    <option value="">Choose a curated example</option>
+                                    {window.MTLX_PRESETS.map((p) => (
+                                        <option key={p.path} value={p.path}>{p.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                    </SectionCard>
+
+                    {renderables.length > 1 && (
+                        <SectionCard icon="color-swatch" title="Materials" summary={currentMaterialName}>
+                            <select
+                                className={TEXT_INPUT_CLS}
+                                value={chosenMat}
+                                onChange={(e) => setChosenMat(Number(e.target.value))}
+                            >
+                                {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
+                            </select>
+                        </SectionCard>
                     )}
 
-                    {/* IN_VSCODE: height chain continues so the viewport card
-                        fills the app root. Browser: `absolute inset-0` stage;
-                        the old left column now lives in the floating "Files" sidebar. */}
+                    {texReport && texReport.missing.length > 0 && (
+                        <SectionCard icon="alert-triangle" title="Textures" summary={texReport.missing.length + ' unresolved'}>
+                            <div className="space-y-2">
+                                {texReport.missing.map((m, i) => (
+                                    <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">
+                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
+                                    </div>
+                                ))}
+                                <div className="text-xs text-gray-500">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
+                            </div>
+                        </SectionCard>
+                    )}
+                </div>
+            );
+
+            // Stage: canvas + HUD + collapsed-sidebar pill + status/error
+            // banners. IN_VSCODE renders this fragment directly (unchanged
+            // layout); the browser arm wraps it in a positioned column below.
+            const stage = (
+                <React.Fragment>
                     <div className={IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'}>
                         {/* Viewport card, full width in both modes (left
                             column moved into the "Files" sidebar). Browser:
@@ -828,13 +935,10 @@
                                     />
                                     ) : (
                                     <ViewportControls
-                                        containerClassName="absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end"
-                                        selectClassName="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                                        buttonClassName={(active) => `inline-flex items-center text-[11px] px-2 py-1 rounded border transition-colors ${
-                                            active
-                                                ? 'bg-blue-600/80 border-blue-500 text-white'
-                                                : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
-                                        }`}
+                                        containerClassName="absolute top-2 right-2 z-10 flex items-center gap-2.5"
+                                        clusterClassName="flex items-center gap-1"
+                                        selectClassName="h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                        buttonClassName={hudChipClass}
                                         geom={geom}
                                         onGeomChange={setGeom}
                                         geomBadges={{ 'shaderball-scene': 'Default' }}
@@ -857,54 +961,52 @@
                                         showSettings={showCtl('settings')}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={showCtl('fullscreen') ? onToggleFullscreen : undefined}
-                                        showLabels={!narrow}
-                                        labelsClass={(!IN_VSCODE && sidebarOpen) ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'}
-                                        // Site-shell-coupled (hash-routes to another view, or
-                                        // opens a dialog that assumes it owns the window) —
-                                        // hidden entirely in embed mode, not opt-in via `controls`.
-                                        trailingChildren={chromeless ? undefined : (labels) => (
-                                            <React.Fragment>
-                                                {/* Graph and viewer are always in sync in the
-                                                    extension (one opened .mtlx file), so this
-                                                    cross-view handoff doesn't apply under VS Code. */}
-                                                {!IN_VSCODE && (
+                                        showLabels={false}
+                                        clusters={[
+                                            ['geom', 'rotate', 'cameraReset', 'env'],
+                                            ['screenshot', 'shaderCode', 'sendToGraph'],
+                                            ['presets', 'settings', 'fullscreen'],
+                                        ]}
+                                        slots={{
+                                            // Graph and viewer are always in sync in the
+                                            // extension (one opened .mtlx file), so this
+                                            // handoff doesn't apply under VS Code.
+                                            sendToGraph: !IN_VSCODE ? (
                                                 <button
+                                                    key="sendToGraph"
                                                     onClick={sendToEditor}
                                                     title="Open this material in the Node Graph Editor"
                                                     disabled={!renderables.length}
-                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
+                                                    className={hudChipClass(false) + ' disabled:opacity-40'}
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Send to Graph Editor</span>}
                                                 </button>
-                                                )}
-                                                {/* Presets: browser-only (VS Code is bound to the
-                                                    open file). Portals into the fullscreen element
-                                                    when active, so it stays visible without exiting. */}
-                                                {!IN_VSCODE && (
+                                            ) : null,
+                                            // Presets: browser-only (VS Code is bound to the open file).
+                                            presets: !IN_VSCODE ? (
                                                 <button
+                                                    key="presets"
                                                     onClick={() => setPresetsOpen(true)}
                                                     title="Load a curated official MaterialX example"
-                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                    className={hudChipClass(false)}
                                                 >
                                                     <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Presets</span>}
                                                 </button>
-                                                )}
-                                                {/* Not VS Code-gated: generating shader source
-                                                    applies to the single opened file too. Portals
-                                                    into the fullscreen element when active. */}
+                                            ) : null,
+                                            // Not VS Code-gated: generating shader source
+                                            // applies to the single opened file too.
+                                            shaderCode: (
                                                 <button
+                                                    key="shaderCode"
                                                     onClick={() => setShaderExportOpen(true)}
                                                     title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
                                                     disabled={!renderables.length}
-                                                    className="inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
+                                                    className={hudChipClass(false) + ' disabled:opacity-40'}
                                                 >
                                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                                    {labels && <span className="ml-1.5 whitespace-nowrap">Shader Code</span>}
                                                 </button>
-                                            </React.Fragment>
-                                        )}
+                                            ),
+                                        }}
                                     >
                                         {/* Material picker surfaces here only in fullscreen
                                             (sidebar out of reach) or under VS Code, where the
@@ -935,11 +1037,28 @@
                                     style={{ height: '100%', outline: 'none' }}
                                     tabIndex={-1}
                                 />
+                                {/* Status chip: material / shader category / MaterialX
+                                    version. Lives inside viewportRef (survives fullscreen);
+                                    browser-only, VS Code has its own status line above. */}
+                                {!IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
+                                    const segments = [
+                                        renderables[chosenMat] && renderables[chosenMat].name,
+                                        mxSafe(() => renderables[chosenMat].node.getCategory(), ''),
+                                        window.__mtlxVersion ? 'v' + window.__mtlxVersion : null,
+                                    ].filter(Boolean);
+                                    if (!segments.length) return null;
+                                    return (
+                                        <div className="absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                                            <span>{segments.join(' | ')}</span>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         </div>
                     </div>
 
-                    {/* Floating status/error banners (browser only), same idea as the
+                    {/* Status/error banners (browser only), same idea as the
                         graph editor's. error sits at top-12 (below status's top-2)
                         so the two don't overlap when both show at once. */}
                     {!IN_VSCODE && status && !busy && (
@@ -949,112 +1068,9 @@
                         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
                     )}
 
-                    {/* Floating left "Files" sidebar (browser only), mirroring the
-                        graph editor's param panel but anchored left. May cover the
-                        HUD's left edge at narrow widths — collapse it to reach the HUD.
-                        Hidden entirely in embed mode (drop zone, pickers, document/
-                        material <select>, texture report, collapse chevron and all). */}
-                    {!IN_VSCODE && !chromeless && (sidebarOpen ? (
-                        <div className="absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden">
-                            <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
-                                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Files</span>
-                                <button
-                                    onClick={() => setSidebarOpen(false)}
-                                    title="Collapse the files panel"
-                                    className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
-                                ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
-                            </div>
-                            <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
-                                <div className="text-xs text-gray-500">
-                                    Drag &amp; drop a <code>.mtlx</code> document anywhere on this page — alone, with its
-                                    textures (loose files or a subfolder), or as a <code>.zip</code> — and render it
-                                    with the same engine as the node previews.
-                                </div>
-
-                                <div
-                                    className={`rounded-lg border-2 border-dashed p-4 text-center transition-colors ${
-                                        dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'
-                                    }`}
-                                >
-                                    <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-2 text-gray-400" />
-                                    <div className="text-sm text-gray-300 font-medium">Drop .mtlx / textures / folder / .zip anywhere on the page</div>
-                                    <div className="text-xs text-gray-500 mt-2">or</div>
-                                    <div className="flex items-center justify-center gap-2 mt-2 flex-wrap">
-                                        <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
-                                            Choose files
-                                            <input type="file" multiple className="hidden" onChange={onPickFiles} />
-                                        </label>
-                                        <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
-                                            Choose folder
-                                            <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
-                                        </label>
-                                    </div>
-                                </div>
-
-                                {fileCount > 0 && (
-                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs text-gray-400">
-                                        <span className="text-gray-200 font-semibold">{fileCount}</span> file{fileCount === 1 ? '' : 's'} loaded
-                                        ({mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'})
-                                    </div>
-                                )}
-
-                                {mtlxPaths.length > 1 && (
-                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
-                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Document</div>
-                                        <select
-                                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
-                                            value={chosenMtlx || ''}
-                                            onChange={(e) => { setChosenMtlx(e.target.value); loadDocument(e.target.value); }}
-                                        >
-                                            {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
-                                            {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                                        </select>
-                                        {chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && (
-                                            <div className="text-[11px] text-amber-300/90 mt-1.5">
-                                                Showing {renderedMtlx.split('/').pop()} (last successful load)
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-
-                                {/* Geometry selection lives in the viewport overlay;
-                                    this panel only hosts the material picker now. */}
-                                {renderables.length > 1 && (
-                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3">
-                                        <div>
-                                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Material</div>
-                                            <select
-                                                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
-                                                value={chosenMat}
-                                                onChange={(e) => setChosenMat(Number(e.target.value))}
-                                            >
-                                                {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
-                                            </select>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {texReport && texReport.missing.length > 0 && (
-                                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2">
-                                        <div className="font-semibold text-gray-400 uppercase tracking-wider">Textures</div>
-                                        {texReport.bound.map((b, i) => (
-                                            <div key={'b' + i} className="flex items-start gap-1 text-green-300/90 font-mono break-all">
-                                                <MtlxIcon name="check" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{b}</span>
-                                            </div>
-                                        ))}
-                                        {texReport.missing.map((m, i) => (
-                                            <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">
-                                                <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                            <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
-                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.
-                            </div>
-                        </div>
-                    ) : (
+                    {/* Collapsed-sidebar pill, only shown while the docked
+                        "Files" panel is closed (browser only, hidden in embed). */}
+                    {!IN_VSCODE && !chromeless && !sidebarOpen && (
                         <button
                             onClick={() => setSidebarOpen(true)}
                             title="Expand the files panel"
@@ -1063,14 +1079,61 @@
                             <MtlxIcon name="chevrons-right" className="w-4 h-4" />
                             <span className="max-w-[5rem] md:max-w-[8rem] truncate">Files</span>
                         </button>
-                    ))}
+                    )}
+                </React.Fragment>
+            );
+
+            return (
+                // IN_VSCODE: height chain fills the webview. Browser: a
+                // full-bleed flex row (docked sidebar + stage column), via
+                // js/shell.jsx's now-empty viewer wrapClass.
+                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`}>
+                    {/* Full-page drop indicator, below the sticky header
+                        (top-14) — except in embed mode, which has no header
+                        to clear (top-0). z-40 matches the graph z-convention
+                        (controls 10/30 < drop 40 < dialogs 50); pointer-events-none. */}
+                    {dragOver && (
+                        <div className={`fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`}>
+                            <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
+                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                                    <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Docked "Files" sidebar (browser only), first flex child
+                        so the stage column fills the remainder. Hidden in
+                        embed mode; collapses to the pill in the stage below. */}
+                    {!IN_VSCODE && !chromeless && sidebarOpen && (
+                        <div className="flex-none w-72 max-w-[85%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
+                            <div className="flex-none h-[42px] flex items-center px-3 border-b border-gray-700">
+                                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Files</span>
+                                <button
+                                    onClick={() => setSidebarOpen(false)}
+                                    title="Collapse the files panel"
+                                    className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
+                                ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
+                            </div>
+                            {filesPanelBody}
+                            <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
+                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.
+                            </div>
+                        </div>
+                    )}
+
+                    {IN_VSCODE ? stage : (
+                        <div className="relative flex-1 min-w-0">
+                            {stage}
+                        </div>
+                    )}
 
                     {/* Both dialogs use the `fixed` overlay variant (not
                         DialogFrame's `absolute` default) so the backdrop covers
                         the whole window, including the shared header/footer.
                         Not rendered in embed mode: they assume they own the
                         window, and there's no trigger button to reach them
-                        from anyway (both live in trailingChildren, above). */}
+                        from anyway (both live in the HUD's slots, above). */}
                     {!chromeless && (
                     <PresetsDialog open={presetsOpen} onClose={() => setPresetsOpen(false)} onPick={loadPreset}
                         busy={presetsBusy} busyPath={presetsBusyPath}

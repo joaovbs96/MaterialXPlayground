@@ -248,6 +248,10 @@ function MaterialViewerApp({
   const [presetsOpen, setPresetsOpen] = React.useState(false);
   const [presetsBusy, setPresetsBusy] = React.useState(false);
   const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+  // Selected MTLX_PRESETS path for the Document card's curated
+  // select, mirrored with PresetsDialog's picks via loadPreset
+  // (cleared at the three non-preset ingest entry points only).
+  const [presetPick, setPresetPick] = React.useState('');
   // Shader export dialog ("Export Shader Code" overlay button).
   const [shaderExportOpen, setShaderExportOpen] = React.useState(false);
   // True from "parsing a document" until the render view is live (or
@@ -354,6 +358,7 @@ function MaterialViewerApp({
       } = await fetchPresetFiles(preset);
       await ingestRef.current(map, rootKey);
       setPresetsOpen(false);
+      setPresetPick(preset.path);
     } catch (e) {
       setError('Could not load preset: ' + errMsg(e));
     } finally {
@@ -423,7 +428,10 @@ function MaterialViewerApp({
   // dropped file's result. Could be made opt-in later.
   useWindowFileDrop({
     activeRef,
-    onFiles: map => ingestRef.current(map),
+    onFiles: map => {
+      setPresetPick('');
+      ingestRef.current(map);
+    },
     onDragState: setDragOver,
     disabled: IN_VSCODE || chromeless
   });
@@ -446,6 +454,7 @@ function MaterialViewerApp({
         type: 'application/xml'
       })
     });
+    setPresetPick('');
     ingestRef.current(map);
   };
   React.useEffect(() => {
@@ -620,6 +629,7 @@ function MaterialViewerApp({
       map[f.webkitRelativePath || f.name] = f;
     }
     e.target.value = '';
+    setPresetPick('');
     ingest(map);
   };
   const loadDocument = async (path, mapArg) => {
@@ -628,7 +638,7 @@ function MaterialViewerApp({
     setError(null);
     setTexReport(null);
     setBusy(true); // stays on through the render effect below
-    setStatus('Parsing ' + path + ' \u2026');
+    setStatus('Parsing ' + path + ' …');
     try {
       // readMtlxText resolves xi:includes; only the resolved
       // text is used here (the raw half is for callers needing
@@ -678,7 +688,7 @@ function MaterialViewerApp({
       setError(null);
       setTexReport(null);
       setBusy(true);
-      setStatus('Generating shader\u2026');
+      setStatus('Generating shader…');
       try {
         const target = loaded.renderables[Math.min(chosenMat, loaded.renderables.length - 1)];
         const view = await createMtlxRenderView({
@@ -780,13 +790,302 @@ function MaterialViewerApp({
   // guard above, in case geom ever drifts back to the room.
   const transparentActive = chromeless && !!transparent && !roomGeomActive;
   const bgClass = transparentActive ? 'bg-transparent' : 'bg-gray-900';
+
+  // Document/Materials card summaries and the HUD status chip
+  // all read the same "what's currently on screen" values.
+  const currentMtlxPath = chosenMtlx || renderedMtlx;
+  const docBasename = currentMtlxPath ? currentMtlxPath.split('/').pop() : 'No document';
+  const currentMaterialName = renderables[chosenMat] && renderables[chosenMat].name || '';
+
+  // 28px HUD chip classes, shared by ViewportControls' built-in
+  // slots (via buttonClassName) and the custom sendToGraph/
+  // presets/shaderCode buttons below.
+  const hudChipClass = active => `h-7 w-7 inline-flex items-center justify-center rounded border transition-colors ${active ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'}`;
+
+  // Files sidebar body: Document/Materials/Textures cards, split
+  // out so the docked panel's own JSX (below) stays flat.
+  const filesPanelBody = /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3"
+  }, /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "file-text",
+    title: "Document",
+    summary: docBasename,
+    defaultOpen: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `rounded-lg border-2 border-dashed p-4 text-center transition-colors ${dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'}`
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "file-upload",
+    className: "w-8 h-8 block mx-auto mb-2 text-gray-400"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-gray-300 font-medium"
+  }, "Drop .mtlx, textures, a folder or a .zip"), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500 mt-1"
+  }, "anywhere on the page, or"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-2 mt-3 flex-wrap"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: BTN_SECONDARY + ' cursor-pointer'
+  }, "Choose files", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    multiple: true,
+    className: "hidden",
+    onChange: onPickFiles
+  })), /*#__PURE__*/React.createElement("label", {
+    className: BTN_SECONDARY + ' cursor-pointer'
+  }, "Choose folder", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    webkitdirectory: "",
+    directory: "",
+    multiple: true,
+    className: "hidden",
+    onChange: onPickFiles
+  })))), chosenMtlx && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-mono text-gray-200 truncate"
+  }, docBasename), /*#__PURE__*/React.createElement("div", {
+    className: "text-gray-500 mt-0.5"
+  }, mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's')), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+    label: "Pick a document"
+  }), /*#__PURE__*/React.createElement("select", {
+    className: TEXT_INPUT_CLS,
+    value: chosenMtlx || '',
+    onChange: e => {
+      setChosenMtlx(e.target.value);
+      loadDocument(e.target.value);
+    }
+  }, !chosenMtlx && /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, 'Pick a .mtlx…'), mtlxPaths.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p,
+    value: p
+  }, p))), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-amber-300/90 mt-1.5"
+  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+    label: "Or pick a curated example"
+  }), /*#__PURE__*/React.createElement("select", {
+    className: TEXT_INPUT_CLS,
+    value: presetPick,
+    disabled: presetsBusy || busy,
+    onChange: e => {
+      const path = e.target.value;
+      setPresetPick(path);
+      if (!path) return;
+      const preset = window.MTLX_PRESETS.find(p => p.path === path);
+      if (preset) loadPreset(preset);
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Choose a curated example"), window.MTLX_PRESETS.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p.path,
+    value: p.path
+  }, p.label))))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "color-swatch",
+    title: "Materials",
+    summary: currentMaterialName
+  }, /*#__PURE__*/React.createElement("select", {
+    className: TEXT_INPUT_CLS,
+    value: chosenMat,
+    onChange: e => setChosenMat(Number(e.target.value))
+  }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, r.name)))), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "alert-triangle",
+    title: "Textures",
+    summary: texReport.missing.length + ' unresolved'
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, texReport.missing.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: 'm' + i,
+    className: "flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all",
+    title: "Referenced by the document but not found among the dropped files \u2014 the checker texture is shown instead."
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "alert-triangle",
+    className: "w-3.5 h-3.5 shrink-0 mt-0.5"
+  }), /*#__PURE__*/React.createElement("span", null, m))), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500"
+  }, "Only textures that failed to resolve are listed. This card disappears when everything loads."))));
+
+  // Stage: canvas + HUD + collapsed-sidebar pill + status/error
+  // banners. IN_VSCODE renders this fragment directly (unchanged
+  // layout); the browser arm wraps it in a positioned column below.
+  const stage = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'
+  }, /*#__PURE__*/React.createElement("div", {
+    className: IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'
+  }, IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-gray-400 mb-3"
+  }, status), IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
+    className: "bg-red-950/40 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-3 mb-3 break-words"
+  }, error), /*#__PURE__*/React.createElement("div", {
+    ref: viewportRef,
+    className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
+  }, /*#__PURE__*/React.createElement(LoadingOverlay, {
+    show: busy,
+    label: status,
+    className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
+    labelClassName: "text-sm text-gray-300 animate-pulse",
+    barWidthClass: "w-56"
+  }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
+  /*#__PURE__*/
+  // Purpose-built compact strip (js/embed-controls.jsx):
+  // no portals, own CSS, degrades with width. See that
+  // file's header for why this isn't ViewportControls.
+  React.createElement(EmbedControls, {
+    containerRef: viewportRef,
+    geom: geom
+    // shaderball-scene is excluded while transparent is on:
+    // picking it back would just re-trigger the fallback
+    // above, so don't offer it in the first place.
+    ,
+    geomList: transparent ? VIEWER_GEOM_NAMES.filter(g => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES,
+    onGeomChange: setGeom,
+    showGeom: ctlFlags.geometry,
+    materialList: renderables.map(r => r.name),
+    chosenMat: chosenMat,
+    onMaterialChange: setChosenMat,
+    showMaterial: showMaterial,
+    rotating: rotating,
+    onToggleRotating: toggleRotating
+    // Hidden while shaderball-scene is active
+    // (roomGeomActive above), same for the
+    // background toggle below; not reported.
+    ,
+    showRotate: ctlFlags.rotate,
+    onCameraReset: handleCameraReset,
+    showReset: ctlFlags.reset,
+    envBg: envBg,
+    onToggleEnvBg: toggleEnvBg,
+    showBackgroundToggle: !roomGeomActive,
+    showEnv: ctlFlags.env,
+    initialEnvRotation: envRotation,
+    initialEnvExposure: envExposure,
+    viewRef: viewRef,
+    viewEpoch: viewEpoch,
+    onScreenshot: takeScreenshot,
+    showScreenshot: ctlFlags.screenshot,
+    showSettings: ctlFlags.settings,
+    isFullscreen: isFullscreen,
+    onToggleFullscreen: onToggleFullscreen,
+    showFullscreen: ctlFlags.fullscreen
+  }) : /*#__PURE__*/React.createElement(ViewportControls, {
+    containerClassName: "absolute top-2 right-2 z-10 flex items-center gap-2.5",
+    clusterClassName: "flex items-center gap-1",
+    selectClassName: "h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300",
+    buttonClassName: hudChipClass,
+    geom: geom,
+    onGeomChange: setGeom,
+    geomBadges: {
+      'shaderball-scene': 'Default'
+    },
+    showGeomSelect: showCtl('geometry'),
+    rotating: rotating,
+    onToggleRotating: toggleRotating
+    // Engine no-ops auto-rotate for the full scene, and the
+    // backdrop box fully occludes the env-background sky
+    // sphere - hide both controls while it's selected.
+    ,
+    showRotate: showCtl('rotate') && geom !== 'shaderball-scene',
+    showBackgroundToggle: geom !== 'shaderball-scene',
+    onCameraReset: showCtl('reset') ? handleCameraReset : undefined,
+    envAvail: showCtl('env'),
+    envBg: envBg,
+    onToggleEnvBg: toggleEnvBg,
+    viewRef: viewRef,
+    viewEpoch: viewEpoch,
+    onScreenshot: takeScreenshot,
+    showScreenshot: showCtl('screenshot'),
+    showSettings: showCtl('settings'),
+    isFullscreen: isFullscreen,
+    onToggleFullscreen: showCtl('fullscreen') ? onToggleFullscreen : undefined,
+    showLabels: false,
+    clusters: [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen']],
+    slots: {
+      // Graph and viewer are always in sync in the
+      // extension (one opened .mtlx file), so this
+      // handoff doesn't apply under VS Code.
+      sendToGraph: !IN_VSCODE ? /*#__PURE__*/React.createElement("button", {
+        key: "sendToGraph",
+        onClick: sendToEditor,
+        title: "Open this material in the Node Graph Editor",
+        disabled: !renderables.length,
+        className: hudChipClass(false) + ' disabled:opacity-40'
+      }, /*#__PURE__*/React.createElement(MtlxIcon, {
+        name: "transfer",
+        className: "w-3.5 h-3.5"
+      })) : null,
+      // Presets: browser-only (VS Code is bound to the open file).
+      presets: !IN_VSCODE ? /*#__PURE__*/React.createElement("button", {
+        key: "presets",
+        onClick: () => setPresetsOpen(true),
+        title: "Load a curated official MaterialX example",
+        className: hudChipClass(false)
+      }, /*#__PURE__*/React.createElement(MtlxIcon, {
+        name: "presets",
+        className: "w-3.5 h-3.5"
+      })) : null,
+      // Not VS Code-gated: generating shader source
+      // applies to the single opened file too.
+      shaderCode: /*#__PURE__*/React.createElement("button", {
+        key: "shaderCode",
+        onClick: () => setShaderExportOpen(true),
+        title: "Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)",
+        disabled: !renderables.length,
+        className: hudChipClass(false) + ' disabled:opacity-40'
+      }, /*#__PURE__*/React.createElement(MtlxIcon, {
+        name: "file-code",
+        className: "w-3.5 h-3.5"
+      }))
+    }
+  }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement("select", {
+    value: chosenMat,
+    onChange: e => setChosenMat(Number(e.target.value)),
+    title: "Material to display",
+    className: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+  }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, r.name))))), /*#__PURE__*/React.createElement("canvas", {
+    ref: canvasRef,
+    className: "w-full block cursor-grab active:cursor-grabbing"
+    // Always fills its container: VS Code, fullscreen, and
+    // the full-bleed browser default all resolve to 100% here.
+    // No focus ring: on a transparent embed it reads as a border.
+    ,
+    style: {
+      height: '100%',
+      outline: 'none'
+    },
+    tabIndex: -1
+  }), !IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
+    const segments = [renderables[chosenMat] && renderables[chosenMat].name, mxSafe(() => renderables[chosenMat].node.getCategory(), ''), window.__mtlxVersion ? 'v' + window.__mtlxVersion : null].filter(Boolean);
+    if (!segments.length) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-1.5 rounded-full bg-green-400 shrink-0"
+    }), /*#__PURE__*/React.createElement("span", null, segments.join(' | ')));
+  })()))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
+    className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg"
+  }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
+    className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
+  }, error), !IN_VSCODE && !chromeless && !sidebarOpen && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSidebarOpen(true),
+    title: "Expand the files panel",
+    className: "absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "chevrons-right",
+    className: "w-4 h-4"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "max-w-[5rem] md:max-w-[8rem] truncate"
+  }, "Files")));
   return (
     /*#__PURE__*/
-    // IN_VSCODE: height chain fills the webview. Browser:
-    // graph-editor-style full-bleed stage via `absolute inset-0`
-    // (js/shell.jsx's viewer wrapClass is now empty).
+    // IN_VSCODE: height chain fills the webview. Browser: a
+    // full-bleed flex row (docked sidebar + stage column), via
+    // js/shell.jsx's now-empty viewer wrapClass.
     React.createElement("div", {
-      className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden ${bgClass}`
+      className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
     }, dragOver && /*#__PURE__*/React.createElement("div", {
       className: `fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`
     }, /*#__PURE__*/React.createElement("div", {
@@ -796,158 +1095,10 @@ function MaterialViewerApp({
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "file-upload",
       className: "w-6 h-6"
-    }), " Drop to load"))), /*#__PURE__*/React.createElement("div", {
-      className: IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'
+    }), " Drop to load"))), !IN_VSCODE && !chromeless && sidebarOpen && /*#__PURE__*/React.createElement("div", {
+      className: "flex-none w-72 max-w-[85%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden"
     }, /*#__PURE__*/React.createElement("div", {
-      className: IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'
-    }, IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
-      className: "text-sm text-gray-400 mb-3"
-    }, status), IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-      className: "bg-red-950/40 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-3 mb-3 break-words"
-    }, error), /*#__PURE__*/React.createElement("div", {
-      ref: viewportRef,
-      className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
-    }, /*#__PURE__*/React.createElement(LoadingOverlay, {
-      show: busy,
-      label: status,
-      className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
-      labelClassName: "text-sm text-gray-300 animate-pulse",
-      barWidthClass: "w-56"
-    }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
-    /*#__PURE__*/
-    // Purpose-built compact strip (js/embed-controls.jsx):
-    // no portals, own CSS, degrades with width. See that
-    // file's header for why this isn't ViewportControls.
-    React.createElement(EmbedControls, {
-      containerRef: viewportRef,
-      geom: geom
-      // shaderball-scene is excluded while transparent is on:
-      // picking it back would just re-trigger the fallback
-      // above, so don't offer it in the first place.
-      ,
-      geomList: transparent ? VIEWER_GEOM_NAMES.filter(g => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES,
-      onGeomChange: setGeom,
-      showGeom: ctlFlags.geometry,
-      materialList: renderables.map(r => r.name),
-      chosenMat: chosenMat,
-      onMaterialChange: setChosenMat,
-      showMaterial: showMaterial,
-      rotating: rotating,
-      onToggleRotating: toggleRotating
-      // Hidden while shaderball-scene is active
-      // (roomGeomActive above), same for the
-      // background toggle below; not reported.
-      ,
-      showRotate: ctlFlags.rotate,
-      onCameraReset: handleCameraReset,
-      showReset: ctlFlags.reset,
-      envBg: envBg,
-      onToggleEnvBg: toggleEnvBg,
-      showBackgroundToggle: !roomGeomActive,
-      showEnv: ctlFlags.env,
-      initialEnvRotation: envRotation,
-      initialEnvExposure: envExposure,
-      viewRef: viewRef,
-      viewEpoch: viewEpoch,
-      onScreenshot: takeScreenshot,
-      showScreenshot: ctlFlags.screenshot,
-      showSettings: ctlFlags.settings,
-      isFullscreen: isFullscreen,
-      onToggleFullscreen: onToggleFullscreen,
-      showFullscreen: ctlFlags.fullscreen
-    }) : /*#__PURE__*/React.createElement(ViewportControls, {
-      containerClassName: "absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end",
-      selectClassName: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300",
-      buttonClassName: active => `inline-flex items-center text-[11px] px-2 py-1 rounded border transition-colors ${active ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'}`,
-      geom: geom,
-      onGeomChange: setGeom,
-      geomBadges: {
-        'shaderball-scene': 'Default'
-      },
-      showGeomSelect: showCtl('geometry'),
-      rotating: rotating,
-      onToggleRotating: toggleRotating
-      // Engine no-ops auto-rotate for the full scene, and the
-      // backdrop box fully occludes the env-background sky
-      // sphere - hide both controls while it's selected.
-      ,
-      showRotate: showCtl('rotate') && geom !== 'shaderball-scene',
-      showBackgroundToggle: geom !== 'shaderball-scene',
-      onCameraReset: showCtl('reset') ? handleCameraReset : undefined,
-      envAvail: showCtl('env'),
-      envBg: envBg,
-      onToggleEnvBg: toggleEnvBg,
-      viewRef: viewRef,
-      viewEpoch: viewEpoch,
-      onScreenshot: takeScreenshot,
-      showScreenshot: showCtl('screenshot'),
-      showSettings: showCtl('settings'),
-      isFullscreen: isFullscreen,
-      onToggleFullscreen: showCtl('fullscreen') ? onToggleFullscreen : undefined,
-      showLabels: !narrow,
-      labelsClass: !IN_VSCODE && sidebarOpen ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'
-      // Site-shell-coupled (hash-routes to another view, or
-      // opens a dialog that assumes it owns the window) —
-      // hidden entirely in embed mode, not opt-in via `controls`.
-      ,
-      trailingChildren: chromeless ? undefined : labels => /*#__PURE__*/React.createElement(React.Fragment, null, !IN_VSCODE && /*#__PURE__*/React.createElement("button", {
-        onClick: sendToEditor,
-        title: "Open this material in the Node Graph Editor",
-        disabled: !renderables.length,
-        className: "inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "transfer",
-        className: "w-3.5 h-3.5"
-      }), labels && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Send to Graph Editor")), !IN_VSCODE && /*#__PURE__*/React.createElement("button", {
-        onClick: () => setPresetsOpen(true),
-        title: "Load a curated official MaterialX example",
-        className: "inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "presets",
-        className: "w-3.5 h-3.5"
-      }), labels && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Presets")), /*#__PURE__*/React.createElement("button", {
-        onClick: () => setShaderExportOpen(true),
-        title: "Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)",
-        disabled: !renderables.length,
-        className: "inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "file-code",
-        className: "w-3.5 h-3.5"
-      }), labels && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Shader Code")))
-    }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement("select", {
-      value: chosenMat,
-      onChange: e => setChosenMat(Number(e.target.value)),
-      title: "Material to display",
-      className: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-    }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-      key: i,
-      value: i
-    }, r.name))))), /*#__PURE__*/React.createElement("canvas", {
-      ref: canvasRef,
-      className: "w-full block cursor-grab active:cursor-grabbing"
-      // Always fills its container: VS Code, fullscreen, and
-      // the full-bleed browser default all resolve to 100% here.
-      // No focus ring: on a transparent embed it reads as a border.
-      ,
-      style: {
-        height: '100%',
-        outline: 'none'
-      },
-      tabIndex: -1
-    })))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
-      className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg"
-    }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-      className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
-    }, error), !IN_VSCODE && !chromeless && (sidebarOpen ? /*#__PURE__*/React.createElement("div", {
-      className: "absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "flex-none flex items-center px-3 py-2 border-b border-gray-700"
+      className: "flex-none h-[42px] flex items-center px-3 border-b border-gray-700"
     }, /*#__PURE__*/React.createElement("span", {
       className: "text-xs font-semibold text-gray-300 uppercase tracking-wider"
     }, "Files"), /*#__PURE__*/React.createElement("button", {
@@ -957,99 +1108,11 @@ function MaterialViewerApp({
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "chevrons-left",
       className: "w-4 h-4"
-    }))), /*#__PURE__*/React.createElement("div", {
-      className: "flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs text-gray-500"
-    }, "Drag & drop a ", /*#__PURE__*/React.createElement("code", null, ".mtlx"), " document anywhere on this page \u2014 alone, with its textures (loose files or a subfolder), or as a ", /*#__PURE__*/React.createElement("code", null, ".zip"), " \u2014 and render it with the same engine as the node previews."), /*#__PURE__*/React.createElement("div", {
-      className: `rounded-lg border-2 border-dashed p-4 text-center transition-colors ${dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'}`
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "file-upload",
-      className: "w-10 h-10 block mx-auto mb-2 text-gray-400"
-    }), /*#__PURE__*/React.createElement("div", {
-      className: "text-sm text-gray-300 font-medium"
-    }, "Drop .mtlx / textures / folder / .zip anywhere on the page"), /*#__PURE__*/React.createElement("div", {
-      className: "text-xs text-gray-500 mt-2"
-    }, "or"), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-center gap-2 mt-2 flex-wrap"
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors"
-    }, "Choose files", /*#__PURE__*/React.createElement("input", {
-      type: "file",
-      multiple: true,
-      className: "hidden",
-      onChange: onPickFiles
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors"
-    }, "Choose folder", /*#__PURE__*/React.createElement("input", {
-      type: "file",
-      webkitdirectory: "",
-      directory: "",
-      multiple: true,
-      className: "hidden",
-      onChange: onPickFiles
-    })))), fileCount > 0 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs text-gray-400"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "text-gray-200 font-semibold"
-    }, fileCount), " file", fileCount === 1 ? '' : 's', " loaded (", mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's', ")"), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2"
-    }, "Document"), /*#__PURE__*/React.createElement("select", {
-      className: "w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200",
-      value: chosenMtlx || '',
-      onChange: e => {
-        setChosenMtlx(e.target.value);
-        loadDocument(e.target.value);
-      }
-    }, !chosenMtlx && /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, 'Pick a .mtlx\u2026'), mtlxPaths.map(p => /*#__PURE__*/React.createElement("option", {
-      key: p,
-      value: p
-    }, p))), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
-      className: "text-[11px] text-amber-300/90 mt-1.5"
-    }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), renderables.length > 1 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3"
-    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2"
-    }, "Material"), /*#__PURE__*/React.createElement("select", {
-      className: "w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200",
-      value: chosenMat,
-      onChange: e => setChosenMat(Number(e.target.value))
-    }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-      key: i,
-      value: i
-    }, r.name))))), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "font-semibold text-gray-400 uppercase tracking-wider"
-    }, "Textures"), texReport.bound.map((b, i) => /*#__PURE__*/React.createElement("div", {
-      key: 'b' + i,
-      className: "flex items-start gap-1 text-green-300/90 font-mono break-all"
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "check",
-      className: "w-3.5 h-3.5 shrink-0 mt-0.5"
-    }), /*#__PURE__*/React.createElement("span", null, b))), texReport.missing.map((m, i) => /*#__PURE__*/React.createElement("div", {
-      key: 'm' + i,
-      className: "flex items-start gap-1 text-amber-300/90 font-mono break-all",
-      title: "Referenced by the document but not found among the dropped files \u2014 the checker texture is shown instead."
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "alert-triangle",
-      className: "w-3.5 h-3.5 shrink-0 mt-0.5"
-    }), /*#__PURE__*/React.createElement("span", null, m))))), /*#__PURE__*/React.createElement("div", {
+    }))), filesPanelBody, /*#__PURE__*/React.createElement("div", {
       className: "flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500"
-    }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.")) : /*#__PURE__*/React.createElement("button", {
-      onClick: () => setSidebarOpen(true),
-      title: "Expand the files panel",
-      className: "absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "chevrons-right",
-      className: "w-4 h-4"
-    }), /*#__PURE__*/React.createElement("span", {
-      className: "max-w-[5rem] md:max-w-[8rem] truncate"
-    }, "Files"))), !chromeless && /*#__PURE__*/React.createElement(PresetsDialog, {
+    }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.")), IN_VSCODE ? stage : /*#__PURE__*/React.createElement("div", {
+      className: "relative flex-1 min-w-0"
+    }, stage), !chromeless && /*#__PURE__*/React.createElement(PresetsDialog, {
       open: presetsOpen,
       onClose: () => setPresetsOpen(false),
       onPick: loadPreset,
