@@ -1208,6 +1208,10 @@
                     });
             }, []);
 
+            // File > Import drives this hidden input by ref: a menu row
+            // can't be the <label> the old toolbar button was.
+            const importInputRef = React.useRef(null);
+
             const onPickFiles = (e) => {
                 const map = {};
                 for (const f of Array.from(e.target.files || [])) {
@@ -3159,6 +3163,9 @@
             // plus selected nodegraph instances (name+pos, deep-copied via
             // copyContentFrom on paste). No system clipboard — in-page only.
             const clipboardRef = React.useRef(null);
+            // Mirrors "the clipboard holds something" into render state so
+            // Edit > Paste can grey out; the ref alone never re-renders.
+            const [clipboardFilled, setClipboardFilled] = React.useState(false);
 
             const isCopyableId = (id) => id.indexOf('n:') === 0 || id.indexOf('g:') === 0;
 
@@ -3218,7 +3225,10 @@
                         pos, inputs,
                     });
                 }
-                if (entries.length) clipboardRef.current = { nodes: entries };
+                if (entries.length) {
+                    clipboardRef.current = { nodes: entries };
+                    setClipboardFilled(true);
+                }
             };
 
             const pasteClipboard = () => {
@@ -4704,6 +4714,83 @@
                 ? <PortPickerPopover portPicker={portPicker} rootRef={portPickerRef} onPick={pickPort} />
                 : null;
 
+            // ---- Menu bar contents ------------------------------------
+            // Per-session document verbs. Icons only here; Edit below is
+            // check-and-shortcut shaped, so each menu stays internally
+            // consistent instead of mixing four gutters.
+            const fileMenuItems = [
+                !IN_VSCODE && {
+                    label: 'New Material', icon: 'file-plus', onSelect: guardedNewDocument,
+                    title: 'New material (empty document)',
+                },
+                !IN_VSCODE && {
+                    label: 'Import…', icon: 'file-upload',
+                    onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
+                    title: 'Import .mtlx / .zip / companion files (drag and drop works anywhere on the page)',
+                },
+                !IN_VSCODE && {
+                    label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
+                    title: 'Load a curated official MaterialX example document',
+                },
+                !IN_VSCODE && { separator: true },
+                {
+                    label: 'Export…', icon: 'file-download', disabled: !parsed, onSelect: openExportDialog,
+                    title: 'Export the current document as .mtlx or a .zip with textures, edits, connections and layout positions included',
+                },
+                {
+                    label: 'Shader Code…', icon: 'file-code', disabled: !parsed, onSelect: openShaderExport,
+                    title: 'Generate shader source for a chosen target language (GLSL, OSL, MDL, ...)',
+                },
+                { separator: true },
+                {
+                    label: 'View XML Source', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
+                    title: 'View the raw MaterialX XML for the current document',
+                },
+            ];
+
+            // Group/ungroup mirror the sidebar buttons' own gates, so a row
+            // is enabled here exactly when that button would be offered.
+            const canGroupSelection = !!parsed && scope === '' && selectedIds.length > 1;
+            const canUngroupSelection = !!parsed && scope === '' && selectedIds.length <= 1
+                && !!displayNode && displayNode.data.kind === 'nodegraph';
+
+            const editMenuItems = [
+                { label: 'Undo', keys: 'Ctrl+Z', onSelect: undoDoc },
+                { label: 'Redo', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
+                { separator: true },
+                {
+                    label: 'Copy', keys: 'Ctrl+C', onSelect: () => copySelectionRef.current(),
+                    disabled: !parsed || !selectedIds.length,
+                    title: 'Copy the selected nodes to the in-page clipboard',
+                },
+                {
+                    label: 'Paste', keys: 'Ctrl+V', onSelect: pasteClipboard,
+                    disabled: !parsed || !clipboardFilled,
+                    title: 'Paste the copied nodes into the current scope',
+                },
+                { separator: true },
+                {
+                    label: 'Auto Layout', keys: 'A', disabled: !parsed, onSelect: () => reorganize(),
+                    title: 'Re-run the automatic layout once',
+                },
+                {
+                    label: 'Show All Inputs', checked: globalPorts === 'all', disabled: !parsed,
+                    onSelect: () => setAllPorts(globalPorts === 'all' ? 'authored' : 'all'),
+                    title: 'Show every input on every node, defaults included, instead of only the set ones',
+                },
+                { separator: true },
+                {
+                    label: 'Group into Nodegraph', keys: 'Ctrl+G', disabled: !canGroupSelection,
+                    onSelect: encapsulateSelection,
+                    title: 'Collapse the selected nodes into a new nodegraph',
+                },
+                {
+                    label: 'Ungroup Nodegraph', keys: 'Ctrl+Shift+G', disabled: !canUngroupSelection,
+                    onSelect: () => { if (canUngroupSelection) ungroupNodegraph(displayNode.data.name); },
+                    title: 'Dissolve the selected nodegraph back into its nodes, keeping every connection',
+                },
+            ];
+
             return (
                 <div
                     ref={panelRef}
@@ -4717,84 +4804,46 @@
                         flex children; only dialogs and full-editor overlays
                         further down stay absolutely positioned on top. */}
                     <div className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
-                        {/* Top-left cluster: the document/session button
-                            row, a direct child of the grid column. Same
-                            measured 3-tier collapse as the top-right cluster; width comes from the menu bar's grid column. */}
+                        {/* Top-left cluster: the File and Edit menus, plus
+                            the undo/redo pair that stays out of them, the
+                            way Word keeps those on the toolbar too. */}
                         <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full min-w-0">
-                            {/* New/Import/Presets are browser-only, multi-
-                                document affordances — the VS Code editor is
-                                bound to the single opened .mtlx file. */}
+                            {/* File > Import needs a real input: a menu row
+                                cannot be the <label> the old toolbar button
+                                was, so the row clicks this one by ref. */}
                             {!IN_VSCODE && (
-                            <button
-                                onClick={guardedNewDocument}
-                                title="New material (empty document)"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">New Material</span>
-                            </button>
+                                <input
+                                    ref={importInputRef}
+                                    type="file"
+                                    multiple
+                                    className="hidden"
+                                    onChange={onPickFiles}
+                                />
                             )}
-                            {!IN_VSCODE && (
-                            <label
-                                title="Import .mtlx / .zip / companion files (drag & drop works anywhere on the page)"
-                                className={BTN_TOOLBAR + ' cursor-pointer'}
-                            >
-                                <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Import</span>
-                                <input type="file" multiple className="hidden" onChange={onPickFiles} />
-                            </label>
-                            )}
-                            {!IN_VSCODE && (
-                            <button
-                                onClick={() => setPresetsOpen(true)}
-                                title="Load a curated official MaterialX example document"
-                                className={BTN_TOOLBAR}
-                            >
-                                {/* 'presets' renders as a framed photo
-                                    glyph (MTLX_ICON_PATHS) — its own icon,
-                                    no longer shared with the env-map-background toggle. */}
-                                <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Presets</span>
-                            </button>
-                            )}
-                            {parsed && (
-                                <div className="flex items-center gap-1.5">
-                                <button
-                                    onClick={openExportDialog}
-                                    title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
-                                    className={BTN_TOOLBAR}
-                                >
-                                    <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Export</span>
-                                </button>
-                                <button
-                                    onClick={openShaderExport}
-                                    title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
-                                    className={BTN_TOOLBAR}
-                                >
-                                    <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Shader Code</span>
-                                </button>
-                                </div>
-                            )}
-                            <div className="flex items-center gap-1.5">
+                            <MtlxMenuBar className="shrink-0">
+                                <MtlxMenu label="File" items={fileMenuItems} title="Document actions" />
+                                <MtlxMenu label="Edit" items={editMenuItems} title="Editing actions" />
+                            </MtlxMenuBar>
+                            <div className="w-px h-5 bg-gray-700 shrink-0" aria-hidden="true" />
+                            {/* Icon-only on purpose: these two are also in
+                                the Edit menu, so the bar carries the fast
+                                path and the menu carries the discoverability. */}
                             <button
                                 onClick={undoDoc}
                                 title="Undo (Ctrl+Z)"
+                                aria-label="Undo"
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Undo</span>
                             </button>
                             <button
                                 onClick={redoDoc}
                                 title="Redo (Ctrl+Shift+Z)"
+                                aria-label="Redo"
                                 className={BTN_TOOLBAR}
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Redo</span>
                             </button>
-                            </div>
                         </div>
 
                         {/* Column 2: the breadcrumb. The side columns are
@@ -4830,28 +4879,16 @@
                                 <MtlxSelect
                                     value={chosenMtlx || ''}
                                     options={mtlxPaths}
-                                    placeholder={'Pick a .mtlx\u2026'}
+                                    placeholder={'Pick a .mtlx…'}
                                     onChange={(path) => confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); })}
                                     title="Which .mtlx document to display"
                                     size="md"
                                     className="max-w-[10rem] md:max-w-[14rem] shrink-0"
                                 />
                             )}
-                            {parsed && (
-                                <button
-                                    onClick={() => setAllPorts(globalPorts === 'all' ? 'authored' : 'all')}
-                                    title={globalPorts === 'all'
-                                        ? 'Showing ALL inputs on every node — click to show only the set ones'
-                                        : 'Showing only the SET inputs — click to show all inputs (defaults included) on every node'}
-                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
-                                        + (globalPorts === 'all'
-                                            ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
-                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
-                                >
-                                    <MtlxIcon name="code" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Show All Inputs</span>
-                                </button>
-                            )}
+                            {/* What stays out of the menus: the canvas verbs
+                                you reach for constantly, and the controls
+                                whose visible state is itself information. */}
                             {parsed && (
                                 <button
                                     onClick={openAddSearch}
@@ -4879,27 +4916,6 @@
                             )}
                             {parsed && (
                                 <button
-                                    onClick={() => reorganize()}
-                                    title="Re-run the automatic layout once (A)"
-                                    className={BTN_TOOLBAR}
-                                >
-                                    <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Auto Layout</span>
-                                    <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
-                                </button>
-                            )}
-                            {parsed && (
-                                <button
-                                    onClick={openXmlDialog}
-                                    title="View the current document's raw MaterialX XML"
-                                    className={BTN_TOOLBAR}
-                                >
-                                    <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Document</span>
-                                </button>
-                            )}
-                            {parsed && (
-                                <button
                                     onClick={() => setValidateOpen(true)}
                                     title="Run the MaterialX library's document validation"
                                     className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
@@ -4916,6 +4932,14 @@
                                 </button>
                             )}
                             <button
+                                onClick={() => setHelpOpen(true)}
+                                title="Help & Keybinds"
+                                className={BTN_TOOLBAR}
+                            >
+                                <MtlxIcon name="help" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Help</span>
+                            </button>
+                            <button
                                 onClick={() => toggleFullscreen(panelRef.current)}
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
                                 className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
@@ -4925,14 +4949,6 @@
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                                 <span className="gtb-label">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
-                            </button>
-                            <button
-                                onClick={() => setHelpOpen(true)}
-                                title="Help & Keybinds"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="help" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Help</span>
                             </button>
                         </div>
                     </div>

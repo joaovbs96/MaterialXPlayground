@@ -2155,6 +2155,292 @@ const MtlxSelect = ({
     );
 };
 
+// ---- Menu bar --------------------------------------------------------
+// MtlxMenu is MtlxSelect's command-list sibling: same portal, placement
+// and keyboard model, but its rows are commands, separators and
+// checkable toggles instead of values.
+const MtlxMenuBarContext = React.createContext(null);
+
+// Wraps sibling menus so only one is open at a time and hovering another
+// trigger switches to it, the way a desktop menu bar behaves.
+const MtlxMenuBar = ({ children, className }) => {
+    const [openId, setOpenId] = React.useState(null);
+    const ctx = React.useMemo(() => ({ openId, setOpenId }), [openId]);
+    return (
+        <MtlxMenuBarContext.Provider value={ctx}>
+            <div role="menubar" className={'flex items-center gap-1 ' + (className || '')}>{children}</div>
+        </MtlxMenuBarContext.Provider>
+    );
+};
+
+const MTLX_MENU_MIN_W = 200, MTLX_MENU_ROW_H = 28; // ROW_H: measurement fallback only, see reposition()
+
+// `items`: [{ label, icon, keys, onSelect, disabled, checked, title,
+// keepOpen } | { separator: true }]. `checked` makes a row a toggle;
+// `keys` renders a right-aligned shortcut hint.
+const MtlxMenu = ({
+    label, icon, items, title, className, ariaLabel, theme,
+    minWidth = MTLX_MENU_MIN_W, maxWidth = 360, popMaxHeight = 460,
+}) => {
+    const bar = React.useContext(MtlxMenuBarContext);
+    const menuId = React.useId();
+    // Standalone fallback so a menu still works outside a MtlxMenuBar.
+    const [standalone, setStandalone] = React.useState(false);
+    const open = bar ? bar.openId === menuId : standalone;
+    const setOpen = (on) => { if (bar) bar.setOpenId(on ? menuId : null); else setStandalone(!!on); };
+
+    const [pos, setPos] = React.useState(null);
+    const [hi, setHi] = React.useState(-1);
+    const [ambient, setAmbient] = React.useState(null);
+    const [triggerHover, setTriggerHover] = React.useState(false);
+    const btnRef = React.useRef(null);
+    const popRef = React.useRef(null);
+    const rowRefs = React.useRef([]);
+
+    // Falsy entries are dropped so call sites can inline `cond && {...}`.
+    const rows = React.useMemo(() => (items || []).filter(Boolean), [items]);
+    // Gutters are decided per menu, not per row, so labels stay aligned
+    // in a menu that mixes checkable and plain commands.
+    const hasChecks = rows.some((r) => r.checked != null);
+    const hasIcons = rows.some((r) => r.icon);
+    const hasKeys = rows.some((r) => r.keys);
+
+    const selectable = (i) => { const r = rows[i]; return !!r && !r.separator && !r.disabled; };
+    const findEnabled = (from, dir) => {
+        let i = from;
+        for (;;) {
+            i += dir;
+            if (i < 0 || i > rows.length - 1) return null;
+            if (selectable(i)) return i;
+        }
+    };
+
+    // Same measure-then-place contract as MtlxSelect: called once after a
+    // hidden probe render, then on every scroll/resize.
+    const reposition = () => {
+        const btn = btnRef.current;
+        if (!btn) { setOpen(false); return; }
+        const rect = btn.getBoundingClientRect();
+        if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+            setOpen(false);
+            return;
+        }
+        const pop = popRef.current;
+        const measured = pop ? pop.scrollHeight : (rows.length * MTLX_MENU_ROW_H + 8);
+        const width = pop ? Math.max(pop.offsetWidth, minWidth) : minWidth;
+        const spaceBelow = window.innerHeight - rect.bottom - 8;
+        const spaceAbove = rect.top - 8;
+        const desired = Math.min(measured, popMaxHeight);
+        const flip = desired > spaceBelow && spaceAbove > spaceBelow;
+        const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+        setPos(flip
+            ? { left, bottom: window.innerHeight - rect.top + 4, maxHeight }
+            : { left, top: rect.bottom + 4, maxHeight });
+    };
+    const repositionRef = React.useRef(reposition);
+    repositionRef.current = reposition;
+
+    const openMenu = () => {
+        // Nothing highlighted until the pointer or a key picks a row, so
+        // opening a menu never pre-arms an Enter into a command.
+        setHi(-1);
+        setPos(null);
+        if (btnRef.current) {
+            const cs = window.getComputedStyle(btnRef.current);
+            const vars = {};
+            Object.keys(SELECT_THEME_VAR_NAMES).forEach((k) => {
+                const name = SELECT_THEME_VAR_NAMES[k];
+                const v = cs.getPropertyValue(name);
+                if (v && v.trim()) vars[name] = v.trim();
+            });
+            setAmbient({ fontFamily: cs.fontFamily, vars });
+        }
+        setOpen(true);
+    };
+
+    const commitItem = (row) => {
+        if (!row || row.separator || row.disabled) return;
+        if (row.onSelect) row.onSelect();
+        if (!row.keepOpen) setOpen(false);
+    };
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (popRef.current && popRef.current.contains(e.target)) return;
+            if (btnRef.current && btnRef.current.contains(e.target)) return;
+            setOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
+    React.useLayoutEffect(() => {
+        if (!open) return undefined;
+        repositionRef.current();
+        return undefined;
+    }, [open]);
+
+    // CAPTURE: these are element scrolls, which never reach a bubble-phase
+    // window listener.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onScroll = () => repositionRef.current();
+        const onResize = () => repositionRef.current();
+        window.addEventListener('scroll', onScroll, true);
+        window.addEventListener('resize', onResize);
+        return () => {
+            window.removeEventListener('scroll', onScroll, true);
+            window.removeEventListener('resize', onResize);
+        };
+    }, [open]);
+
+    React.useEffect(() => {
+        if (!open || hi < 0) return undefined;
+        const el = rowRefs.current[hi];
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+        return undefined;
+    }, [hi, open]);
+
+    // CAPTURE phase so Escape closes only this menu and never reaches the
+    // canvas keybinds or a surrounding dialog.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                setOpen(false);
+                if (btnRef.current) btnRef.current.focus();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault(); e.stopPropagation();
+                setHi((h) => { const n = findEnabled(h < 0 ? -1 : h, 1); return n == null ? h : n; });
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault(); e.stopPropagation();
+                setHi((h) => { const n = findEnabled(h < 0 ? rows.length : h, -1); return n == null ? h : n; });
+            } else if (e.key === 'Home') {
+                e.preventDefault(); e.stopPropagation();
+                const n = findEnabled(-1, 1); if (n != null) setHi(n);
+            } else if (e.key === 'End') {
+                e.preventDefault(); e.stopPropagation();
+                const n = findEnabled(rows.length, -1); if (n != null) setHi(n);
+            } else if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault(); e.stopPropagation();
+                commitItem(rows[hi]);
+            }
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [open, hi, rows]);
+
+    const triggerStyle = Object.assign({
+        color: open ? MXS_TEXT_STRONG : MXS_TEXT,
+        borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE, borderColor: MXS_BORDER,
+        background: (open || triggerHover) ? MXS_SURFACE_HOVER : MXS_SURFACE,
+        fontFamily: 'var(--mx-select-font, inherit)',
+    }, selectThemeStyle(theme));
+
+    const ambientFont = (ambient && ambient.fontFamily) || 'inherit';
+    const popStyle = Object.assign(
+        {
+            position: 'fixed', zIndex: 9999,
+            width: 'max-content', minWidth, maxWidth,
+            visibility: pos ? 'visible' : 'hidden',
+            maxHeight: pos ? pos.maxHeight : 'none',
+            overflowY: 'auto',
+            background: MXS_SURFACE_SOFT, border: '1px solid ' + MXS_BORDER, borderRadius: MXS_RADIUS,
+            fontFamily: 'var(--mx-select-font, ' + ambientFont + ')', fontSize: MXS_FONT_SIZE,
+        },
+        ambient && ambient.vars,
+        selectThemeStyle(theme),
+        pos || { top: 0, left: 0 },
+    );
+
+    const popover = open ? (
+        <div
+            ref={popRef}
+            role="menu"
+            aria-label={ariaLabel || label}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={popStyle}
+            className="backdrop-blur shadow-2xl custom-scrollbar py-1"
+        >
+            {rows.map((row, i) => {
+                if (row.separator) {
+                    return <div key={'sep:' + i} role="separator" className="my-1 border-t" style={{ borderColor: MXS_BORDER }} />;
+                }
+                const isHi = i === hi && !row.disabled;
+                const rowStyle = {
+                    color: row.disabled ? MXS_MUTED : (isHi ? MXS_ACCENT_TEXT : MXS_TEXT),
+                    background: isHi ? MXS_ACCENT_SOFT : undefined,
+                };
+                return (
+                    <button
+                        key={'row:' + i}
+                        ref={(el) => { rowRefs.current[i] = el; }}
+                        type="button"
+                        role={row.checked != null ? 'menuitemcheckbox' : 'menuitem'}
+                        aria-checked={row.checked != null ? !!row.checked : undefined}
+                        aria-disabled={row.disabled || undefined}
+                        title={row.title}
+                        onMouseEnter={() => { if (!row.disabled) setHi(i); }}
+                        onClick={() => commitItem(row)}
+                        style={rowStyle}
+                        className={'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors '
+                            + (row.disabled ? 'cursor-default' : 'cursor-pointer')}
+                    >
+                        {hasChecks && (
+                            <span className="w-3.5 flex-none">
+                                {row.checked ? <MtlxIcon name="check" className="w-3.5 h-3.5" /> : null}
+                            </span>
+                        )}
+                        {hasIcons && (
+                            <span className="w-3.5 flex-none">
+                                {row.icon ? <MtlxIcon name={row.icon} className="w-3.5 h-3.5" /> : null}
+                            </span>
+                        )}
+                        <span className="flex-1 whitespace-nowrap">{row.label}</span>
+                        {hasKeys && (
+                            <span className="flex-none pl-6 text-[10px]" style={{ color: MXS_MUTED }}>{row.keys || ''}</span>
+                        )}
+                    </button>
+                );
+            })}
+        </div>
+    ) : null;
+
+    return (
+        <React.Fragment>
+            <button
+                type="button"
+                ref={btnRef}
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={open}
+                title={title}
+                aria-label={ariaLabel}
+                onClick={() => (open ? setOpen(false) : openMenu())}
+                onMouseEnter={() => {
+                    setTriggerHover(true);
+                    // Desktop menu-bar behaviour: with one menu already
+                    // open, hovering a sibling trigger switches to it.
+                    if (bar && bar.openId != null && bar.openId !== menuId) openMenu();
+                }}
+                onMouseLeave={() => setTriggerHover(false)}
+                style={triggerStyle}
+                className={'h-7 px-2 border rounded inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors '
+                    + (className || '')}
+            >
+                {icon && <MtlxIcon name={icon} className="w-3.5 h-3.5 flex-none" />}
+                <span>{label}</span>
+                <MtlxIcon name="chevron-down" className="w-3 h-3 flex-none opacity-70" />
+            </button>
+            {popover && ReactDOM.createPortal(popover, fullscreenPortalRoot())}
+        </React.Fragment>
+    );
+};
+
 // The site ships production React with no error boundaries — one render
 // throw anywhere unmounts the ENTIRE app. This wraps the docs page's 3D
 // preview so a crash degrades to an inline error card instead.
@@ -2182,7 +2468,7 @@ Object.assign(window, {
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
-    ColorSwatch, MtlxSelect, PreviewErrorBoundary,
+    ColorSwatch, MtlxSelect, MtlxMenu, MtlxMenuBar, PreviewErrorBoundary,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
     TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile,
