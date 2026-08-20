@@ -186,11 +186,11 @@
         // send/colorspace/collapse from the geometry/screenshot/env/settings
         // group; fullscreen folds everything into one row, same order.
         const GRAPH_PREVIEW_CLUSTERS_DOCKED = [
-            ['sendToViewer', 'docColorspace', 'collapse'],
-            ['graphGeom', 'screenshot', 'env', 'settings'],
+            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse'],
+            ['graphGeom', 'env', 'settings'],
         ];
         const GRAPH_PREVIEW_CLUSTERS_FULLSCREEN = [
-            ['sendToViewer', 'docColorspace', 'collapse', 'graphGeom', 'screenshot', 'env', 'settings'],
+            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse', 'graphGeom', 'env', 'settings'],
         ];
 
         // Resolves WHAT the preview renders, building transient '__pv_*'
