@@ -866,8 +866,8 @@
                                         // chosen file. Nothing to reload if none is chosen yet.
                                         if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
                                     }}
-                                    className={'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300'
-                                        + (busy ? ' opacity-50 pointer-events-none' : '')}
+                                    size="sm"
+                                    disabled={busy}
                                 />
                             </div>
                             {unavailableVersions.length > 0 && (
@@ -1027,7 +1027,7 @@
                                     <ViewportControls
                                         containerClassName="absolute top-2 right-2 z-10 flex items-center gap-2.5"
                                         clusterClassName="flex items-center gap-1"
-                                        selectClassName="h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                        selectSize="md"
                                         buttonClassName={hudChipClass}
                                         geom={geom}
                                         onGeomChange={setGeom}

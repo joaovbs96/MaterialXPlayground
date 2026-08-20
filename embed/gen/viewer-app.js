@@ -932,7 +932,8 @@ function MaterialViewerApp({
       // chosen file. Nothing to reload if none is chosen yet.
       if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
     },
-    className: 'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300' + (busy ? ' opacity-50 pointer-events-none' : '')
+    size: "sm",
+    disabled: busy
   })), unavailableVersions.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "text-[10px] text-gray-500 mt-1"
   }, unavailableVersions.map(v => 'MaterialX ' + v).join(', '), unavailableVersions.length === 1 ? ' is' : ' are', " not available in this build.")), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
@@ -1062,7 +1063,7 @@ function MaterialViewerApp({
   }) : /*#__PURE__*/React.createElement(ViewportControls, {
     containerClassName: "absolute top-2 right-2 z-10 flex items-center gap-2.5",
     clusterClassName: "flex items-center gap-1",
-    selectClassName: "h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300",
+    selectSize: "md",
     buttonClassName: hudChipClass,
     geom: geom,
     onGeomChange: setGeom,

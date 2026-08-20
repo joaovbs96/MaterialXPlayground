@@ -1628,10 +1628,11 @@
                             <GeomSelect
                                 value={geomChoice}
                                 options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                labels={GEOM_LABELS}
                                 badges={GEOM_BADGES}
                                 onChange={setGeomChoice}
                                 title="Global preview-geometry choice (all docs previews)"
-                                className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                size="sm" block className="mt-1.5"
                             />
                             <div className="mt-1 text-[11px] text-gray-400">
                                 Applies to all node docs previews. "Auto (by node type)"
@@ -1779,10 +1780,16 @@
                                 <GeomSelect
                                     value={geomChoice}
                                     options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                    labels={GEOM_LABELS}
                                     badges={GEOM_BADGES}
                                     onChange={setGeomChoice}
                                     title="Preview geometry"
-                                    className="absolute top-2 left-2 z-20 h-7 text-[11px] px-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                    size="md" variant="plain" className="absolute top-2 left-2 z-20"
+                                    theme={{
+                                        surface: 'var(--site-gray-700, #374151)',
+                                        surfaceHover: 'var(--site-gray-600, #4b5563)',
+                                        text: 'var(--site-gray-200, #e5e7eb)',
+                                    }}
                                 />
                             </React.Fragment>
                         )}

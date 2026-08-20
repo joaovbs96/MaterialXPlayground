@@ -940,8 +940,8 @@ function MaterialCompareApp({ active = true } = {}) {
                                 // the new engine. Nothing to reload if none is loaded yet.
                                 if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
                             }}
-                            className={'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300'
-                                + (slot.busy ? ' opacity-50 pointer-events-none' : '')}
+                            size="sm"
+                            disabled={slot.busy}
                         />
                     </div>
                     {unavailableVersions.length > 0 && (

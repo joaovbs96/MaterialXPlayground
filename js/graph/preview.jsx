@@ -797,21 +797,16 @@
             // built-in slot) so it shares geomMode with the Settings-popover's
             // own GeomSelect just below.
             const graphGeomSlot = (
-                <div key="graphGeom" className="relative flex-1 min-w-0 flex items-center">
-                    {/* `flex` here (not just `relative`) matters: without it
-                        the button child sits in an inline formatting context
-                        and picks up a UA line-height "strut", ~2-3px taller. */}
-                    <MtlxIcon name="cube" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
-                    <GeomSelect
-                        value={geomMode}
-                        options={GRAPH_GEOM_MODES}
-                        labels={GRAPH_GEOM_LABELS}
-                        badges={GRAPH_GEOM_BADGES}
-                        onChange={setGeomMode}
-                        title="Preview geometry"
-                        className="w-full h-6 text-[11px] pl-6 pr-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 justify-between"
-                    />
-                </div>
+                <GeomSelect
+                    key="graphGeom"
+                    value={geomMode}
+                    options={GRAPH_GEOM_MODES}
+                    labels={GRAPH_GEOM_LABELS}
+                    badges={GRAPH_GEOM_BADGES}
+                    onChange={setGeomMode}
+                    title="Preview geometry"
+                    size="sm" block icon="cube" className="flex-1 min-w-0"
+                />
             );
             // Merge the caller's row-2 controls (render-prop, same shape as
             // the old trailingChildren) with the geometry slot above.
@@ -873,7 +868,7 @@
                                     badges={GRAPH_GEOM_BADGES}
                                     onChange={setGeomMode}
                                     title="Global graph-preview geometry"
-                                    className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                    size="sm" block className="mt-1.5"
                                 />
                                 <div className="mt-1 text-[11px] text-gray-400">
                                     Applies to every preview in the graph editor. 3D geometries

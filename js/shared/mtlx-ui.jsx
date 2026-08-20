@@ -1214,7 +1214,7 @@ const ViewportControls = ({
     showSettings = true,
     envDialogPlacement,
     containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
-    selectClassName = 'h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300',
+    selectSize = 'sm',
     buttonClassName = (active) => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
         active
             ? 'bg-blue-600/80 border-blue-500 text-white'
@@ -1301,10 +1301,11 @@ const ViewportControls = ({
                         key="geom"
                         value={geom}
                         options={geomList}
+                        labels={GEOM_LABELS}
                         badges={geomBadges}
                         onChange={onGeomChange}
                         title="Preview geometry"
-                        className={selectClassName}
+                        size={selectSize}
                     />
                 ) : null;
             case 'rotate':
@@ -1813,7 +1814,7 @@ const normalizeSelectOptions = (options, labels, extras) => {
 };
 
 const MtlxSelect = ({
-    value, options, labels = GEOM_LABELS, badges, onChange, title, className, popWidth,
+    value, options, labels = {}, badges, onChange, title, className, popWidth,
     icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
     size = 'sm', variant = 'toolbar', block, font,
     popMaxHeight = 280, theme,
@@ -2018,24 +2019,26 @@ const MtlxSelect = ({
     const explicitFont = font === 'mono' ? undefined : (font && font !== 'sans' ? font : (theme && theme.font));
     const fontStyle = explicitFont ? { fontFamily: explicitFont } : undefined;
 
-    // className still REPLACES the trigger's chrome wholesale (a later
-    // step makes it additive); size/variant only build the default when
-    // the caller doesn't override it, same as today's hardcoded string.
-    const triggerChrome = className || ('rounded ' + (SELECT_SIZE_CLS[size] || SELECT_SIZE_CLS.sm) + ' ' + (SELECT_VARIANT_CLS[variant] || SELECT_VARIANT_CLS.toolbar));
+    // className is additive and layout-only: the trigger always renders
+    // its own chrome from size/variant, and className is appended for
+    // positioning/flex sizing/margins on top of that.
+    const chrome = 'rounded ' + (SELECT_SIZE_CLS[size] || SELECT_SIZE_CLS.sm) + ' ' + (SELECT_VARIANT_CLS[variant] || SELECT_VARIANT_CLS.toolbar);
     const triggerClassName = [
-        triggerChrome, 'inline-flex items-center gap-1',
+        chrome, 'inline-flex items-center gap-1',
         block && 'w-full justify-between',
         fontCls,
         disabled && 'opacity-50 pointer-events-none',
+        className,
     ].filter(Boolean).join(' ');
 
-    // Default chrome (only used when className is omitted) plus theme's
-    // custom properties, stamped even when className hides them visually
-    // so openPopover's ambient capture can still forward them below.
-    const defaultChromeStyle = className ? undefined : Object.assign(
-        { color: MXS_TEXT, borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE },
-        variant === 'plain' ? undefined : { background: triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE, borderColor: MXS_BORDER },
-    );
+    // Chrome color/background/border comes from theme custom properties,
+    // always applied now that className no longer replaces the trigger's
+    // chrome. `plain` only drops the border width (via SELECT_VARIANT_CLS);
+    // borderColor stays harmless since there's no border to paint it on.
+    const defaultChromeStyle = {
+        color: MXS_TEXT, borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE,
+        background: triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE, borderColor: MXS_BORDER,
+    };
     const triggerStyle = Object.assign({}, defaultChromeStyle, selectThemeStyle(theme), fontStyle);
 
     const selected = normalized.find((o) => o.value === value);
