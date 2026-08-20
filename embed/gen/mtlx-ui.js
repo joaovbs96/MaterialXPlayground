@@ -1915,18 +1915,70 @@ const ColorSwatch = ({
   }), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
 };
 
-// Custom dropdown replacing the native geometry <select>: macOS draws
-// the native menu checkmark at system size, which misaligns against
-// 11px option text (option CSS can't reach the native menu). Portaled
-// to fullscreenPortalRoot() — required both for native fullscreen and
-// because ancestor backdrop-blur creates a containing block that
-// silently mispositions position:fixed (see ColorSwatch).
-const GEOM_POP_W = 190,
-  GEOM_POP_ROW_H = 26;
-// `badges`: optional { value: text } — renders a small amber pill after
-// that option's ROW label (popover only, never the trigger), for calling
-// out e.g. an experimental entry without branding the whole control.
-const GeomSelect = ({
+// Generic dropdown (documents, materials, versions, colorspaces), not
+// just geometry. Portaled to fullscreenPortalRoot(): native fullscreen,
+// and ancestor backdrop-blur mispositions position:fixed (see ColorSwatch).
+const SELECT_POP_W = 190,
+  SELECT_POP_ROW_H = 26;
+
+// `badges`: optional { value: text | { text, tone } }, rendered as a
+// small pill after that option's ROW label. Tone comes from this map
+// (warn = amber, else neutral gray) unless the badge itself overrides it.
+const SELECT_BADGE_TONES = {
+  Experimental: 'warn'
+};
+const SELECT_BADGE_TONE_CLS = {
+  warn: 'bg-amber-600/30 border-amber-500/50 text-amber-300',
+  neutral: 'bg-gray-700/60 border-gray-500/50 text-gray-300'
+};
+const resolveSelectBadge = badge => {
+  if (badge == null) return null;
+  const isObj = typeof badge === 'object';
+  const text = isObj ? badge.text : badge;
+  if (!text) return null;
+  const tone = isObj && badge.tone || SELECT_BADGE_TONES[text] || 'neutral';
+  return {
+    text,
+    tone
+  };
+};
+const SELECT_SIZE_CLS = {
+  sm: 'h-6 text-[11px] px-2',
+  md: 'h-7 text-[11px] px-2',
+  lg: 'w-full px-2.5 py-1.5 text-sm'
+};
+const SELECT_VARIANT_CLS = {
+  toolbar: 'border bg-gray-800/80 border-gray-600 text-gray-300',
+  field: 'border bg-gray-900 border-gray-700 text-gray-200',
+  plain: 'border-0 text-gray-300'
+};
+
+// Normalizes `options` (string[], unchanged, or object-form entries)
+// into one shape. Top-level icons/titles/disabledOptions/badges maps
+// fill in per-value data when an entry doesn't already carry its own.
+const normalizeSelectOptions = (options, labels, extras) => {
+  const {
+    icons,
+    titles,
+    disabledOptions,
+    badges
+  } = extras || {};
+  const disabledSet = Array.isArray(disabledOptions) ? new Set(disabledOptions) : disabledOptions;
+  const isDisabledValue = v => !!(disabledSet && (disabledSet instanceof Set ? disabledSet.has(v) : disabledSet[v]));
+  return (options || []).map(o => {
+    const isObj = o !== null && typeof o === 'object';
+    const value = isObj ? o.value : o;
+    return {
+      value,
+      label: isObj && o.label != null ? o.label : labels[value] || value,
+      icon: isObj && o.icon || icons && icons[value] || undefined,
+      badge: resolveSelectBadge(isObj && o.badge != null ? o.badge : badges && badges[value]),
+      title: isObj && o.title || titles && titles[value] || undefined,
+      disabled: !!(isObj && o.disabled || isDisabledValue(value))
+    };
+  });
+};
+const MtlxSelect = ({
   value,
   options,
   labels = GEOM_LABELS,
@@ -1934,24 +1986,84 @@ const GeomSelect = ({
   onChange,
   title,
   className,
-  popWidth
+  popWidth,
+  icon,
+  icons,
+  titles,
+  disabledOptions,
+  disabled,
+  placeholder,
+  emptyOption,
+  size = 'sm',
+  variant = 'toolbar',
+  block,
+  font,
+  // Accepted and stored, not yet applied to behaviour or style: the
+  // popover's positioning, scrolling, keyboard and theming are step 2.
+  popMaxHeight = 280,
+  theme,
+  commitFocus = 'trigger',
+  ariaLabel
 }) => {
+  void popMaxHeight;
+  void theme;
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState(null);
   const [hi, setHi] = React.useState(0);
   const btnRef = React.useRef(null);
   const popRef = React.useRef(null);
+  const normalized = React.useMemo(() => {
+    const base = normalizeSelectOptions(options, labels, {
+      icons,
+      titles,
+      disabledOptions,
+      badges
+    });
+    if (!emptyOption) return base;
+    // A real, selectable "back to default" row (value ''), distinct
+    // from `placeholder` which only affects the trigger's own text.
+    const emptyLabel = typeof emptyOption === 'string' ? emptyOption : placeholder || '';
+    return [{
+      value: '',
+      label: emptyLabel,
+      icon: undefined,
+      badge: null,
+      title: undefined,
+      disabled: false
+    }].concat(base);
+  }, [options, labels, icons, titles, disabledOptions, badges, emptyOption, placeholder]);
+
   // Wider popover when badge pills share the rows with the labels,
   // unless the caller knows its content is narrower and overrides it.
-  const popW = popWidth || (badges ? 240 : GEOM_POP_W);
+  const popW = popWidth || (badges ? 240 : SELECT_POP_W);
+
+  // Next/previous ENABLED row from `from`, walking in `dir` (+1/-1),
+  // clamped at the array ends without wrapping. Returns null when every
+  // remaining row that way is disabled, so the caller can leave hi put.
+  const findEnabled = (from, dir) => {
+    let i = from;
+    for (;;) {
+      i += dir;
+      if (i < 0 || i > normalized.length - 1) return null;
+      if (!normalized[i].disabled) return i;
+    }
+  };
   const openPopover = () => {
-    setHi(Math.max(0, options.indexOf(value)));
+    if (disabled) return;
+    const idx = normalized.findIndex(o => o.value === value);
+    let start = Math.max(0, idx);
+    if (normalized[start] && normalized[start].disabled) {
+      const fwd = findEnabled(start, 1);
+      const back = fwd == null ? findEnabled(start, -1) : null;
+      start = fwd != null ? fwd : back != null ? back : start;
+    }
+    setHi(start);
     const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;
     if (rect) {
       // Left-aligned to the trigger (ColorSwatch precedent),
       // clamped to the viewport and flipped above when it would
       // overflow the bottom (SettingsDialog math).
-      const h = options.length * GEOM_POP_ROW_H + 8;
+      const h = normalized.length * SELECT_POP_ROW_H + 8;
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
       setPos(rect.bottom + h > window.innerHeight ? {
         left,
@@ -1962,6 +2074,15 @@ const GeomSelect = ({
       });
     }
     setOpen(true);
+  };
+
+  // Row click commit: a disabled row is not clickable, so this is a
+  // no-op for it (no onChange, popover stays open).
+  const commitRow = opt => {
+    if (opt.disabled) return;
+    onChange(opt.value);
+    setOpen(false);
+    if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
   };
 
   // Outside-pointerdown close (SettingsDialog pattern); the popover
@@ -1977,10 +2098,9 @@ const GeomSelect = ({
     return () => window.removeEventListener('pointerdown', onDown);
   }, [open]);
 
-  // Keyboard nav. CAPTURE phase on purpose: when hosted inside the
-  // SettingsDialog, Escape must close only THIS popover — stopping
-  // propagation here keeps the dialog's bubble-phase Escape listener
-  // (useEscapeToClose) from also firing.
+  // Keyboard nav. CAPTURE phase on purpose: inside SettingsDialog,
+  // Escape must close only THIS popover, so stopping propagation here
+  // keeps the dialog's bubble-phase Escape listener (useEscapeToClose) from firing.
   React.useEffect(() => {
     if (!open) return undefined;
     const onKey = e => {
@@ -1989,19 +2109,41 @@ const GeomSelect = ({
         setOpen(false);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setHi(h => Math.min(h + 1, options.length - 1));
+        setHi(h => {
+          const n = findEnabled(h, 1);
+          return n == null ? h : n;
+        });
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setHi(h => Math.max(h - 1, 0));
+        setHi(h => {
+          const n = findEnabled(h, -1);
+          return n == null ? h : n;
+        });
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (options[hi] != null) onChange(options[hi]);
+        const opt = normalized[hi];
+        if (opt != null && !opt.disabled) onChange(opt.value);
         setOpen(false);
+        if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, hi, options]);
+  }, [open, hi, normalized]);
+  const fontCls = font === 'mono' ? 'font-mono' : '';
+  const fontStyle = font && font !== 'sans' && font !== 'mono' ? {
+    fontFamily: font
+  } : undefined;
+
+  // className still REPLACES the trigger's chrome wholesale (a later
+  // step makes it additive); size/variant only build the default when
+  // the caller doesn't override it, same as today's hardcoded string.
+  const triggerChrome = className || 'rounded ' + (SELECT_SIZE_CLS[size] || SELECT_SIZE_CLS.sm) + ' ' + (SELECT_VARIANT_CLS[variant] || SELECT_VARIANT_CLS.toolbar);
+  const triggerClassName = [triggerChrome, 'inline-flex items-center gap-1', block && 'w-full justify-between', fontCls, disabled && 'opacity-50 pointer-events-none'].filter(Boolean).join(' ');
+  const selected = normalized.find(o => o.value === value);
+  const selectedLabel = selected ? selected.label : labels[value] || value;
+  const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
+  const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
   const popover = open ? /*#__PURE__*/React.createElement("div", {
     ref: popRef,
     onPointerDown: e => e.stopPropagation(),
@@ -2009,41 +2151,47 @@ const GeomSelect = ({
       position: 'fixed',
       zIndex: 9999,
       width: popW
-    }, pos || {}),
-    className: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1"
-  }, options.map((g, i) => /*#__PURE__*/React.createElement("button", {
-    key: g,
+    }, fontStyle, pos || {}),
+    className: 'bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1' + (fontCls ? ' ' + fontCls : '')
+  }, normalized.map((o, i) => /*#__PURE__*/React.createElement("button", {
+    key: o.value,
     type: "button",
-    onMouseEnter: () => setHi(i),
-    onClick: () => {
-      onChange(g);
-      setOpen(false);
+    title: o.title,
+    "aria-disabled": o.disabled || undefined,
+    onMouseEnter: () => {
+      if (!o.disabled) setHi(i);
     },
-    className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors ' + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300')
+    onClick: () => commitRow(o),
+    className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors ' + (o.disabled ? 'text-gray-500 cursor-default' : i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300')
   }, /*#__PURE__*/React.createElement("span", {
     className: "w-3.5 flex-none"
-  }, g === value && /*#__PURE__*/React.createElement(MtlxIcon, {
+  }, o.value === value && /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "check",
     className: "w-3.5 h-3.5"
-  })), /*#__PURE__*/React.createElement("span", {
+  })), o.icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: o.icon,
+    className: "w-3.5 h-3.5 flex-none"
+  }), /*#__PURE__*/React.createElement("span", {
     className: "flex-1 truncate"
-  }, labels[g] || g), badges && badges[g] &&
-  /*#__PURE__*/
-  // Amber only for the warning-flavored Experimental
-  // tag; informational badges (e.g. Default) stay
-  // neutral so they don't read as a caution.
-  React.createElement("span", {
-    className: 'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + (badges[g] === 'Experimental' ? 'bg-amber-600/30 border-amber-500/50 text-amber-300' : 'bg-gray-700/60 border-gray-500/50 text-gray-300')
-  }, badges[g])))) : null;
+  }, o.label), o.badge && /*#__PURE__*/React.createElement("span", {
+    className: 'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]
+  }, o.badge.text)))) : null;
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     type: "button",
     ref: btnRef,
     title: title,
+    disabled: !!disabled,
+    "aria-disabled": disabled || undefined,
+    "aria-label": ariaLabel,
     onClick: () => open ? setOpen(false) : openPopover(),
-    className: (className || 'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300') + ' inline-flex items-center gap-1'
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "truncate"
-  }, labels[value] || value), /*#__PURE__*/React.createElement(MtlxIcon, {
+    className: triggerClassName,
+    style: fontStyle
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5 flex-none"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: 'truncate' + (showPlaceholder ? ' text-gray-500' : '')
+  }, triggerLabel), /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "chevron-down",
     className: "w-3 h-3 flex-none opacity-70"
   })), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
@@ -2095,8 +2243,12 @@ Object.assign(window, {
   useWindowFileDrop,
   LoadingOverlay,
   ViewportControls,
+  // GeomSelect: kept as an alias during the dropdown-standardization
+  // migration. Both are bare window globals, so a missing one is a
+  // render-time ReferenceError; a later step drops the alias.
   ColorSwatch,
-  GeomSelect,
+  MtlxSelect,
+  GeomSelect: MtlxSelect,
   PreviewErrorBoundary,
   DialogFrame,
   PresetsDialog,
