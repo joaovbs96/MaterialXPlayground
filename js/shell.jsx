@@ -456,7 +456,10 @@ function Shell() {
             // overflow reached the document, and since the preview stage
             // derives its height from its own width, the page scrollbar
             // could appear, narrow the stage, stop being needed, and loop.
-            builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            // md:pb-0: this view fills the viewport, so bottom padding is
+            // dead space between the sidebar and the footer. Dropping it
+            // hands those pixels to the grid's 1fr row, i.e. the canvas.
+            builder: 'p-2 sm:p-6 md:pb-0 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
