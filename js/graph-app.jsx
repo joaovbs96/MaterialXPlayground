@@ -4704,18 +4704,15 @@
                         <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
                             {mtlxPaths.length > 1 && (
-                                <select
-                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[10rem] md:max-w-[14rem] truncate shrink-0 whitespace-nowrap"
-                                    title="Which .mtlx document to display"
+                                <MtlxSelect
                                     value={chosenMtlx || ''}
-                                    onChange={(e) => {
-                                        const path = e.target.value;
-                                        confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); });
-                                    }}
-                                >
-                                    {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
-                                    {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                                </select>
+                                    options={mtlxPaths}
+                                    placeholder={'Pick a .mtlx\u2026'}
+                                    onChange={(path) => confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); })}
+                                    title="Which .mtlx document to display"
+                                    size="md"
+                                    className="max-w-[10rem] md:max-w-[14rem] shrink-0"
+                                />
                             )}
                             {parsed && (
                                 <button
@@ -4935,15 +4932,19 @@
                                 top-left. Only rendered when there's more
                                 than one entry (root + a nodegraph to pick). */}
                             {nodegraphs.length > 0 && (
-                                <select
-                                    className="absolute top-2 left-2 z-30 h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-[14rem] truncate"
-                                    title="Scope: the document root, or step inside a nodegraph"
+                                <MtlxSelect
                                     value={scope}
-                                    onChange={(e) => { changeScope(e.target.value); e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */ }}
-                                >
-                                    <option value="">(document root)</option>
-                                    {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
-                                </select>
+                                    options={nodegraphs}
+                                    emptyOption="(document root)"
+                                    onChange={changeScope}
+                                    // Keyboard shortcuts like Backspace must go back to
+                                    // the canvas, not the control, once a scope is picked.
+                                    commitFocus="none"
+                                    title="Scope: the document root, or step inside a nodegraph"
+                                    size="md"
+                                    font="mono"
+                                    className="absolute top-2 left-2 z-30 max-w-[14rem]"
+                                />
                             )}
 
                             {/* Error banner, centered along the top */}
@@ -5088,32 +5089,28 @@
                                 }
                                 controlSlots={(labeled) => ({
                                     docColorspace: (
-                                        <div key="docColorspace" className="relative flex-1 min-w-0 flex items-center">
-                                            {/* `flex` (not just `relative`) keeps this wrapper from
-                                                picking up a UA line-height "strut" around the native
-                                                <select>, which otherwise renders taller than h-6. */}
-                                            <MtlxIcon name="palette" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
-                                            {/* Own chevron at the same inset as GeomSelect's, so both
-                                                dropdowns in this strip read as one control family. */}
-                                            <MtlxIcon name="chevron-down" className="w-3 h-3 text-gray-300 opacity-70 pointer-events-none absolute right-[9px] top-1/2 -translate-y-1/2" />
-                                            <select
-                                                className="appearance-none h-6 text-[11px] pl-6 pr-6 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 w-full truncate"
-                                                title="Document colorspace -- fallback for inputs without an explicit colorspace"
-                                                value={docColorspace}
-                                                onChange={(e) => {
-                                                    const v = e.target.value;
-                                                    setDocColorspace(v);
-                                                    if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
-                                                    else mxRemoveAttr(parsed.doc, 'colorspace');
-                                                    setDocRev((r) => r + 1);
-                                                    markDirty();
-                                                    e.target.blur();
-                                                }}
-                                            >
-                                                <option value="">(doc colorspace)</option>
-                                                {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                                            </select>
-                                        </div>
+                                        // size="sm" matches GeomSelect just below it in the
+                                        // strip (h-6 / 24px), so both dropdowns read as one
+                                        // control family.
+                                        <MtlxSelect
+                                            key="docColorspace"
+                                            value={docColorspace}
+                                            options={COLORSPACES}
+                                            emptyOption="(doc colorspace)"
+                                            onChange={(v) => {
+                                                setDocColorspace(v);
+                                                if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
+                                                else mxRemoveAttr(parsed.doc, 'colorspace');
+                                                setDocRev((r) => r + 1);
+                                                markDirty();
+                                            }}
+                                            commitFocus="none"
+                                            title="Document colorspace -- fallback for inputs without an explicit colorspace"
+                                            icon="palette"
+                                            size="sm"
+                                            block
+                                            className="flex-1 min-w-0"
+                                        />
                                     ),
                                     // Graph and viewer are always in sync in the extension
                                     // (one opened .mtlx file), so this cross-view handoff
