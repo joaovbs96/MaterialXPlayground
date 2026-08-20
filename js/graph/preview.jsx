@@ -182,6 +182,16 @@
         };
         const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
         const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default' };
+        // Row layout for the docked/fullscreen viewport strip: docked splits
+        // geometry/colorspace/collapse from the env/screenshot/settings/send
+        // group; fullscreen folds everything into one row.
+        const GRAPH_PREVIEW_CLUSTERS_DOCKED = [
+            ['graphGeom', 'docColorspace', 'collapse'],
+            ['env', 'screenshot', 'settings', 'sendToViewer'],
+        ];
+        const GRAPH_PREVIEW_CLUSTERS_FULLSCREEN = [
+            ['graphGeom', 'docColorspace', 'collapse', 'env', 'screenshot', 'settings', 'sendToViewer'],
+        ];
 
         // Resolves WHAT the preview renders, building transient '__pv_*'
         // wrapper nodes as needed — callers MUST call cleanup() when done.
@@ -449,7 +459,7 @@
         // Shaderball preview of the current target (selection, else doc
         // default). Only the first mount pays for a full render-view init;
         // later docRev changes reuse the shell (fast refresh or APPLY swap).
-        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay, trailingChildren }) {
+        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay, controlSlots }) {
             const canvasRef = React.useRef(null);
             // The viewport CONTAINER (not the canvas) goes fullscreen, so
             // the overlaid ViewportControls stay visible — same contract as
@@ -783,41 +793,65 @@
                 };
             }, [parsed, target, docRev, fileMap, geomMode]);
 
+            // Row-1 geometry dropdown, built HERE (not a ViewportControls
+            // built-in slot) so it shares geomMode with the Settings-popover's
+            // own GeomSelect just below.
+            const graphGeomSlot = (
+                <GeomSelect
+                    key="graphGeom"
+                    value={geomMode}
+                    options={GRAPH_GEOM_MODES}
+                    labels={GRAPH_GEOM_LABELS}
+                    badges={GRAPH_GEOM_BADGES}
+                    onChange={setGeomMode}
+                    title="Preview geometry"
+                    className="flex-1 min-w-0 h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                />
+            );
+            // Merge the caller's row-2 controls (render-prop, same shape as
+            // the old trailingChildren) with the geometry slot above.
+            const slotNodes = Object.assign(
+                { graphGeom: graphGeomSlot },
+                typeof controlSlots === 'function' ? controlSlots(isFullscreen) : controlSlots
+            );
+
             return (
                 <div
                     ref={viewportRef}
                     className="flex flex-col flex-none w-full border-b border-gray-700"
                     style={isFullscreen ? { height: '100%' } : undefined}
                 >
-                    {/* Viewport controls (F2.1): env toggle, screenshot,
-                        fullscreen \u2014 geometry/rotate hidden (fixed camera);
-                        trailingChildren carries the "send to Viewer" button. */}
+                    {/* Viewport controls (F2.1/F2.2): two rows when docked
+                        (geometry/colorspace/collapse, then env/screenshot/
+                        settings/send), one row in fullscreen; see clusters. */}
                     <ViewportControls
-                        showGeomSelect={false}
-                        showRotate={false}
                         envBg={envBg}
                         onToggleEnvBg={toggleEnvBg}
                         envAvail={envAvail}
-                        // The GLB scene's backdrop box fully occludes the
-                        // env-background sky sphere, so the Background
-                        // On/Off toggle in the Environment popover is a no-op here.
-                        showBackgroundToggle={false}
+                        // The GLB scene's backdrop box occludes the sky and the
+                        // flat buffer has no backdrop mesh, so the Background
+                        // toggle in the Environment popover is a no-op for those.
+                        showBackgroundToggle={resolvedGeom !== 'shaderball-scene' && resolvedGeom !== 'buffer2d'}
                         viewRef={viewRef}
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
-                        isFullscreen={isFullscreen}
-                        onToggleFullscreen={toggleFullscreenView}
-                        trailingChildren={trailingChildren}
+                        slots={slotNodes}
+                        clusters={isFullscreen ? GRAPH_PREVIEW_CLUSTERS_FULLSCREEN : GRAPH_PREVIEW_CLUSTERS_DOCKED}
+                        // flex-wrap is a deliberate escape hatch: a width miss
+                        // degrades to a wrapped line instead of clipping.
+                        clusterClassName="flex items-center gap-1 flex-wrap min-w-0"
                         // Docked: open the env dialog toward the canvas (left) so
                         // it doesn't cover the preview. Fullscreen: open in the
                         // default spot under the Environment button instead.
                         envDialogPlacement={isFullscreen ? undefined : "left"}
-                        containerClassName="flex items-center justify-center gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
-                        // Show button labels only in fullscreen (icon-only when
-                        // docked); labelsClass keeps the strip centered (its own
-                        // justify-center) while allowing wrap — no right-align.
+                        containerClassName={isFullscreen
+                            ? "flex items-center justify-center gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
+                            // font-sans: the panel wrapper is font-mono and its
+                            // wider glyphs eat the 304px strip's width budget.
+                            : "flex flex-col gap-1 px-2 py-1.5 border-b border-gray-700 bg-gray-900/70 flex-none font-sans"}
+                        // Show button labels only in fullscreen, matching the
+                        // render's own camera-reset/fullscreen buttons.
                         showLabels={isFullscreen}
-                        labelsClass="flex-wrap"
                         settingsChildren={
                             <div>
                                 {/* Dropdown on its OWN line: label + trigger

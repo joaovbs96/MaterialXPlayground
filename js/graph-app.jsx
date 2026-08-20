@@ -5159,43 +5159,58 @@
                                         <MtlxIcon name={pinnedTarget ? 'pin-filled' : 'pin'} className="w-3.5 h-3.5" />
                                     </button>
                                 }
-                                trailingChildren={(labeled) => (
-                                    <>
-                                    <select
-                                        className="h-6 text-[11px] px-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono max-w-[7rem] truncate"
-                                        title="Document colorspace -- fallback for inputs without an explicit colorspace"
-                                        value={docColorspace}
-                                        onChange={(e) => {
-                                            const v = e.target.value;
-                                            setDocColorspace(v);
-                                            if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
-                                            else mxRemoveAttr(parsed.doc, 'colorspace');
-                                            setDocRev((r) => r + 1);
-                                            markDirty();
-                                            e.target.blur();
-                                        }}
-                                    >
-                                        <option value="">(doc colorspace)</option>
-                                        {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                                    </select>
-                                    {/* Graph and viewer are always in sync in the extension
-                                        (one opened .mtlx file), so this cross-view handoff
-                                        doesn't apply under VS Code. */}
-                                    {!IN_VSCODE && (
-                                    <button
-                                        onClick={sendToViewer}
-                                        title="Open in Material Viewer"
-                                        className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
-                                    >
-                                        <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                        {labeled && <span className="ml-1.5 whitespace-nowrap">Send to Material Viewer</span>}
-                                    </button>
-                                    )}
-                                    </>
-                                )}
+                                controlSlots={(labeled) => ({
+                                    docColorspace: (
+                                        <select
+                                            key="docColorspace"
+                                            className="h-6 text-[11px] px-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono flex-none w-[6rem] truncate"
+                                            title="Document colorspace -- fallback for inputs without an explicit colorspace"
+                                            value={docColorspace}
+                                            onChange={(e) => {
+                                                const v = e.target.value;
+                                                setDocColorspace(v);
+                                                if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
+                                                else mxRemoveAttr(parsed.doc, 'colorspace');
+                                                setDocRev((r) => r + 1);
+                                                markDirty();
+                                                e.target.blur();
+                                            }}
+                                        >
+                                            <option value="">(doc colorspace)</option>
+                                            {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
+                                        </select>
+                                    ),
+                                    // Graph and viewer are always in sync in the extension
+                                    // (one opened .mtlx file), so this cross-view handoff
+                                    // doesn't apply under VS Code.
+                                    sendToViewer: !IN_VSCODE ? (
+                                        <button
+                                            key="sendToViewer"
+                                            onClick={sendToViewer}
+                                            title="Open in Material Viewer"
+                                            className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                                        >
+                                            <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                                            <span className="ml-1.5 whitespace-nowrap">Send to Material Viewer</span>
+                                        </button>
+                                    ) : null,
+                                    // Moved from the panel header (item F2.2): last control
+                                    // in row 1, sized to match the row's other icon buttons.
+                                    collapse: (
+                                        <button
+                                            key="collapse"
+                                            onClick={() => setParamsOpen(false)}
+                                            title="Collapse the preview panel"
+                                            className="flex-none w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/80 transition-colors"
+                                        >
+                                            <MtlxIcon name="chevrons-right" className="w-4 h-4" />
+                                        </button>
+                                    ),
+                                })}
                             />
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
-                                {/* Top Row: Color dot, Name, and Collapse button */}
+                                {/* Top Row: Color dot, Name, and docs button (collapse
+                                    now lives in the preview strip's row 1). */}
                                 <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
                                     {selectedIds.length > 1 ? (
                                         <span className="w-2 h-2 rounded-full flex-none bg-blue-400" />
@@ -5262,14 +5277,6 @@
                                             className="flex-none ml-auto w-4 h-4 flex items-center justify-center rounded-full border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 text-[9px] leading-none transition-colors"
                                         >?</button>
                                     )}
-                                    <button
-                                        onClick={() => setParamsOpen(false)}
-                                        title="Collapse the preview panel"
-                                        className={'flex-none text-gray-400 hover:text-gray-200 px-1 leading-none'
-                                            + (selectedIds.length <= 1 && displayNode
-                                                && ['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
-                                                && displayNode.data.category ? '' : ' ml-auto')}
-                                    ><MtlxIcon name="chevrons-right" className="w-4 h-4" /></button>
                                 </div>
 
                                 {nameEditing && nameIssue && (
