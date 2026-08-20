@@ -570,24 +570,28 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                     <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
                         <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
                             <span>Target</span>
-                            <select
+                            <MtlxSelect
                                 value={targetKey}
-                                onChange={(e) => setTargetKey(e.target.value)}
-                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-                            >
-                                {EXPORT_TARGETS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                            </select>
+                                options={EXPORT_TARGETS.map((t) => ({ value: t.key, label: t.label }))}
+                                onChange={setTargetKey}
+                                size="md"
+                                variant="toolbar"
+                                font="mono"
+                                className="max-w-full truncate"
+                            />
                         </label>
                         {renderables.length > 1 && (
                             <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
                                 <span>Material</span>
-                                <select
+                                <MtlxSelect
                                     value={matIndex}
-                                    onChange={(e) => setMatIndex(Number(e.target.value))}
-                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-                                >
-                                    {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
-                                </select>
+                                    options={renderables.map((r, i) => ({ value: i, label: r.name }))}
+                                    onChange={setMatIndex}
+                                    size="md"
+                                    variant="toolbar"
+                                    font="mono"
+                                    className="max-w-full truncate"
+                                />
                             </label>
                         )}
                     </div>

@@ -684,23 +684,31 @@ function ShaderExportDialog({
     className: "px-4 py-2.5 flex items-center gap-2 flex-wrap"
   }, /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 text-[11px] text-gray-400"
-  }, /*#__PURE__*/React.createElement("span", null, "Target"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("span", null, "Target"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: targetKey,
-    onChange: e => setTargetKey(e.target.value),
-    className: "h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-  }, EXPORT_TARGETS.map(t => /*#__PURE__*/React.createElement("option", {
-    key: t.key,
-    value: t.key
-  }, t.label)))), renderables.length > 1 && /*#__PURE__*/React.createElement("label", {
+    options: EXPORT_TARGETS.map(t => ({
+      value: t.key,
+      label: t.label
+    })),
+    onChange: setTargetKey,
+    size: "md",
+    variant: "toolbar",
+    font: "mono",
+    className: "max-w-full truncate"
+  })), renderables.length > 1 && /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 text-[11px] text-gray-400"
-  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: matIndex,
-    onChange: e => setMatIndex(Number(e.target.value)),
-    className: "h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-  }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-    key: i,
-    value: i
-  }, r.name))))), stages && stages.length > 1 && /*#__PURE__*/React.createElement("div", {
+    options: renderables.map((r, i) => ({
+      value: i,
+      label: r.name
+    })),
+    onChange: setMatIndex,
+    size: "md",
+    variant: "toolbar",
+    font: "mono",
+    className: "max-w-full truncate"
+  }))), stages && stages.length > 1 && /*#__PURE__*/React.createElement("div", {
     className: "px-4 pb-2 flex items-center gap-1.5"
   }, stages.map((st, i) => /*#__PURE__*/React.createElement("button", {
     key: st.id,
