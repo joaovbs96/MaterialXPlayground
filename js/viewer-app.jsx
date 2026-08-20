@@ -566,8 +566,18 @@
                 return () => { cancelled = true; };
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, []);
-            const availableVersionOptions = mtlxVersions.filter((v) => v === mtlxDefaultVersion || versionAvailable[v] === true);
-            const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+            // Every known version is listed now; disabledOptions/titles carry
+            // the probe result instead of filtering rows out of the list.
+            // A still-probing version stays disabled with no title yet.
+            const versionDisabledOptions = {};
+            const versionTitles = {};
+            mtlxVersions.forEach((v) => {
+                if (v === mtlxDefaultVersion || versionAvailable[v] === true) return;
+                versionDisabledOptions[v] = true;
+                if (versionAvailable[v] === false) {
+                    versionTitles[v] = 'MaterialX ' + v + ' is not available in this build.';
+                }
+            });
 
             // Default material: open_pbr_default.mtlx via ingest(), or
             // documentUrl when supplied, crawled for includes/textures
@@ -855,9 +865,11 @@
                                 <span className="text-xs font-medium text-gray-400">MaterialX version</span>
                                 <GeomSelect
                                     value={version}
-                                    options={availableVersionOptions}
+                                    options={mtlxVersions}
                                     labels={versionLabels}
                                     badges={versionBadges}
+                                    disabledOptions={versionDisabledOptions}
+                                    titles={versionTitles}
                                     popWidth={VERSION_POP_W}
                                     onChange={(v) => {
                                         setVersion(v);
@@ -870,25 +882,20 @@
                                     disabled={busy}
                                 />
                             </div>
-                            {unavailableVersions.length > 0 && (
-                                <div className="text-[10px] text-gray-500 mt-1">
-                                    {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
-                                    {unavailableVersions.length === 1 ? ' is' : ' are'} not available in this build.
-                                </div>
-                            )}
                         </div>
 
                         {mtlxPaths.length > 1 && (
                             <div>
                                 <FieldLabel label="Pick a document" />
-                                <select
-                                    className={TEXT_INPUT_CLS}
+                                <MtlxSelect
                                     value={chosenMtlx || ''}
-                                    onChange={(e) => { setChosenMtlx(e.target.value); loadDocument(e.target.value); }}
-                                >
-                                    {!chosenMtlx && <option value="">{'Pick a .mtlx…'}</option>}
-                                    {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                                </select>
+                                    options={mtlxPaths}
+                                    placeholder={'Pick a .mtlx…'}
+                                    onChange={(v) => { setChosenMtlx(v); loadDocument(v); }}
+                                    size="lg"
+                                    variant="field"
+                                    block
+                                />
                                 {chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && (
                                     <div className="text-[11px] text-amber-300/90 mt-1.5">
                                         Showing {renderedMtlx.split('/').pop()} (last successful load)
@@ -900,36 +907,35 @@
                         {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
                             <div>
                                 <FieldLabel label="Or pick a curated example" />
-                                <select
-                                    className={TEXT_INPUT_CLS}
+                                <MtlxSelect
                                     value={presetPick}
+                                    options={window.MTLX_PRESETS.map((p) => ({ value: p.path, label: p.label }))}
+                                    placeholder="Choose a curated example"
                                     disabled={presetsBusy || busy}
-                                    onChange={(e) => {
-                                        const path = e.target.value;
+                                    onChange={(path) => {
                                         setPresetPick(path);
                                         if (!path) return;
                                         const preset = window.MTLX_PRESETS.find((p) => p.path === path);
                                         if (preset) loadPreset(preset);
                                     }}
-                                >
-                                    <option value="">Choose a curated example</option>
-                                    {window.MTLX_PRESETS.map((p) => (
-                                        <option key={p.path} value={p.path}>{p.label}</option>
-                                    ))}
-                                </select>
+                                    size="lg"
+                                    variant="field"
+                                    block
+                                />
                             </div>
                         )}
                     </SectionCard>
 
                     {renderables.length > 1 && (
                         <SectionCard icon="color-swatch" title="Materials" summary={currentMaterialName}>
-                            <select
-                                className={TEXT_INPUT_CLS}
+                            <MtlxSelect
                                 value={chosenMat}
-                                onChange={(e) => setChosenMat(Number(e.target.value))}
-                            >
-                                {renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
-                            </select>
+                                options={renderables.map((r, i) => ({ value: i, label: r.name }))}
+                                onChange={setChosenMat}
+                                size="lg"
+                                variant="field"
+                                block
+                            />
                         </SectionCard>
                     )}
 
@@ -1104,16 +1110,14 @@
                                             hidden — there's no sidebar to lack in the first place,
                                             and it's not one of the `controls` opt-in names. */}
                                         {(isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && (
-                                            <select
+                                            <MtlxSelect
                                                 value={chosenMat}
-                                                onChange={(e) => setChosenMat(Number(e.target.value))}
+                                                options={renderables.map((r, i) => ({ value: i, label: r.name }))}
+                                                onChange={setChosenMat}
                                                 title="Material to display"
-                                                className="text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                                            >
-                                                {renderables.map((r, i) => (
-                                                    <option key={i} value={i}>{r.name}</option>
-                                                ))}
-                                            </select>
+                                                size="sm"
+                                                variant="toolbar"
+                                            />
                                         )}
                                     </ViewportControls>
                                     )

@@ -627,8 +627,18 @@ function MaterialViewerApp({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const availableVersionOptions = mtlxVersions.filter(v => v === mtlxDefaultVersion || versionAvailable[v] === true);
-  const unavailableVersions = mtlxVersions.filter(v => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+  // Every known version is listed now; disabledOptions/titles carry
+  // the probe result instead of filtering rows out of the list.
+  // A still-probing version stays disabled with no title yet.
+  const versionDisabledOptions = {};
+  const versionTitles = {};
+  mtlxVersions.forEach(v => {
+    if (v === mtlxDefaultVersion || versionAvailable[v] === true) return;
+    versionDisabledOptions[v] = true;
+    if (versionAvailable[v] === false) {
+      versionTitles[v] = 'MaterialX ' + v + ' is not available in this build.';
+    }
+  });
 
   // Default material: open_pbr_default.mtlx via ingest(), or
   // documentUrl when supplied, crawled for includes/textures
@@ -921,9 +931,11 @@ function MaterialViewerApp({
     className: "text-xs font-medium text-gray-400"
   }, "MaterialX version"), /*#__PURE__*/React.createElement(GeomSelect, {
     value: version,
-    options: availableVersionOptions,
+    options: mtlxVersions,
     labels: versionLabels,
     badges: versionBadges,
+    disabledOptions: versionDisabledOptions,
+    titles: versionTitles,
     popWidth: VERSION_POP_W,
     onChange: v => {
       setVersion(v);
@@ -934,54 +946,55 @@ function MaterialViewerApp({
     },
     size: "sm",
     disabled: busy
-  })), unavailableVersions.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "text-[10px] text-gray-500 mt-1"
-  }, unavailableVersions.map(v => 'MaterialX ' + v).join(', '), unavailableVersions.length === 1 ? ' is' : ' are', " not available in this build.")), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+  }))), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
     label: "Pick a document"
-  }), /*#__PURE__*/React.createElement("select", {
-    className: TEXT_INPUT_CLS,
+  }), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: chosenMtlx || '',
-    onChange: e => {
-      setChosenMtlx(e.target.value);
-      loadDocument(e.target.value);
-    }
-  }, !chosenMtlx && /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, 'Pick a .mtlx…'), mtlxPaths.map(p => /*#__PURE__*/React.createElement("option", {
-    key: p,
-    value: p
-  }, p))), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
+    options: mtlxPaths,
+    placeholder: 'Pick a .mtlx…',
+    onChange: v => {
+      setChosenMtlx(v);
+      loadDocument(v);
+    },
+    size: "lg",
+    variant: "field",
+    block: true
+  }), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-amber-300/90 mt-1.5"
   }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
     label: "Or pick a curated example"
-  }), /*#__PURE__*/React.createElement("select", {
-    className: TEXT_INPUT_CLS,
+  }), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: presetPick,
+    options: window.MTLX_PRESETS.map(p => ({
+      value: p.path,
+      label: p.label
+    })),
+    placeholder: "Choose a curated example",
     disabled: presetsBusy || busy,
-    onChange: e => {
-      const path = e.target.value;
+    onChange: path => {
       setPresetPick(path);
       if (!path) return;
       const preset = window.MTLX_PRESETS.find(p => p.path === path);
       if (preset) loadPreset(preset);
-    }
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "Choose a curated example"), window.MTLX_PRESETS.map(p => /*#__PURE__*/React.createElement("option", {
-    key: p.path,
-    value: p.path
-  }, p.label))))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
+    },
+    size: "lg",
+    variant: "field",
+    block: true
+  }))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "color-swatch",
     title: "Materials",
     summary: currentMaterialName
-  }, /*#__PURE__*/React.createElement("select", {
-    className: TEXT_INPUT_CLS,
+  }, /*#__PURE__*/React.createElement(MtlxSelect, {
     value: chosenMat,
-    onChange: e => setChosenMat(Number(e.target.value))
-  }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-    key: i,
-    value: i
-  }, r.name)))), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+    options: renderables.map((r, i) => ({
+      value: i,
+      label: r.name
+    })),
+    onChange: setChosenMat,
+    size: "lg",
+    variant: "field",
+    block: true
+  })), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "alert-triangle",
     title: "Textures",
     summary: texReport.missing.length + ' unresolved'
@@ -1129,15 +1142,17 @@ function MaterialViewerApp({
         className: "w-3.5 h-3.5"
       }))
     }
-  }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement("select", {
+  }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement(MtlxSelect, {
     value: chosenMat,
-    onChange: e => setChosenMat(Number(e.target.value)),
+    options: renderables.map((r, i) => ({
+      value: i,
+      label: r.name
+    })),
+    onChange: setChosenMat,
     title: "Material to display",
-    className: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-  }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-    key: i,
-    value: i
-  }, r.name))))), /*#__PURE__*/React.createElement("canvas", {
+    size: "sm",
+    variant: "toolbar"
+  }))), /*#__PURE__*/React.createElement("canvas", {
     ref: canvasRef,
     className: "w-full block cursor-grab active:cursor-grabbing"
     // Always fills its container: VS Code, fullscreen, and
