@@ -144,7 +144,7 @@
         // exceeds ~70% of the editor width (see clampSidebarWidth).
         const SIDEBAR_MIN_WIDTH = 260;
         const SIDEBAR_MAX_WIDTH = 640;
-        const SIDEBAR_DEFAULT_WIDTH = 304; // matches the old fixed w-[19rem]
+        const SIDEBAR_DEFAULT_WIDTH = SIDEBAR_MIN_WIDTH; // open at the narrowest, widen by dragging
         const SIDEBAR_WIDTH_STORAGE_KEY = 'mtlxGraphSidebarWidth';
         const clampSidebarWidth = (w, editorWidth) => {
             let max = SIDEBAR_MAX_WIDTH;
