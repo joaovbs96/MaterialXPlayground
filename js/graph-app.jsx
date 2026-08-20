@@ -516,9 +516,9 @@
                 el.style.justifyContent = prevJustify;
             };
 
-            // Top-left cluster: the strip itself (see its JSX) is
-            // `flex-col`, so the element actually measured/toggled is
-            // its inner button row, ref'd here.
+            // Top-left cluster: this row (see its JSX) is a direct
+            // child of the menu bar's first grid column, and is
+            // itself the element measured/toggled here.
             const topLeftRowRef = React.useRef(null);
             React.useLayoutEffect(() => {
                 const el = topLeftRowRef.current;
@@ -4598,120 +4598,105 @@
                         flex children; only dialogs and full-editor overlays
                         further down stay absolutely positioned on top. */}
                     <div className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
-                        {/* Top-left cluster: document/session toolbar above
-                            the breadcrumb + scope dropdown. Same measured
-                            3-tier collapse as the top-right cluster; width now comes from the menu bar's grid column. */}
-                        <div className="flex flex-col items-start gap-1.5 min-w-0">
-                            {/* `w-full` here is load-bearing: `items-start`
-                                (flex-col parent) would otherwise shrink this
-                                row to content width, reintroducing the shrink-to-fit trap and hiding overflow. */}
-                            <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full">
-                                {/* New/Import/Presets are browser-only, multi-
-                                    document affordances — the VS Code editor is
-                                    bound to the single opened .mtlx file. */}
-                                {!IN_VSCODE && (
-                                <button
-                                    onClick={guardedNewDocument}
-                                    title="New material (empty document)"
-                                    className={BTN_TOOLBAR}
-                                >
-                                    <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">New Material</span>
-                                </button>
-                                )}
-                                {!IN_VSCODE && (
-                                <label
-                                    title="Import .mtlx / .zip / companion files (drag & drop works anywhere on the page)"
-                                    className={BTN_TOOLBAR + ' cursor-pointer'}
-                                >
-                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Import</span>
-                                    <input type="file" multiple className="hidden" onChange={onPickFiles} />
-                                </label>
-                                )}
-                                {!IN_VSCODE && (
-                                <button
-                                    onClick={() => setPresetsOpen(true)}
-                                    title="Load a curated official MaterialX example document"
-                                    className={BTN_TOOLBAR}
-                                >
-                                    {/* 'presets' renders as a framed photo
-                                        glyph (MTLX_ICON_PATHS) — its own icon,
-                                        no longer shared with the env-map-background toggle. */}
-                                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Presets</span>
-                                </button>
-                                )}
-                                {parsed && (
-                                    <div className="flex items-center gap-1.5">
-                                    <button
-                                        onClick={openExportDialog}
-                                        title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
-                                        className={BTN_TOOLBAR}
-                                    >
-                                        <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
-                                        <span className="gtb-label">Export</span>
-                                    </button>
-                                    <button
-                                        onClick={openShaderExport}
-                                        title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
-                                        className={BTN_TOOLBAR}
-                                    >
-                                        <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                        <span className="gtb-label">Shader Code</span>
-                                    </button>
-                                    </div>
-                                )}
+                        {/* Top-left cluster: the document/session button
+                            row, a direct child of the grid column. Same
+                            measured 3-tier collapse as the top-right cluster; width comes from the menu bar's grid column. */}
+                        <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full min-w-0">
+                            {/* New/Import/Presets are browser-only, multi-
+                                document affordances — the VS Code editor is
+                                bound to the single opened .mtlx file. */}
+                            {!IN_VSCODE && (
+                            <button
+                                onClick={guardedNewDocument}
+                                title="New material (empty document)"
+                                className={BTN_TOOLBAR}
+                            >
+                                <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">New Material</span>
+                            </button>
+                            )}
+                            {!IN_VSCODE && (
+                            <label
+                                title="Import .mtlx / .zip / companion files (drag & drop works anywhere on the page)"
+                                className={BTN_TOOLBAR + ' cursor-pointer'}
+                            >
+                                <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Import</span>
+                                <input type="file" multiple className="hidden" onChange={onPickFiles} />
+                            </label>
+                            )}
+                            {!IN_VSCODE && (
+                            <button
+                                onClick={() => setPresetsOpen(true)}
+                                title="Load a curated official MaterialX example document"
+                                className={BTN_TOOLBAR}
+                            >
+                                {/* 'presets' renders as a framed photo
+                                    glyph (MTLX_ICON_PATHS) — its own icon,
+                                    no longer shared with the env-map-background toggle. */}
+                                <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Presets</span>
+                            </button>
+                            )}
+                            {parsed && (
                                 <div className="flex items-center gap-1.5">
                                 <button
-                                    onClick={undoDoc}
-                                    title="Undo (Ctrl+Z)"
+                                    onClick={openExportDialog}
+                                    title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
                                     className={BTN_TOOLBAR}
                                 >
-                                    <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Undo</span>
+                                    <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Export</span>
                                 </button>
                                 <button
-                                    onClick={redoDoc}
-                                    title="Redo (Ctrl+Shift+Z)"
+                                    onClick={openShaderExport}
+                                    title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
                                     className={BTN_TOOLBAR}
                                 >
-                                    <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Redo</span>
+                                    <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Shader Code</span>
                                 </button>
                                 </div>
-                            </div>
-                            {/* Breadcrumb: document \u25B8 scope, with the scope
-                                dropdown right underneath it. */}
-                            {parsed && (
-                                <>
-                                    <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
-                                        <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
-                                            // Cheap ref write stays immediate; changeScope is a
-                                            // no-op (no overlay flash) when already at the root.
-                                            if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                                            changeScope('');
-                                        }}>
-                                            {parsed.label}
-                                        </button>
-                                        {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
-                                        {scope && <span className="text-blue-300">{scope}</span>}
-                                    </div>
-                                    <select
-                                        className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-                                        title="Scope: the document root, or step inside a nodegraph"
-                                        value={scope}
-                                        onChange={(e) => { changeScope(e.target.value); e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */ }}
-                                    >
-                                        <option value="">(document root)</option>
-                                        {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
-                                    </select>
-                                </>
                             )}
+                            <div className="flex items-center gap-1.5">
+                            <button
+                                onClick={undoDoc}
+                                title="Undo (Ctrl+Z)"
+                                className={BTN_TOOLBAR}
+                            >
+                                <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Undo</span>
+                            </button>
+                            <button
+                                onClick={redoDoc}
+                                title="Redo (Ctrl+Shift+Z)"
+                                className={BTN_TOOLBAR}
+                            >
+                                <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Redo</span>
+                            </button>
+                            </div>
                         </div>
 
-                        {/* Column 2: reserved for the breadcrumb (step 5). */}
-                        <div />
+                        {/* Column 2: the breadcrumb. The side columns are
+                            equal-width (minmax(0,1fr)), so this stays dead
+                            centre no matter what the clusters contain, and items-start keeps it on the bar's top row when a cluster wraps. */}
+                        {parsed ? (
+                            <div className="flex items-center h-7 min-w-0">
+                                <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
+                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
+                                        // Cheap ref write stays immediate; changeScope is a
+                                        // no-op (no overlay flash) when already at the root.
+                                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                                        changeScope('');
+                                    }}>
+                                        {parsed.label}
+                                    </button>
+                                    {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
+                                    {scope && <span className="text-blue-300">{scope}</span>}
+                                </div>
+                            </div>
+                        ) : <div />}
 
                         {/* Top-right cluster: document picker, view toggles,
                             add-node, fullscreen. Width now comes from the
@@ -4945,6 +4930,21 @@
                                     )}
                                 </ReactFlowComp>
                             </div>
+
+                            {/* Scope select: floats at the canvas host's
+                                top-left. Only rendered when there's more
+                                than one entry (root + a nodegraph to pick). */}
+                            {nodegraphs.length > 0 && (
+                                <select
+                                    className="absolute top-2 left-2 z-30 h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-[14rem] truncate"
+                                    title="Scope: the document root, or step inside a nodegraph"
+                                    value={scope}
+                                    onChange={(e) => { changeScope(e.target.value); e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */ }}
+                                >
+                                    <option value="">(document root)</option>
+                                    {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
+                                </select>
+                            )}
 
                             {/* Error banner, centered along the top */}
                             {error && (
