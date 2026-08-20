@@ -476,6 +476,10 @@
 
             // Fullscreen for the graph panel (same helpers as the viewports).
             const panelRef = React.useRef(null);
+            // The canvas's own flex cell (body row, right of the docked
+            // sidebar), read by every viewport/overlay measurement below
+            // instead of panelRef, so the sidebar's width is never double-counted.
+            const canvasHostRef = React.useRef(null);
             const [isFullscreen, setIsFullscreen] = React.useState(false);
             React.useEffect(() => watchFullscreen(
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
@@ -483,7 +487,7 @@
 
             // Top toolbar clusters: measured 3-tier collapse (labels ->
             // icons -> wrapped), via classList (not state) to avoid a
-            // measure loop; needs FIXED-width elements so RO detects overflow.
+            // measure loop; needs a real width constraint (the menu bar's grid column) so RO detects overflow.
             const measureToolbarCluster = (el) => {
                 if (!el) return;
                 // Start every pass from tier 1 (both classes off),
@@ -512,17 +516,16 @@
                 el.style.justifyContent = prevJustify;
             };
 
-            // Top-left cluster: the fixed-width strip itself (see its
-            // JSX) is `flex-col`, so the element actually measured/
-            // toggled is its inner button row, ref'd here.
+            // Top-left cluster: the strip itself (see its JSX) is
+            // `flex-col`, so the element actually measured/toggled is
+            // its inner button row, ref'd here.
             const topLeftRowRef = React.useRef(null);
             React.useLayoutEffect(() => {
                 const el = topLeftRowRef.current;
                 if (!el) return;
                 measureToolbarCluster(el);
-                // Covers pane resizes that change the strip's available
-                // width without a React re-render (see the shared comment
-                // above re: fixed width making the RO fire both ways).
+                // Covers pane resizes that change the grid column's
+                // available width without a React re-render.
                 const ro = new ResizeObserver(() => measureToolbarCluster(el));
                 ro.observe(el);
                 return () => ro.disconnect();
@@ -532,36 +535,19 @@
             });
 
             // Top-right cluster: the container itself is the measured
-            // row (see its JSX). Its measured height/position also drives
-            // where the params panel / collapsed chip sit — see below.
+            // row (see its JSX). It sits in the menu bar's own grid column
+            // now, so it no longer needs to publish its position anywhere.
             const topRightClusterRef = React.useRef(null);
             React.useLayoutEffect(() => {
                 const el = topRightClusterRef.current;
                 if (!el) return;
-                const measureAndPosition = () => {
-                    measureToolbarCluster(el);
-                    // Publish the toolbar's actual bottom edge as a CSS
-                    // var on the panel root (shared offsetParent) so the
-                    // params panel/chip sit snugly beneath it (+6 = old gap).
-                    if (panelRef.current) {
-                        panelRef.current.style.setProperty(
-                            '--gtb-offset',
-                            (el.offsetTop + el.offsetHeight + 6) + 'px'
-                        );
-                    }
-                };
-                measureAndPosition();
+                measureToolbarCluster(el);
                 // Covers pane resizes (params panel width, preview panel
-                // toggling) that change available width without a React
-                // re-render — el resizes (fixed-width), firing both ways.
-                const ro = new ResizeObserver(measureAndPosition);
+                // toggling) that change the grid column's available width
+                // without a React re-render.
+                const ro = new ResizeObserver(() => measureToolbarCluster(el));
                 ro.observe(el);
-                return () => {
-                    ro.disconnect();
-                    // Don't leave a stale offset behind for whatever else
-                    // renders against panelRef next.
-                    if (panelRef.current) panelRef.current.style.removeProperty('--gtb-offset');
-                };
+                return () => ro.disconnect();
                 // Intentionally no deps: re-runs every render (chip text,
                 // Validate border, Fullscreen label, etc. change width);
                 // the measurement itself costs microseconds.
@@ -1312,11 +1298,11 @@
             }, [isDirty]);
 
             // Sidebar-aware replacement for inst.fitView(opts): the params
-            // panel overlays the canvas (not a flex sibling), so plain
-            // fitView() doesn't account for it and hides nodes underneath.
+            // panel is a docked flex sibling of the canvas host, not an
+            // overlay, so the host's own rect already excludes it.
             const smartFitView = (opts) => {
                 const inst = rfInstRef.current;
-                const host = panelRef.current;
+                const host = canvasHostRef.current;
                 if (!inst) return false;
                 const getBounds = RF && RF.getNodesBounds;
                 const getViewport = RF && RF.getViewportForBounds;
@@ -1331,10 +1317,9 @@
                 if (!targetNodes.length || targetNodes.some((n) => !n.width || !n.height)) return false;
                 const rect = host.getBoundingClientRect();
                 if (!rect.width || !rect.height) return false;
-                // Narrow-pane exception: an open params panel there is a
-                // transient overlay, not permanent occlusion — reserving
-                // 320 of a ~400px pane would floor visibleWidth.
-                const sidebarWidth = (parsedRef.current && paramsOpenRef.current && !narrowRef.current) ? 320 : 15; // mirrors the MiniMap's own occlusion constant
+                // Small margin only: the docked sidebar is already
+                // excluded from the host's rect, so no 320 term here.
+                const sidebarWidth = 15; // mirrors the MiniMap's own occlusion constant
                 const visibleWidth = Math.max(50, rect.width - sidebarWidth);
                 const bounds = getBounds(targetNodes);
                 const padding = (opts && typeof opts.padding === 'number') ? opts.padding : 0.15;
@@ -2858,7 +2843,7 @@
                         // existing output — match against visible inputs.
                         wiredRowIndex = Math.max(0, data.inputs.findIndex((i) => i.type === pending.portType));
                     }
-                    const host = panelRef.current;
+                    const host = canvasHostRef.current;
                     const hostRect = host ? host.getBoundingClientRect() : null;
                     const P = typeof inst.screenToFlowPosition === 'function'
                         ? inst.screenToFlowPosition(pending.dropClient)
@@ -2897,7 +2882,7 @@
                 }
                 if (!placedAtDrop) {
                     // Drop it at the center of the current viewport.
-                    const host = panelRef.current;
+                    const host = canvasHostRef.current;
                     const centered = viewportCenterFlow(inst, host);
                     if (centered) pos = centered;
                     pos = {
@@ -3039,7 +3024,7 @@
                 // as addNodeFromCatalog).
                 let pos = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
-                const host = panelRef.current;
+                const host = canvasHostRef.current;
                 const centered = viewportCenterFlow(inst, host);
                 if (centered) pos = centered;
                 pos = {
@@ -3217,7 +3202,7 @@
                 const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
                 let center = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
-                const host = panelRef.current;
+                const host = canvasHostRef.current;
                 const centered = viewportCenterFlow(inst, host);
                 if (centered) center = centered;
                 for (const { el, entry } of created) {
@@ -3917,7 +3902,9 @@
             // MiniMap/legend collision, re-measured every render: Stage 1
             // hides the MiniMap for the pill on legend overlap; Stage 2
             // auto-collapses the legend (see legendOpenRightEdge below).
-            const minimapMarginRight = (parsed && paramsOpen && !narrow) ? 320 : 15;
+            // Flat 15: the docked sidebar is a flex sibling of the canvas
+            // host, already excluded from its rect, so no 320 term here.
+            const minimapMarginRight = 15;
             const legendBoxRef = React.useRef(null);
             const pillRef = React.useRef(null);
             // The collapsed params chip's rendered width (name varies)
@@ -3948,12 +3935,12 @@
             const consecutiveChangeFramesRef = React.useRef(0);
             const loopBreakerTrippedRef = React.useRef(false);
             const [minimapBlocked, setMinimapBlocked] = React.useState(false);
-            // The Map pill's own right-margin: 320 while the params
-            // panel is expanded (mirrors minimapMarginRight), else just
-            // enough to clear the collapsed chip's live width plus a gap.
+            // The Map pill's own right-margin: 15 by default, or just
+            // enough to clear the collapsed chip's live width plus a gap
+            // while the chip is showing (params panel collapsed).
             const [pillMarginRight, setPillMarginRight] = React.useState(15);
             React.useLayoutEffect(() => {
-                const host = panelRef.current;
+                const host = canvasHostRef.current;
                 if (!host) return;
                 let rafId = null;
                 const measure = () => {
@@ -3974,9 +3961,9 @@
                         return blocked;
                     });
 
-                    // The pill's own margin (item 3): mirrors
-                    // minimapMarginRight's 320 while expanded, else clears
-                    // the collapsed chip's live width (8px + width + GAP).
+                    // The pill's own margin (item 3): the only thing left
+                    // that can occlude this corner is the collapsed chip,
+                    // so this clears its live width (8px + width + GAP).
                     // Rounded to whole pixels at the source — the value
                     // feeds an exact-equality change guard just below, and
                     // getBoundingClientRect() returns sub-pixel floats that
@@ -3985,9 +3972,7 @@
                     const chipRect = (!paramsOpen && paramsChipRef.current)
                         ? paramsChipRef.current.getBoundingClientRect() : null;
                     const chipWidth = chipRect ? chipRect.width : 0;
-                    const pillMarginRightNow = Math.round((parsed && paramsOpen && !narrow)
-                        ? 320
-                        : (parsed ? (8 + chipWidth + GAP) : 15));
+                    const pillMarginRightNow = Math.round((parsed && !paramsOpen) ? (8 + chipWidth + GAP) : 15);
                     setPillMarginRight((prev) => {
                         if (prev === pillMarginRightNow) return prev;
                         changed = true;
@@ -4010,6 +3995,10 @@
                     // production). One constant, shared by both directions,
                     // can't disagree with itself.
                     const legendOpenRightEdge = 8 + 320;
+                    // Invariant: this 320 is the legend card's own w-80,
+                    // unrelated to the sidebar. The aside's width must
+                    // never be derived from anything this effect sets.
+
                     // Skip stage 2 entirely while the pill isn't mounted —
                     // there is nothing to measure, and treating a 0-width
                     // phantom pill as "clear" was spuriously firing the
@@ -4616,531 +4605,482 @@
                 : null;
 
             return (
-                <div ref={panelRef} className="absolute inset-0 bg-gray-900 overflow-hidden">
-                    {/* The graph itself owns the full stage; every control
-                        below floats above it. */}
-                    <div className="absolute inset-0">
-                        <ReactFlowComp
-                            key={graphKey}
-                            nodes={flow.nodes}
-                            edges={rfEdges}
-                            nodeTypes={NODE_TYPES}
-                            onInit={(inst) => { rfInstRef.current = inst; fitViewSoon({ padding: 0.15 }); }}
-                            onNodesChange={onNodesChange}
-                            onEdgesChange={onEdgesChange}
-                            onSelectionStart={onSelectionStart}
-                            onSelectionEnd={onSelectionEnd}
-                            onNodeDragStop={onNodeDragStop}
-                            onSelectionDragStop={onNodeDragStop}
-                            onNodeDoubleClick={onNodeDoubleClick}
-                            onNodeClick={onNodeClick}
-                            onEdgeClick={onEdgeClick}
-                            onPaneClick={clearSelection}
-                            onConnect={onConnect}
-                            onConnectStart={onConnectStart}
-                            onConnectEnd={onConnectEnd}
-                            isValidConnection={isValidConnection}
-                            connectionRadius={24}
-                            connectionLineStyle={{ stroke: '#60a5fa', strokeWidth: 1.5 }}
-                            onEdgeUpdate={onEdgeUpdate}
-                            onEdgeUpdateStart={onEdgeUpdateStart}
-                            onEdgeUpdateEnd={onEdgeUpdateEnd}
-                            // slightly enlarged (default 10) so the updater's grab zone covers the occupied port's dot+halo area now that connected handles are click-through (see index.html's .mtlx-handle-connected rule)
-                            edgeUpdaterRadius={12}
-                            minZoom={0.05}
-                            zoomOnDoubleClick={false}
-                            nodesConnectable={true}
-                            nodesDraggable={true}
-                            elementsSelectable={true}
-                            deleteKeyCode={null}
-                            panOnDrag={[1]}
-                            selectionOnDrag={true}
-                            selectionMode={(RF.SelectionMode && RF.SelectionMode.Partial) || 'partial'}
-                            selectionKeyCode={null}
-                            multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
-                            proOptions={{ account: '', hideAttribution: false }}
-                        >
-                            <Background color="#374151" gap={18} size={1.5} />
-                            {/* Zoom + fit controls: a custom cluster docked
-                                to the TOP of the Types window instead of
-                                React Flow's own bottom-left <Controls>. */}
-                            {/* Hidden below the compact-mode threshold (no
-                                room; would sit under the overlay params panel),
-                                and whenever minimapBlocked says there's no room even in wide mode. */}
-                            {!narrow && minimapOpen && !minimapBlocked && (
-                                <MiniMap
-                                    pannable zoomable
-                                    position="bottom-right"
-                                    nodeColor={(n) => getNodeColor(n.data)}
-                                    nodeStrokeColor="#111827"
-                                    maskColor="rgba(17, 24, 39, 0.75)"
-                                    // Sits LEFT of the preview panel while
-                                    // open, sliding to the corner when
-                                    // collapsed. Explicit width/height make this a KNOWN box for fixed-arithmetic sizing.
-                                    style={{
-                                        background: '#1f2937',
-                                        width: 200,
-                                        height: 150,
-                                        marginRight: minimapMarginRight,
-                                        transition: 'margin-right 200ms ease',
-                                    }}
-                                />
-                            )}
-                            {/* Minimize button, pinned to the MiniMap's
-                                corner via <Panel>. marginRight = minimapMarginRight+4;
-                                marginBottom = 15+150-20-4 = 141 (see below). */}
-                            {!narrow && minimapOpen && !minimapBlocked && (
-                                <Panel
-                                    position="bottom-right"
-                                    style={{
-                                        marginRight: minimapMarginRight + 4,
-                                        marginBottom: 141, // 15 + 150 - 20 - 4, see comment above
-                                        transition: 'margin-right 200ms ease',
-                                    }}
-                                >
-                                    <button
-                                        onClick={() => setMinimapOpen(false)}
-                                        title="Minimize the minimap"
-                                        className="w-5 h-5 flex items-center justify-center rounded bg-gray-900/70 text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
-                                    ><MtlxIcon name="minus" className="w-3 h-3" /></button>
-                                </Panel>
-                            )}
-                            {/* Collapsed pill: shown instead of the MiniMap
-                                when minimized/blocked/narrow. Never hidden
-                                outright (disabled instead, else no way back after a stale minimapOpen=false). */}
-                            {(narrow || !minimapOpen || minimapBlocked) && (
-                                <Panel
-                                    position="bottom-right"
-                                    style={{
-                                        marginRight: pillMarginRight,
-                                        marginBottom: 8,
-                                        transition: 'margin-right 200ms ease',
-                                    }}
-                                >
-                                    <button
-                                        ref={pillRef}
-                                        onClick={() => { if (!narrow && !minimapBlocked) setMinimapOpen(true); }}
-                                        disabled={narrow || minimapBlocked}
-                                        title={(narrow || minimapBlocked) ? 'Not enough room for the minimap' : 'Restore the minimap'}
-                                        className={BTN_TOOLBAR + ((narrow || minimapBlocked) ? ' opacity-50 cursor-not-allowed' : '')}
-                                    >
-                                        <MtlxIcon name="plus" className="w-3.5 h-3.5" />
-                                        <span className="ml-0.5">Map</span>
-                                    </button>
-                                </Panel>
-                            )}
-                        </ReactFlowComp>
-                    </div>
-
-                    {/* Presets dialog. Rendered BEFORE the unsaved-changes
-                        dialog below (same z-50 class, earlier in the DOM)
-                        so that dialog paints on top during a mid-fetch confirmReplace. */}
-                    <PresetsDialog
-                        open={presetsOpen}
-                        onClose={() => setPresetsOpen(false)}
-                        onPick={loadPreset}
-                        busy={presetsBusy}
-                        busyPath={presetsBusyPath}
-                    />
-
-                    {/* Shader Code export dialog ("Shader Code" button). */}
-                    {shaderExport && (
-                        <ShaderExportDialog
-                            open={true}
-                            onClose={() => setShaderExport(null)}
-                            renderables={shaderExport.renderables}
-                            initialIndex={0}
-                            generate={({ renderable, label, targetKey }) =>
-                                generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
-                        />
-                    )}
-
-                    {/* Unsaved-changes dialog: gates Import / drag-drop of a
-                        new .mtlx / switching documents while dirty. See
-                        confirmReplace. */}
-                    {confirmCloseOpen && (
-                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                            onMouseDown={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}>
-                            <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
-                                onMouseDown={(e) => e.stopPropagation()}>
-                                <div className="text-sm font-semibold text-gray-100 mb-1">Unsaved changes</div>
-                                <div className="text-[12px] text-gray-400 mb-4">
-                                    This document has edits that haven't been exported. Export before
-                                    continuing, discard them, or cancel.
-                                </div>
-                                <div className="flex flex-wrap justify-end gap-2">
-                                    <button
-                                        onClick={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}
-                                        className={BTN_SECONDARY}
-                                    >Cancel</button>
-                                    <button
-                                        onClick={() => {
-                                            const a = pendingActionRef.current;
-                                            pendingActionRef.current = null;
-                                            setConfirmCloseOpen(false);
-                                            if (a) a();
-                                        }}
-                                        className={BTN_SECONDARY}
-                                    >Discard & Continue</button>
-                                    <button
-                                        onClick={async () => {
-                                            const ok = await exportMtlx();
-                                            if (!ok) return; // canceled/failed — leave the dialog open
-                                            const a = pendingActionRef.current;
-                                            pendingActionRef.current = null;
-                                            setConfirmCloseOpen(false);
-                                            if (a) a();
-                                        }}
-                                        className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
-                                    >Export & Continue</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Full-stage drop indicator */}
-                    {dragOver && (
-                        <div className="absolute inset-0 z-40 pointer-events-none p-2 sm:p-4">
-                            <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
-                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
-                                    <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Loading overlay */}
-                    {busy && (
-                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70">
-                            {status && <span className="text-sm text-gray-300 animate-pulse">{status}</span>}
-                            <div className="mtlx-loading-bar w-56" />
-                        </div>
-                    )}
-
-                    {/* Scope-transition overlay: entering/leaving a
-                        nodegraph (changeScope) rebuilds the flow
-                        synchronously; reuses the shared LoadingOverlay component. */}
-                    <LoadingOverlay show={scopeBusy} label={'Loading graph' + '\u2026'}
-                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                        labelClassName="text-sm text-gray-300 animate-pulse"
-                        barWidthClass="w-56" />
-
-                    {/* Action-busy overlay (items 2 & 3): a heavy,
-                        doc-mutating action (Ctrl+G, deleting a nodegraph)
-                        is in flight; actionBusy already carries a trailing ellipsis as the label. */}
-                    <LoadingOverlay show={!!actionBusy} label={actionBusy || ''}
-                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                        labelClassName="text-sm text-gray-300 animate-pulse"
-                        barWidthClass="w-56" />
-
-                    {/* Empty state: nothing loaded, nothing loading */}
-                    {emptyHint && (
-                        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-                            <div className="text-center bg-gray-800/90 border border-gray-700 rounded-xl px-8 py-6">
-                                <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-gray-400" />
-                                <div className="text-sm text-gray-300 font-medium">
-                                    {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
-                                </div>
-                                {/* Mentions the Import button and page-wide drag-drop,
-                                    neither of which exist under VS Code (single opened
-                                    .mtlx file). */}
+                <div ref={panelRef} className="absolute inset-0 bg-gray-900 overflow-hidden flex flex-col">
+                    {/* Menu bar and canvas+sidebar body row below are real
+                        flex children; only dialogs and full-editor overlays
+                        further down stay absolutely positioned on top. */}
+                    <div className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
+                        {/* Top-left cluster: document/session toolbar above
+                            the breadcrumb + scope dropdown. Same measured
+                            3-tier collapse as the top-right cluster; width now comes from the menu bar's grid column. */}
+                        <div className="flex flex-col items-start gap-1.5 min-w-0">
+                            {/* `w-full` here is load-bearing: `items-start`
+                                (flex-col parent) would otherwise shrink this
+                                row to content width, reintroducing the shrink-to-fit trap and hiding overflow. */}
+                            <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full">
+                                {/* New/Import/Presets are browser-only, multi-
+                                    document affordances — the VS Code editor is
+                                    bound to the single opened .mtlx file. */}
                                 {!IN_VSCODE && (
-                                <div className="text-xs text-gray-500 mt-1.5">
-                                    Files can be dropped anywhere on the page — or use Import or Presets in the top left.
-                                </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Error banner, centered along the top */}
-                    {error && (
-                        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">
-                            {error}
-                        </div>
-                    )}
-
-                    {/* Top-left cluster: document/session toolbar above
-                        the breadcrumb + scope dropdown. Same measured
-                        3-tier collapse as the top-right cluster (FIXED width required, see measureToolbarCluster above). */}
-                    <div className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1.5 w-[48%] md:w-[45%] pointer-events-none [&>*]:pointer-events-auto">
-                        {/* `w-full` here is load-bearing: `items-start`
-                            (flex-col parent) would otherwise shrink this
-                            row to content width, reintroducing the shrink-to-fit trap and hiding overflow. */}
-                        <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full">
-                            {/* New/Import/Presets are browser-only, multi-
-                                document affordances — the VS Code editor is
-                                bound to the single opened .mtlx file. */}
-                            {!IN_VSCODE && (
-                            <button
-                                onClick={guardedNewDocument}
-                                title="New material (empty document)"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">New Material</span>
-                            </button>
-                            )}
-                            {!IN_VSCODE && (
-                            <label
-                                title="Import .mtlx / .zip / companion files (drag & drop works anywhere on the page)"
-                                className="h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors cursor-pointer"
-                            >
-                                <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Import</span>
-                                <input type="file" multiple className="hidden" onChange={onPickFiles} />
-                            </label>
-                            )}
-                            {!IN_VSCODE && (
-                            <button
-                                onClick={() => setPresetsOpen(true)}
-                                title="Load a curated official MaterialX example document"
-                                className={BTN_TOOLBAR}
-                            >
-                                {/* 'presets' renders as a framed photo
-                                    glyph (MTLX_ICON_PATHS) — its own icon,
-                                    no longer shared with the env-map-background toggle. */}
-                                <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Presets</span>
-                            </button>
-                            )}
-                            {parsed && (
-                                <div className="flex items-center gap-1.5">
                                 <button
-                                    onClick={openExportDialog}
-                                    title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
+                                    onClick={guardedNewDocument}
+                                    title="New material (empty document)"
                                     className={BTN_TOOLBAR}
                                 >
-                                    <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Export</span>
+                                    <MtlxIcon name="file-plus" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">New Material</span>
+                                </button>
+                                )}
+                                {!IN_VSCODE && (
+                                <label
+                                    title="Import .mtlx / .zip / companion files (drag & drop works anywhere on the page)"
+                                    className={BTN_TOOLBAR + ' cursor-pointer'}
+                                >
+                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Import</span>
+                                    <input type="file" multiple className="hidden" onChange={onPickFiles} />
+                                </label>
+                                )}
+                                {!IN_VSCODE && (
+                                <button
+                                    onClick={() => setPresetsOpen(true)}
+                                    title="Load a curated official MaterialX example document"
+                                    className={BTN_TOOLBAR}
+                                >
+                                    {/* 'presets' renders as a framed photo
+                                        glyph (MTLX_ICON_PATHS) — its own icon,
+                                        no longer shared with the env-map-background toggle. */}
+                                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Presets</span>
+                                </button>
+                                )}
+                                {parsed && (
+                                    <div className="flex items-center gap-1.5">
+                                    <button
+                                        onClick={openExportDialog}
+                                        title="Export the current document as .mtlx or a .zip with textures \u2014 edits, connections and layout positions included"
+                                        className={BTN_TOOLBAR}
+                                    >
+                                        <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
+                                        <span className="gtb-label">Export</span>
+                                    </button>
+                                    <button
+                                        onClick={openShaderExport}
+                                        title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
+                                        className={BTN_TOOLBAR}
+                                    >
+                                        <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                        <span className="gtb-label">Shader Code</span>
+                                    </button>
+                                    </div>
+                                )}
+                                <div className="flex items-center gap-1.5">
+                                <button
+                                    onClick={undoDoc}
+                                    title="Undo (Ctrl+Z)"
+                                    className={BTN_TOOLBAR}
+                                >
+                                    <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Undo</span>
                                 </button>
                                 <button
-                                    onClick={openShaderExport}
-                                    title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
+                                    onClick={redoDoc}
+                                    title="Redo (Ctrl+Shift+Z)"
+                                    className={BTN_TOOLBAR}
+                                >
+                                    <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Redo</span>
+                                </button>
+                                </div>
+                            </div>
+                            {/* Breadcrumb: document \u25B8 scope, with the scope
+                                dropdown right underneath it. */}
+                            {parsed && (
+                                <>
+                                    <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
+                                        <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
+                                            // Cheap ref write stays immediate; changeScope is a
+                                            // no-op (no overlay flash) when already at the root.
+                                            if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                                            changeScope('');
+                                        }}>
+                                            {parsed.label}
+                                        </button>
+                                        {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
+                                        {scope && <span className="text-blue-300">{scope}</span>}
+                                    </div>
+                                    <select
+                                        className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
+                                        title="Scope: the document root, or step inside a nodegraph"
+                                        value={scope}
+                                        onChange={(e) => { changeScope(e.target.value); e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */ }}
+                                    >
+                                        <option value="">(document root)</option>
+                                        {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
+                                    </select>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Column 2: reserved for the breadcrumb (step 5). */}
+                        <div />
+
+                        {/* Top-right cluster: document picker, view toggles,
+                            add-node, fullscreen. Width now comes from the
+                            menu bar's grid column; the bar is opaque chrome, so no pointer-events guard is needed. */}
+                        <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; }'}</style>
+                        <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
+                            {mtlxPaths.length > 1 && (
+                                <select
+                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[10rem] md:max-w-[14rem] truncate shrink-0 whitespace-nowrap"
+                                    title="Which .mtlx document to display"
+                                    value={chosenMtlx || ''}
+                                    onChange={(e) => {
+                                        const path = e.target.value;
+                                        confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); });
+                                    }}
+                                >
+                                    {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
+                                    {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                            )}
+                            {parsed && (
+                                <button
+                                    onClick={() => setAllPorts(globalPorts === 'all' ? 'authored' : 'all')}
+                                    title={globalPorts === 'all'
+                                        ? 'Showing ALL inputs on every node — click to show only the set ones'
+                                        : 'Showing only the SET inputs — click to show all inputs (defaults included) on every node'}
+                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
+                                        + (globalPorts === 'all'
+                                            ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
+                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                >
+                                    <MtlxIcon name="code" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Show All Inputs</span>
+                                </button>
+                            )}
+                            {parsed && (
+                                <button
+                                    onClick={openAddSearch}
+                                    title="Add a node from the standard library (shortcut: Tab)"
+                                    className={BTN_TOOLBAR}
+                                >
+                                    <MtlxIcon name="share" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Add Node</span>
+                                    <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
+                                </button>
+                            )}
+                            {parsed && (
+                                <button
+                                    onClick={() => deleteSelectionRef.current()}
+                                    disabled={!canDelete}
+                                    title={canDelete
+                                        ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
+                                        : 'Select nodes or edges to delete'}
+                                    className={BTN_TOOLBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
+                                >
+                                    <MtlxIcon name="trash" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Delete Nodes</span>
+                                    <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Del</span>
+                                </button>
+                            )}
+                            {parsed && (
+                                <button
+                                    onClick={() => reorganize()}
+                                    title="Re-run the automatic layout once (A)"
+                                    className={BTN_TOOLBAR}
+                                >
+                                    <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Auto Layout</span>
+                                    <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
+                                </button>
+                            )}
+                            {parsed && (
+                                <button
+                                    onClick={openXmlDialog}
+                                    title="View the current document's raw MaterialX XML"
                                     className={BTN_TOOLBAR}
                                 >
                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                    <span className="gtb-label">Shader Code</span>
+                                    <span className="gtb-label">Document</span>
                                 </button>
-                                </div>
                             )}
-                            <div className="flex items-center gap-1.5">
-                            <button
-                                onClick={undoDoc}
-                                title="Undo (Ctrl+Z)"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Undo</span>
-                            </button>
-                            <button
-                                onClick={redoDoc}
-                                title="Redo (Ctrl+Shift+Z)"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Redo</span>
-                            </button>
-                            </div>
-                        </div>
-                        {/* Breadcrumb: document \u25B8 scope, with the scope
-                            dropdown right underneath it. */}
-                        {parsed && (
-                            <>
-                                <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
-                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
-                                        // Cheap ref write stays immediate; changeScope is a
-                                        // no-op (no overlay flash) when already at the root.
-                                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                                        changeScope('');
-                                    }}>
-                                        {parsed.label}
-                                    </button>
-                                    {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
-                                    {scope && <span className="text-blue-300">{scope}</span>}
-                                </div>
-                                <select
-                                    className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-                                    title="Scope: the document root, or step inside a nodegraph"
-                                    value={scope}
-                                    onChange={(e) => { changeScope(e.target.value); e.target.blur(); /* keyboard shortcuts like Backspace must go back to the canvas, not the select */ }}
+                            {parsed && (
+                                <button
+                                    onClick={() => setValidateOpen(true)}
+                                    title="Run the MaterialX library's document validation"
+                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
+                                        + (validateStatus && validateStatus.kind === 'valid'
+                                            ? 'border-green-500/60 text-green-300'
+                                            : validateStatus && validateStatus.kind === 'invalid'
+                                                ? 'border-red-500/60 text-red-300'
+                                                : 'border-gray-600 text-gray-300')}
                                 >
-                                    <option value="">(document root)</option>
-                                    {nodegraphs.map((g) => <option key={g} value={g}>{g}</option>)}
-                                </select>
-                            </>
-                        )}
-                    </div>
-
-                    {/* Top-right cluster: document picker, view toggles,
-                        add-node, fullscreen. FIXED width (not max-width)
-                        keeps clientWidth real for the 3-tier collapse (measureToolbarCluster); pointer-events-none guards empty space. */}
-                    <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; }'}</style>
-                    <div ref={topRightClusterRef} className="absolute top-2 right-2 z-30 flex items-center gap-1.5 flex-nowrap justify-end w-[48%] md:w-[54%] pointer-events-none [&>*]:pointer-events-auto">
-                        {mtlxPaths.length > 1 && (
-                            <select
-                                className="h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 max-w-[10rem] md:max-w-[14rem] truncate shrink-0 whitespace-nowrap"
-                                title="Which .mtlx document to display"
-                                value={chosenMtlx || ''}
-                                onChange={(e) => {
-                                    const path = e.target.value;
-                                    confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); });
-                                }}
-                            >
-                                {!chosenMtlx && <option value="">{'Pick a .mtlx\u2026'}</option>}
-                                {mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                            </select>
-                        )}
-                        {parsed && (
+                                    <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
+                                        : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
+                                        className="w-3.5 h-3.5" />
+                                    <span className="gtb-label">Validate</span>
+                                </button>
+                            )}
                             <button
-                                onClick={() => setAllPorts(globalPorts === 'all' ? 'authored' : 'all')}
-                                title={globalPorts === 'all'
-                                    ? 'Showing ALL inputs on every node — click to show only the set ones'
-                                    : 'Showing only the SET inputs — click to show all inputs (defaults included) on every node'}
-                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
-                                    + (globalPorts === 'all'
+                                onClick={() => toggleFullscreen(panelRef.current)}
+                                title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
+                                    + (isFullscreen
                                         ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
                                         : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
                             >
-                                <MtlxIcon name="code" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Show All Inputs</span>
+                                <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
                             </button>
-                        )}
-                        {parsed && (
                             <button
-                                onClick={openAddSearch}
-                                title="Add a node from the standard library (shortcut: Tab)"
+                                onClick={() => setHelpOpen(true)}
+                                title="Help & Keybinds"
                                 className={BTN_TOOLBAR}
                             >
-                                <MtlxIcon name="share" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Add Node</span>
-                                <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
+                                <MtlxIcon name="help" className="w-3.5 h-3.5" />
+                                <span className="gtb-label">Help</span>
                             </button>
-                        )}
-                        {parsed && (
-                            <button
-                                onClick={() => deleteSelectionRef.current()}
-                                disabled={!canDelete}
-                                title={canDelete
-                                    ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
-                                    : 'Select nodes or edges to delete'}
-                                className={BTN_TOOLBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
-                            >
-                                <MtlxIcon name="trash" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Delete Nodes</span>
-                                <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Del</span>
-                            </button>
-                        )}
-                        {parsed && (
-                            <button
-                                onClick={() => reorganize()}
-                                title="Re-run the automatic layout once (A)"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="reorder" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Auto Layout</span>
-                                <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">A</span>
-                            </button>
-                        )}
-                        {parsed && (
-                            <button
-                                onClick={openXmlDialog}
-                                title="View the current document's raw MaterialX XML"
-                                className={BTN_TOOLBAR}
-                            >
-                                <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Document</span>
-                            </button>
-                        )}
-                        {parsed && (
-                            <button
-                                onClick={() => setValidateOpen(true)}
-                                title="Run the MaterialX library's document validation"
-                                className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
-                                    + (validateStatus && validateStatus.kind === 'valid'
-                                        ? 'border-green-500/60 text-green-300'
-                                        : validateStatus && validateStatus.kind === 'invalid'
-                                            ? 'border-red-500/60 text-red-300'
-                                            : 'border-gray-600 text-gray-300')}
-                            >
-                                <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
-                                    : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
-                                    className="w-3.5 h-3.5" />
-                                <span className="gtb-label">Validate</span>
-                            </button>
-                        )}
-                        <button
-                            onClick={() => toggleFullscreen(panelRef.current)}
-                            title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-                            className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
-                                + (isFullscreen
-                                    ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
-                                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
-                        >
-                            <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
-                            <span className="gtb-label">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
-                        </button>
-                        <button
-                            onClick={() => setHelpOpen(true)}
-                            title="Help & Keybinds"
-                            className={BTN_TOOLBAR}
-                        >
-                            <MtlxIcon name="help" className="w-3.5 h-3.5" />
-                            <span className="gtb-label">Help</span>
-                        </button>
+                        </div>
                     </div>
+                    <div className="relative flex-1 min-h-0 flex">
+                        <div ref={canvasHostRef} className="relative flex-1 min-w-0">
+                            <div className="absolute inset-0">
+                                <ReactFlowComp
+                                    key={graphKey}
+                                    nodes={flow.nodes}
+                                    edges={rfEdges}
+                                    nodeTypes={NODE_TYPES}
+                                    onInit={(inst) => { rfInstRef.current = inst; fitViewSoon({ padding: 0.15 }); }}
+                                    onNodesChange={onNodesChange}
+                                    onEdgesChange={onEdgesChange}
+                                    onSelectionStart={onSelectionStart}
+                                    onSelectionEnd={onSelectionEnd}
+                                    onNodeDragStop={onNodeDragStop}
+                                    onSelectionDragStop={onNodeDragStop}
+                                    onNodeDoubleClick={onNodeDoubleClick}
+                                    onNodeClick={onNodeClick}
+                                    onEdgeClick={onEdgeClick}
+                                    onPaneClick={clearSelection}
+                                    onConnect={onConnect}
+                                    onConnectStart={onConnectStart}
+                                    onConnectEnd={onConnectEnd}
+                                    isValidConnection={isValidConnection}
+                                    connectionRadius={24}
+                                    connectionLineStyle={{ stroke: '#60a5fa', strokeWidth: 1.5 }}
+                                    onEdgeUpdate={onEdgeUpdate}
+                                    onEdgeUpdateStart={onEdgeUpdateStart}
+                                    onEdgeUpdateEnd={onEdgeUpdateEnd}
+                                    // slightly enlarged (default 10) so the updater's grab zone covers the occupied port's dot+halo area now that connected handles are click-through (see index.html's .mtlx-handle-connected rule)
+                                    edgeUpdaterRadius={12}
+                                    minZoom={0.05}
+                                    zoomOnDoubleClick={false}
+                                    nodesConnectable={true}
+                                    nodesDraggable={true}
+                                    elementsSelectable={true}
+                                    deleteKeyCode={null}
+                                    panOnDrag={[1]}
+                                    selectionOnDrag={true}
+                                    selectionMode={(RF.SelectionMode && RF.SelectionMode.Partial) || 'partial'}
+                                    selectionKeyCode={null}
+                                    multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+                                    proOptions={{ account: '', hideAttribution: false }}
+                                >
+                                    <Background color="#374151" gap={18} size={1.5} />
+                                    {/* Zoom + fit controls: a custom cluster docked
+                                        to the TOP of the Types window instead of
+                                        React Flow's own bottom-left <Controls>. */}
+                                    {/* Hidden below the compact-mode threshold (no
+                                        room; would sit under the overlay params panel),
+                                        and whenever minimapBlocked says there's no room even in wide mode. */}
+                                    {!narrow && minimapOpen && !minimapBlocked && (
+                                        <MiniMap
+                                            pannable zoomable
+                                            position="bottom-right"
+                                            nodeColor={(n) => getNodeColor(n.data)}
+                                            nodeStrokeColor="#111827"
+                                            maskColor="rgba(17, 24, 39, 0.75)"
+                                            // Sits LEFT of the preview panel while
+                                            // open, sliding to the corner when
+                                            // collapsed. Explicit width/height make this a KNOWN box for fixed-arithmetic sizing.
+                                            style={{
+                                                background: '#1f2937',
+                                                width: 200,
+                                                height: 150,
+                                                marginRight: minimapMarginRight,
+                                                transition: 'margin-right 200ms ease',
+                                            }}
+                                        />
+                                    )}
+                                    {/* Minimize button, pinned to the MiniMap's
+                                        corner via <Panel>. marginRight = minimapMarginRight+4;
+                                        marginBottom = 15+150-20-4 = 141 (see below). */}
+                                    {!narrow && minimapOpen && !minimapBlocked && (
+                                        <Panel
+                                            position="bottom-right"
+                                            style={{
+                                                marginRight: minimapMarginRight + 4,
+                                                marginBottom: 141, // 15 + 150 - 20 - 4, see comment above
+                                                transition: 'margin-right 200ms ease',
+                                            }}
+                                        >
+                                            <button
+                                                onClick={() => setMinimapOpen(false)}
+                                                title="Minimize the minimap"
+                                                className="w-5 h-5 flex items-center justify-center rounded bg-gray-900/70 text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                            ><MtlxIcon name="minus" className="w-3 h-3" /></button>
+                                        </Panel>
+                                    )}
+                                    {/* Collapsed pill: shown instead of the MiniMap
+                                        when minimized/blocked/narrow. Never hidden
+                                        outright (disabled instead, else no way back after a stale minimapOpen=false). */}
+                                    {(narrow || !minimapOpen || minimapBlocked) && (
+                                        <Panel
+                                            position="bottom-right"
+                                            style={{
+                                                marginRight: pillMarginRight,
+                                                marginBottom: 8,
+                                                transition: 'margin-right 200ms ease',
+                                            }}
+                                        >
+                                            <button
+                                                ref={pillRef}
+                                                onClick={() => { if (!narrow && !minimapBlocked) setMinimapOpen(true); }}
+                                                disabled={narrow || minimapBlocked}
+                                                title={(narrow || minimapBlocked) ? 'Not enough room for the minimap' : 'Restore the minimap'}
+                                                className={BTN_TOOLBAR + ((narrow || minimapBlocked) ? ' opacity-50 cursor-not-allowed' : '')}
+                                            >
+                                                <MtlxIcon name="plus" className="w-3.5 h-3.5" />
+                                                <span className="ml-0.5">Map</span>
+                                            </button>
+                                        </Panel>
+                                    )}
+                                </ReactFlowComp>
+                            </div>
 
-                    {/* Keybinds reference popup. */}
-                    {helpOpen && <KeybindsHelp onClose={() => setHelpOpen(false)} active={active} />}
+                            {/* Error banner, centered along the top */}
+                            {error && (
+                                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">
+                                    {error}
+                                </div>
+                            )}
 
-                    {/* Port-picker popover (item 2): a connection dragged
-                        onto a node body opens this instead of silently
-                        dropping. Portaled onto <body> — see portPickerPopover above. */}
-                    {portPicker && ReactDOM.createPortal(portPickerPopover, document.body)}
+                            {/* Types window (bottom left): zoom/fit cluster docked
+                                above the type-color legend card (or its chip), in
+                                one flex column so it rides up/down with legendShowAll. */}
+                            <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1.5">
+                                <div className="flex items-center gap-0.5 bg-gray-800/80 backdrop-blur border border-gray-600 rounded-lg p-0.5">
+                                    <button
+                                        onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomOut({ duration: 150 }); }}
+                                        title="Zoom out"
+                                        className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                    ><MtlxIcon name="zoom-out" className="w-3.5 h-3.5" /></button>
+                                    <button
+                                        onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomIn({ duration: 150 }); }}
+                                        title="Zoom in"
+                                        className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                    ><MtlxIcon name="zoom-in" className="w-3.5 h-3.5" /></button>
+                                    <button
+                                        onClick={() => fitViewSoon({ padding: 0.15, duration: 350 })}
+                                        title="Fit view (F)"
+                                        className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                    ><MtlxIcon name="zoom-in-area" className="w-3.5 h-3.5" /></button>
+                                </div>
+                                {/* Wrapped so the geometry effect above can
+                                    measure legendBoxRef regardless of which branch
+                                    (open card or chip) is currently rendered inside. */}
+                                <div ref={legendBoxRef}>
+                                {legendOpen ? (
+                                    // w-80 (not w-60): the longest type name (displacementshader,
+                                    // ~133px at this legend's text-[11px] font-mono) doesn't fit
+                                    // in a grid-cols-2 column at the old width.
+                                    <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
+                                            <LegendTriState
+                                                legendOpen={legendOpen}
+                                                legendShowAll={legendShowAll}
+                                                setLegendOpen={setLegendOpen}
+                                                setLegendShowAll={setLegendShowAll}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-48 overflow-y-auto custom-scrollbar">
+                                            {legendDisplayTypes.map((t) => {
+                                                const inGraph = legendTypes.indexOf(t) !== -1;
+                                                return (
+                                                    <div key={t}
+                                                        className={'flex items-center gap-1.5 text-[11px] font-mono min-w-0 '
+                                                            + (inGraph ? 'text-gray-400' : 'text-gray-600')}
+                                                        title={inGraph ? t : t + ' (not in current graph)'}
+                                                    >
+                                                        <span className={'w-2 h-2 rounded-full flex-none' + (inGraph ? '' : ' opacity-50')}
+                                                            style={{ background: typeColor(t) }} />
+                                                        <span className="truncate">{t}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                            {!legendDisplayTypes.length && (
+                                                <div className="col-span-2 text-[11px] text-gray-500">No typed ports in view.</div>
+                                            )}
+                                        </div>
+                                        {parsed && (
+                                            <div className="text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-700">
+                                                {flow.nodes.length} node{flow.nodes.length === 1 ? '' : 's'} {'\u00B7'}{' '}
+                                                {flow.edges.length} connection{flow.edges.length === 1 ? '' : 's'}
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    // Label first, dots after (item 5), same
+                                    // treatment as the open card's header. A <div
+                                    // role="button"> not a real <button> — it hosts the tristate's own nested buttons.
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => { setLegendOpen(true); setLegendShowAll(false); }}
+                                        onKeyDown={(e) => {
+                                            if (e.key !== 'Enter' && e.key !== ' ') return;
+                                            e.preventDefault();
+                                            setLegendOpen(true);
+                                            setLegendShowAll(false);
+                                        }}
+                                        title="Show the type color legend"
+                                        className={BTN_TOOLBAR + ' cursor-pointer'}
+                                    >
+                                        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
+                                        {legendTypes.slice(0, 3).map((t) => (
+                                            <span key={t} className="w-2 h-2 rounded-full" style={{ background: typeColor(t) }} />
+                                        ))}
+                                        <LegendTriState
+                                            legendOpen={legendOpen}
+                                            legendShowAll={legendShowAll}
+                                            setLegendOpen={setLegendOpen}
+                                            setLegendShowAll={setLegendShowAll}
+                                        />
+                                    </div>
+                                )}
+                                </div>
+                            </div>
 
-                    {/* View-only XML dialog ("Document" button, item 8). */}
-                    {xmlDialogOpen && (
-                        <XmlDialog xml={xmlDialogXml} open={xmlDialogOpen} onClose={() => setXmlDialogOpen(false)} />
-                    )}
-
-                    {/* Validation popup ("Validate" button, item 9). */}
-                    {validateOpen && (
-                        <ValidateDialog status={validateStatus} open={validateOpen} onClose={() => setValidateOpen(false)} />
-                    )}
-
-                    {/* Export dialog ("Export" button, item B1). */}
-                    {exportDialog && (
-                        <ExportDialog
-                            open={!!exportDialog}
-                            defaultName={exportDialog.defaultName}
-                            textures={exportDialog.textures}
-                            onExport={handleExportDialogSubmit}
-                            onClose={() => setExportDialog(null)}
-                        />
-                    )}
-
-                    {/* In-tab docs viewer (panel's "?" button). Mounted
-                        once a node's docs have been requested this session;
-                        docsDialogOpen just toggles visibility to stay warm. */}
-                    {docsDialog && (
-                        <DocsDialog
-                            hash={docsDialog.hash}
-                            fullUrl={docsDialog.fullUrl}
-                            label={docsDialog.label}
-                            open={docsDialogOpen}
-                            onClose={() => setDocsDialogOpen(false)}
-                            active={active}
-                        />
-                    )}
-
-                    {/* Preview + parameter panel (right): always shown
-                        while a document is loaded, editing the in-memory
-                        doc; connected inputs are read-only (value from the wire). */}
-                    {parsed && (paramsOpen ? (
-                        <div
-                            className="absolute bottom-2 right-2 z-30 w-[19rem] max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden font-mono"
-                            style={{ top: 'var(--gtb-offset, 3rem)' }}
-                        >
+                            {/* Bottom-right corner (item 3), same bottom-2
+                                offset as the Types window; paramsChipRef feeds
+                                the geometry effect that positions the Map pill (pillMarginRight). */}
+                            {parsed && !paramsOpen && (
+                            <button
+                                ref={paramsChipRef}
+                                onClick={() => setParamsOpen(true)}
+                                title="Expand the preview panel"
+                                className="absolute bottom-2 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            >
+                                <MtlxIcon name="chevrons-left" className="w-4 h-4" />
+                                <span className="font-mono max-w-[5rem] md:max-w-[8rem] truncate">
+                                    {displayNode ? displayNode.data.name : 'Preview'}
+                                </span>
+                            </button>
+                            )}
+                        </div>
+                        {parsed && paramsOpen && (
+                        <aside className="flex-none w-[19rem] max-w-[70%] flex flex-col bg-gray-800/95 border-l border-gray-600 overflow-hidden font-mono">
                             {/* The preview target on a shaderball — same
                                 render pipeline as the docs page. Re-renders
                                 on every committed param edit and target change. */}
@@ -5363,7 +5303,7 @@
                                     ) : null}
                                 </div>
                             </div>
-                            <div className="flex-1 overflow-y-auto custom-scrollbar px-2.5 py-1">
+                            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2.5 py-1">
                                 {selectedIds.length > 1 ? (
                                     <div className="text-[11px] text-gray-400 py-2 space-y-1.5">
                                         <div>{selectedIds.length} nodes selected.</div>
@@ -5458,23 +5398,173 @@
                                     </div>
                                 )}
                             </div>
+                        </aside>
+                        )}
+                    </div>
+
+                    {/* Presets dialog. Rendered BEFORE the unsaved-changes
+                        dialog below (same z-50 class, earlier in the DOM)
+                        so that dialog paints on top during a mid-fetch confirmReplace. */}
+                    <PresetsDialog
+                        open={presetsOpen}
+                        onClose={() => setPresetsOpen(false)}
+                        onPick={loadPreset}
+                        busy={presetsBusy}
+                        busyPath={presetsBusyPath}
+                    />
+
+                    {/* Shader Code export dialog ("Shader Code" button). */}
+                    {shaderExport && (
+                        <ShaderExportDialog
+                            open={true}
+                            onClose={() => setShaderExport(null)}
+                            renderables={shaderExport.renderables}
+                            initialIndex={0}
+                            generate={({ renderable, label, targetKey }) =>
+                                generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                        />
+                    )}
+
+                    {/* Unsaved-changes dialog: gates Import / drag-drop of a
+                        new .mtlx / switching documents while dirty. See
+                        confirmReplace. */}
+                    {confirmCloseOpen && (
+                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+                            onMouseDown={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}>
+                            <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                                onMouseDown={(e) => e.stopPropagation()}>
+                                <div className="text-sm font-semibold text-gray-100 mb-1">Unsaved changes</div>
+                                <div className="text-[12px] text-gray-400 mb-4">
+                                    This document has edits that haven't been exported. Export before
+                                    continuing, discard them, or cancel.
+                                </div>
+                                <div className="flex flex-wrap justify-end gap-2">
+                                    <button
+                                        onClick={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}
+                                        className={BTN_SECONDARY}
+                                    >Cancel</button>
+                                    <button
+                                        onClick={() => {
+                                            const a = pendingActionRef.current;
+                                            pendingActionRef.current = null;
+                                            setConfirmCloseOpen(false);
+                                            if (a) a();
+                                        }}
+                                        className={BTN_SECONDARY}
+                                    >Discard & Continue</button>
+                                    <button
+                                        onClick={async () => {
+                                            const ok = await exportMtlx();
+                                            if (!ok) return; // canceled/failed — leave the dialog open
+                                            const a = pendingActionRef.current;
+                                            pendingActionRef.current = null;
+                                            setConfirmCloseOpen(false);
+                                            if (a) a();
+                                        }}
+                                        className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                                    >Export & Continue</button>
+                                </div>
+                            </div>
                         </div>
-                    ) : (
-                        // Bottom-right corner (item 3), same bottom-2
-                        // offset as the Types window; paramsChipRef feeds
-                        // the geometry effect that positions the Map pill (pillMarginRight).
-                        <button
-                            ref={paramsChipRef}
-                            onClick={() => setParamsOpen(true)}
-                            title="Expand the preview panel"
-                            className="absolute bottom-2 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                        >
-                            <MtlxIcon name="chevrons-left" className="w-4 h-4" />
-                            <span className="font-mono max-w-[5rem] md:max-w-[8rem] truncate">
-                                {displayNode ? displayNode.data.name : 'Preview'}
-                            </span>
-                        </button>
-                    ))}
+                    )}
+
+                    {/* Full-stage drop indicator */}
+                    {dragOver && (
+                        <div className="absolute inset-0 z-40 pointer-events-none p-2 sm:p-4">
+                            <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
+                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                                    <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Loading overlay */}
+                    {busy && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70">
+                            {status && <span className="text-sm text-gray-300 animate-pulse">{status}</span>}
+                            <div className="mtlx-loading-bar w-56" />
+                        </div>
+                    )}
+
+                    {/* Scope-transition overlay: entering/leaving a
+                        nodegraph (changeScope) rebuilds the flow
+                        synchronously; reuses the shared LoadingOverlay component. */}
+                    <LoadingOverlay show={scopeBusy} label={'Loading graph' + '\u2026'}
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
+                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        barWidthClass="w-56" />
+
+                    {/* Action-busy overlay (items 2 & 3): a heavy,
+                        doc-mutating action (Ctrl+G, deleting a nodegraph)
+                        is in flight; actionBusy already carries a trailing ellipsis as the label. */}
+                    <LoadingOverlay show={!!actionBusy} label={actionBusy || ''}
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
+                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        barWidthClass="w-56" />
+
+                    {/* Empty state: nothing loaded, nothing loading */}
+                    {emptyHint && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+                            <div className="text-center bg-gray-800/90 border border-gray-700 rounded-xl px-8 py-6">
+                                <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-gray-400" />
+                                <div className="text-sm text-gray-300 font-medium">
+                                    {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
+                                </div>
+                                {/* Mentions the Import button and page-wide drag-drop,
+                                    neither of which exist under VS Code (single opened
+                                    .mtlx file). */}
+                                {!IN_VSCODE && (
+                                <div className="text-xs text-gray-500 mt-1.5">
+                                    Files can be dropped anywhere on the page — or use Import or Presets in the top left.
+                                </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Keybinds reference popup. */}
+                    {helpOpen && <KeybindsHelp onClose={() => setHelpOpen(false)} active={active} />}
+
+                    {/* Port-picker popover (item 2): a connection dragged
+                        onto a node body opens this instead of silently
+                        dropping. Portaled onto <body> — see portPickerPopover above. */}
+                    {portPicker && ReactDOM.createPortal(portPickerPopover, document.body)}
+
+                    {/* View-only XML dialog ("Document" button, item 8). */}
+                    {xmlDialogOpen && (
+                        <XmlDialog xml={xmlDialogXml} open={xmlDialogOpen} onClose={() => setXmlDialogOpen(false)} />
+                    )}
+
+                    {/* Validation popup ("Validate" button, item 9). */}
+                    {validateOpen && (
+                        <ValidateDialog status={validateStatus} open={validateOpen} onClose={() => setValidateOpen(false)} />
+                    )}
+
+                    {/* Export dialog ("Export" button, item B1). */}
+                    {exportDialog && (
+                        <ExportDialog
+                            open={!!exportDialog}
+                            defaultName={exportDialog.defaultName}
+                            textures={exportDialog.textures}
+                            onExport={handleExportDialogSubmit}
+                            onClose={() => setExportDialog(null)}
+                        />
+                    )}
+
+                    {/* In-tab docs viewer (panel's "?" button). Mounted
+                        once a node's docs have been requested this session;
+                        docsDialogOpen just toggles visibility to stay warm. */}
+                    {docsDialog && (
+                        <DocsDialog
+                            hash={docsDialog.hash}
+                            fullUrl={docsDialog.fullUrl}
+                            label={docsDialog.label}
+                            open={docsDialogOpen}
+                            onClose={() => setDocsDialogOpen(false)}
+                            active={active}
+                        />
+                    )}
 
                     {/* Tab quick-add: search the standard library, Enter to
                         drop the node at the viewport center. */}
@@ -5490,102 +5580,6 @@
                         />
                     )}
 
-                    {/* Types window (bottom left): zoom/fit cluster docked
-                        above the type-color legend card (or its chip), in
-                        one flex column so it rides up/down with legendShowAll. */}
-                    <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1.5">
-                        <div className="flex items-center gap-0.5 bg-gray-800/80 backdrop-blur border border-gray-600 rounded-lg p-0.5">
-                            <button
-                                onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomOut({ duration: 150 }); }}
-                                title="Zoom out"
-                                className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
-                            ><MtlxIcon name="zoom-out" className="w-3.5 h-3.5" /></button>
-                            <button
-                                onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomIn({ duration: 150 }); }}
-                                title="Zoom in"
-                                className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
-                            ><MtlxIcon name="zoom-in" className="w-3.5 h-3.5" /></button>
-                            <button
-                                onClick={() => fitViewSoon({ padding: 0.15, duration: 350 })}
-                                title="Fit view (F)"
-                                className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
-                            ><MtlxIcon name="zoom-in-area" className="w-3.5 h-3.5" /></button>
-                        </div>
-                        {/* Wrapped so the geometry effect above can
-                            measure legendBoxRef regardless of which branch
-                            (open card or chip) is currently rendered inside. */}
-                        <div ref={legendBoxRef}>
-                        {legendOpen ? (
-                            // w-80 (not w-60): the longest type name (displacementshader,
-                            // ~133px at this legend's text-[11px] font-mono) doesn't fit
-                            // in a grid-cols-2 column at the old width.
-                            <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80">
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
-                                    <LegendTriState
-                                        legendOpen={legendOpen}
-                                        legendShowAll={legendShowAll}
-                                        setLegendOpen={setLegendOpen}
-                                        setLegendShowAll={setLegendShowAll}
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-48 overflow-y-auto custom-scrollbar">
-                                    {legendDisplayTypes.map((t) => {
-                                        const inGraph = legendTypes.indexOf(t) !== -1;
-                                        return (
-                                            <div key={t}
-                                                className={'flex items-center gap-1.5 text-[11px] font-mono min-w-0 '
-                                                    + (inGraph ? 'text-gray-400' : 'text-gray-600')}
-                                                title={inGraph ? t : t + ' (not in current graph)'}
-                                            >
-                                                <span className={'w-2 h-2 rounded-full flex-none' + (inGraph ? '' : ' opacity-50')}
-                                                    style={{ background: typeColor(t) }} />
-                                                <span className="truncate">{t}</span>
-                                            </div>
-                                        );
-                                    })}
-                                    {!legendDisplayTypes.length && (
-                                        <div className="col-span-2 text-[11px] text-gray-500">No typed ports in view.</div>
-                                    )}
-                                </div>
-                                {parsed && (
-                                    <div className="text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-700">
-                                        {flow.nodes.length} node{flow.nodes.length === 1 ? '' : 's'} {'\u00B7'}{' '}
-                                        {flow.edges.length} connection{flow.edges.length === 1 ? '' : 's'}
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            // Label first, dots after (item 5), same
-                            // treatment as the open card's header. A <div
-                            // role="button"> not a real <button> — it hosts the tristate's own nested buttons.
-                            <div
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => { setLegendOpen(true); setLegendShowAll(false); }}
-                                onKeyDown={(e) => {
-                                    if (e.key !== 'Enter' && e.key !== ' ') return;
-                                    e.preventDefault();
-                                    setLegendOpen(true);
-                                    setLegendShowAll(false);
-                                }}
-                                title="Show the type color legend"
-                                className={BTN_TOOLBAR + ' cursor-pointer'}
-                            >
-                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
-                                {legendTypes.slice(0, 3).map((t) => (
-                                    <span key={t} className="w-2 h-2 rounded-full" style={{ background: typeColor(t) }} />
-                                ))}
-                                <LegendTriState
-                                    legendOpen={legendOpen}
-                                    legendShowAll={legendShowAll}
-                                    setLegendOpen={setLegendOpen}
-                                    setLegendShowAll={setLegendShowAll}
-                                />
-                            </div>
-                        )}
-                        </div>
-                    </div>
                 </div>
             );
         }
