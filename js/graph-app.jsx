@@ -3907,10 +3907,6 @@
             const minimapMarginRight = 15;
             const legendBoxRef = React.useRef(null);
             const pillRef = React.useRef(null);
-            // The collapsed params chip's rendered width (name varies)
-            // is what the pill's own margin has to clear now both live in
-            // the same corner (item 3); null while the chip isn't showing.
-            const paramsChipRef = React.useRef(null);
             const prevPillOverlapRef = React.useRef(false);
             // True only while the legend is minimized BECAUSE stage-2's
             // geometry check closed it, not because the user minimized it
@@ -3935,9 +3931,9 @@
             const consecutiveChangeFramesRef = React.useRef(0);
             const loopBreakerTrippedRef = React.useRef(false);
             const [minimapBlocked, setMinimapBlocked] = React.useState(false);
-            // The Map pill's own right-margin: 15 by default, or just
-            // enough to clear the collapsed chip's live width plus a gap
-            // while the chip is showing (params panel collapsed).
+            // The Map pill's own right-margin: flat 15, same as the
+            // MiniMap's above (the collapsed preview chip lives at the
+            // canvas's top right now, so it no longer shares this corner).
             const [pillMarginRight, setPillMarginRight] = React.useState(15);
             React.useLayoutEffect(() => {
                 const host = canvasHostRef.current;
@@ -3961,18 +3957,10 @@
                         return blocked;
                     });
 
-                    // The pill's own margin (item 3): the only thing left
-                    // that can occlude this corner is the collapsed chip,
-                    // so this clears its live width (8px + width + GAP).
-                    // Rounded to whole pixels at the source — the value
-                    // feeds an exact-equality change guard just below, and
-                    // getBoundingClientRect() returns sub-pixel floats that
-                    // can jitter render to render without the chip's actual
-                    // on-screen size changing at all.
-                    const chipRect = (!paramsOpen && paramsChipRef.current)
-                        ? paramsChipRef.current.getBoundingClientRect() : null;
-                    const chipWidth = chipRect ? chipRect.width : 0;
-                    const pillMarginRightNow = Math.round((parsed && !paramsOpen) ? (8 + chipWidth + GAP) : 15);
+                    // The pill's own margin (item 3): flat 15, same as the
+                    // MiniMap's above. The preview chip now sits at the
+                    // canvas's TOP right, so this corner is never occluded.
+                    const pillMarginRightNow = 15;
                     setPillMarginRight((prev) => {
                         if (prev === pillMarginRightNow) return prev;
                         changed = true;
@@ -5062,15 +5050,14 @@
                                 </div>
                             </div>
 
-                            {/* Bottom-right corner (item 3), same bottom-2
-                                offset as the Types window; paramsChipRef feeds
-                                the geometry effect that positions the Map pill (pillMarginRight). */}
+                            {/* Top-right corner, directly under the menu bar
+                                (item 3): moved off the canvas's bottom-right,
+                                so it no longer occludes the Map pill there. */}
                             {parsed && !paramsOpen && (
                             <button
-                                ref={paramsChipRef}
                                 onClick={() => setParamsOpen(true)}
                                 title="Expand the preview panel"
-                                className="absolute bottom-2 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className="absolute top-2 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
                             >
                                 <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                                 <span className="font-mono max-w-[5rem] md:max-w-[8rem] truncate">
@@ -5101,24 +5088,26 @@
                                 }
                                 controlSlots={(labeled) => ({
                                     docColorspace: (
-                                        <select
-                                            key="docColorspace"
-                                            className="h-6 text-[11px] px-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono flex-none w-[6rem] truncate"
-                                            title="Document colorspace -- fallback for inputs without an explicit colorspace"
-                                            value={docColorspace}
-                                            onChange={(e) => {
-                                                const v = e.target.value;
-                                                setDocColorspace(v);
-                                                if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
-                                                else mxRemoveAttr(parsed.doc, 'colorspace');
-                                                setDocRev((r) => r + 1);
-                                                markDirty();
-                                                e.target.blur();
-                                            }}
-                                        >
-                                            <option value="">(doc colorspace)</option>
-                                            {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                                        </select>
+                                        <div key="docColorspace" className="relative flex-1 min-w-0">
+                                            <MtlxIcon name="palette" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
+                                            <select
+                                                className="h-6 text-[11px] pl-6 pr-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono w-full truncate"
+                                                title="Document colorspace -- fallback for inputs without an explicit colorspace"
+                                                value={docColorspace}
+                                                onChange={(e) => {
+                                                    const v = e.target.value;
+                                                    setDocColorspace(v);
+                                                    if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);
+                                                    else mxRemoveAttr(parsed.doc, 'colorspace');
+                                                    setDocRev((r) => r + 1);
+                                                    markDirty();
+                                                    e.target.blur();
+                                                }}
+                                            >
+                                                <option value="">(doc colorspace)</option>
+                                                {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
+                                            </select>
+                                        </div>
                                     ),
                                     // Graph and viewer are always in sync in the extension
                                     // (one opened .mtlx file), so this cross-view handoff
@@ -5131,7 +5120,7 @@
                                             className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
                                         >
                                             <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
-                                            <span className="ml-1.5 whitespace-nowrap">Send to Material Viewer</span>
+                                            <span className="ml-1.5 whitespace-nowrap">Send to Viewer</span>
                                         </button>
                                     ) : null,
                                     // Moved from the panel header (item F2.2): last control

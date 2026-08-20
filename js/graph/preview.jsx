@@ -183,14 +183,14 @@
         const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
         const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default' };
         // Row layout for the docked/fullscreen viewport strip: docked splits
-        // geometry/colorspace/collapse from the env/screenshot/settings/send
-        // group; fullscreen folds everything into one row.
+        // screenshot/send/colorspace/collapse from the geometry/env/settings
+        // group; fullscreen folds everything into one row, same order.
         const GRAPH_PREVIEW_CLUSTERS_DOCKED = [
-            ['graphGeom', 'docColorspace', 'collapse'],
-            ['env', 'screenshot', 'settings', 'sendToViewer'],
+            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse'],
+            ['graphGeom', 'env', 'settings'],
         ];
         const GRAPH_PREVIEW_CLUSTERS_FULLSCREEN = [
-            ['graphGeom', 'docColorspace', 'collapse', 'env', 'screenshot', 'settings', 'sendToViewer'],
+            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse', 'graphGeom', 'env', 'settings'],
         ];
 
         // Resolves WHAT the preview renders, building transient '__pv_*'
@@ -797,16 +797,18 @@
             // built-in slot) so it shares geomMode with the Settings-popover's
             // own GeomSelect just below.
             const graphGeomSlot = (
-                <GeomSelect
-                    key="graphGeom"
-                    value={geomMode}
-                    options={GRAPH_GEOM_MODES}
-                    labels={GRAPH_GEOM_LABELS}
-                    badges={GRAPH_GEOM_BADGES}
-                    onChange={setGeomMode}
-                    title="Preview geometry"
-                    className="flex-1 min-w-0 h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                />
+                <div key="graphGeom" className="relative flex-1 min-w-0">
+                    <MtlxIcon name="cube" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
+                    <GeomSelect
+                        value={geomMode}
+                        options={GRAPH_GEOM_MODES}
+                        labels={GRAPH_GEOM_LABELS}
+                        badges={GRAPH_GEOM_BADGES}
+                        onChange={setGeomMode}
+                        title="Preview geometry"
+                        className="w-full h-6 text-[11px] pl-6 pr-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                    />
+                </div>
             );
             // Merge the caller's row-2 controls (render-prop, same shape as
             // the old trailingChildren) with the geometry slot above.
@@ -822,8 +824,8 @@
                     style={isFullscreen ? { height: '100%' } : undefined}
                 >
                     {/* Viewport controls (F2.1/F2.2): two rows when docked
-                        (geometry/colorspace/collapse, then env/screenshot/
-                        settings/send), one row in fullscreen; see clusters. */}
+                        (screenshot/send/colorspace/collapse, then geometry/
+                        env/settings), one row in fullscreen; see clusters. */}
                     <ViewportControls
                         envBg={envBg}
                         onToggleEnvBg={toggleEnvBg}
