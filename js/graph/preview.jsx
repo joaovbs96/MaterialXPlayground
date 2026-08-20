@@ -168,19 +168,20 @@
         const nodeAndUpstreamAllBuffer2d = (nodeEl, scope, doc) =>
             closureAllBuffer2d(doc, [{ node: nodeEl, scope }]);
 
-        // Global graph-preview geometry mode (Settings popup, experimental):
-        // 'shaderball-scene' (the default — every preview uses the full scene,
-        // pre-experiment behavior), 'buffer2d' (everything flat), or 'pernode'
-        // (flat only when the target AND its whole upstream closure are
-        // flat-class — the experimental system).
+        // Global graph-preview geometry mode (Settings popup): any engine
+        // geometry (shaderball-scene, shaderball, shaderball-mtlx, sphere,
+        // cube, cloth, buffer2d), plus 'pernode' (experimental), which
+        // resolves per target via defaultGeomForNode's flat/scene split.
         const GRAPH_GEOM_KEY = 'mtlx_graph_preview_geom';
-        const GRAPH_GEOM_MODES = ['shaderball-scene', 'buffer2d', 'pernode'];
+        const GRAPH_GEOM_MODES = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'pernode'];
         const readGraphGeomMode = () => {
             try {
                 const v = localStorage.getItem(GRAPH_GEOM_KEY);
                 return GRAPH_GEOM_MODES.indexOf(v) !== -1 ? v : 'shaderball-scene';
             } catch (e) { return 'shaderball-scene'; }
         };
+        const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
+        const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default' };
 
         // Resolves WHAT the preview renders, building transient '__pv_*'
         // wrapper nodes as needed — callers MUST call cleanup() when done.
@@ -474,14 +475,18 @@
                 setGeomModeState(mode);
                 try { localStorage.setItem(GRAPH_GEOM_KEY, mode); } catch (e) { /* best-effort */ }
             };
+            // The EFFECTIVE geometry a renderable was built with, resolved
+            // per target in 'pernode' mode; null while there is nothing to
+            // render. Used by later controls to gate on the real geometry.
+            const [resolvedGeom, setResolvedGeom] = React.useState(null);
             // Liveness flag for the PERSISTENT render-view shell (distinct
             // from this run's `mounted`), passed as createMtlxRenderView's
             // `isAlive` so its rAF loop survives reuse via applyMaterial().
             const shellAliveRef = React.useRef(true);
 
-            // ---- Viewport controls (item F2.1) — mirrors node-preview.jsx,
-            // minus geometry selection (own detached camera, nothing to
-            // pick/persist); controls apply live via the shared viewRef handle.
+            // ---- Viewport controls (item F2.1), mirrors node-preview.jsx.
+            // Geometry is selectable via the Settings popover's GeomSelect
+            // (persisted), not this strip; controls apply live via viewRef.
             const {
                 envBg, toggleEnvBg,
                 envAvail, setEnvAvail,
@@ -568,6 +573,7 @@
                             setNotice(built.notice || 'This document has nothing to preview.');
                             setLoading(false);
                             setUpdating(false);
+                            setResolvedGeom(null);
                             if (liveViewRef.current) {
                                 try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             }
@@ -595,6 +601,7 @@
                         const wantGeom = geomMode === 'pernode'
                             ? (built.defaultGeom || 'shaderball-scene')
                             : geomMode;
+                        setResolvedGeom(wantGeom);
                         if (liveViewRef.current && liveGeomRef.current !== wantGeom) {
                             try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             liveViewRef.current = null;
@@ -720,11 +727,10 @@
                                 label: built.label || parsed.label,
                                 needsLighting: true,
                                 geomName: wantGeom,
-                                // The full shaderball SCENE carries its own authored,
-                                // detached camera and isn't orbit/mouse-interactive, so
-                                // auto-rotation stays off; other geometries (plain
-                                // shaderball, buffer2d, ...) share that same fixed,
-                                // non-interactive preview camera here too.
+                                // 3D geometries orbit by default; the full scene opts
+                                // in via sceneOrbit (mirrors viewer-app.jsx). The 2D
+                                // buffer stays fixed via the engine's flat2d gate.
+                                sceneOrbit: wantGeom === 'shaderball-scene',
                                 autoRotate: false,
                                 envBackground: envBg,
                                 isMounted: () => mounted,
@@ -823,18 +829,18 @@
                                 <div className="text-gray-200">Preview Geometry</div>
                                 <GeomSelect
                                     value={geomMode}
-                                    options={['shaderball-scene', 'buffer2d', 'pernode']}
-                                    labels={Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' })}
-                                    badges={{ pernode: 'Experimental', 'shaderball-scene': 'Default' }}
+                                    options={GRAPH_GEOM_MODES}
+                                    labels={GRAPH_GEOM_LABELS}
+                                    badges={GRAPH_GEOM_BADGES}
                                     onChange={setGeomMode}
                                     title="Global graph-preview geometry"
                                     className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
                                 />
                                 <div className="mt-1 text-[11px] text-gray-400">
-                                    Applies to every preview in the graph editor. "Auto (by node
-                                    type)" previews an element flat only when it and everything
-                                    upstream of it are flat (patterns/math); anything touching
-                                    geometry or shading keeps the 3D scene.
+                                    Applies to every preview in the graph editor. 3D geometries
+                                    orbit with the mouse; the 2D Buffer stays fixed. "Auto (by
+                                    node type)" flattens an element only when it and everything
+                                    upstream of it are flat (patterns/math).
                                 </div>
                             </div>
                         }
