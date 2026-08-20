@@ -5094,7 +5094,7 @@
                                                 <select>, which otherwise renders taller than h-6. */}
                                             <MtlxIcon name="palette" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
                                             <select
-                                                className="h-6 text-[11px] pl-6 pr-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono w-full truncate"
+                                                className="h-6 text-[11px] pl-6 pr-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 w-full truncate"
                                                 title="Document colorspace -- fallback for inputs without an explicit colorspace"
                                                 value={docColorspace}
                                                 onChange={(e) => {
