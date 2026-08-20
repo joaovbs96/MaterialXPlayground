@@ -1399,13 +1399,15 @@
                 // value IS the selected string (unlike numeric enums below).
                 if (p.type === 'string' && p.options && p.options.length) {
                     return (
-                        <select
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-1 py-1 text-xs text-gray-200"
+                        <MtlxSelect
                             value={String(cur)}
-                            onChange={(e) => onParamChange(p, e.target.value)}
-                        >
-                            {p.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
+                            options={p.options}
+                            onChange={(v) => onParamChange(p, v)}
+                            disabled={loading}
+                            size="sm"
+                            variant="field"
+                            block
+                        />
                     );
                 }
                 // Free-form string → text field (regenerates on change).
@@ -1426,13 +1428,15 @@
                         if (valOf(i) === Number(cur)) { selIdx = i; break; }
                     }
                     return (
-                        <select
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-1 py-1 text-xs text-gray-200"
+                        <MtlxSelect
                             value={selIdx}
-                            onChange={(e) => onParamChange(p, valOf(parseInt(e.target.value, 10)))}
-                        >
-                            {p.enumNames.map((nm, i) => <option key={i} value={i}>{nm}</option>)}
-                        </select>
+                            options={p.enumNames.map((nm, i) => ({ value: i, label: nm }))}
+                            onChange={(i) => onParamChange(p, valOf(i))}
+                            disabled={loading}
+                            size="sm"
+                            variant="field"
+                            block
+                        />
                     );
                 }
                 if (p.type === 'filename') {
@@ -1462,14 +1466,16 @@
                                 baked into the shader), so picking regenerates. */}
                             <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-gray-500 flex-none">colorspace</span>
-                                <select
-                                    className="flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] text-gray-200"
+                                <MtlxSelect
                                     value={csVal}
-                                    onChange={(e) => onColorspacePick(p, e.target.value)}
-                                >
-                                    <option value="">{'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}</option>
-                                    {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                                </select>
+                                    options={COLORSPACES}
+                                    emptyOption={'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}
+                                    onChange={(v) => onColorspacePick(p, v)}
+                                    disabled={loading}
+                                    size="sm"
+                                    variant="field"
+                                    className="flex-1 min-w-0"
+                                />
                             </div>
                         </div>
                     );
