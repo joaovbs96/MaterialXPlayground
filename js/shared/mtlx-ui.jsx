@@ -1718,6 +1718,28 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 // native fullscreen, and ancestor backdrop-blur mispositions position:fixed.
 const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
 
+// The height a popover needs in order NOT to scroll. max-height resolves
+// against the box-sizing box while scrollHeight is always content+padding,
+// so under Tailwind's border-box preflight a max-height set straight from
+// scrollHeight lands exactly one border short and grows a scrollbar.
+// Default height cap, proportional to the window rather than a fixed pixel
+// count, so a list scrolls only when it genuinely would not fit. Callers
+// can still pin an explicit popMaxHeight.
+const POPOVER_VH_CAP = 0.6, POPOVER_MIN_CAP = 220;
+const popoverHeightCap = (explicit) => (explicit != null
+    ? explicit
+    : Math.max(POPOVER_MIN_CAP, Math.round(window.innerHeight * POPOVER_VH_CAP)));
+
+const popoverNaturalHeight = (el, fallback) => {
+    if (!el) return fallback;
+    const cs = window.getComputedStyle(el);
+    const px = (v) => parseFloat(v) || 0;
+    const delta = cs.boxSizing === 'border-box'
+        ? px(cs.borderTopWidth) + px(cs.borderBottomWidth)
+        : -(px(cs.paddingTop) + px(cs.paddingBottom));
+    return Math.ceil(el.scrollHeight + delta);
+};
+
 // --mx-select-* theming hook. Each falls back through the matching
 // js/site-tokens.css token to a literal, so the embed bundle (no
 // Tailwind, no site-tokens.css there) still renders correctly.
@@ -1821,7 +1843,7 @@ const MtlxSelect = ({
     value, options, labels = {}, badges, onChange, title, className, popWidth,
     icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
     size = 'sm', variant = 'toolbar', block, font,
-    popMaxHeight = 280, theme,
+    popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel,
 }) => {
     const [open, setOpen] = React.useState(false);
@@ -1878,10 +1900,10 @@ const MtlxSelect = ({
             setOpen(false);
             return;
         }
-        const measured = popRef.current ? popRef.current.scrollHeight : (normalized.length * SELECT_POP_ROW_H + 8);
+        const measured = popoverNaturalHeight(popRef.current, normalized.length * SELECT_POP_ROW_H + 8);
         const spaceBelow = window.innerHeight - rect.bottom - 8;
         const spaceAbove = rect.top - 8;
-        const desired = Math.min(measured, popMaxHeight);
+        const desired = Math.min(measured, popoverHeightCap(popMaxHeight));
         // Prefer below; flip above only when it doesn't fit below AND
         // there's more room above, otherwise stay below and clamp.
         const flip = desired > spaceBelow && spaceAbove > spaceBelow;
@@ -1950,7 +1972,11 @@ const MtlxSelect = ({
     React.useLayoutEffect(() => {
         if (!open) return undefined;
         repositionRef.current();
-        return undefined;
+        // Tailwind Play injects utility CSS asynchronously, so the first
+        // measurement of a never-before-seen row can predate its own
+        // height. One more pass after paint settles that.
+        const raf = window.requestAnimationFrame(() => repositionRef.current());
+        return () => window.cancelAnimationFrame(raf);
     }, [open]);
 
     // Track the trigger through ancestor scrolls and window resizes.
@@ -2180,7 +2206,7 @@ const MTLX_MENU_MIN_W = 200, MTLX_MENU_ROW_H = 28; // ROW_H: measurement fallbac
 // `keys` renders a right-aligned shortcut hint.
 const MtlxMenu = ({
     label, icon, items, title, className, ariaLabel, theme,
-    minWidth = MTLX_MENU_MIN_W, maxWidth = 360, popMaxHeight = 460,
+    minWidth = MTLX_MENU_MIN_W, maxWidth = 360, popMaxHeight,
 }) => {
     const bar = React.useContext(MtlxMenuBarContext);
     const menuId = React.useId();
@@ -2226,11 +2252,11 @@ const MtlxMenu = ({
             return;
         }
         const pop = popRef.current;
-        const measured = pop ? pop.scrollHeight : (rows.length * MTLX_MENU_ROW_H + 8);
+        const measured = popoverNaturalHeight(pop, rows.length * MTLX_MENU_ROW_H + 8);
         const width = pop ? Math.max(pop.offsetWidth, minWidth) : minWidth;
         const spaceBelow = window.innerHeight - rect.bottom - 8;
         const spaceAbove = rect.top - 8;
-        const desired = Math.min(measured, popMaxHeight);
+        const desired = Math.min(measured, popoverHeightCap(popMaxHeight));
         const flip = desired > spaceBelow && spaceAbove > spaceBelow;
         const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
         const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
@@ -2279,7 +2305,9 @@ const MtlxMenu = ({
     React.useLayoutEffect(() => {
         if (!open) return undefined;
         repositionRef.current();
-        return undefined;
+        // Same late-CSS second pass as MtlxSelect above.
+        const raf = window.requestAnimationFrame(() => repositionRef.current());
+        return () => window.cancelAnimationFrame(raf);
     }, [open]);
 
     // CAPTURE: these are element scrolls, which never reach a bubble-phase
