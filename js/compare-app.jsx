@@ -523,13 +523,18 @@ function MaterialCompareApp({ active = true } = {}) {
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    // GeomSelect has no notion of a disabled option, and extending it is
-    // out of scope here (js/shared/mtlx-ui.jsx isn't one of this pass's
-    // two touchable files) — so unavailable versions are filtered out of
-    // `options` instead, with a one-line hint standing in for the "not in
-    // this build" note a disabled row would otherwise carry.
-    const availableVersionOptions = mtlxVersions.filter((v) => v === mtlxDefaultVersion || versionAvailable[v] === true);
-    const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+    // Every known version is listed now; disabledOptions/titles carry
+    // the probe result instead of filtering rows out of the list.
+    // A still-probing version stays disabled with no title yet.
+    const versionDisabledOptions = {};
+    const versionTitles = {};
+    mtlxVersions.forEach((v) => {
+        if (v === mtlxDefaultVersion || versionAvailable[v] === true) return;
+        versionDisabledOptions[v] = true;
+        if (versionAvailable[v] === false) {
+            versionTitles[v] = 'MaterialX ' + v + ' is not available in this build.';
+        }
+    });
 
     // Whole-feature signal for Task 4's labels: only worth surfacing the
     // version at all once the two panes actually diverge. Compares
@@ -929,9 +934,11 @@ function MaterialCompareApp({ active = true } = {}) {
                         <span className="text-xs font-medium text-gray-400">MaterialX version</span>
                         <GeomSelect
                             value={slot.version}
-                            options={availableVersionOptions}
+                            options={mtlxVersions}
                             labels={versionLabels}
                             badges={versionBadges}
+                            disabledOptions={versionDisabledOptions}
+                            titles={versionTitles}
                             popWidth={VERSION_POP_W}
                             onChange={(v) => {
                                 slot.setVersion(v);
@@ -944,12 +951,6 @@ function MaterialCompareApp({ active = true } = {}) {
                             disabled={slot.busy}
                         />
                     </div>
-                    {unavailableVersions.length > 0 && (
-                        <div className="text-[10px] text-gray-500 mt-1">
-                            {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
-                            {unavailableVersions.length === 1 ? ' is' : ' are'} not available in this build.
-                        </div>
-                    )}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                     <label className={BTN_SECONDARY + ' cursor-pointer'}>
@@ -963,23 +964,25 @@ function MaterialCompareApp({ active = true } = {}) {
                 </div>
                 <div className="text-xs text-gray-500">{dropHint}</div>
                 {slot.mtlxPaths.length > 1 && (
-                    <select
-                        className={TEXT_INPUT_CLS}
+                    <MtlxSelect
                         value={slot.chosenMtlx || ''}
-                        onChange={(e) => { slot.setChosenMtlx(e.target.value); slot.loadDocument(e.target.value); }}
-                    >
-                        {!slot.chosenMtlx && <option value="">{'Pick a .mtlx…'}</option>}
-                        {slot.mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </select>
+                        options={slot.mtlxPaths}
+                        placeholder={'Pick a .mtlx…'}
+                        onChange={(v) => { slot.setChosenMtlx(v); slot.loadDocument(v); }}
+                        size="lg"
+                        variant="field"
+                        block
+                    />
                 )}
                 {slot.renderables.length > 1 && (
-                    <select
-                        className={TEXT_INPUT_CLS}
+                    <MtlxSelect
                         value={slot.chosenMat}
-                        onChange={(e) => slot.setChosenMat(Number(e.target.value))}
-                    >
-                        {slot.renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
-                    </select>
+                        options={slot.renderables.map((r, i) => ({ value: i, label: r.name }))}
+                        onChange={slot.setChosenMat}
+                        size="lg"
+                        variant="field"
+                        block
+                    />
                 )}
                 {slot.texReport && slot.texReport.missing.length > 0 && (
                     <div className="space-y-2">
