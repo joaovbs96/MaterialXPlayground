@@ -4683,7 +4683,7 @@
                             centre no matter what the clusters contain, and items-start keeps it on the bar's top row when a cluster wraps. */}
                         {parsed ? (
                             <div className="flex items-center h-7 min-w-0">
-                                <div className="text-[11px] font-mono text-gray-400 bg-gray-800/80 backdrop-blur border border-gray-600 rounded px-2 py-1 max-w-full truncate">
+                                <div className="text-[11px] font-mono text-gray-400 max-w-full truncate">
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
                                         // Cheap ref write stays immediate; changeScope is a
                                         // no-op (no overlay flash) when already at the root.
