@@ -451,10 +451,12 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
-            // No md:overflow-y-auto here, unlike the others: the builder
-            // view fills the viewport height and does not scroll itself
-            // (only its settings sidebar does) - see BuilderApp's rootRef.
-            builder: 'p-2 sm:p-6 flex-1 md:min-h-0',
+            // The builder means to fill the viewport and let only its
+            // sidebar scroll, but min-h-0 alone never enforced that: any
+            // overflow reached the document, and since the preview stage
+            // derives its height from its own width, the page scrollbar
+            // could appear, narrow the stage, stop being needed, and loop.
+            builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
