@@ -219,6 +219,10 @@ const parseBuilderHashSettings = () => {
     // pasted link can't resurrect the transparent + backdrop-room combo.
     const effectiveGeometry = params.has('geometry') ? patch.geometry : BUILDER_DEFAULTS.geometry;
     if (patch.transparent && effectiveGeometry === 'shaderball-scene') patch.geometry = 'shaderball';
+    // Same for transparent vs. the env-as-background toggle - the two
+    // cancel each other out, so a pasted link can't resurrect that combo.
+    const effectiveBackground = params.has('background') ? patch.background : BUILDER_DEFAULTS.background;
+    if (patch.transparent && effectiveBackground) patch.background = false;
     return patch;
 };
 const buildShareParams = (s) => {
@@ -488,7 +492,7 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
     }, [code]);
     return (
         <div id="builder-snippets" className="rounded-lg border border-gray-700 bg-gray-900 overflow-hidden h-[142px] md:h-full flex flex-col min-w-0">
-            <div className="flex items-center justify-between gap-2 bg-gray-800/60 shrink-0">
+            <div className="flex items-center justify-between gap-2 py-1 bg-gray-800/60 shrink-0">
                 <div className="flex items-stretch">
                     {SNIPPET_TABS.map((s) => (
                         <button
@@ -1218,15 +1222,27 @@ function BuilderApp({ active } = {}) {
     const themeSummary = activeThemePreset ? activeThemePreset.label : 'Custom';
     const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
     const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
-    // shaderball-scene is an opaque room the engine can't render transparent
-    // (docs/EMBEDDING.md's Geometry constraint) - keep that combo unreachable
-    // instead of letting the embed silently swap geometry and warn.
-    const transparentDisabled = geometry === 'shaderball-scene';
+    // Std. Shader Ball w/ Backdrop is an opaque authored room; several
+    // controls below are dead against it, all keyed on this condition.
+    const roomGeom = geometry === 'shaderball-scene';
+    // Room geometry can't render transparent (docs/EMBEDDING.md); the env
+    // background toggle draws an equally opaque backdrop. Either cause
+    // makes every pixel opaque, so block transparent from both.
+    const transparentDisabled = roomGeom || background;
     // Same geometry also has no turntable rotation (js/viewer-app.jsx hides
     // the rotate button whenever roomGeomActive) - the HUD control still
     // toggles, but the button it would add never renders. Explain it rather
     // than silently emitting a control that does nothing.
-    const rotateHudDisabled = geometry === 'shaderball-scene';
+    const rotateHudDisabled = roomGeom;
+    // The engine forces autoRotate off unconditionally for this geometry
+    // and setAutoRotate returns early - the Behavior toggle is a no-op.
+    const autorotateDisabled = roomGeom;
+    // The env background is an inverted sphere the room fully occludes,
+    // and with transparent on it would defeat transparent's whole point.
+    const envBackgroundDisabled = roomGeom || transparent;
+    // Accent/surface/text/radius only ever become CSS vars for the HUD
+    // strip's stylesheet - a hint, not a disable (also the default state).
+    const noHudControls = !controlsStr;
 
     // Raw content, unwrapped: placed directly by the JSX below. previewContent
     // is never a MasonryItem (see masonryItems further down); snippets/legend
@@ -1406,10 +1422,20 @@ function BuilderApp({ active } = {}) {
                     className={TEXT_INPUT_CLS}
                 />
             </div>
-            <label className="flex items-center justify-between cursor-pointer">
-                <span className="text-xs font-medium text-gray-400">Show environment as background</span>
-                <Toggle checked={background} onChange={(v) => patch({ background: v })} />
-            </label>
+            <div>
+                <label className={'flex items-center justify-between ' + (envBackgroundDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
+                    <span className="text-xs font-medium text-gray-400">Show environment as background</span>
+                    <Toggle checked={background} onChange={(v) => patch({ background: v })} disabled={envBackgroundDisabled} />
+                </label>
+                {envBackgroundDisabled && (
+                    <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
+                        <span>{roomGeom
+                            ? 'Disabled: Std. Shader Ball w/ Backdrop covers the sky with its own walls. Pick another geometry to enable it.'
+                            : 'Disabled: Transparent page background is on, covering every pixel. Turn off Transparent page background to enable it.'}</span>
+                    </div>
+                )}
+            </div>
         </SectionCard>,
 
         <SectionCard key="look" icon="palette" title="Look" summary={themeSummary} defaultOpen={defaultOpen}>
@@ -1439,6 +1465,9 @@ function BuilderApp({ active } = {}) {
                 onSlider={(v) => patch({ radius: v })}
                 onNumber={(v) => patch({ radius: v })}
             />
+            {noHudControls && (
+                <p className="text-[11px] text-gray-500">Theme colors and corner radius style the HUD strip only. Turn on a HUD control to see them.</p>
+            )}
             <div>
                 <label className={'flex items-center justify-between gap-3 ' + (transparentDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
                     <span className="text-xs font-medium text-gray-400">Transparent page background</span>
@@ -1447,7 +1476,9 @@ function BuilderApp({ active } = {}) {
                 {transparentDisabled ? (
                     <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
                         <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
-                        <span>Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.</span>
+                        <span>{roomGeom
+                            ? 'Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.'
+                            : 'Disabled: Show environment as background is on, covering every pixel. Turn off Show environment as background to enable it.'}</span>
                     </div>
                 ) : (
                     <p className="text-[11px] mt-1 text-gray-500">Not compatible with Std. Shader Ball w/ Backdrop.</p>
@@ -1498,10 +1529,16 @@ function BuilderApp({ active } = {}) {
         </SectionCard>,
 
         <SectionCard key="behavior" icon="adjustments" title="Behavior" summary={builderBehaviorSummary(autorotate, wheelZoom)} defaultOpen={defaultOpen}>
-            <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <label className={'flex items-center justify-between gap-3 ' + (autorotateDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
                 <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Auto-rotate <ReloadsPill /></span>
-                <Toggle checked={autorotate} onChange={(v) => patch({ autorotate: v })} />
+                <Toggle checked={autorotate} onChange={(v) => patch({ autorotate: v })} disabled={autorotateDisabled} />
             </label>
+            {autorotateDisabled && (
+                <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                    <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
+                    <span>Disabled: Std. Shader Ball w/ Backdrop has no turntable rotation. Pick another geometry to enable it.</span>
+                </div>
+            )}
             <label className="flex items-center justify-between gap-3 cursor-pointer">
                 <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Direct wheel zoom, no Ctrl needed <ReloadsPill /></span>
                 <Toggle checked={wheelZoom} onChange={(v) => patch({ wheelZoom: v })} />
@@ -1653,8 +1690,8 @@ function BuilderApp({ active } = {}) {
                     <div className="grid grid-cols-[minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_auto] gap-3 md:flex-1 md:min-h-0">
                         {previewContent}
                         {/* h-[142px] is the single height both cards fill (h-full)
-                            below - matches the old snippets card total (28px tab
-                            header + 112px code + 2px border) so the preview's
+                            below - matches the snippets card total (36px tab
+                            header + 104px code + 2px border) so the preview's
                             "Shown at 100%" cap is unaffected by this change. */}
                         <div className="col-start-1 row-start-2 grid grid-cols-2 gap-5 min-w-0 h-[142px]">
                             {snippetsContent}
