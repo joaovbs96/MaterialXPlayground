@@ -1711,14 +1711,56 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 // Generic dropdown (documents, materials, versions, colorspaces), not
 // just geometry. Portaled to fullscreenPortalRoot(): native fullscreen,
 // and ancestor backdrop-blur mispositions position:fixed (see ColorSwatch).
-const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26;
+const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
+
+// --mx-select-* theming hook. Each falls back through the matching
+// js/site-tokens.css token to a literal, so the embed bundle (no
+// Tailwind, no site-tokens.css there) still renders correctly.
+const MXS_FONT = 'var(--mx-select-font, var(--site-font-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif))';
+const MXS_FONT_SIZE = 'var(--mx-select-font-size, 11px)';
+const MXS_ACCENT = 'var(--mx-select-accent, var(--site-blue-600, #2563eb))';
+const MXS_ACCENT_TEXT = 'var(--mx-select-accent-text, var(--site-gray-100, #f3f4f6))';
+const MXS_SURFACE = 'var(--mx-select-surface, var(--site-gray-800, #1f2937))';
+const MXS_SURFACE_HOVER = 'var(--mx-select-surface-hover, var(--site-gray-700, #374151))';
+const MXS_TEXT = 'var(--mx-select-text, var(--site-gray-300, #d1d5db))';
+const MXS_TEXT_STRONG = 'var(--mx-select-text-strong, var(--site-gray-100, #f3f4f6))';
+const MXS_MUTED = 'var(--mx-select-muted, var(--site-gray-500, #6b7280))';
+const MXS_BORDER = 'var(--mx-select-border, var(--site-gray-600, #4b5563))';
+const MXS_RADIUS = 'var(--mx-select-radius, 8px)';
+const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, var(--site-amber-300, #fcd34d))';
+
+// theme prop keys -> the custom property each one feeds. Used to stamp
+// theme overrides as inline custom properties, and to know which
+// property names to look for when capturing ambient values (openPopover).
+const SELECT_THEME_VAR_NAMES = {
+    font: '--mx-select-font', fontSize: '--mx-select-font-size',
+    accent: '--mx-select-accent', accentText: '--mx-select-accent-text',
+    surface: '--mx-select-surface', surfaceHover: '--mx-select-surface-hover',
+    text: '--mx-select-text', textStrong: '--mx-select-text-strong',
+    muted: '--mx-select-muted', border: '--mx-select-border',
+    radius: '--mx-select-radius', badgeWarn: '--mx-select-badge-warn',
+};
+
+// Builds inline custom-property declarations from a theme prop, one
+// entry per key the caller actually set (React allows custom-property
+// keys directly in a style object).
+const selectThemeStyle = (theme) => {
+    if (!theme) return undefined;
+    const out = {};
+    Object.keys(SELECT_THEME_VAR_NAMES).forEach((k) => {
+        if (theme[k] != null) out[SELECT_THEME_VAR_NAMES[k]] = theme[k];
+    });
+    return out;
+};
 
 // `badges`: optional { value: text | { text, tone } }, rendered as a
 // small pill after that option's ROW label. Tone comes from this map
 // (warn = amber, else neutral gray) unless the badge itself overrides it.
 const SELECT_BADGE_TONES = { Experimental: 'warn' };
+// warn's text color is the MXS_BADGE_WARN var (applied inline per row);
+// the tint/border stay literal, there's no separate themed var for them.
 const SELECT_BADGE_TONE_CLS = {
-    warn: 'bg-amber-600/30 border-amber-500/50 text-amber-300',
+    warn: 'bg-amber-600/30 border-amber-500/50',
     neutral: 'bg-gray-700/60 border-gray-500/50 text-gray-300',
 };
 const resolveSelectBadge = (badge) => {
@@ -1730,15 +1772,18 @@ const resolveSelectBadge = (badge) => {
     return { text, tone };
 };
 
+// Layout only: color/border/radius/font-size for this default chrome
+// (used only when a caller omits className) come from MXS_* inline
+// style below, so they stay themeable via the theme prop.
 const SELECT_SIZE_CLS = {
-    sm: 'h-6 text-[11px] px-2',
-    md: 'h-7 text-[11px] px-2',
-    lg: 'w-full px-2.5 py-1.5 text-sm',
+    sm: 'h-6 px-2',
+    md: 'h-7 px-2',
+    lg: 'w-full px-2.5 py-1.5',
 };
 const SELECT_VARIANT_CLS = {
-    toolbar: 'border bg-gray-800/80 border-gray-600 text-gray-300',
-    field: 'border bg-gray-900 border-gray-700 text-gray-200',
-    plain: 'border-0 text-gray-300',
+    toolbar: 'border',
+    field: 'border',
+    plain: 'border-0',
 };
 
 // Normalizes `options` (string[], unchanged, or object-form entries)
@@ -1766,18 +1811,24 @@ const MtlxSelect = ({
     value, options, labels = GEOM_LABELS, badges, onChange, title, className, popWidth,
     icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
     size = 'sm', variant = 'toolbar', block, font,
-    // Accepted and stored, not yet applied to behaviour or style: the
-    // popover's positioning, scrolling, keyboard and theming are step 2.
     popMaxHeight = 280, theme,
     commitFocus = 'trigger', ariaLabel,
 }) => {
-    void popMaxHeight;
-    void theme;
     const [open, setOpen] = React.useState(false);
     const [pos, setPos] = React.useState(null);
     const [hi, setHi] = React.useState(0);
+    // Trigger's resolved font-family + any ambient --mx-select-* custom
+    // properties, snapshotted on open (see openPopover) so the portaled
+    // popover can mirror context it doesn't actually inherit from here.
+    const [ambient, setAmbient] = React.useState(null);
+    // Hover can't be expressed inline; this mirrors the row-highlight
+    // idiom (state-driven, only visible on the default chrome below).
+    const [triggerHover, setTriggerHover] = React.useState(false);
     const btnRef = React.useRef(null);
     const popRef = React.useRef(null);
+    const rowRefs = React.useRef([]);
+    const typeAheadRef = React.useRef({ buf: '', t: 0 });
+    const listboxId = React.useId();
 
     const normalized = React.useMemo(() => {
         const base = normalizeSelectOptions(options, labels, { icons, titles, disabledOptions, badges });
@@ -1804,6 +1855,37 @@ const MtlxSelect = ({
         }
     };
 
+    // Recomputes placement from the trigger's CURRENT rect: called once,
+    // right after a hidden probe render gives a real measured height,
+    // then again on every scroll/resize so a sidebar trigger stays tracked.
+    const reposition = () => {
+        const btn = btnRef.current;
+        if (!btn) { setOpen(false); return; }
+        const rect = btn.getBoundingClientRect();
+        // The trigger scrolled fully out of view: close rather than let
+        // the popover float disconnected over unrelated content.
+        if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+            setOpen(false);
+            return;
+        }
+        const measured = popRef.current ? popRef.current.scrollHeight : (normalized.length * SELECT_POP_ROW_H + 8);
+        const spaceBelow = window.innerHeight - rect.bottom - 8;
+        const spaceAbove = rect.top - 8;
+        const desired = Math.min(measured, popMaxHeight);
+        // Prefer below; flip above only when it doesn't fit below AND
+        // there's more room above, otherwise stay below and clamp.
+        const flip = desired > spaceBelow && spaceAbove > spaceBelow;
+        const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+        setPos(flip
+            ? { left, bottom: window.innerHeight - rect.top + 4, maxHeight }
+            : { left, top: rect.bottom + 4, maxHeight });
+    };
+    // A ref mirror so the scroll/resize effect (subscribed once per open,
+    // not per render) always calls the LATEST reposition closure.
+    const repositionRef = React.useRef(reposition);
+    repositionRef.current = reposition;
+
     const openPopover = () => {
         if (disabled) return;
         const idx = normalized.findIndex((o) => o.value === value);
@@ -1814,16 +1896,18 @@ const MtlxSelect = ({
             start = fwd != null ? fwd : (back != null ? back : start);
         }
         setHi(start);
-        const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;
-        if (rect) {
-            // Left-aligned to the trigger (ColorSwatch precedent),
-            // clamped to the viewport and flipped above when it would
-            // overflow the bottom (SettingsDialog math).
-            const h = normalized.length * SELECT_POP_ROW_H + 8;
-            const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
-            setPos(rect.bottom + h > window.innerHeight
-                ? { left, bottom: window.innerHeight - rect.top + 4 }
-                : { left, top: rect.bottom + 4 });
+        // Unmeasured: the popover renders hidden until the layout effect
+        // below measures its real height and commits a placement.
+        setPos(null);
+        if (btnRef.current) {
+            const cs = window.getComputedStyle(btnRef.current);
+            const vars = {};
+            Object.keys(SELECT_THEME_VAR_NAMES).forEach((k) => {
+                const name = SELECT_THEME_VAR_NAMES[k];
+                const v = cs.getPropertyValue(name);
+                if (v && v.trim()) vars[name] = v.trim();
+            });
+            setAmbient({ fontFamily: cs.fontFamily, vars });
         }
         setOpen(true);
     };
@@ -1850,6 +1934,43 @@ const MtlxSelect = ({
         return () => window.removeEventListener('pointerdown', onDown);
     }, [open]);
 
+    // Measure-then-place: the first render after opening has pos=null,
+    // so the popover mounts hidden at its natural height; this fires
+    // right after that commit and reveals it already positioned.
+    React.useLayoutEffect(() => {
+        if (!open) return undefined;
+        repositionRef.current();
+        return undefined;
+    }, [open]);
+
+    // Track the trigger through ancestor scrolls and window resizes.
+    // CAPTURE is essential: these are element scrolls (a sidebar), and a
+    // bubble-phase listener on window never sees them.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onScroll = () => repositionRef.current();
+        const onResize = () => repositionRef.current();
+        window.addEventListener('scroll', onScroll, true);
+        window.addEventListener('resize', onResize);
+        return () => {
+            window.removeEventListener('scroll', onScroll, true);
+            window.removeEventListener('resize', onResize);
+        };
+    }, [open]);
+
+    // Keep the highlighted row in view as `hi` moves via keyboard.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const el = rowRefs.current[hi];
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    }, [hi, open]);
+
+    // A container that greys itself out mid-interaction should close our
+    // popover the way a native select's would disappear with it.
+    React.useEffect(() => {
+        if (disabled && open) setOpen(false);
+    }, [disabled]);
+
     // Keyboard nav. CAPTURE phase on purpose: inside SettingsDialog,
     // Escape must close only THIS popover, so stopping propagation here
     // keeps the dialog's bubble-phase Escape listener (useEscapeToClose) from firing.
@@ -1859,12 +1980,26 @@ const MtlxSelect = ({
             if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); }
             else if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => { const n = findEnabled(h, 1); return n == null ? h : n; }); }
             else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => { const n = findEnabled(h, -1); return n == null ? h : n; }); }
+            else if (e.key === 'Home') { e.preventDefault(); const n = normalized.findIndex((o) => !o.disabled); if (n !== -1) setHi(n); }
+            else if (e.key === 'End') {
+                e.preventDefault();
+                for (let i = normalized.length - 1; i >= 0; i--) { if (!normalized[i].disabled) { setHi(i); break; } }
+            }
             else if (e.key === 'Enter') {
                 e.preventDefault();
                 const opt = normalized[hi];
                 if (opt != null && !opt.disabled) onChange(opt.value);
                 setOpen(false);
                 if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
+            } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                // Type-ahead: a short timestamped buffer, prefix-matched
+                // against resolved labels, skipping disabled rows.
+                const now = Date.now();
+                const ta = typeAheadRef.current;
+                ta.buf = (now - ta.t < 800 ? ta.buf : '') + e.key.toLowerCase();
+                ta.t = now;
+                const match = normalized.findIndex((o) => !o.disabled && String(o.label).toLowerCase().indexOf(ta.buf) === 0);
+                if (match !== -1) setHi(match);
             }
         };
         window.addEventListener('keydown', onKey, true);
@@ -1872,7 +2007,11 @@ const MtlxSelect = ({
     }, [open, hi, normalized]);
 
     const fontCls = font === 'mono' ? 'font-mono' : '';
-    const fontStyle = font && font !== 'sans' && font !== 'mono' ? { fontFamily: font } : undefined;
+    // Precedence: an explicit `font` prop (a literal string) wins; 'mono'
+    // is handled by the class above instead; otherwise theme.font; else
+    // ambient inheritance is left alone (ties into popFontFamily below).
+    const explicitFont = font === 'mono' ? undefined : (font && font !== 'sans' ? font : (theme && theme.font));
+    const fontStyle = explicitFont ? { fontFamily: explicitFont } : undefined;
 
     // className still REPLACES the trigger's chrome wholesale (a later
     // step makes it additive); size/variant only build the default when
@@ -1885,41 +2024,88 @@ const MtlxSelect = ({
         disabled && 'opacity-50 pointer-events-none',
     ].filter(Boolean).join(' ');
 
+    // Default chrome (only used when className is omitted) plus theme's
+    // custom properties, stamped even when className hides them visually
+    // so openPopover's ambient capture can still forward them below.
+    const defaultChromeStyle = className ? undefined : Object.assign(
+        { color: MXS_TEXT, borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE },
+        variant === 'plain' ? undefined : { background: triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE, borderColor: MXS_BORDER },
+    );
+    const triggerStyle = Object.assign({}, defaultChromeStyle, selectThemeStyle(theme), fontStyle);
+
     const selected = normalized.find((o) => o.value === value);
     const selectedLabel = selected ? selected.label : (labels[value] || value);
     const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
     const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
 
+    // POPOVER font: explicit font prop or theme.font wins; else the
+    // ambient value captured off the trigger (fixes the portal losing
+    // normal font-family inheritance); 'mono' is left to the class.
+    const popFontFamily = font === 'mono' ? undefined : (explicitFont || (ambient && ambient.fontFamily) || undefined);
+
+    const popStyle = Object.assign(
+        {
+            position: 'fixed', zIndex: 9999, width: popW,
+            visibility: pos ? 'visible' : 'hidden',
+            maxHeight: pos ? pos.maxHeight : 'none',
+            overflowY: 'auto',
+            background: MXS_SURFACE, border: '1px solid ' + MXS_BORDER, borderRadius: MXS_RADIUS,
+            fontFamily: font === 'mono' ? undefined : MXS_FONT, fontSize: MXS_FONT_SIZE,
+        },
+        ambient && ambient.vars,
+        selectThemeStyle(theme),
+        popFontFamily ? { fontFamily: popFontFamily } : undefined,
+        pos || { top: 0, left: 0 },
+    );
+
     const popover = open ? (
         <div
             ref={popRef}
+            id={listboxId}
+            role="listbox"
             onPointerDown={(e) => e.stopPropagation()}
-            style={Object.assign({ position: 'fixed', zIndex: 9999, width: popW }, fontStyle, pos || {})}
-            className={'bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1' + (fontCls ? ' ' + fontCls : '')}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={popStyle}
+            className={'backdrop-blur shadow-2xl overflow-y-auto custom-scrollbar py-1' + (fontCls ? ' ' + fontCls : '')}
         >
-            {normalized.map((o, i) => (
-                <button
-                    key={o.value}
-                    type="button"
-                    title={o.title}
-                    aria-disabled={o.disabled || undefined}
-                    onMouseEnter={() => { if (!o.disabled) setHi(i); }}
-                    onClick={() => commitRow(o)}
-                    className={'w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors '
-                        + (o.disabled ? 'text-gray-500 cursor-default' : (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300'))}
-                >
-                    {/* Fixed check gutter so labels align selected or not,
-                        disabled rows included. */}
-                    <span className="w-3.5 flex-none">
-                        {o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
-                    </span>
-                    {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
-                    <span className="flex-1 truncate">{o.label}</span>
-                    {o.badge && (
-                        <span className={'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]}>{o.badge.text}</span>
-                    )}
-                </button>
-            ))}
+            {normalized.map((o, i) => {
+                const isHi = i === hi && !o.disabled;
+                const isSelected = o.value === value;
+                const rowStyle = {
+                    color: o.disabled ? MXS_MUTED : (isHi ? MXS_ACCENT_TEXT : (isSelected ? MXS_TEXT_STRONG : MXS_TEXT)),
+                    background: isHi ? MXS_ACCENT : undefined,
+                };
+                return (
+                    <button
+                        key={o.value}
+                        ref={(el) => { rowRefs.current[i] = el; }}
+                        type="button"
+                        role="option"
+                        aria-selected={o.value === value}
+                        title={o.title}
+                        aria-disabled={o.disabled || undefined}
+                        onMouseEnter={() => { if (!o.disabled) setHi(i); }}
+                        onClick={() => commitRow(o)}
+                        style={rowStyle}
+                        className={'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors '
+                            + (o.disabled ? 'cursor-default' : 'cursor-pointer')}
+                    >
+                        {/* Fixed check gutter so labels align selected or not,
+                            disabled rows included. */}
+                        <span className="w-3.5 flex-none">
+                            {o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
+                        </span>
+                        {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
+                        <span className="flex-1 truncate">{o.label}</span>
+                        {o.badge && (
+                            <span
+                                style={o.badge.tone === 'warn' ? { color: MXS_BADGE_WARN } : undefined}
+                                className={'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]}
+                            >{o.badge.text}</span>
+                        )}
+                    </button>
+                );
+            })}
         </div>
     ) : null;
 
@@ -1928,16 +2114,22 @@ const MtlxSelect = ({
             <button
                 type="button"
                 ref={btnRef}
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={listboxId}
                 title={title}
                 disabled={!!disabled}
                 aria-disabled={disabled || undefined}
                 aria-label={ariaLabel}
                 onClick={() => (open ? setOpen(false) : openPopover())}
+                onMouseEnter={() => setTriggerHover(true)}
+                onMouseLeave={() => setTriggerHover(false)}
                 className={triggerClassName}
-                style={fontStyle}
+                style={triggerStyle}
             >
                 {icon && <MtlxIcon name={icon} className="w-3.5 h-3.5 flex-none" />}
-                <span className={'truncate' + (showPlaceholder ? ' text-gray-500' : '')}>{triggerLabel}</span>
+                <span className="truncate" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
                 <MtlxIcon name="chevron-down" className="w-3 h-3 flex-none opacity-70" />
             </button>
             {popover && ReactDOM.createPortal(popover, fullscreenPortalRoot())}
