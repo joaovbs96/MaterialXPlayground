@@ -5275,7 +5275,10 @@
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
                                 {/* Top Row: Color dot, Name, and docs button (collapse
                                     now lives in the preview strip's row 1). */}
-                                <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
+                                {/* Same height with or without the About this Node button:
+                                    28px button + 16px padding + the 1px border-b that
+                                    border-box min-height counts. */}
+                                <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-800">
                                     {selectedIds.length > 1 ? (
                                         <span className="w-2 h-2 rounded-full flex-none bg-blue-400" />
                                     ) : displayNode ? (
