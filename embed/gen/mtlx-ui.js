@@ -1936,6 +1936,11 @@ const MXS_MUTED = 'var(--mx-select-muted, var(--site-gray-500, #6b7280))';
 const MXS_BORDER = 'var(--mx-select-border, var(--site-gray-600, #4b5563))';
 const MXS_RADIUS = 'var(--mx-select-radius, 8px)';
 const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, var(--site-amber-300, #fcd34d))';
+// Translucent derivations so the highlight reads as a tint over the
+// popover ground, not a solid slab. color-mix is already a baseline here
+// (embed/embed-controls.css, js/builder-app.jsx).
+const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
+const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
 
 // theme prop keys -> the custom property each one feeds. Used to stamp
 // theme overrides as inline custom properties, and to know which
@@ -2335,7 +2340,7 @@ const MtlxSelect = ({
     visibility: pos ? 'visible' : 'hidden',
     maxHeight: pos ? pos.maxHeight : 'none',
     overflowY: 'auto',
-    background: MXS_SURFACE,
+    background: MXS_SURFACE_SOFT,
     border: '1px solid ' + MXS_BORDER,
     borderRadius: MXS_RADIUS,
     fontFamily: font === 'mono' ? undefined : MXS_FONT,
@@ -2359,7 +2364,7 @@ const MtlxSelect = ({
     const isSelected = o.value === value;
     const rowStyle = {
       color: o.disabled ? MXS_MUTED : isHi ? MXS_ACCENT_TEXT : isSelected ? MXS_TEXT_STRONG : MXS_TEXT,
-      background: isHi ? MXS_ACCENT : undefined
+      background: isHi ? MXS_ACCENT_SOFT : undefined
     };
     return /*#__PURE__*/React.createElement("button", {
       key: o.value,
