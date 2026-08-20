@@ -5093,8 +5093,11 @@
                                                 picking up a UA line-height "strut" around the native
                                                 <select>, which otherwise renders taller than h-6. */}
                                             <MtlxIcon name="palette" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
+                                            {/* Own chevron at the same inset as GeomSelect's, so both
+                                                dropdowns in this strip read as one control family. */}
+                                            <MtlxIcon name="chevron-down" className="w-3 h-3 text-gray-300 opacity-70 pointer-events-none absolute right-[9px] top-1/2 -translate-y-1/2" />
                                             <select
-                                                className="h-6 text-[11px] pl-6 pr-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 w-full truncate"
+                                                className="appearance-none h-6 text-[11px] pl-6 pr-6 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 w-full truncate"
                                                 title="Document colorspace -- fallback for inputs without an explicit colorspace"
                                                 value={docColorspace}
                                                 onChange={(e) => {

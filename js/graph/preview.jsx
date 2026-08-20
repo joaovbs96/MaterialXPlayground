@@ -809,7 +809,7 @@
                         badges={GRAPH_GEOM_BADGES}
                         onChange={setGeomMode}
                         title="Preview geometry"
-                        className="w-full h-6 text-[11px] pl-6 pr-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                        className="w-full h-6 text-[11px] pl-6 pr-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 justify-between"
                     />
                 </div>
             );
