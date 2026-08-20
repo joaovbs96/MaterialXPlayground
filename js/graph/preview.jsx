@@ -853,7 +853,7 @@
                             // APPLY path in flight against the live view — old
                             // material keeps rendering underneath, so this is a
                             // small corner badge rather than a full overlay/flash.
-                            <div className="absolute top-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
+                            <div className="absolute bottom-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
                         )}
                         <LoadingOverlay
                             show={loading && !notice && !error}
@@ -872,10 +872,34 @@
                                 {error}
                             </div>
                         )}
-                        {/* Rendered last so it stacks above the loading/notice/
-                            error overlays regardless of z-index ties (item 10's
-                            pin toggle, passed in by the caller). */}
+                        {/* Rendered last so they stack above the loading/notice/
+                            error overlays: item 10's pin (top-left) and the
+                            camera-reset/fullscreen cluster (top-right) below. */}
                         {!isFullscreen && overlay}
+                        <div className="absolute top-1 right-1 z-20 flex items-center gap-1">
+                            {resolvedGeom !== 'buffer2d' && (
+                                <button
+                                    onClick={() => {
+                                        const v = viewRef.current;
+                                        if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
+                                    }}
+                                    title="Reset camera"
+                                    className="w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                                >
+                                    <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
+                                </button>
+                            )}
+                            <button
+                                onClick={toggleFullscreenView}
+                                title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                className={'w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
+                                    + (isFullscreen
+                                        ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
+                                        : 'bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                            >
+                                <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
