@@ -5088,7 +5088,10 @@
                                 }
                                 controlSlots={(labeled) => ({
                                     docColorspace: (
-                                        <div key="docColorspace" className="relative flex-1 min-w-0">
+                                        <div key="docColorspace" className="relative flex-1 min-w-0 flex items-center">
+                                            {/* `flex` (not just `relative`) keeps this wrapper from
+                                                picking up a UA line-height "strut" around the native
+                                                <select>, which otherwise renders taller than h-6. */}
                                             <MtlxIcon name="palette" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
                                             <select
                                                 className="h-6 text-[11px] pl-6 pr-1.5 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300 font-mono w-full truncate"

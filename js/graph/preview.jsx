@@ -183,14 +183,14 @@
         const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
         const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default' };
         // Row layout for the docked/fullscreen viewport strip: docked splits
-        // screenshot/send/colorspace/collapse from the geometry/env/settings
+        // send/colorspace/collapse from the geometry/screenshot/env/settings
         // group; fullscreen folds everything into one row, same order.
         const GRAPH_PREVIEW_CLUSTERS_DOCKED = [
-            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse'],
-            ['graphGeom', 'env', 'settings'],
+            ['sendToViewer', 'docColorspace', 'collapse'],
+            ['graphGeom', 'screenshot', 'env', 'settings'],
         ];
         const GRAPH_PREVIEW_CLUSTERS_FULLSCREEN = [
-            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse', 'graphGeom', 'env', 'settings'],
+            ['sendToViewer', 'docColorspace', 'collapse', 'graphGeom', 'screenshot', 'env', 'settings'],
         ];
 
         // Resolves WHAT the preview renders, building transient '__pv_*'
@@ -797,7 +797,10 @@
             // built-in slot) so it shares geomMode with the Settings-popover's
             // own GeomSelect just below.
             const graphGeomSlot = (
-                <div key="graphGeom" className="relative flex-1 min-w-0">
+                <div key="graphGeom" className="relative flex-1 min-w-0 flex items-center">
+                    {/* `flex` here (not just `relative`) matters: without it
+                        the button child sits in an inline formatting context
+                        and picks up a UA line-height "strut", ~2-3px taller. */}
                     <MtlxIcon name="cube" className="w-3.5 h-3.5 text-gray-500 pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2" />
                     <GeomSelect
                         value={geomMode}
@@ -824,7 +827,7 @@
                     style={isFullscreen ? { height: '100%' } : undefined}
                 >
                     {/* Viewport controls (F2.1/F2.2): two rows when docked
-                        (screenshot/send/colorspace/collapse, then geometry/
+                        (send/colorspace/collapse, then geometry/screenshot/
                         env/settings), one row in fullscreen; see clusters. */}
                     <ViewportControls
                         envBg={envBg}
