@@ -1005,7 +1005,7 @@ const EnvDialog = ({
     );
 };
 
-// Friendly labels for the preview-geometry <select>'s raw values (which
+// Friendly labels for the preview-geometry dropdown's raw values (which
 // double as engine geomName / persisted-storage values, never changed —
 // only how they're displayed). Falls back to the raw value if unlisted.
 const GEOM_LABELS = {
@@ -1025,7 +1025,7 @@ const GEOM_LABELS = {
     'default': 'Auto (by node type)',
 };
 
-// Icons for the preview-geometry options (GeometryTile / GeomSelect rows).
+// Icons for the preview-geometry options (GeometryTile rows).
 const GEOM_ICONS = {
     'shaderball-scene': 'inner-shadow-bottom-right',
     'shaderball': 'inner-shadow-bottom-right',
@@ -1189,7 +1189,7 @@ const ViewportControls = ({
     geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'],
     geom, onGeomChange,
     // Optional { value: badge text } for the geometry dropdown's rows
-    // (see GeomSelect) — e.g. marking the docs previewer's Auto entry
+    // (see MtlxSelect) — e.g. marking the docs previewer's Auto entry
     // as experimental.
     geomBadges,
     showGeomSelect = true,
@@ -1301,7 +1301,7 @@ const ViewportControls = ({
         switch (id) {
             case 'geom':
                 return showGeomSelect ? (
-                    <GeomSelect
+                    <MtlxSelect
                         key="geom"
                         value={geom}
                         options={geomList}
@@ -1713,9 +1713,9 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
     );
 };
 
-// Generic dropdown (documents, materials, versions, colorspaces), not
-// just geometry. Portaled to fullscreenPortalRoot(): native fullscreen,
-// and ancestor backdrop-blur mispositions position:fixed (see ColorSwatch).
+// Shared dropdown used across the site (documents, materials, versions,
+// colorspaces, geometry, and more). Portaled to fullscreenPortalRoot():
+// native fullscreen, and ancestor backdrop-blur mispositions position:fixed.
 const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
 
 // --mx-select-* theming hook. Each falls back through the matching
@@ -2176,10 +2176,7 @@ Object.assign(window, {
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
-    // GeomSelect: kept as an alias during the dropdown-standardization
-    // migration. Both are bare window globals, so a missing one is a
-    // render-time ReferenceError; a later step drops the alias.
-    ColorSwatch, MtlxSelect, GeomSelect: MtlxSelect, PreviewErrorBoundary,
+    ColorSwatch, MtlxSelect, PreviewErrorBoundary,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
     TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile,

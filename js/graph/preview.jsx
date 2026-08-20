@@ -495,7 +495,7 @@
             const shellAliveRef = React.useRef(true);
 
             // ---- Viewport controls (item F2.1), mirrors node-preview.jsx.
-            // Geometry is selectable via the Settings popover's GeomSelect
+            // Geometry is selectable via the Settings popover's MtlxSelect
             // (persisted), not this strip; controls apply live via viewRef.
             const {
                 envBg, toggleEnvBg,
@@ -795,9 +795,9 @@
 
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
             // built-in slot) so it shares geomMode with the Settings-popover's
-            // own GeomSelect just below.
+            // own MtlxSelect just below.
             const graphGeomSlot = (
-                <GeomSelect
+                <MtlxSelect
                     key="graphGeom"
                     value={geomMode}
                     options={GRAPH_GEOM_MODES}
@@ -861,7 +861,7 @@
                                     picking a geometry isn't the experiment,
                                     the Auto mode is. */}
                                 <div className="text-gray-200">Preview Geometry</div>
-                                <GeomSelect
+                                <MtlxSelect
                                     value={geomMode}
                                     options={GRAPH_GEOM_MODES}
                                     labels={GRAPH_GEOM_LABELS}

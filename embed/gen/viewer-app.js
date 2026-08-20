@@ -533,7 +533,7 @@ function MaterialViewerApp({
   // postMessage handler re-rendering with a new value) updates
   // `geom` here. Guarded so: (a) an uncontrolled caller (geometry
   // always undefined) never fires this, and (b) the HUD's own
-  // GeomSelect (when `controls` opts it in) isn't fought — this
+  // MtlxSelect (when `controls` opts it in) isn't fought — this
   // only reacts to the PROP actually changing, not to `geom`
   // drifting away from it via the user's own selection.
   const geometryPropRef = React.useRef(geometry);
@@ -597,7 +597,7 @@ function MaterialViewerApp({
     [mtlxDefaultVersion]: 'Default'
   };
   // Narrow popover: rows are just a version string + Default badge,
-  // nowhere near GeomSelect's default badge width (long geo labels).
+  // nowhere near MtlxSelect's default badge width (long geo labels).
   const VERSION_POP_W = 144;
 
   // Non-default versions are gitignored and may be absent from a
@@ -929,7 +929,7 @@ function MaterialViewerApp({
     className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-medium text-gray-400"
-  }, "MaterialX version"), /*#__PURE__*/React.createElement(GeomSelect, {
+  }, "MaterialX version"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: version,
     options: mtlxVersions,
     labels: versionLabels,

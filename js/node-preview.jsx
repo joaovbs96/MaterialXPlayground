@@ -1631,7 +1631,7 @@
                                 picking a geometry isn't the experiment,
                                 the Auto mode is. */}
                             <div className="text-gray-200">Preview Geometry</div>
-                            <GeomSelect
+                            <MtlxSelect
                                 value={geomChoice}
                                 options={['default'].concat(PREVIEW_GEOM_LIST)}
                                 labels={GEOM_LABELS}
@@ -1783,7 +1783,7 @@
                         {(isFullscreen || params.length === 0) ? renderViewportControls(false) : (
                             <React.Fragment>
                                 {renderViewportControls(true)}
-                                <GeomSelect
+                                <MtlxSelect
                                     value={geomChoice}
                                     options={['default'].concat(PREVIEW_GEOM_LIST)}
                                     labels={GEOM_LABELS}

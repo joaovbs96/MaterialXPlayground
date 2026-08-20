@@ -495,7 +495,7 @@ function MaterialCompareApp({ active = true } = {}) {
     mtlxVersions.forEach((v) => { versionLabels[v] = v; });
     const versionBadges = { [mtlxDefaultVersion]: 'Default' };
     // Narrow popover: rows are just a version string + Default badge,
-    // nowhere near GeomSelect's default badge width (long geo labels).
+    // nowhere near MtlxSelect's default badge width (long geo labels).
     const VERSION_POP_W = 144;
 
     // Non-default versions are gitignored and may simply be absent from a
@@ -932,7 +932,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 <div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">MaterialX version</span>
-                        <GeomSelect
+                        <MtlxSelect
                             value={slot.version}
                             options={mtlxVersions}
                             labels={versionLabels}
