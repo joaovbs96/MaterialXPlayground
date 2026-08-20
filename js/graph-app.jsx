@@ -130,6 +130,27 @@
             );
         }
 
+        // Collapsible parameter-group header (folders + Downstream
+        // Connections). Negative margins matching the panel's own px-2.5
+        // pull the border edge-to-edge instead of sitting inset.
+        const GROUP_HEADER_CLASS = 'w-full flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
+            + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
+            + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
+
+        // Right sidebar resize range and localStorage key. Max also never
+        // exceeds ~70% of the editor width (see clampSidebarWidth).
+        const SIDEBAR_MIN_WIDTH = 260;
+        const SIDEBAR_MAX_WIDTH = 640;
+        const SIDEBAR_DEFAULT_WIDTH = 304; // matches the old fixed w-[19rem]
+        const SIDEBAR_WIDTH_STORAGE_KEY = 'mtlxGraphSidebarWidth';
+        const clampSidebarWidth = (w, editorWidth) => {
+            let max = SIDEBAR_MAX_WIDTH;
+            if (editorWidth) max = Math.min(max, Math.round(editorWidth * 0.7));
+            if (max < SIDEBAR_MIN_WIDTH) max = SIDEBAR_MIN_WIDTH;
+            const n = isFinite(w) ? w : SIDEBAR_DEFAULT_WIDTH;
+            return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, n));
+        };
+
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
@@ -192,6 +213,16 @@
             // stays exclusive via selectedEdgeId.
             const [selectedEdgeIds, setSelectedEdgeIds] = React.useState([]);
             const [paramsOpen, setParamsOpen] = React.useState(!narrow);
+            // Right sidebar width in px, resizable by dragging its left
+            // edge. Seeded from localStorage and re-validated against
+            // clampSidebarWidth so a stale/corrupt value can't break layout.
+            const [sidebarWidth, setSidebarWidth] = React.useState(() => {
+                let stored = NaN;
+                try {
+                    stored = parseFloat(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+                } catch (e) { /* private mode / storage disabled */ }
+                return clampSidebarWidth(stored);
+            });
             // The LAST node the preview showed — { scope, id } — so the
             // preview stays on it when the selection is cleared. Reset per
             // document.
@@ -484,6 +515,77 @@
             React.useEffect(() => watchFullscreen(
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
             ), []);
+
+            // Sidebar resize (drag its left edge). Mousemove deltas
+            // coalesce to one setState per animation frame, same idiom as
+            // the ResizeObserver effects below, so a fast drag can't force a render per event.
+            const sidebarWidthRef = React.useRef(sidebarWidth);
+            sidebarWidthRef.current = sidebarWidth;
+            const sidebarDragRef = React.useRef(null); // { startX, startWidth, lastWidth } while dragging
+            const [sidebarDragging, setSidebarDragging] = React.useState(false);
+            const persistSidebarWidth = (w) => {
+                try { window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(w))); } catch (e) { /* private mode / storage disabled */ }
+            };
+            const onSidebarHandleMouseDown = (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidthRef.current, lastWidth: sidebarWidthRef.current };
+                setSidebarDragging(true);
+            };
+            React.useEffect(() => {
+                if (!sidebarDragging) return;
+                let rafId = null;
+                const applyPending = () => {
+                    rafId = null;
+                    const drag = sidebarDragRef.current;
+                    if (drag) setSidebarWidth(drag.lastWidth);
+                };
+                const onMove = (e) => {
+                    const drag = sidebarDragRef.current;
+                    if (!drag) return;
+                    const editorWidth = panelRef.current ? panelRef.current.getBoundingClientRect().width : 0;
+                    // Sidebar is docked on the right: dragging the handle
+                    // LEFT (clientX decreasing) grows it.
+                    drag.lastWidth = clampSidebarWidth(drag.startWidth + (drag.startX - e.clientX), editorWidth);
+                    if (rafId == null) rafId = requestAnimationFrame(applyPending);
+                };
+                const onUp = () => {
+                    if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+                    const drag = sidebarDragRef.current;
+                    if (drag) {
+                        setSidebarWidth(drag.lastWidth);
+                        persistSidebarWidth(drag.lastWidth);
+                    }
+                    sidebarDragRef.current = null;
+                    setSidebarDragging(false);
+                };
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+                return () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                    if (rafId != null) cancelAnimationFrame(rafId);
+                };
+            }, [sidebarDragging]);
+            // Keeps a restored/stale width honest as the editor itself
+            // resizes (window resize, VS Code panel drag): re-clamps
+            // against the live editor width, idempotent so it can't loop.
+            React.useEffect(() => {
+                const host = panelRef.current;
+                if (!host) return;
+                const measure = () => {
+                    const rect = host.getBoundingClientRect();
+                    if (!rect.width) return;
+                    setSidebarWidth((w) => {
+                        const c = clampSidebarWidth(w, rect.width);
+                        return c === w ? w : c;
+                    });
+                };
+                measure();
+                const ro = new ResizeObserver(measure);
+                ro.observe(host);
+                return () => ro.disconnect();
+            }, []);
 
             // Top toolbar clusters: measured 3-tier collapse (labels ->
             // icons -> wrapped), via classList (not state) to avoid a
@@ -4593,7 +4695,14 @@
                 : null;
 
             return (
-                <div ref={panelRef} className="absolute inset-0 bg-gray-900 overflow-hidden flex flex-col">
+                <div
+                    ref={panelRef}
+                    className="absolute inset-0 bg-gray-900 overflow-hidden flex flex-col"
+                    // Locks the cursor/selection for the whole panel during a
+                    // sidebar drag so a fast pointer move (leaving the thin
+                    // handle strip) doesn't flicker the cursor or select text.
+                    style={sidebarDragging ? { cursor: 'col-resize', userSelect: 'none' } : undefined}
+                >
                     {/* Menu bar and canvas+sidebar body row below are real
                         flex children; only dialogs and full-editor overlays
                         further down stay absolutely positioned on top. */}
@@ -4701,7 +4810,11 @@
                         {/* Top-right cluster: document picker, view toggles,
                             add-node, fullscreen. Width now comes from the
                             menu bar's grid column; the bar is opaque chrome, so no pointer-events guard is needed. */}
-                        <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; }'}</style>
+                        {/* Also moves React Flow's attribution tag left of
+                            the MiniMap, bottom-aligned with it, instead of
+                            underneath it (kept, not hidden: see below). */}
+                        <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; } '
+                            + '.react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
                             {mtlxPaths.length > 1 && (
                                 <MtlxSelect
@@ -4854,6 +4967,9 @@
                                     selectionMode={(RF.SelectionMode && RF.SelectionMode.Partial) || 'partial'}
                                     selectionKeyCode={null}
                                     multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+                                    // React Flow's MIT text doesn't require on-screen credit, but
+                                    // the bundle asks non-Pro users to keep it, so it stays visible
+                                    // (repositioned, not hidden; see the style tag above).
                                     proOptions={{ account: '', hideAttribution: false }}
                                 >
                                     <Background color="#374151" gap={18} size={1.5} />
@@ -4878,19 +4994,20 @@
                                                 width: 200,
                                                 height: 150,
                                                 marginRight: minimapMarginRight,
+                                                marginBottom: 8, // aligns with the Types window's bottom-2 (8px)
                                                 transition: 'margin-right 200ms ease',
                                             }}
                                         />
                                     )}
                                     {/* Minimize button, pinned to the MiniMap's
                                         corner via <Panel>. marginRight = minimapMarginRight+4;
-                                        marginBottom = 15+150-20-4 = 141 (see below). */}
+                                        marginBottom = 8+150-20-4 = 134 (see below). */}
                                     {!narrow && minimapOpen && !minimapBlocked && (
                                         <Panel
                                             position="bottom-right"
                                             style={{
                                                 marginRight: minimapMarginRight + 4,
-                                                marginBottom: 141, // 15 + 150 - 20 - 4, see comment above
+                                                marginBottom: 134, // 8 + 150 - 20 - 4, see comment above
                                                 transition: 'margin-right 200ms ease',
                                             }}
                                         >
@@ -5068,7 +5185,19 @@
                             )}
                         </div>
                         {parsed && paramsOpen && (
-                        <aside className="flex-none w-[19rem] max-w-[70%] flex flex-col bg-gray-800/95 border-l border-gray-600 overflow-hidden font-mono">
+                        <React.Fragment>
+                        {/* Sidebar resize handle: a thin strip flush against
+                            the aside's left edge (hidden while collapsed,
+                            since there's nothing to resize then). */}
+                        <div
+                            onMouseDown={onSidebarHandleMouseDown}
+                            title="Drag to resize"
+                            className={'flex-none w-1.5 cursor-col-resize transition-colors '
+                                + (sidebarDragging ? 'bg-blue-500/70' : 'bg-transparent hover:bg-blue-500/50')}
+                        />
+                        <aside
+                            style={{ width: sidebarWidth }}
+                            className="flex-none max-w-[70%] flex flex-col bg-gray-800/95 border-l border-gray-600 overflow-hidden font-mono">
                             {/* The preview target on a shaderball — same
                                 render pipeline as the docs page. Re-renders
                                 on every committed param edit and target change. */}
@@ -5206,8 +5335,11 @@
                                                 setDocsDialogOpen(true);
                                             }}
                                             title={'Open the documentation for "' + displayNode.data.category + '"'}
-                                            className="flex-none ml-auto w-4 h-4 flex items-center justify-center rounded-full border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 text-[9px] leading-none transition-colors"
-                                        >?</button>
+                                            className={BTN_TOOLBAR + ' ml-auto'}
+                                        >
+                                            <MtlxIcon name="help" className="w-3.5 h-3.5" />
+                                            <span>About this Node</span>
+                                        </button>
                                     )}
                                 </div>
 
@@ -5334,16 +5466,16 @@
                                         panelParamGroups.folders.map((f) => {
                                             const open = panelFoldersOpen[f.name] !== false;
                                             return (
-                                                <div key={'folder:' + f.name} className="py-1 border-t border-gray-700/70 mt-1 pt-1">
+                                                <div key={'folder:' + f.name} className="mt-2">
                                                     <button
                                                         type="button"
                                                         onClick={() => setPanelFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
-                                                        className="w-full flex items-center gap-1.5 py-1 text-[11px] font-mono text-gray-300 hover:text-gray-100"
+                                                        className={GROUP_HEADER_CLASS}
                                                     >
                                                         <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
                                                         <span className="truncate">{f.name}</span>
                                                     </button>
-                                                    {open && f.inputs.map(renderParamRow)}
+                                                    {open && <div className="pt-1.5">{f.inputs.map(renderParamRow)}</div>}
                                                 </div>
                                             );
                                         })
@@ -5354,17 +5486,17 @@
                                     // "from …" parent links. Hidden when
                                     // nothing is connected downstream.
                                     downstreamEdges.length > 0 && (
-                                        <div key="downstream" className="py-1 border-t border-gray-700/70 mt-1 pt-1">
+                                        <div key="downstream" className="mt-2">
                                             <button
                                                 type="button"
                                                 onClick={() => setDownstreamOpen((o) => !o)}
-                                                className="w-full flex items-center gap-1.5 py-1 text-[11px] font-mono text-gray-300 hover:text-gray-100"
+                                                className={GROUP_HEADER_CLASS}
                                             >
                                                 <MtlxIcon name={downstreamOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
                                                 <span className="truncate">Downstream Connections</span>
-                                                <span className="ml-auto flex-none text-[9px] text-gray-500">{downstreamEdges.length}</span>
+                                                <span className="ml-auto flex-none text-[9px] text-gray-500 normal-case tracking-normal">{downstreamEdges.length}</span>
                                             </button>
-                                            {downstreamOpen && downstreamEdges.map((e) => {
+                                            {downstreamOpen && <div className="pt-1.5">{downstreamEdges.map((e) => {
                                                 const outName = e.sourceHandle.slice(4);
                                                 const inName = e.targetHandle.slice(3);
                                                 const multiOut = ((displayNode.data.outputs) || []).length > 1;
@@ -5381,7 +5513,7 @@
                                                         </button>
                                                     </div>
                                                 );
-                                            })}
+                                            })}</div>}
                                         </div>
                                     ),
                                 ] : (
@@ -5391,6 +5523,7 @@
                                 )}
                             </div>
                         </aside>
+                        </React.Fragment>
                         )}
                     </div>
 
