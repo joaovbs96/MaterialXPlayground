@@ -1075,8 +1075,7 @@ function BuilderApp({ active } = {}) {
     // Picking a preset fills the src field and commits it immediately,
     // same as typing a URL then pressing Enter. Typing in the src field
     // afterwards resets this select back to its placeholder (see below).
-    const handlePresetPick = (e) => {
-        const url = e.target.value;
+    const handlePresetPick = (url) => {
         setPresetPick(url);
         if (!url) return;
         patch({ src: url });
@@ -1308,35 +1307,44 @@ function BuilderApp({ active } = {}) {
             {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
                 <div>
                     <FieldLabel label="Or pick a curated example" />
-                    <select value={presetPick} onChange={handlePresetPick} className={TEXT_INPUT_CLS}>
-                        <option value="">Choose a curated example</option>
-                        {window.MTLX_PRESETS.map((p) => (
-                            <option key={p.path} value={window.MTLX_PRESETS_BASE + p.path}>{p.label}</option>
-                        ))}
-                    </select>
+                    <MtlxSelect
+                        value={presetPick}
+                        options={window.MTLX_PRESETS.map((p) => ({ value: window.MTLX_PRESETS_BASE + p.path, label: p.label }))}
+                        placeholder="Choose a curated example"
+                        onChange={handlePresetPick}
+                        size="lg"
+                        variant="field"
+                        block
+                    />
                 </div>
             )}
             <div className="grid grid-cols-2 gap-3">
                 <div>
                     <FieldLabel label="Material" pill={<LivePill />} />
-                    {renderables.length >= 2 ? (
-                        <select value={material} onChange={(e) => patch({ material: e.target.value })} className={TEXT_INPUT_CLS}>
-                            <option value="">First material</option>
-                            {renderables.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
-                        </select>
-                    ) : (
-                        <div className={TEXT_INPUT_CLS + ' flex items-center gap-1.5 border-dashed text-gray-500 cursor-not-allowed select-none'}>
-                            <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
-                            First material
-                        </div>
-                    )}
+                    <MtlxSelect
+                        value={material}
+                        options={renderables.map((r) => ({ value: r.name, label: r.name }))}
+                        emptyOption="First material"
+                        disabled={renderables.length < 2}
+                        icon={renderables.length < 2 ? 'lock' : undefined}
+                        onChange={(v) => patch({ material: v })}
+                        size="lg"
+                        variant="field"
+                        block
+                        className={renderables.length < 2 ? 'border-dashed' : undefined}
+                    />
                 </div>
                 <div>
                     <FieldLabel label="MaterialX version" />
                     {BUILDER_VERSIONS.length > 0 && (
-                        <select value={version} onChange={(e) => patch({ version: e.target.value })} className={TEXT_INPUT_CLS}>
-                            {BUILDER_VERSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-                        </select>
+                        <MtlxSelect
+                            value={version}
+                            options={BUILDER_VERSIONS}
+                            onChange={(v) => patch({ version: v })}
+                            size="lg"
+                            variant="field"
+                            block
+                        />
                     )}
                 </div>
             </div>
