@@ -2021,7 +2021,11 @@ const MtlxSelect = ({
     // is handled by the class above instead; otherwise theme.font; else
     // ambient inheritance is left alone (ties into popFontFamily below).
     const explicitFont = font === 'mono' ? undefined : (font && font !== 'sans' ? font : (theme && theme.font));
-    const fontStyle = explicitFont ? { fontFamily: explicitFont } : undefined;
+    // No explicit font: point at the token with `inherit` as its fallback,
+    // so --mx-select-font themes the trigger while plain inheritance
+    // stays the default when nobody sets it.
+    const fontStyle = explicitFont ? { fontFamily: explicitFont }
+        : (font === 'mono' ? undefined : { fontFamily: 'var(--mx-select-font, inherit)' });
 
     // className is additive and layout-only: the trigger always renders
     // its own chrome from size/variant, and className is appended for
@@ -2053,7 +2057,9 @@ const MtlxSelect = ({
     // POPOVER font: explicit font prop or theme.font wins; else the
     // ambient value captured off the trigger (fixes the portal losing
     // normal font-family inheritance); 'mono' is left to the class.
-    const popFontFamily = font === 'mono' ? undefined : (explicitFont || (ambient && ambient.fontFamily) || undefined);
+    const ambientFont = (ambient && ambient.fontFamily) || 'inherit';
+    const popFontFamily = font === 'mono' ? undefined
+        : (explicitFont || 'var(--mx-select-font, ' + ambientFont + ')');
 
     const popStyle = Object.assign(
         {
