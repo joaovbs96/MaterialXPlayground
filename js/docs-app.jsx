@@ -730,45 +730,44 @@
                                                     <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
                                                         {sigCount > 1 && (
                                                             <React.Fragment>
-                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="sig-select">
+                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                                                                     Signature
                                                                 </label>
-                                                                <select
-                                                                    id="sig-select"
+                                                                <MtlxSelect
                                                                     value={sig}
-                                                                    onChange={(e) => setSigIndex(Number(e.target.value))}
-                                                                    title="This node has several signatures — pick which one to document and preview"
-                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
-                                                                >
-                                                                    {sigGroups.map((g, i) => {
+                                                                    options={sigGroups.map((g, i) => {
                                                                         const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
-                                                                        return (
-                                                                            <option key={g.key || i} value={i}>
-                                                                                {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
-                                                                            </option>
-                                                                        );
+                                                                        return { value: i, label: (i + 1) + ' / ' + sigCount + (l ? ' - ' + l : '') };
                                                                     })}
-                                                                </select>
+                                                                    onChange={setSigIndex}
+                                                                    title="This node has several signatures - pick which one to document and preview"
+                                                                    ariaLabel="Signature"
+                                                                    font="mono"
+                                                                    size="sm"
+                                                                    variant="field"
+                                                                    className="max-w-full"
+                                                                />
                                                             </React.Fragment>
                                                         )}
                                                         {showVersionPicker && (
                                                             <React.Fragment>
-                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="version-select">
+                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                                                                     Version
                                                                 </label>
-                                                                <select
-                                                                    id="version-select"
+                                                                <MtlxSelect
                                                                     value={versionIdx}
-                                                                    onChange={(e) => setVersionIndex(Number(e.target.value))}
-                                                                    title="This node has several nodedef versions — same ports, different defaults"
-                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
-                                                                >
-                                                                    {selectedGroup.versions.map((v, i) => (
-                                                                        <option key={v.name || i} value={i}>
-                                                                            {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
+                                                                    options={selectedGroup.versions.map((v, i) => ({
+                                                                        value: i,
+                                                                        label: (v.version || '?') + (v.isDefaultVersion ? ' (default)' : ''),
+                                                                    }))}
+                                                                    onChange={setVersionIndex}
+                                                                    title="This node has several nodedef versions - same ports, different defaults"
+                                                                    ariaLabel="Version"
+                                                                    font="mono"
+                                                                    size="sm"
+                                                                    variant="field"
+                                                                    className="max-w-full"
+                                                                />
                                                             </React.Fragment>
                                                         )}
                                                     </div>
