@@ -451,7 +451,10 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
-            builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            // No md:overflow-y-auto here, unlike the others: the builder
+            // view fills the viewport height and does not scroll itself
+            // (only its settings sidebar does) - see BuilderApp's rootRef.
+            builder: 'p-2 sm:p-6 flex-1 md:min-h-0',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
@@ -533,9 +536,14 @@ function Shell() {
                 // inset-0` root positions directly against #root. VS
                 // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
-            } else if (view === 'builder' || view === 'vscode') {
+            } else if (view === 'builder') {
+                // md:h-full (not scrollable, unlike home/vscode below):
+                // BuilderApp fills this and owns its own internal height
+                // chain so only its settings sidebar scrolls, not the page.
+                content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
+            } else if (view === 'vscode') {
                 // Same wrapper contract as home: a static, scrollable
-                // content page, not a full-bleed canvas (builder/vscode).
+                // content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root

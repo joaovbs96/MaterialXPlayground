@@ -344,6 +344,17 @@ function ReloadsPill({ className }) {
     );
 }
 
+// Small neutral "live" pill, ReloadsPill's counterpart for fields that
+// update in place. Same markup LegendBlock's own chip already used,
+// hoisted here so both places share one definition.
+function LivePill({ className }) {
+    return (
+        <span className={'shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-full border border-gray-600 text-gray-400 ' + (className || '')}>
+            live
+        </span>
+    );
+}
+
 // One Look theme preset (58px tall, fills its grid column): three small
 // color squares + a label.
 function ThemeTile({ preset, active, disabled, title, onClick }) {
@@ -367,23 +378,62 @@ function ThemeTile({ preset, active, disabled, title, onClick }) {
     );
 }
 
-// Dashed strip in the Look card: two fake HUD chips rendered with the
+// Dashed strip in the Look card: a faithful miniature of the real HUD
+// (js/embed-controls.jsx, embed/embed-controls.css) rendered with the
 // current accent/surface/text/radius, so the theme previews live even
-// with no real HUD controls turned on.
+// with no real HUD controls turned on. Chrome/sizing below is copied
+// from .mtlx-ec-select / .mtlx-ec-btn / .mtlx-ec-btn.is-active exactly;
+// the border stays the fixed #4b5563 the real HUD uses, since it does
+// NOT follow the accent, only the active button and the focus ring do.
 function HudMiniPreview({ accent, surface, text, radius }) {
-    const chipStyle = { background: surface, color: text, borderRadius: (Number(radius) || 0) + 'px', border: '1px solid ' + accent };
+    const radiusPx = (Number(radius) || 0) + 'px';
+    const chrome = {
+        boxSizing: 'border-box',
+        margin: 0,
+        fontFamily: 'inherit',
+        color: text,
+        background: 'color-mix(in srgb, ' + surface + ' 80%, transparent)',
+        border: '1px solid #4b5563',
+        borderRadius: radiusPx,
+    };
+    const selectStyle = Object.assign({}, chrome, {
+        height: '24px',
+        maxWidth: '132px',
+        padding: '0 4px',
+        fontSize: '11px',
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
+        textOverflow: 'ellipsis',
+    });
+    const btnStyle = Object.assign({}, chrome, {
+        height: '24px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '0 7px',
+        fontSize: '11px',
+        whiteSpace: 'nowrap',
+    });
+    const activeBtnStyle = Object.assign({}, btnStyle, {
+        background: 'color-mix(in srgb, ' + accent + ' 80%, transparent)',
+        border: '1px solid ' + accent,
+        color: '#fff',
+    });
     return (
         <div className="rounded-lg border border-dashed border-gray-700 p-3 flex items-center justify-between gap-3 flex-wrap">
             <span className="text-[10px] text-gray-500 shrink-0">HUD with these colors</span>
-            <div className="flex items-center gap-2">
-                <span style={chipStyle} className="h-7 px-2.5 inline-flex items-center gap-1.5 text-[11px]">
-                    <span style={{ color: accent }}><MtlxIcon name="cube" className="w-3 h-3" /></span>
-                    Std. Shader Ball
-                    <MtlxIcon name="chevron-down" className="w-3 h-3" />
-                </span>
-                <span style={chipStyle} className="h-7 w-7 inline-flex items-center justify-center">
-                    <span style={{ color: accent }}><MtlxIcon name="maximize" className="w-3.5 h-3.5" /></span>
-                </span>
+            <div className="flex items-center gap-1">
+                <select style={selectStyle} value={BUILDER_DEFAULT_GEOM} onChange={() => {}} title="Preview geometry">
+                    <option value={BUILDER_DEFAULT_GEOM}>{window.GEOM_LABELS[BUILDER_DEFAULT_GEOM]}</option>
+                </select>
+                <button type="button" style={activeBtnStyle}>
+                    <MtlxIcon name="environment" className="w-3.5 h-3.5 shrink-0" />
+                    <span>Environment</span>
+                </button>
+                <button type="button" style={btnStyle}>
+                    <MtlxIcon name="camera-reset" className="w-3.5 h-3.5 shrink-0" />
+                    <span>Reset</span>
+                </button>
             </div>
         </div>
     );
@@ -391,23 +441,27 @@ function HudMiniPreview({ accent, surface, text, radius }) {
 
 // One "Start from a template" card: icon box + name + description + tags.
 // The icon box is self-stretch so it always matches the text block's height.
-function TemplateCard({ t, active, onClick }) {
+// `compact` is the sidebar's full-width-row styling (narrower icon box,
+// tighter padding, description clamped to 2 lines) - same content either way.
+function TemplateCard({ t, active, onClick, compact }) {
     return (
         <button
             type="button"
             onClick={onClick}
-            className={'w-full text-left rounded-lg border p-3 flex gap-3 transition-colors '
+            className={'w-full text-left rounded-lg border flex gap-3 transition-colors '
+                + (compact ? 'p-2.5' : 'p-3') + ' '
                 + (active ? 'border-blue-500/70 bg-gray-800 ring-1 ring-blue-500/20' : 'border-gray-700 bg-gray-800/40 hover:border-gray-600')}
         >
             <div
-                className={'self-stretch w-14 rounded-md border bg-gray-900 flex items-center justify-center shrink-0 '
+                className={'self-stretch rounded-md border bg-gray-900 flex items-center justify-center shrink-0 '
+                    + (compact ? 'w-11' : 'w-14') + ' '
                     + (active ? 'border-blue-500/60' : 'border-gray-700')}
             >
-                <MtlxIcon name={t.icon} className={'w-[22px] h-[22px] ' + (active ? 'text-blue-300' : 'text-gray-300')} />
+                <MtlxIcon name={t.icon} className={(compact ? 'w-[18px] h-[18px] ' : 'w-[22px] h-[22px] ') + (active ? 'text-blue-300' : 'text-gray-300')} />
             </div>
             <div className="min-w-0 flex-1 space-y-1">
                 <div className="text-[13px] font-semibold text-gray-100">{t.name}</div>
-                <p className="text-[11px] leading-snug text-gray-500">{t.desc}</p>
+                <p className={'text-[11px] leading-snug text-gray-500' + (compact ? ' line-clamp-2' : '')}>{t.desc}</p>
                 <div className="flex flex-wrap gap-1 pt-0.5">
                     {t.tags.map((tag) => (
                         <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">{tag}</span>
@@ -419,8 +473,9 @@ function TemplateCard({ t, active, onClick }) {
 }
 
 // Both generated snippets behind tabs, one Copy button for whichever
-// tab is active. Fixed-height code area so the card never resizes as
-// a snippet grows/shrinks.
+// tab is active. The code area fills whatever the row (see the
+// grid-cols-2 wrapper below) leaves under the tab header, so the row's
+// own height is the single source of truth instead of a hand-tuned px.
 const SNIPPET_TABS = [
     { id: 'iframe', label: 'Plain iframe' },
     { id: 'element', label: 'Custom element' },
@@ -432,15 +487,15 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
         try { return window.hljs.highlight(code, { language: 'xml' }).value; } catch (e) { return null; }
     }, [code]);
     return (
-        <div id="builder-snippets" className="rounded-lg border border-gray-700 bg-gray-900 overflow-hidden">
-            <div className="flex items-center justify-between gap-2 bg-gray-800/60">
+        <div id="builder-snippets" className="rounded-lg border border-gray-700 bg-gray-900 overflow-hidden h-[142px] md:h-full flex flex-col min-w-0">
+            <div className="flex items-center justify-between gap-2 bg-gray-800/60 shrink-0">
                 <div className="flex items-stretch">
                     {SNIPPET_TABS.map((s) => (
                         <button
                             key={s.id}
                             type="button"
                             onClick={() => onTab(s.id)}
-                            className={'h-9 px-3 text-xs border-b-2 transition-colors '
+                            className={'h-7 px-3 text-xs border-b-2 transition-colors '
                                 + (tab === s.id ? 'border-blue-500 text-gray-100' : 'border-transparent text-gray-400 hover:text-gray-200')}
                         >
                             {s.label}
@@ -450,13 +505,13 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
                 <button
                     type="button"
                     onClick={onCopy}
-                    className={BTN_PRIMARY + ' inline-flex items-center gap-1.5 shrink-0 mr-3'}
+                    className={BTN_PRIMARY + ' inline-flex items-center gap-1.5 shrink-0 mr-2'}
                 >
                     <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
                     {copied ? 'Copied!' : 'Copy'}
                 </button>
             </div>
-            <pre className="p-3 text-xs leading-relaxed text-gray-300 h-[200px] whitespace-pre overflow-auto custom-scrollbar">
+            <pre className="flex-1 min-h-0 min-w-0 p-2 text-xs leading-relaxed text-gray-300 whitespace-pre overflow-auto custom-scrollbar">
                 {highlighted ? <code dangerouslySetInnerHTML={{ __html: highlighted }} /> : <code>{code}</code>}
             </pre>
         </div>
@@ -464,12 +519,14 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
 }
 
 // The legend block (item d in the masonry): live vs reloads pills plus two
-// one-line notes about snippet generation and preview scaling.
+// one-line notes about snippet generation and preview scaling. h-full so
+// it always matches SnippetsCard's height (set by the row, see the
+// grid-cols-2 wrapper below) instead of a separately hand-tuned px.
 function LegendBlock() {
     return (
-        <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3 space-y-2">
+        <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
             <div className="flex items-center gap-1.5 text-[11px] text-gray-500 flex-wrap">
-                <span className="shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-full border border-gray-600 text-gray-400">live</span>
+                <LivePill />
                 lighting, look, camera, size update in place
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-gray-500 flex-wrap">
@@ -609,6 +666,10 @@ const BUILDER_DEVICES = [
     { id: 'phone', width: 390, icon: 'device-mobile' },
 ];
 const BUILDER_STAGE_HEIGHT_CAP = 560;
+// Non-frame chrome inside the stage box the fill-height cap subtracts from
+// the measured box: p-6 padding (48) + gap-2 (8) + the single-line camera
+// controls row (28px), plus a small rounding buffer.
+const BUILDER_STAGE_CHROME = 90;
 
 function PreviewStage({
     settings, patch, ready, errors, onClearErrors, onUseCurrentView,
@@ -617,12 +678,20 @@ function PreviewStage({
     const [device, setDevice] = React.useState('desktop');
     const stageRef = React.useRef(null);
     const [stageWidth, setStageWidth] = React.useState(0);
+    const [stageHeight, setStageHeight] = React.useState(0);
     const dragRef = React.useRef(null);
 
     React.useEffect(() => {
         const el = stageRef.current;
         if (!el) return undefined;
-        const ro = new ResizeObserver((entries) => setStageWidth(entries[0].contentRect.width));
+        // Ignore non-positive readings (e.g. a mid-layout frame while an
+        // ancestor's flex height is still resolving) instead of latching
+        // a 0 that would scale the embed to nothing and never recover.
+        const ro = new ResizeObserver((entries) => {
+            const rect = entries[0].contentRect;
+            if (rect.width > 0) setStageWidth(rect.width);
+            if (rect.height > 0) setStageHeight(rect.height);
+        });
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
@@ -634,21 +703,35 @@ function PreviewStage({
     // stage never scrolls, it just narrows its centered "page" backdrop
     // (desktop's 1200 is usually wider than innerW, so it's a no-op there).
     const pageInnerW = Math.max(40, Math.min(innerW, deviceWidth));
+    // Compact/phone stage is a fixed 660px box, so its cap stays fixed
+    // too; the desktop fill-height stage derives its cap from the box
+    // size actually measured above. The floor is a small safety net
+    // only (never fully degenerate), not a "comfortable minimum" - a
+    // bigger floor would make the chrome want more room than a short
+    // box actually has, overflowing its own overflow-hidden bounds.
+    const heightCap = compact
+        ? BUILDER_STAGE_HEIGHT_CAP
+        : Math.max(24, (stageHeight || (BUILDER_STAGE_HEIGHT_CAP + BUILDER_STAGE_CHROME)) - BUILDER_STAGE_CHROME);
 
     let frameW, frameH, scale;
     if (sizing === 'responsive') {
         frameW = pageInnerW;
         frameH = frameW * ((height / width) || 1);
-        scale = Math.min(1, BUILDER_STAGE_HEIGHT_CAP / frameH);
+        scale = Math.min(1, heightCap / frameH);
     } else {
         frameW = width;
         frameH = height;
-        scale = Math.min(1, pageInnerW / frameW, BUILDER_STAGE_HEIGHT_CAP / frameH);
+        scale = Math.min(1, pageInnerW / frameW, heightCap / frameH);
     }
     const scaledW = Math.max(1, Math.round(frameW * scale));
     const scaledH = Math.max(1, Math.round(frameH * scale));
     const shownPct = Math.round(scale * 100);
     const pageBoxWidth = pageInnerW + 48;
+    // The camera/size controls row below the frame is normally as wide as
+    // the (scaled) embed, but a heavily scaled-down embed would squeeze it
+    // into wrapping onto extra lines and overflowing the stage's fixed
+    // box. Give it a wider floor (clamped to what actually fits) instead.
+    const controlsW = Math.min(pageInnerW, Math.max(scaledW, 620));
 
     const startDrag = (e) => {
         if (sizing !== 'fixed') return;
@@ -671,7 +754,10 @@ function PreviewStage({
     };
 
     return (
-        <div ref={fadeRef} className={'space-y-2' + (compact ? ' sticky top-0 z-10 bg-gray-900 pb-2' : '')}>
+        <div ref={fadeRef} className={compact
+            ? 'space-y-2 sticky top-0 z-10 bg-gray-900 pb-2'
+            : 'col-start-1 row-start-1 min-h-0 min-w-0 flex flex-col gap-2'}
+        >
             {!compact ? (
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-2 text-xs">
@@ -714,16 +800,20 @@ function PreviewStage({
 
             <div
                 ref={stageRef}
-                className="rounded-lg border border-gray-700 overflow-hidden bg-gray-900 flex items-center justify-center"
+                // Compact/phone: fixed 660px, matching the old constant
+                // height. Desktop: fills the column's remaining height
+                // (heightCap above follows this box's own measured size).
+                className={'rounded-lg border border-gray-700 overflow-hidden flex items-center justify-center '
+                    + (compact ? 'h-[660px]' : 'flex-1 min-h-0')}
+                style={{
+                    backgroundColor: '#0b1220',
+                    backgroundImage: 'linear-gradient(rgba(107,114,128,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(107,114,128,0.14) 1px, transparent 1px)',
+                    backgroundSize: '20px 20px',
+                }}
             >
                 <div
-                    className="flex flex-col items-center gap-2 p-6 rounded-md"
-                    style={{
-                        width: pageBoxWidth,
-                        backgroundColor: '#0b1220',
-                        backgroundImage: 'linear-gradient(rgba(107,114,128,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(107,114,128,0.14) 1px, transparent 1px)',
-                        backgroundSize: '20px 20px',
-                    }}
+                    className="flex flex-col items-center gap-2 p-6"
+                    style={{ width: pageBoxWidth }}
                 >
                     <div
                         className="relative shrink-0"
@@ -746,7 +836,7 @@ function PreviewStage({
 
                     {/* Builder-only camera controls + size readout: kept out of the
                         frame itself so they never read as part of the embed's own HUD. */}
-                    <div className="flex items-center justify-between gap-2 flex-wrap" style={{ width: scaledW }}>
+                    <div className="flex items-center justify-between gap-2 flex-wrap" style={{ width: controlsW }}>
                         <div className="flex items-center gap-1.5">
                             <button
                                 type="button" title="Use current view" onClick={onUseCurrentView}
@@ -847,7 +937,6 @@ function BuilderApp({ active } = {}) {
     }, []);
     const effectiveWidth = containerWidth || Math.min(window.innerWidth - 32, 1280);
     const columns = builderColumnsFor(effectiveWidth);
-    const columnWidth = (effectiveWidth - (columns - 1) * 12) / columns;
 
     // Pushes an advisory message into the errors banner, deduped against
     // whatever the last entry already says so repeated hints don't stack
@@ -1134,324 +1223,372 @@ function BuilderApp({ active } = {}) {
     // (docs/EMBEDDING.md's Geometry constraint) - keep that combo unreachable
     // instead of letting the embed silently swap geometry and warn.
     const transparentDisabled = geometry === 'shaderball-scene';
+    // Same geometry also has no turntable rotation (js/viewer-app.jsx hides
+    // the rotate button whenever roomGeomActive) - the HUD control still
+    // toggles, but the button it would add never renders. Explain it rather
+    // than silently emitting a control that does nothing.
+    const rotateHudDisabled = geometry === 'shaderball-scene';
 
-    const previewFrameWidthForSpan = sizing === 'responsive' ? 800 : width;
-    const previewSpan = columns === 1 ? 1 : ((previewFrameWidthForSpan + 32 > columnWidth) ? 2 : 1);
-
-    const previewItem = (
-        <MasonryItem key="preview" span={previewSpan}>
-            <PreviewStage
-                settings={settings}
-                patch={patch}
-                ready={ready}
-                errors={errors}
-                onClearErrors={() => setErrors([])}
-                onUseCurrentView={handleUseCurrentView}
-                previewMountRef={previewMountRef}
-                iframeUrl={iframeUrl}
-                compact={columns === 1}
-                onCopyIframe={() => copySnippet('iframe', iframeSnippet)}
-                fadeRef={fadeRef}
-            />
-        </MasonryItem>
+    // Raw content, unwrapped: placed directly by the JSX below. previewContent
+    // is never a MasonryItem (see masonryItems further down); snippets/legend
+    // are MasonryItems on phone only, a plain grid row on wider layouts.
+    const previewContent = (
+        <PreviewStage
+            settings={settings}
+            patch={patch}
+            ready={ready}
+            errors={errors}
+            onClearErrors={() => setErrors([])}
+            onUseCurrentView={handleUseCurrentView}
+            previewMountRef={previewMountRef}
+            iframeUrl={iframeUrl}
+            compact={columns === 1}
+            onCopyIframe={() => copySnippet('iframe', iframeSnippet)}
+            fadeRef={fadeRef}
+        />
     );
-    const snippetsItem = (
-        <MasonryItem key="snippets" span={1}>
-            <SnippetsCard
-                tab={snippetTab}
-                onTab={setSnippetTab}
-                iframeSnippet={iframeSnippet}
-                elementSnippet={elementSnippet}
-                copied={copiedKey === snippetTab}
-                onCopy={() => copySnippet(snippetTab, snippetTab === 'iframe' ? iframeSnippet : elementSnippet)}
-            />
-        </MasonryItem>
+    const snippetsContent = (
+        <SnippetsCard
+            tab={snippetTab}
+            onTab={setSnippetTab}
+            iframeSnippet={iframeSnippet}
+            elementSnippet={elementSnippet}
+            copied={copiedKey === snippetTab}
+            onCopy={() => copySnippet(snippetTab, snippetTab === 'iframe' ? iframeSnippet : elementSnippet)}
+        />
     );
-    const legendItem = <MasonryItem key="legend" span={1}><LegendBlock /></MasonryItem>;
+    const legendContent = <LegendBlock />;
 
-    const cardItems = [
-        <MasonryItem key="doc" span={1}>
-            <SectionCard icon="file-text" title="Document" summary={docSummary} defaultOpen={defaultOpen}>
+    // "Start from a template": a SectionCard for the sidebar (columns 2/3,
+    // full-width stacked rows, collapsible like every other sidebar card)
+    // vs. today's horizontally scrolling strip for the phone path (columns
+    // === 1, rendered in the main flow instead - see the return below).
+    const activeTemplate = BUILDER_TEMPLATES.find((t) => isTemplateActive(t, settings));
+    const templatesSummary = activeTemplate ? activeTemplate.name : 'Custom';
+    const templatesCard = (
+        <SectionCard key="templates" icon="presets" title="Start from a template" summary={templatesSummary} defaultOpen={defaultOpen}>
+            <p className="text-[11px] text-gray-500">Prefills every setting below. You can change anything afterwards.</p>
+            <div className="space-y-2">
+                {BUILDER_TEMPLATES.map((t) => (
+                    <TemplateCard key={t.id} t={t} active={isTemplateActive(t, settings)} onClick={() => handleTemplate(t)} compact />
+                ))}
+            </div>
+        </SectionCard>
+    );
+    const templatesStrip = (
+        <div>
+            <div className="flex items-baseline gap-2 flex-wrap mb-2.5">
+                <span className="text-[13px] font-semibold text-gray-300">Start from a template</span>
+                <span className="text-[11px] text-gray-500">Prefills every setting below. You can change anything afterwards.</span>
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-1 custom-scrollbar">
+                {BUILDER_TEMPLATES.map((t) => (
+                    <div key={t.id} className="w-64 shrink-0">
+                        <TemplateCard t={t} active={isTemplateActive(t, settings)} onClick={() => handleTemplate(t)} />
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+
+    const cardsContent = [
+        <SectionCard key="doc" icon="file-text" title="Document" pill={<ReloadsPill />} summary={docSummary} defaultOpen={defaultOpen}>
+            <div>
+                <FieldLabel label="Document URL (src)" />
+                <input
+                    type="text" value={src}
+                    onChange={(e) => { patch({ src: e.target.value }); setPresetPick(''); }}
+                    onBlur={commitSrc}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { commitSrc(); e.currentTarget.blur(); } }}
+                    placeholder="https://example.com/materials/brushed_steel.mtlx"
+                    className={TEXT_INPUT_CLS}
+                />
+                <p className="text-[11px] text-gray-500 mt-1">Applies on Enter or when the field loses focus.</p>
+            </div>
+            {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
                 <div>
-                    <FieldLabel label="Document URL (src)" pill={<ReloadsPill />} />
-                    <input
-                        type="text" value={src}
-                        onChange={(e) => { patch({ src: e.target.value }); setPresetPick(''); }}
-                        onBlur={commitSrc}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { commitSrc(); e.currentTarget.blur(); } }}
-                        placeholder="https://example.com/materials/brushed_steel.mtlx"
-                        className={TEXT_INPUT_CLS}
-                    />
-                    <p className="text-[11px] text-gray-500 mt-1">Applies on Enter or when the field loses focus.</p>
+                    <FieldLabel label="Or pick a curated example" />
+                    <select value={presetPick} onChange={handlePresetPick} className={TEXT_INPUT_CLS}>
+                        <option value="">Choose a curated example</option>
+                        {window.MTLX_PRESETS.map((p) => (
+                            <option key={p.path} value={window.MTLX_PRESETS_BASE + p.path}>{p.label}</option>
+                        ))}
+                    </select>
                 </div>
-                {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
-                    <div>
-                        <FieldLabel label="Or pick a curated example" />
-                        <select value={presetPick} onChange={handlePresetPick} className={TEXT_INPUT_CLS}>
-                            <option value="">Choose a curated example</option>
-                            {window.MTLX_PRESETS.map((p) => (
-                                <option key={p.path} value={window.MTLX_PRESETS_BASE + p.path}>{p.label}</option>
-                            ))}
+            )}
+            <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <FieldLabel label="Material" pill={<LivePill />} />
+                    {renderables.length >= 2 ? (
+                        <select value={material} onChange={(e) => patch({ material: e.target.value })} className={TEXT_INPUT_CLS}>
+                            <option value="">First material</option>
+                            {renderables.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
                         </select>
-                    </div>
-                )}
-                <div className="grid grid-cols-2 gap-3">
-                    <div>
-                        <FieldLabel label="Material" />
-                        {renderables.length >= 2 ? (
-                            <select value={material} onChange={(e) => patch({ material: e.target.value })} className={TEXT_INPUT_CLS}>
-                                <option value="">First material</option>
-                                {renderables.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
-                            </select>
-                        ) : (
-                            <div className={TEXT_INPUT_CLS + ' flex items-center gap-1.5 border-dashed text-gray-500 cursor-not-allowed select-none'}>
-                                <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
-                                First material
-                            </div>
-                        )}
-                    </div>
-                    <div>
-                        <FieldLabel label="MaterialX version" pill={<ReloadsPill />} />
-                        {BUILDER_VERSIONS.length > 0 && (
-                            <select value={version} onChange={(e) => patch({ version: e.target.value })} className={TEXT_INPUT_CLS}>
-                                {BUILDER_VERSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-                            </select>
-                        )}
-                    </div>
-                </div>
-                <p className="text-[11px] text-gray-500">Unlocks for documents with 2 or more materials.</p>
-            </SectionCard>
-        </MasonryItem>,
-
-        <MasonryItem key="scene" span={1}>
-            <SectionCard icon="cube" title="Scene" pill={<ReloadsPill />} summary={(window.GEOM_LABELS && window.GEOM_LABELS[geometry]) || geometry} defaultOpen={defaultOpen}>
-                <div>
-                    <FieldLabel label="Geometry" />
-                    <div className="grid grid-cols-3 gap-2">
-                        {BUILDER_GEOM_OPTIONS.map((g) => {
-                            const geomDisabled = g === 'shaderball-scene' && transparent;
-                            return (
-                                <GeometryTile
-                                    key={g}
-                                    label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
-                                    icon={GEOM_ICONS[g]}
-                                    selected={geometry === g}
-                                    disabled={geomDisabled}
-                                    title={geomDisabled ? 'Not available with a transparent page background' : undefined}
-                                    onClick={() => patch({ geometry: g })}
-                                />
-                            );
-                        })}
-                    </div>
-                </div>
-            </SectionCard>
-        </MasonryItem>,
-
-        <MasonryItem key="lighting" span={1}>
-            <SectionCard icon="sun" title="Lighting" summary={builderLightingSummary(env, exposure)} defaultOpen={defaultOpen}>
-                <SliderField
-                    label="Environment rotation" unit="deg" value={env} min={0} max={360} step={1} placeholder="0"
-                    onSlider={(v) => patch({ env: Number(v) === 0 ? '' : v })}
-                    onNumber={(v) => patch({ env: v })}
-                />
-                <SliderField
-                    label="Exposure" unit="EV" value={builderExposureEv(exposure)} min={-3} max={3} step={0.1} placeholder="0"
-                    onSlider={(v) => patch({ exposure: builderEvToExposure(v) })}
-                    onNumber={(v) => patch({ exposure: builderEvToExposure(v) })}
-                />
-                <div className="flex justify-end">
-                    <button
-                        type="button"
-                        disabled={lightingAtDefault}
-                        onClick={() => patch({ env: '', exposure: '' })}
-                        className={BTN_SECONDARY + ' inline-flex items-center gap-1.5' + (lightingAtDefault ? ' opacity-50 cursor-not-allowed' : '')}
-                    >
-                        <MtlxIcon name="refresh" className="w-3.5 h-3.5" />
-                        Reset rotation and exposure
-                    </button>
-                </div>
-                <div>
-                    <FieldLabel label="Environment map URL (.hdr / .exr)" />
-                    <input
-                        type="text" value={envmap}
-                        onChange={(e) => patch({ envmap: e.target.value })}
-                        onBlur={commitEnvmap}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
-                        placeholder="(default environment)"
-                        className={TEXT_INPUT_CLS}
-                    />
-                </div>
-                <label className="flex items-center justify-between cursor-pointer">
-                    <span className="text-xs font-medium text-gray-400">Show environment as background</span>
-                    <Toggle checked={background} onChange={(v) => patch({ background: v })} />
-                </label>
-            </SectionCard>
-        </MasonryItem>,
-
-        <MasonryItem key="look" span={1}>
-            <SectionCard icon="palette" title="Look" summary={themeSummary} defaultOpen={defaultOpen}>
-                <div>
-                    <FieldLabel label="Theme preset" />
-                    <div className="grid grid-cols-3 gap-2">
-                        {BUILDER_THEME_PRESETS.map((p) => {
-                            const presetDisabled = p.id === 'card' && geometry === 'shaderball-scene';
-                            return (
-                                <ThemeTile
-                                    key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
-                                    disabled={presetDisabled}
-                                    title={presetDisabled ? 'Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable this preset.' : undefined}
-                                    onClick={() => patch({ accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
-                                />
-                            );
-                        })}
-                    </div>
-                </div>
-                <div className="grid grid-cols-3 gap-2.5">
-                    <ColorField label="Accent" value={accent} onChange={(v) => patch({ accent: v })} placeholder={BUILDER_THEME_DEFAULTS.accent} />
-                    <ColorField label="Surface" value={surface} onChange={(v) => patch({ surface: v })} placeholder={BUILDER_THEME_DEFAULTS.surface} />
-                    <ColorField label="Text" value={text} onChange={(v) => patch({ text: v })} placeholder={BUILDER_THEME_DEFAULTS.text} />
-                </div>
-                <SliderField
-                    label="Corner radius" unit="px" value={radius} min={0} max={24} step={1} placeholder={BUILDER_THEME_DEFAULTS.radius}
-                    onSlider={(v) => patch({ radius: v })}
-                    onNumber={(v) => patch({ radius: v })}
-                />
-                <div>
-                    <label className={'flex items-center justify-between gap-3 ' + (transparentDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
-                        <span className="text-xs font-medium text-gray-400">Transparent page background</span>
-                        <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} disabled={transparentDisabled} />
-                    </label>
-                    {transparentDisabled ? (
-                        <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
-                            <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
-                            <span>Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.</span>
-                        </div>
                     ) : (
-                        <p className="text-[11px] mt-1 text-gray-500">Not compatible with Std. Shader Ball w/ Backdrop.</p>
+                        <div className={TEXT_INPUT_CLS + ' flex items-center gap-1.5 border-dashed text-gray-500 cursor-not-allowed select-none'}>
+                            <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
+                            First material
+                        </div>
                     )}
                 </div>
-                <HudMiniPreview accent={accent} surface={surface} text={text} radius={radius} />
-            </SectionCard>
-        </MasonryItem>,
+                <div>
+                    <FieldLabel label="MaterialX version" />
+                    {BUILDER_VERSIONS.length > 0 && (
+                        <select value={version} onChange={(e) => patch({ version: e.target.value })} className={TEXT_INPUT_CLS}>
+                            {BUILDER_VERSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                    )}
+                </div>
+            </div>
+            <p className="text-[11px] text-gray-500">Unlocks for documents with 2 or more materials.</p>
+        </SectionCard>,
 
-        <MasonryItem key="hud" span={1}>
-            <SectionCard icon="layout-grid" title="HUD controls" pill={<ReloadsPill />} summary={builderHudSummary(controls)} defaultOpen={defaultOpen}>
-                <div className="flex flex-wrap gap-2">
-                    {BUILDER_CONTROLS.map((c) => {
-                        const locked = c.id === 'material' && renderables.length < 2;
+        <SectionCard key="scene" icon="cube" title="Scene" pill={<ReloadsPill />} summary={(window.GEOM_LABELS && window.GEOM_LABELS[geometry]) || geometry} defaultOpen={defaultOpen}>
+            <div>
+                <FieldLabel label="Geometry" />
+                <div className="grid grid-cols-3 gap-2">
+                    {BUILDER_GEOM_OPTIONS.map((g) => {
+                        const geomDisabled = g === 'shaderball-scene' && transparent;
                         return (
-                            <Chip
-                                key={c.id} icon={c.icon} active={!!controls[c.id]} disabled={locked} dashed={locked}
-                                title={locked ? 'Unlocks for documents with 2 or more materials' : undefined}
-                                onClick={() => patch({ controls: { ...controls, [c.id]: !controls[c.id] } })}
-                            >
-                                {c.chip}
-                            </Chip>
+                            <GeometryTile
+                                key={g}
+                                label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
+                                icon={GEOM_ICONS[g]}
+                                selected={geometry === g}
+                                disabled={geomDisabled}
+                                title={geomDisabled ? 'Not available with a transparent page background' : undefined}
+                                onClick={() => patch({ geometry: g })}
+                            />
                         );
                     })}
                 </div>
-                <p className="text-[11px] text-gray-500">Material selection unlocks for documents with 2 or more materials.</p>
-                <div className="flex items-center gap-3 text-[11px]">
+            </div>
+        </SectionCard>,
+
+        <SectionCard key="lighting" icon="sun" title="Lighting" summary={builderLightingSummary(env, exposure)} defaultOpen={defaultOpen}>
+            <SliderField
+                label="Environment rotation" unit="deg" value={env} min={0} max={360} step={1} placeholder="0"
+                onSlider={(v) => patch({ env: Number(v) === 0 ? '' : v })}
+                onNumber={(v) => patch({ env: v })}
+            />
+            <SliderField
+                label="Exposure" unit="EV" value={builderExposureEv(exposure)} min={-3} max={3} step={0.1} placeholder="0"
+                onSlider={(v) => patch({ exposure: builderEvToExposure(v) })}
+                onNumber={(v) => patch({ exposure: builderEvToExposure(v) })}
+            />
+            <div className="flex justify-end">
+                <button
+                    type="button"
+                    disabled={lightingAtDefault}
+                    onClick={() => patch({ env: '', exposure: '' })}
+                    className={BTN_SECONDARY + ' inline-flex items-center gap-1.5' + (lightingAtDefault ? ' opacity-50 cursor-not-allowed' : '')}
+                >
+                    <MtlxIcon name="refresh" className="w-3.5 h-3.5" />
+                    Reset rotation and exposure
+                </button>
+            </div>
+            <div>
+                <FieldLabel label="Environment map URL (.hdr / .exr)" />
+                <input
+                    type="text" value={envmap}
+                    onChange={(e) => patch({ envmap: e.target.value })}
+                    onBlur={commitEnvmap}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
+                    placeholder="(default environment)"
+                    className={TEXT_INPUT_CLS}
+                />
+            </div>
+            <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-xs font-medium text-gray-400">Show environment as background</span>
+                <Toggle checked={background} onChange={(v) => patch({ background: v })} />
+            </label>
+        </SectionCard>,
+
+        <SectionCard key="look" icon="palette" title="Look" summary={themeSummary} defaultOpen={defaultOpen}>
+            <div>
+                <FieldLabel label="Theme preset" />
+                <div className="grid grid-cols-3 gap-2">
+                    {BUILDER_THEME_PRESETS.map((p) => {
+                        const presetDisabled = p.id === 'card' && geometry === 'shaderball-scene';
+                        return (
+                            <ThemeTile
+                                key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
+                                disabled={presetDisabled}
+                                title={presetDisabled ? 'Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable this preset.' : undefined}
+                                onClick={() => patch({ accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
+                            />
+                        );
+                    })}
+                </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2.5">
+                <ColorField label="Accent" value={accent} onChange={(v) => patch({ accent: v })} placeholder={BUILDER_THEME_DEFAULTS.accent} />
+                <ColorField label="Surface" value={surface} onChange={(v) => patch({ surface: v })} placeholder={BUILDER_THEME_DEFAULTS.surface} />
+                <ColorField label="Text" value={text} onChange={(v) => patch({ text: v })} placeholder={BUILDER_THEME_DEFAULTS.text} />
+            </div>
+            <SliderField
+                label="Corner radius" unit="px" value={radius} min={0} max={24} step={1} placeholder={BUILDER_THEME_DEFAULTS.radius}
+                onSlider={(v) => patch({ radius: v })}
+                onNumber={(v) => patch({ radius: v })}
+            />
+            <div>
+                <label className={'flex items-center justify-between gap-3 ' + (transparentDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
+                    <span className="text-xs font-medium text-gray-400">Transparent page background</span>
+                    <Toggle checked={transparent} onChange={(v) => patch({ transparent: v })} disabled={transparentDisabled} />
+                </label>
+                {transparentDisabled ? (
+                    <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
+                        <span>Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.</span>
+                    </div>
+                ) : (
+                    <p className="text-[11px] mt-1 text-gray-500">Not compatible with Std. Shader Ball w/ Backdrop.</p>
+                )}
+            </div>
+            <HudMiniPreview accent={accent} surface={surface} text={text} radius={radius} />
+        </SectionCard>,
+
+        <SectionCard key="hud" icon="layout-grid" title="HUD controls" pill={<ReloadsPill />} summary={builderHudSummary(controls)} defaultOpen={defaultOpen}>
+            <div className="flex flex-wrap gap-2">
+                {BUILDER_CONTROLS.map((c) => {
+                    const materialLocked = c.id === 'material' && renderables.length < 2;
+                    const rotateLocked = c.id === 'rotate' && rotateHudDisabled;
+                    const locked = materialLocked || rotateLocked;
+                    const title = materialLocked
+                        ? 'Unlocks for documents with 2 or more materials'
+                        : rotateLocked
+                            ? 'Std. Shader Ball w/ Backdrop has no turntable rotation. Pick another geometry to enable it.'
+                            : undefined;
+                    return (
+                        <Chip
+                            key={c.id} icon={c.icon} active={!!controls[c.id]} disabled={locked} dashed={locked}
+                            title={title}
+                            onClick={() => patch({ controls: { ...controls, [c.id]: !controls[c.id] } })}
+                        >
+                            {c.chip}
+                        </Chip>
+                    );
+                })}
+            </div>
+            <p className="text-[11px] text-gray-500">Material selection unlocks for documents with 2 or more materials.</p>
+            {rotateHudDisabled && (
+                <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                    <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
+                    <span>Disabled: Std. Shader Ball w/ Backdrop has no turntable rotation. Pick another geometry to enable it.</span>
+                </div>
+            )}
+            <div className="flex items-center gap-3 text-[11px]">
+                <button
+                    type="button" className="text-blue-400 hover:text-blue-300"
+                    onClick={() => { const o = {}; BUILDER_CONTROLS.forEach((c) => { o[c.id] = true; }); patch({ controls: o }); }}
+                >
+                    All
+                </button>
+                <span className="text-gray-700">|</span>
+                <button type="button" className="text-blue-400 hover:text-blue-300" onClick={() => patch({ controls: {} })}>None</button>
+            </div>
+        </SectionCard>,
+
+        <SectionCard key="behavior" icon="adjustments" title="Behavior" summary={builderBehaviorSummary(autorotate, wheelZoom)} defaultOpen={defaultOpen}>
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Auto-rotate <ReloadsPill /></span>
+                <Toggle checked={autorotate} onChange={(v) => patch({ autorotate: v })} />
+            </label>
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Direct wheel zoom, no Ctrl needed <ReloadsPill /></span>
+                <Toggle checked={wheelZoom} onChange={(v) => patch({ wheelZoom: v })} />
+            </label>
+            <div className="border-t border-gray-700/60 pt-3.5 space-y-3">
+                <div>
+                    <div className="text-xs font-medium text-gray-300">Loading</div>
+                    <p className="text-[11px] text-gray-500 mt-0.5">Poster shows until the viewer activates, eager skips waiting for it to scroll into view.</p>
+                </div>
+                <div>
+                    <FieldLabel label="Poster image URL" />
+                    <input type="text" value={poster} onChange={(e) => patch({ poster: e.target.value })} placeholder="(none)" className={TEXT_INPUT_CLS} />
+                </div>
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                    <span className="text-xs font-medium text-gray-400">Eager (skip lazy-loading)</span>
+                    <Toggle checked={eager} onChange={(v) => patch({ eager: v })} />
+                </label>
+            </div>
+        </SectionCard>,
+
+        <SectionCard key="size" icon="dimensions" title="Size" summary={builderSizeSummary(settings)} defaultOpen={defaultOpen}>
+            <div>
+                <FieldLabel label="Sizing" />
+                <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden">
                     <button
-                        type="button" className="text-blue-400 hover:text-blue-300"
-                        onClick={() => { const o = {}; BUILDER_CONTROLS.forEach((c) => { o[c.id] = true; }); patch({ controls: o }); }}
+                        type="button" onClick={() => patch({ sizing: 'fixed' })}
+                        className={'h-8 px-3 text-xs font-medium transition-colors '
+                            + (sizing === 'fixed' ? 'bg-blue-600/70 text-white' : 'bg-gray-900 text-gray-400 hover:text-gray-200')}
                     >
-                        All
+                        Fixed (px)
                     </button>
-                    <span className="text-gray-700">|</span>
-                    <button type="button" className="text-blue-400 hover:text-blue-300" onClick={() => patch({ controls: {} })}>None</button>
+                    <button
+                        type="button" onClick={() => patch({ sizing: 'responsive' })}
+                        className={'h-8 px-3 text-xs font-medium border-l border-gray-700 transition-colors '
+                            + (sizing === 'responsive' ? 'bg-blue-600/70 text-white' : 'bg-gray-900 text-gray-400 hover:text-gray-200')}
+                    >
+                        Responsive
+                    </button>
                 </div>
-            </SectionCard>
-        </MasonryItem>,
-
-        <MasonryItem key="behavior" span={1}>
-            <SectionCard icon="adjustments" title="Behavior" summary={builderBehaviorSummary(autorotate, wheelZoom)} defaultOpen={defaultOpen}>
-                <label className="flex items-center justify-between gap-3 cursor-pointer">
-                    <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Auto-rotate <ReloadsPill /></span>
-                    <Toggle checked={autorotate} onChange={(v) => patch({ autorotate: v })} />
-                </label>
-                <label className="flex items-center justify-between gap-3 cursor-pointer">
-                    <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Direct wheel zoom, no Ctrl needed <ReloadsPill /></span>
-                    <Toggle checked={wheelZoom} onChange={(v) => patch({ wheelZoom: v })} />
-                </label>
-                <div className="border-t border-gray-700/60 pt-3.5 space-y-3">
-                    <div>
-                        <div className="text-xs font-medium text-gray-300">Loading</div>
-                        <p className="text-[11px] text-gray-500 mt-0.5">Poster shows until the viewer activates, eager skips waiting for it to scroll into view.</p>
-                    </div>
-                    <div>
-                        <FieldLabel label="Poster image URL" />
-                        <input type="text" value={poster} onChange={(e) => patch({ poster: e.target.value })} placeholder="(none)" className={TEXT_INPUT_CLS} />
-                    </div>
-                    <label className="flex items-center justify-between gap-3 cursor-pointer">
-                        <span className="text-xs font-medium text-gray-400">Eager (skip lazy-loading)</span>
-                        <Toggle checked={eager} onChange={(v) => patch({ eager: v })} />
-                    </label>
+            </div>
+            <div>
+                <FieldLabel label="Aspect presets" />
+                <div className="flex flex-wrap gap-1.5">
+                    {ASPECT_PRESETS.map((p) => (
+                        <Chip
+                            key={p.id} active={!!matchedAspect && matchedAspect.id === p.id}
+                            onClick={() => patch({ height: Math.max(1, Math.round(width * p.h / p.w)) })}
+                        >
+                            {p.id}
+                        </Chip>
+                    ))}
+                    <Chip active={!matchedAspect} onClick={() => {}}>Custom</Chip>
                 </div>
-            </SectionCard>
-        </MasonryItem>,
-
-        <MasonryItem key="size" span={1}>
-            <SectionCard icon="dimensions" title="Size" summary={builderSizeSummary(settings)} defaultOpen={defaultOpen}>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
                 <div>
-                    <FieldLabel label="Sizing" />
-                    <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden">
-                        <button
-                            type="button" onClick={() => patch({ sizing: 'fixed' })}
-                            className={'h-8 px-3 text-xs font-medium transition-colors '
-                                + (sizing === 'fixed' ? 'bg-blue-600/70 text-white' : 'bg-gray-900 text-gray-400 hover:text-gray-200')}
-                        >
-                            Fixed (px)
-                        </button>
-                        <button
-                            type="button" onClick={() => patch({ sizing: 'responsive' })}
-                            className={'h-8 px-3 text-xs font-medium border-l border-gray-700 transition-colors '
-                                + (sizing === 'responsive' ? 'bg-blue-600/70 text-white' : 'bg-gray-900 text-gray-400 hover:text-gray-200')}
-                        >
-                            Responsive
-                        </button>
-                    </div>
+                    <FieldLabel label={sizing === 'responsive' ? 'Aspect W' : 'Width (px)'} />
+                    <input type="number" min="1" value={width} onChange={(e) => patch({ width: Math.max(1, Number(e.target.value) || 1) })} className={TEXT_INPUT_CLS} />
                 </div>
                 <div>
-                    <FieldLabel label="Aspect presets" />
-                    <div className="flex flex-wrap gap-1.5">
-                        {ASPECT_PRESETS.map((p) => (
-                            <Chip
-                                key={p.id} active={!!matchedAspect && matchedAspect.id === p.id}
-                                onClick={() => patch({ height: Math.max(1, Math.round(width * p.h / p.w)) })}
-                            >
-                                {p.id}
-                            </Chip>
-                        ))}
-                        <Chip active={!matchedAspect} onClick={() => {}}>Custom</Chip>
-                    </div>
+                    <FieldLabel label={sizing === 'responsive' ? 'Aspect H' : 'Height (px)'} />
+                    <input type="number" min="1" value={height} onChange={(e) => patch({ height: Math.max(1, Number(e.target.value) || 1) })} className={TEXT_INPUT_CLS} />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                    <div>
-                        <FieldLabel label={sizing === 'responsive' ? 'Aspect W' : 'Width (px)'} />
-                        <input type="number" min="1" value={width} onChange={(e) => patch({ width: Math.max(1, Number(e.target.value) || 1) })} className={TEXT_INPUT_CLS} />
-                    </div>
-                    <div>
-                        <FieldLabel label={sizing === 'responsive' ? 'Aspect H' : 'Height (px)'} />
-                        <input type="number" min="1" value={height} onChange={(e) => patch({ height: Math.max(1, Number(e.target.value) || 1) })} className={TEXT_INPUT_CLS} />
-                    </div>
-                </div>
-                <p className="text-[11px] text-gray-500">Or drag the corner of the preview.</p>
-            </SectionCard>
-        </MasonryItem>,
+            </div>
+            <p className="text-[11px] text-gray-500">Or drag the corner of the preview.</p>
+        </SectionCard>,
     ];
 
-    // Phone (1 column): the snippets card/legend render AFTER the cards
-    // (reachable via the sticky stage's "View snippets" button) instead of
-    // right after the preview, per the brief's compact layout.
+    // Phone (1 column) keeps the old masonry stack for the cards, snippets
+    // and legend (reachable via the sticky stage's "View snippets" button).
+    // previewContent itself is NOT a masonry item (see below).
     const masonryItems = columns === 1
-        ? [previewItem, ...cardItems, snippetsItem, legendItem]
-        : [previewItem, snippetsItem, legendItem, ...cardItems];
+        ? [
+            ...cardsContent.map((c) => <MasonryItem key={c.key} span={1}>{c}</MasonryItem>),
+            <MasonryItem key="snippets" span={1}>{snippetsContent}</MasonryItem>,
+            <MasonryItem key="legend" span={1}>{legendContent}</MasonryItem>,
+        ]
+        : null;
 
     return (
-        <div ref={rootRef} className="relative">
+        <div ref={rootRef} className="relative md:h-full md:flex md:flex-col md:min-h-0">
             <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="top" />
-            <div ref={contentRef} className="relative max-w-7xl mx-auto space-y-5">
+            {/* w-full: without it, mx-auto's auto margins disable flex stretch and
+                this column shrink-to-fits its content instead of clamping at
+                max-w-7xl - letting the snippets grid's 1fr track's max-content
+                (driven by the active snippet's text) resize the whole page. */}
+            <div ref={contentRef} className="relative w-full max-w-7xl mx-auto space-y-3 md:flex-1 md:min-h-0 md:flex md:flex-col">
+                <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <a href="#!home" className="hover:text-gray-300 transition-colors">Home</a>
+                    <MtlxIcon name="chevron-right" className="w-3 h-3" />
+                    <span>Integrate</span>
+                    <MtlxIcon name="chevron-right" className="w-3 h-3" />
+                    <span className="text-gray-400">Embed Builder</span>
+                </nav>
+
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                     <div>
                         <div className="flex items-center gap-2">
@@ -1480,26 +1617,47 @@ function BuilderApp({ active } = {}) {
                     </div>
                 </div>
 
-                <div>
-                    <div className="flex items-baseline gap-2 flex-wrap mb-2.5">
-                        <span className="text-[13px] font-semibold text-gray-300">Start from a template</span>
-                        <span className="text-[11px] text-gray-500">Prefills every setting below. You can change anything afterwards.</span>
-                    </div>
-                    <div className={columns === 1
-                        ? 'flex gap-3 overflow-x-auto pb-1 custom-scrollbar'
-                        : 'grid gap-3 ' + (columns === 2 ? 'grid-cols-2' : 'grid-cols-4')}
-                    >
-                        {BUILDER_TEMPLATES.map((t) => (
-                            <div key={t.id} className={columns === 1 ? 'w-64 shrink-0' : 'min-w-0'}>
-                                <TemplateCard t={t} active={isTemplateActive(t, settings)} onClick={() => handleTemplate(t)} />
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                {/* Templates: phone keeps the old horizontally scrolling strip
+                    in the main flow, rendered here at this same fixed source
+                    position (columns 2/3 render nothing here - it moves into
+                    the sidebar as a SectionCard instead, costing no page
+                    height since only the sidebar scrolls there). This stays
+                    OUTSIDE the ternary below on purpose: previewContent must
+                    stay each branch's own first child so PreviewStage (and
+                    the live materialx-viewer it owns) never unmounts when
+                    `columns` crosses 1 - see that comment below. */}
+                {columns === 1 && templatesStrip}
 
-                <MasonryGrid columns={columns}>
-                    {masonryItems}
-                </MasonryGrid>
+                {/* previewContent is always this div's first child in both
+                    branches, so PreviewStage (and the live materialx-viewer
+                    it owns) never unmounts when `columns` crosses 1. */}
+                {columns === 1 ? (
+                    <div className="space-y-5">
+                        {previewContent}
+                        <MasonryGrid columns={columns}>
+                            {masonryItems}
+                        </MasonryGrid>
+                    </div>
+                ) : (
+                    // Two-row left column (preview fills row 1, snippets +
+                    // legend sit side by side in row 2) beside a sidebar
+                    // that spans both rows and scrolls its cards on its own.
+                    <div className="grid grid-cols-[minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_auto] gap-3 md:flex-1 md:min-h-0">
+                        {previewContent}
+                        {/* h-[142px] is the single height both cards fill (h-full)
+                            below - matches the old snippets card total (28px tab
+                            header + 112px code + 2px border) so the preview's
+                            "Shown at 100%" cap is unaffected by this change. */}
+                        <div className="col-start-1 row-start-2 grid grid-cols-2 gap-5 min-w-0 h-[142px]">
+                            {snippetsContent}
+                            {legendContent}
+                        </div>
+                        <div className="col-start-2 row-start-1 row-span-2 space-y-5 overflow-y-auto custom-scrollbar pr-2 min-h-0">
+                            {templatesCard}
+                            {cardsContent}
+                        </div>
+                    </div>
+                )}
             </div>
 
             <BuilderHelpDialog
