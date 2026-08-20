@@ -142,7 +142,7 @@
 
         // Right sidebar resize range and localStorage key. Max also never
         // exceeds ~70% of the editor width (see clampSidebarWidth).
-        const SIDEBAR_MIN_WIDTH = 260;
+        const SIDEBAR_MIN_WIDTH = 295; // below this the colorspace label truncates to nothing
         const SIDEBAR_MAX_WIDTH = 640;
         const SIDEBAR_DEFAULT_WIDTH = SIDEBAR_MIN_WIDTH; // open at the narrowest, widen by dragging
         const SIDEBAR_WIDTH_STORAGE_KEY = 'mtlxGraphSidebarWidth';
