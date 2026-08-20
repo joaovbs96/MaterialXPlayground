@@ -133,7 +133,10 @@
         // Collapsible parameter-group header (folders + Downstream
         // Connections). Negative margins matching the panel's own px-2.5
         // pull the border edge-to-edge instead of sitting inset.
-        const GROUP_HEADER_CLASS = 'w-full flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
+        // A <button> sizes to its content even as a flex container, so the width
+        // must exceed 100% by the -mx-2.5 pair (20px) for the rule to reach both
+        // padding edges of the scroll body.
+        const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
             + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
             + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
 
@@ -4006,7 +4009,7 @@
             // auto-collapses the legend (see legendOpenRightEdge below).
             // Flat 15: the docked sidebar is a flex sibling of the canvas
             // host, already excluded from its rect, so no 320 term here.
-            const minimapMarginRight = 15;
+            const minimapMarginRight = 8;
             const legendBoxRef = React.useRef(null);
             const pillRef = React.useRef(null);
             const prevPillOverlapRef = React.useRef(false);
@@ -5463,10 +5466,14 @@
                                         <div key="none" className="text-[11px] text-gray-500 py-2">This node has no parameters.</div>
                                     ),
                                     panelParamGroups.ungrouped.map(renderParamRow).concat(
-                                        panelParamGroups.folders.map((f) => {
+                                        panelParamGroups.folders.map((f, fi) => {
                                             const open = panelFoldersOpen[f.name] !== false;
+                                            // The first group sits flush at the panel top: -mt-1
+                                            // cancels the scroll body's py-1 so its rule reads as
+                                            // the panel's own edge, not a floating band.
+                                            const lead = (fi === 0 && !panelParamGroups.ungrouped.length) ? '-mt-1' : 'mt-2';
                                             return (
-                                                <div key={'folder:' + f.name} className="mt-2">
+                                                <div key={'folder:' + f.name} className={lead}>
                                                     <button
                                                         type="button"
                                                         onClick={() => setPanelFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
