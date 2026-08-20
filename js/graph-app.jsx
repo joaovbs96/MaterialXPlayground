@@ -533,6 +533,11 @@
                 if (e.button !== 0) return;
                 e.preventDefault();
                 sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidthRef.current, lastWidth: sidebarWidthRef.current };
+                // The preview keeps its drawing buffer for the drag and the
+                // browser scales it, so the image tracks the panel smoothly
+                // instead of the GL buffer reallocating every frame.
+                const pv = previewViewRef.current;
+                if (pv && pv.setResizeSuspended) { try { pv.setResizeSuspended(true); } catch (err) { /* stale view */ } }
                 setSidebarDragging(true);
             };
             React.useEffect(() => {
@@ -560,6 +565,8 @@
                         persistSidebarWidth(drag.lastWidth);
                     }
                     sidebarDragRef.current = null;
+                    const pv = previewViewRef.current;
+                    if (pv && pv.setResizeSuspended) { try { pv.setResizeSuspended(false); } catch (err) { /* stale view */ } }
                     setSidebarDragging(false);
                 };
                 window.addEventListener('mousemove', onMove);
@@ -5201,11 +5208,9 @@
                         <aside
                             style={{ width: sidebarWidth }}
                             className="flex-none max-w-[70%] flex flex-col bg-gray-800/95 border-l border-gray-600 overflow-hidden font-mono">
-                            {/* Width is pinned to the pre-drag value while the
-                                handle is held: the engine resizes the GL buffer on
-                                every canvas box change, which flickers mid-drag. */}
-                            <div className="flex-none" style={sidebarDragging && sidebarDragRef.current
-                                ? { width: sidebarDragRef.current.startWidth - 1 } : undefined}>
+                            {/* The preview target on a shaderball — same
+                                render pipeline as the docs page. Re-renders
+                                on every committed param edit and target change. */}
                             <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
                                 overlay={
                                     <button
@@ -5274,7 +5279,6 @@
                                     ),
                                 })}
                             />
-                            </div>
                             <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
                                 {/* Top Row: Color dot, Name, and docs button (collapse
                                     now lives in the preview strip's row 1). */}
