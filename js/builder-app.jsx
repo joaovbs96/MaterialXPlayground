@@ -679,7 +679,7 @@ const BUILDER_STAGE_CHROME = 90;
 
 function PreviewStage({
     settings, patch, ready, errors, onClearErrors, onUseCurrentView,
-    previewMountRef, iframeUrl, compact, onCopyIframe, fadeRef,
+    previewMountRef, iframeUrl, compact, onCopyIframe, onReloadPreview, fadeRef,
 }) {
     const [device, setDevice] = React.useState('desktop');
     const stageRef = React.useRef(null);
@@ -772,6 +772,15 @@ function PreviewStage({
                         <span className="text-gray-500">{ready ? 'Ready' : 'Loading...'}</span>
                     </div>
                     <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={onReloadPreview}
+                            title="Rebuild the preview frame from scratch with the settings as they stand"
+                            className={BTN_SECONDARY + ' inline-flex items-center gap-1.5'}
+                        >
+                            <MtlxIcon name="refresh" className="w-3.5 h-3.5" />
+                            Reload preview
+                        </button>
                         <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden">
                             {BUILDER_DEVICES.map((d) => (
                                 <button
@@ -929,6 +938,9 @@ function BuilderApp({ active } = {}) {
 
     const previewMountRef = React.useRef(null);
     const previewElRef = React.useRef(null);
+    // Bumping this re-runs the mount effect below, which tears the element
+    // down and rebuilds it from the settings as they stand right now.
+    const [previewNonce, setPreviewNonce] = React.useState(0);
 
     const rootRef = React.useRef(null);
     const fadeRef = React.useRef(null);
@@ -955,6 +967,13 @@ function BuilderApp({ active } = {}) {
 
     const controlsStr = controlsStrFrom(controls);
 
+    // Full rebuild, not a live property update: the effect re-runs with a
+    // fresh closure, so every setting is re-applied before the element is
+    // connected, exactly as on first mount.
+    const reloadPreview = () => {
+        setReady(false);
+        setPreviewNonce((n) => n + 1);
+    };
 
     // Builds the real <materialx-viewer> element off-DOM (not via JSX),
     // so `eager` and the initial src/geometry/controls are all set before
@@ -1005,7 +1024,7 @@ function BuilderApp({ active } = {}) {
             previewElRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [previewNonce]);
 
     // Live-updating properties (docs/EMBEDDING.md LIVE_ATTRS): applied on
     // every change via the element's own property setters, which handle
@@ -1262,6 +1281,7 @@ function BuilderApp({ active } = {}) {
             iframeUrl={iframeUrl}
             compact={columns === 1}
             onCopyIframe={() => copySnippet('iframe', iframeSnippet)}
+            onReloadPreview={reloadPreview}
             fadeRef={fadeRef}
         />
     );
@@ -1464,7 +1484,7 @@ function BuilderApp({ active } = {}) {
                 <ColorField label="Text" value={text} onChange={(v) => patch({ text: v })} placeholder={BUILDER_THEME_DEFAULTS.text} />
             </div>
             <SliderField
-                label="Corner radius" unit="px" value={radius} min={0} max={24} step={1} placeholder={BUILDER_THEME_DEFAULTS.radius}
+                label="HUD corner radius" unit="px" value={radius} min={0} max={24} step={1} placeholder={BUILDER_THEME_DEFAULTS.radius}
                 onSlider={(v) => patch({ radius: v })}
                 onNumber={(v) => patch({ radius: v })}
             />
