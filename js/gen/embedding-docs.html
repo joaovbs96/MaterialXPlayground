@@ -120,6 +120,12 @@ in-page, for reference while you work.</p>
 <td>Makes the page itself see-through, so the host page&#39;s own background shows behind the rendered geometry, instead of the viewer&#39;s usual dark backdrop. See <a href="#transparent-background">Transparent background</a>.</td>
 </tr>
 <tr>
+<td><code>forcetransparency</code></td>
+<td>boolean</td>
+<td><em>(off, or the visitor&#39;s last Settings choice)</em></td>
+<td>Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as <code>transparent</code> above. See <a href="#force-transparency">Force transparency</a>.</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td>CSS color</td>
 <td><code>#3b82f6</code></td>
@@ -283,6 +289,27 @@ floor, backdrop) that fills the whole frame, so it can never look transparent. R
 <code>transparent=1</code> against it (including by simply omitting <code>geometry</code> altogether) falls back to
 <code>shaderball</code> instead, and reports the substitution through <code>mtlx-error</code>. The geometries that
 do work with <code>transparent</code> are <code>shaderball</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code>, and <code>shaderball-mtlx</code>.</p>
+<h3 id="force-transparency">Force transparency</h3>
+<p>Despite the similar name, <code>forcetransparency</code> is unrelated to <code>transparent</code> above: it changes
+how <em>materials</em> render, not the page background. A material with opacity or transmission
+normally renders opaque, matching the official MaterialX viewer; <code>forcetransparency=1</code> instead
+renders it with real alpha blending (front-to-back depth-peeled order-independent transparency).
+This is experimental.</p>
+<pre><code class="language-html">&lt;iframe
+  src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=shaderball-scene&amp;forcetransparency=1&quot;
+  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
+  title=&quot;MaterialX material preview&quot;&gt;
+&lt;/iframe&gt;
+</code></pre>
+<p>Unlike <code>transparent</code>, there is no geometry constraint: it works with every <code>geometry</code> value,
+including the default <code>shaderball-scene</code>. It is also gated per material, not per geometry, so an
+opaque material in the same document renders exactly the same either way.</p>
+<p>This mirrors the &quot;Force Transparency&quot; toggle in the viewer&#39;s own Settings HUD panel, and, like
+that toggle, persists to the visitor&#39;s browser storage for this site (<code>localStorage</code>, shared by
+origin). An embed that sets <code>forcetransparency</code> writes that same shared preference, so it can
+also change the starting state of the next unrelated embed or page view on the same origin,
+unless that one passes its own explicit <code>forcetransparency</code> value too. Omitting the param
+entirely leaves whatever that shared preference already is untouched.</p>
 <h2 id="the-materialx-viewer-custom-element">The <code>&lt;materialx-viewer&gt;</code> custom element</h2>
 <p>For anything beyond a single static embed — a docs page with several materials, a product
 grid, a listing that scrolls — use the wrapper element instead of hand-writing iframes. It
@@ -409,6 +436,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>forcetransparency</code></td>
+<td><code>.forceTransparency</code></td>
+<td>boolean</td>
+<td>off</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td><code>.accent</code></td>
 <td>CSS color</td>
@@ -471,11 +505,11 @@ Rotate HUD control themselves (when <code>rotate</code> is in <code>controls</co
 <p>Two read-only diagnostic properties, not reflected as attributes: <code>el.ready</code> (<code>true</code> once the
 iframe has posted <code>ready</code>) and <code>el.active</code> (<code>true</code> while the element currently owns a live
 iframe/WebGL context).</p>
-<p>Boolean attributes on the element itself (<code>autorotate</code>, <code>background</code>, <code>transparent</code>, <code>eager</code>)
-follow the ordinary HTML convention: presence means true, regardless of value, so
-<code>transparent=&quot;0&quot;</code> is still on. Use <code>el.removeAttribute(&#39;transparent&#39;)</code>, or the property
-(<code>el.transparent = false</code>), to turn one off. This is a different rule from the <code>boolean</code>
-query params above, which do parse the value (<code>1</code>/<code>true</code>/<code>yes</code>/<code>on</code>).</p>
+<p>Boolean attributes on the element itself (<code>autorotate</code>, <code>background</code>, <code>transparent</code>,
+<code>forcetransparency</code>, <code>eager</code>) follow the ordinary HTML convention: presence means true,
+regardless of value, so <code>transparent=&quot;0&quot;</code> is still on. Use <code>el.removeAttribute(&#39;transparent&#39;)</code>,
+or the property (<code>el.transparent = false</code>), to turn one off. This is a different rule from the
+<code>boolean</code> query params above, which do parse the value (<code>1</code>/<code>true</code>/<code>yes</code>/<code>on</code>).</p>
 <p><code>base</code> only needs setting explicitly if <code>mtlx-viewer.js</code> isn&#39;t loaded as a plain, synchronous
 <code>&lt;script src&gt;</code> next to <code>viewer.html</code> (for example, if you copy the script into a bundler or
 inject it dynamically) — normally it&#39;s inferred automatically from where the script itself
@@ -557,7 +591,7 @@ calling these.</p>
 <tr>
 <td><code>mtlx-error</code></td>
 <td><code>{ message: string }</code></td>
-<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, or an unrecognized <code>wheel</code>/<code>version</code> value.</td>
+<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>forcetransparency</code> value.</td>
 </tr>
 </tbody></table>
 <pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);
