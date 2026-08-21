@@ -16,6 +16,7 @@
             { keys: 'Shift/Ctrl/Cmd + Click', desc: 'Toggle a node into/out of the current multi-selection', group: 'mouse' },
             { keys: 'Click an edge', desc: 'Select it (Delete then disconnects it)', group: 'mouse' },
             { keys: 'Click empty canvas', desc: 'Clear the selection', group: 'mouse' },
+            { keys: 'Right-click', desc: 'Context menu for the node, selection, edge or empty canvas under the cursor', group: 'mouse' },
             { keys: 'Drag (empty canvas)', desc: 'Box-select every node inside the marquee', group: 'mouse' },
             { keys: 'Middle-drag', desc: 'Pan the canvas', group: 'mouse' },
             { keys: 'Drag a node', desc: 'Move it', group: 'mouse' },

@@ -2283,16 +2283,30 @@ const MTLX_MENU_MIN_W = 200, MTLX_MENU_ROW_H = 28; // ROW_H: measurement fallbac
 // `items`: [{ label, icon, keys, onSelect, disabled, checked, title,
 // keepOpen } | { separator: true }]. `checked` makes a row a toggle;
 // `keys` renders a right-aligned shortcut hint.
+//
+// Two anchoring modes. By default it renders its own menu-bar trigger and
+// hangs the popover under it. Pass `anchorPoint` {x, y} in CLIENT coords
+// for the right-click context-menu mode: no trigger, popover at that
+// point, and the caller owns `open` / `onClose` (which fires for EVERY
+// dismissal). Re-key the element to re-target an already-open menu.
 const MtlxMenu = ({
     label, icon, items, title, className, ariaLabel, theme,
     minWidth = MTLX_MENU_MIN_W, maxWidth = 360, popMaxHeight,
+    anchorPoint = null, open: openProp, onClose,
 }) => {
     const bar = React.useContext(MtlxMenuBarContext);
     const menuId = React.useId();
+    // Controlled mode: the caller owns `open`, and every internal close
+    // path funnels into one onClose. The bar context is ignored here on
+    // purpose, since a point-anchored menu is never a bar member.
+    const controlled = openProp !== undefined;
     // Standalone fallback so a menu still works outside a MtlxMenuBar.
     const [standalone, setStandalone] = React.useState(false);
-    const open = bar ? bar.openId === menuId : standalone;
-    const setOpen = (on) => { if (bar) bar.setOpenId(on ? menuId : null); else setStandalone(!!on); };
+    const open = controlled ? !!openProp : (bar ? bar.openId === menuId : standalone);
+    const setOpen = (on) => {
+        if (controlled) { if (!on && onClose) onClose(); return; }
+        if (bar) bar.setOpenId(on ? menuId : null); else setStandalone(!!on);
+    };
 
     const [pos, setPos] = React.useState(null);
     const [hi, setHi] = React.useState(-1);
@@ -2324,8 +2338,12 @@ const MtlxMenu = ({
     // hidden probe render, then on every scroll/resize.
     const reposition = () => {
         const btn = btnRef.current;
-        if (!btn) { setOpen(false); return; }
-        const rect = btn.getBoundingClientRect();
+        // A point anchor is just a zero-size rect, so every flip, clamp
+        // and height-cap branch below is shared with the trigger case.
+        const rect = anchorPoint
+            ? { left: anchorPoint.x, right: anchorPoint.x, top: anchorPoint.y, bottom: anchorPoint.y }
+            : (btn ? btn.getBoundingClientRect() : null);
+        if (!rect) { setOpen(false); return; }
         if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
             setOpen(false);
             return;
@@ -2524,8 +2542,10 @@ const MtlxMenu = ({
         </div>
     ) : null;
 
-    return (
-        <React.Fragment>
+    // A point-anchored menu has no trigger to render, and nothing to
+    // return focus to on Escape. btnRef stays null, which every read of
+    // it already guards.
+    const trigger = anchorPoint ? null : (
             <button
                 type="button"
                 ref={btnRef}
@@ -2550,6 +2570,11 @@ const MtlxMenu = ({
                 <span>{label}</span>
                 <MtlxIcon name="chevron-down" className="w-3 h-3 flex-none opacity-70" />
             </button>
+    );
+
+    return (
+        <React.Fragment>
+            {trigger}
             {popover && ReactDOM.createPortal(popover, fullscreenPortalRoot())}
         </React.Fragment>
     );
@@ -2583,6 +2608,7 @@ Object.assign(window, {
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, MtlxSelect, MtlxMenu, MtlxMenuBar, PreviewErrorBoundary,
+    fullscreenPortalRoot,
     BTN_MENUBAR,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,

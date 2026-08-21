@@ -242,6 +242,13 @@
             // instead of demanding pixel-precise aim. See onConnectEnd.
             const [portPicker, setPortPicker] = React.useState(null);
             const portPickerRef = React.useRef(null);
+            // Right-click context menu: null when closed, else
+            // { kind: 'node'|'edge'|'pane', x, y, nodeId?, edgeId? } in CLIENT
+            // coords (same contract as portPicker). One state, one menu.
+            const [ctxMenu, setCtxMenu] = React.useState(null);
+            // Client point an "Add Node here" row should drop at. A ref, so it
+            // survives the async catalog load without a render, like pendingConnRef.
+            const addAtPointRef = React.useRef(null);
             // Keybinds reference popup ("?" button, top-right).
             const [helpOpen, setHelpOpen] = React.useState(false);
             // In-tab docs viewer (panel "?" button): { hash, fullUrl, label }
@@ -1517,9 +1524,8 @@
 
             // Click an edge → select it (Del disconnects); click the pane →
             // drop every selection.
-            const onEdgeClick = (evt, edge) => {
-                evt.stopPropagation();
-                setSelectedEdgeId(edge.id);
+            const selectEdge = (edgeId) => {
+                setSelectedEdgeId(edgeId);
                 setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
                 setSelectedId(null);
                 setFlow((prev) => ({
@@ -1527,6 +1533,10 @@
                     nodes: prev.nodes.map((n) =>
                         n.selected ? Object.assign({}, n, { selected: false }) : n),
                 }));
+            };
+            const onEdgeClick = (evt, edge) => {
+                evt.stopPropagation();
+                selectEdge(edge.id);
             };
             const clearSelection = () => {
                 setSelectedId(null);
@@ -1537,6 +1547,34 @@
                     nodes: prev.nodes.map((n) =>
                         n.selected ? Object.assign({}, n, { selected: false }) : n),
                 }));
+            };
+
+            // ---- Right-click context menus --------------------------------
+            // Selection rule, as every desktop node editor does it: right-
+            // clicking an UNSELECTED node takes over the selection; right-
+            // clicking inside an existing one leaves it entirely alone.
+            const onNodeContextMenu = (evt, node) => {
+                const already = flow.nodes.some((n) => n.id === node.id && n.selected);
+                // pan=false: focusNode(id, true) animates the viewport, which
+                // would slide the graph out from under a point-anchored menu.
+                if (!already) focusNode(node.id, false);
+                setCtxMenu({ kind: 'node', x: evt.clientX, y: evt.clientY, nodeId: node.id });
+            };
+            // The multi-selection rect: its existence means the selection is
+            // already what the user meant, so nothing is re-selected.
+            const onSelectionContextMenu = (evt) => {
+                setCtxMenu({ kind: 'node', x: evt.clientX, y: evt.clientY, nodeId: selectedId });
+            };
+            const onEdgeContextMenu = (evt, edge) => {
+                // No stopPropagation (unlike onEdgeClick): it would stop the
+                // canvas host's preventDefault from ever running.
+                if (selectedEdgeId !== edge.id && selectedEdgeIds.indexOf(edge.id) === -1) selectEdge(edge.id);
+                setCtxMenu({ kind: 'edge', x: evt.clientX, y: evt.clientY, edgeId: edge.id });
+            };
+            // Deliberately no clearSelection: right-click never collapses a
+            // selection, and the pane rows still act on it.
+            const onPaneContextMenu = (evt) => {
+                setCtxMenu({ kind: 'pane', x: evt.clientX, y: evt.clientY });
             };
 
             // The flow edge feeding a given input — the panel uses it to
@@ -2604,6 +2642,18 @@
             // close it (same pattern as ColorSwatch) — the popover stops
             // propagation on its own pointerdown, so this only sees outside clicks.
             useEscapeToClose(() => setPortPicker(null), !!portPicker);
+
+            // A context menu whose target was deleted out from under it (Del,
+            // an undo, a scope rebuild) has nothing left to act on. Those keys
+            // still reach the window binds: MtlxMenu's capture handler only
+            // claims Escape, the arrows, Home/End and Enter/Space.
+            React.useEffect(() => {
+                if (!ctxMenu) return;
+                if (ctxMenu.kind === 'node' && ctxMenu.nodeId
+                    && !flow.nodes.some((n) => n.id === ctxMenu.nodeId)) setCtxMenu(null);
+                else if (ctxMenu.kind === 'edge'
+                    && !flow.edges.some((e) => e.id === ctxMenu.edgeId)) setCtxMenu(null);
+            }, [ctxMenu, flow]);
             React.useEffect(() => {
                 if (!portPicker) return undefined;
                 const onDown = (e) => {
@@ -3013,7 +3063,9 @@
                 if (!placedAtDrop) {
                     // Drop it at the center of the current viewport.
                     const host = canvasHostRef.current;
-                    const centered = viewportCenterFlow(inst, host);
+                    // addAtPointRef: a right-click "Add Node here" drops at the cursor;
+                    // every other entry point leaves it null and stays centred.
+                    const centered = viewportCenterFlow(inst, host, addAtPointRef.current || undefined);
                     if (centered) pos = centered;
                     pos = {
                         x: pos.x - NODE_W / 2,
@@ -3100,6 +3152,7 @@
                 const created = addNodeFromCatalog(entry, typeHint);
                 const pending = pendingConnRef.current;
                 pendingConnRef.current = null;
+                addAtPointRef.current = null;
                 setPortAddFilter(null);
                 if (created && pending) wirePendingConnection(created, pending);
             };
@@ -3155,7 +3208,9 @@
                 let pos = { x: 40, y: 40 };
                 const inst = rfInstRef.current;
                 const host = canvasHostRef.current;
-                const centered = viewportCenterFlow(inst, host);
+                // addAtPointRef: a right-click "Add Node here" drops at the cursor;
+                // every other entry point leaves it null and stays centred.
+                const centered = viewportCenterFlow(inst, host, addAtPointRef.current || undefined);
                 if (centered) pos = centered;
                 pos = {
                     x: pos.x - NODE_W / 2,
@@ -4700,6 +4755,33 @@
             const showSigPicker = !!panelSigGroups && panelSigGroups.length > 1;
             const showVersionPicker = !!currentSigGroup && currentSigGroup.versions.length > 1;
 
+            // Opens the docs dialog for the node the panel is showing, carrying
+            // the signature and version it currently resolves to so the docs
+            // land on the same one instead of the node's first/default.
+            const openNodeDocs = () => {
+                if (!displayNode) return;
+                const params = [];
+                if (currentSigGroup && currentSigGroup.type) {
+                    const ins = (displayNode.data.inputs || [])
+                        .filter((i) => i.name && i.type)
+                        .map((i) => i.name + ':' + i.type)
+                        .join(',');
+                    params.push('sig=' + encodeURIComponent(
+                        currentSigGroup.type + (ins ? '(' + ins + ')' : '')));
+                    const cur = currentSigGroup.versions
+                        && currentSigGroup.versions.find((v) => v.name === currentDefName);
+                    if (cur && cur.version) params.push('ver=' + encodeURIComponent(cur.version));
+                }
+                const full = nodeDocsUrl(displayNode.data)
+                    + (params.length ? '?' + params.join('&') : '');
+                setDocsDialog({
+                    hash: full.slice(full.indexOf('#')),
+                    fullUrl: full,
+                    label: displayNode.data.category,
+                });
+                setDocsDialogOpen(true);
+            };
+
             // Header name editing — only real document elements (nodes,
             // nodegraphs, interface inputs, outputs) can be renamed.
             const nameEditable = !!displayNode && ['n:', 'g:', 'i:', 'o:'].indexOf(displayNode.id.slice(0, 2)) !== -1;
@@ -4804,6 +4886,124 @@
                     title: 'Dissolve the selected nodegraph back into its nodes, keeping every connection',
                 },
             ];
+
+            // ---- Context-menu contents ---------------------------------
+            // One builder branching on selectedIds, so the single-node and
+            // multi-selection menus can never drift. Icons, keys and labels
+            // are the Edit menu's own: a command reads the same everywhere.
+            const ctxNode = (ctxMenu && ctxMenu.nodeId)
+                ? flow.nodes.find((n) => n.id === ctxMenu.nodeId) || null : null;
+            const ctxEdge = (ctxMenu && ctxMenu.kind === 'edge')
+                ? flow.edges.find((e) => e.id === ctxMenu.edgeId) || null : null;
+            // Mirrors the node card's own +/- badge gate (node-component.jsx)
+            // so the row appears exactly when that badge does.
+            const ctxHasDefaults = !!ctxNode
+                && (ctxNode.data.allInputs || []).some((i) => i.authored === false);
+            const canOpenDocs = selectedIds.length <= 1 && !!displayNode
+                && ['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
+                && !!displayNode.data.category;
+            // Every edge the Disconnect row would act on: the clicked one plus
+            // whatever else is selected.
+            const ctxEdgeIds = ctxMenu && ctxMenu.kind === 'edge'
+                ? Array.from(new Set(selectedEdgeIds
+                    .concat(selectedEdgeId ? [selectedEdgeId] : [])
+                    .concat([ctxMenu.edgeId])))
+                : [];
+
+            const ctxRowsForNode = () => (selectedIds.length > 1 ? [
+                { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
+                    onSelect: () => copySelectionRef.current() },
+                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
+                    onSelect: () => pasteClipboard() },
+                { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete,
+                    onSelect: () => deleteSelectionRef.current() },
+                { separator: true },
+                // Disabled rather than omitted: inside a nodegraph the title
+                // explains why grouping is unavailable.
+                { label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection,
+                    title: canGroupSelection ? undefined : 'Grouping is only available at the document root',
+                    onSelect: encapsulateSelection },
+                { separator: true },
+                { label: 'Frame Selection', icon: 'zoom-in-area',
+                    onSelect: () => smartFitView({ nodes: selectedIds.map((id) => ({ id })), duration: 400, padding: 0.3 }) },
+            ] : [
+                ctxNode && ctxNode.data.kind === 'nodegraph' && {
+                    label: 'Open Nodegraph', icon: 'cube',
+                    onSelect: () => changeScope(ctxNode.data.name) },
+                { label: 'Rename…', icon: 'id', disabled: !nameEditable,
+                    onSelect: () => { setParamsOpen(true); startNameEdit(); } },
+                { separator: true },
+                { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
+                    onSelect: () => copySelectionRef.current() },
+                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
+                    onSelect: () => pasteClipboard() },
+                { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete,
+                    onSelect: () => deleteSelectionRef.current() },
+                (ctxHasDefaults || canUngroupSelection) && { separator: true },
+                ctxHasDefaults && {
+                    label: 'Show All Inputs', icon: 'code', checked: ctxNode.data.portMode === 'all',
+                    onSelect: () => togglePortsRef.current(ctxNode.id) },
+                canUngroupSelection && {
+                    label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G',
+                    onSelect: () => ungroupNodegraph(displayNode.data.name) },
+                { separator: true },
+                ctxNode && { label: 'Frame Node', icon: 'zoom-in-area',
+                    onSelect: () => smartFitView({ nodes: [{ id: ctxNode.id }], duration: 400, padding: 0.4, maxZoom: 1.2 }) },
+                canOpenDocs && { label: 'About this Node', icon: 'help', onSelect: openNodeDocs },
+            ]);
+
+            const ctxRowsForEdge = () => [
+                { label: ctxEdgeIds.length > 1 ? 'Disconnect ' + ctxEdgeIds.length + ' Edges' : 'Disconnect',
+                    icon: 'plug', keys: 'Del', disabled: !ctxEdge,
+                    // Edge-only by construction: deleteSelectionRef would also
+                    // delete selected NODES caught by the same box-select.
+                    onSelect: () => {
+                        const ids = new Set(ctxEdgeIds);
+                        flow.edges.filter((e) => ids.has(e.id)).forEach(disconnectEdge);
+                    } },
+                { separator: true },
+                { label: 'Select Source Node', icon: 'arrow-left', disabled: !ctxEdge,
+                    onSelect: () => focusNode(ctxEdge.source, true) },
+                { label: 'Select Target Node', icon: 'arrow-right', disabled: !ctxEdge,
+                    onSelect: () => focusNode(ctxEdge.target, true) },
+            ];
+
+            const ctxRowsForPane = () => [
+                { label: 'Add Node…', icon: 'share', keys: 'Tab', disabled: !parsed,
+                    onSelect: () => {
+                        addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
+                        openAddSearch();
+                    } },
+                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
+                    onSelect: () => pasteClipboard() },
+                scope !== '' && {
+                    label: 'Add Interface Input/Output…', icon: 'plus', disabled: !parsed,
+                    onSelect: () => {
+                        addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
+                        openAddSearch();
+                    } },
+                { separator: true },
+                { label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed,
+                    onSelect: () => reorganize() },
+                { label: 'Show All Inputs', icon: 'code', checked: globalPorts === 'all', disabled: !parsed,
+                    onSelect: () => setAllPorts(globalPorts === 'all' ? 'authored' : 'all') },
+                { label: 'Fit Graph in View', icon: 'zoom-in-area', keys: 'F', disabled: !parsed,
+                    onSelect: () => smartFitView({ padding: 0.15, duration: 350 }) },
+                scope !== '' && { separator: true },
+                scope !== '' && {
+                    label: 'Exit Nodegraph', icon: 'chevrons-left', keys: 'Backspace',
+                    onSelect: () => {
+                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                        changeScope('');
+                    } },
+                { separator: true },
+                { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
+                { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
+            ];
+
+            const ctxMenuItems = !ctxMenu ? []
+                : (ctxMenu.kind === 'edge' ? ctxRowsForEdge()
+                    : ctxMenu.kind === 'pane' ? ctxRowsForPane() : ctxRowsForNode());
 
             return (
                 <div
@@ -4970,7 +5170,16 @@
                         </div>
                     </div>
                     <div className="relative flex-1 min-h-0 flex">
-                        <div ref={canvasHostRef} className="relative flex-1 min-w-0">
+                        {/* One contextmenu suppression point for the whole
+                            canvas: React Flow only preventDefaults when
+                            panOnDrag includes button 2, and ours is [1]. As an
+                            ancestor of the pane it also covers the background
+                            svg, the minimap and the attribution link, which
+                            none of the four callbacks below fire on. The params
+                            sidebar is a SIBLING, so its inputs keep the native
+                            menu. */}
+                        <div ref={canvasHostRef} className="relative flex-1 min-w-0"
+                            onContextMenu={(e) => e.preventDefault()}>
                             <div className="absolute inset-0">
                                 <ReactFlowComp
                                     key={graphKey}
@@ -4985,6 +5194,10 @@
                                     onNodeDragStop={onNodeDragStop}
                                     onSelectionDragStop={onNodeDragStop}
                                     onNodeDoubleClick={onNodeDoubleClick}
+                                    onNodeContextMenu={onNodeContextMenu}
+                                    onSelectionContextMenu={onSelectionContextMenu}
+                                    onEdgeContextMenu={onEdgeContextMenu}
+                                    onPaneContextMenu={onPaneContextMenu}
                                     onNodeClick={onNodeClick}
                                     onEdgeClick={onEdgeClick}
                                     onPaneClick={clearSelection}
@@ -5371,31 +5584,7 @@
                                         && ['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
                                         && displayNode.data.category && (
                                         <button
-                                            onClick={() => {
-                                                // Carry the signature and version this panel
-                                                // currently resolves to, so the docs open on the
-                                                // same one instead of the node's first/default.
-                                                const params = [];
-                                                if (currentSigGroup && currentSigGroup.type) {
-                                                    const ins = (displayNode.data.inputs || [])
-                                                        .filter((i) => i.name && i.type)
-                                                        .map((i) => i.name + ':' + i.type)
-                                                        .join(',');
-                                                    params.push('sig=' + encodeURIComponent(
-                                                        currentSigGroup.type + (ins ? '(' + ins + ')' : '')));
-                                                    const cur = currentSigGroup.versions
-                                                        && currentSigGroup.versions.find((v) => v.name === currentDefName);
-                                                    if (cur && cur.version) params.push('ver=' + encodeURIComponent(cur.version));
-                                                }
-                                                const full = nodeDocsUrl(displayNode.data)
-                                                    + (params.length ? '?' + params.join('&') : '');
-                                                setDocsDialog({
-                                                    hash: full.slice(full.indexOf('#')),
-                                                    fullUrl: full,
-                                                    label: displayNode.data.category,
-                                                });
-                                                setDocsDialogOpen(true);
-                                            }}
+                                            onClick={openNodeDocs}
                                             title={'Open the documentation for "' + displayNode.data.category + '"'}
                                             className={BTN_TOOLBAR + ' ml-auto'}
                                         >
@@ -5720,7 +5909,22 @@
                     {/* Port-picker popover (item 2): a connection dragged
                         onto a node body opens this instead of silently
                         dropping. Portaled onto <body> — see portPickerPopover above. */}
-                    {portPicker && ReactDOM.createPortal(portPickerPopover, document.body)}
+                    {portPicker && ReactDOM.createPortal(portPickerPopover, fullscreenPortalRoot())}
+                    {/* Right-click context menu. Point-anchored, controlled
+                        MtlxMenu, so it inherits the bar menus' keyboard nav,
+                        outside-click dismissal and flip/clamp placement. The
+                        key re-mounts it when a second right-click re-targets an
+                        already-open menu, which also resets the highlight. */}
+                    {ctxMenu && (
+                        <MtlxMenu
+                            key={ctxMenu.kind + ':' + ctxMenu.x + ':' + ctxMenu.y}
+                            anchorPoint={ctxMenu}
+                            open
+                            onClose={() => setCtxMenu(null)}
+                            items={ctxMenuItems}
+                            ariaLabel="Graph context menu"
+                        />
+                    )}
 
                     {/* View-only XML dialog ("Document" button, item 8). */}
                     {xmlDialogOpen && (
@@ -5767,7 +5971,7 @@
                             onPick={handleCatalogPick}
                             filterMode={portAddFilter && portAddFilter.mode}
                             filterType={portAddFilter && portAddFilter.type}
-                            onClose={() => { setAddOpen(false); pendingConnRef.current = null; setPortAddFilter(null); }}
+                            onClose={() => { setAddOpen(false); pendingConnRef.current = null; addAtPointRef.current = null; setPortAddFilter(null); }}
                         />
                     )}
 

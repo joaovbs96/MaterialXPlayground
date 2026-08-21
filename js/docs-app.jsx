@@ -693,11 +693,18 @@
 
                             {/* Right Content Area: Node Details */}
                             <div className={(chromeless || sidebarCollapsed ? '' : 'md:col-span-3 ')
-                                + 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
-                                /* Collapsed (md+) docs pane loses its card chrome — rounded
-                                   corners, border, shadow — so it reads as edge-to-edge
-                                   content against the now-flush (md:-m-6) shell background. */
-                                + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0 md:shadow-none' : '')}>
+                                + 'bg-gray-800 p-4 sm:p-6'
+                                /* Inline (the graph editor's docs dialog): the DialogFrame
+                                   panel is the edge and its scroller already reserves a
+                                   gutter, so card chrome would box a box and a second
+                                   overflow-y-auto would reserve a second gutter. ?embed=1
+                                   keeps the shell's page padding, so it keeps the card. */
+                                + (inline ? ''
+                                    : ' rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
+                                    /* Collapsed (md+) docs pane loses its card chrome — rounded
+                                       corners, border, shadow — so it reads as edge-to-edge
+                                       content against the now-flush (md:-m-6) shell background. */
+                                    + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0 md:shadow-none' : ''))}>
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
