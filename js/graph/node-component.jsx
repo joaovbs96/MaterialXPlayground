@@ -45,31 +45,46 @@
             const issue = data.renameIssueFor ? data.renameIssueFor(draft) : null;
             const commit = () => { if (data.onRenameCommit) data.onRenameCommit(draft); };
             return (
-                <input
-                    autoFocus
-                    spellCheck={false}
-                    onFocus={(e) => e.target.select()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                    title={issue || ''}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            // Invalid: swallow the Enter and stay in edit mode,
-                            // the red border already says why.
-                            if (!issue) commit();
-                        } else if (e.key === 'Escape') {
-                            setDraft(data.name);
-                            if (data.onRenameCancel) data.onRenameCancel();
-                        }
-                    }}
-                    className={'nodrag min-w-0 flex-1 bg-gray-900 border rounded py-0 px-1 focus:outline-none '
-                        + (isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
-                        + (issue ? ' border-red-500' : ' border-gray-600')}
-                />
+                <div className="relative flex-1 min-w-0">
+                    <input
+                        autoFocus
+                        spellCheck={false}
+                        onFocus={(e) => e.target.select()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={commit}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                // Invalid: swallow the Enter and stay in edit
+                                // mode, the balloon below says why.
+                                if (!issue) commit();
+                            } else if (e.key === 'Escape') {
+                                setDraft(data.name);
+                                if (data.onRenameCancel) data.onRenameCancel();
+                            }
+                        }}
+                        className={'nodrag w-full bg-gray-900 border rounded py-0 px-1 focus:outline-none '
+                            + (isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
+                            + (issue ? ' border-red-500' : ' border-gray-600')}
+                    />
+                    {issue && (
+                        // Same palette as the panel's own rename message, but
+                        // floated with a pointer since there is no room under
+                        // the field on a card. pointer-events-none so it can
+                        // never swallow a click meant for the canvas.
+                        <div className="absolute left-0 top-full mt-1.5 z-50 w-max max-w-[15rem] pointer-events-none
+                            rounded border border-red-800/60 bg-red-950/95 backdrop-blur shadow-lg
+                            px-2 py-1 text-[10px] leading-snug font-normal text-red-300
+                            flex items-start gap-1.5">
+                            <span className="absolute -top-1 left-3 w-2 h-2 rotate-45 border-l border-t border-red-800/60 bg-red-950/95" />
+                            <MtlxIcon name="alert-triangle" className="w-3 h-3 flex-none mt-px" />
+                            <span>{issue}</span>
+                        </div>
+                    )}
+                </div>
             );
         }
 
