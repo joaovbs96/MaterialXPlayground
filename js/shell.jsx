@@ -164,6 +164,7 @@ const VIEW_DEPS = {
             'js/shared/mtlx-ui.jsx',
             'js/graph/model.jsx',
             'js/graph/style.jsx',
+            'js/graph/legend.jsx',
             'js/graph/node-component.jsx',
             'js/graph/preview.jsx',
             'js/graph/catalog.jsx',
