@@ -36,6 +36,43 @@
         // Node card: header + one 22px port row each (row height must
         // match nodeHeight() above). Interface input/output GRAPH BOUNDARY
         // pseudo-nodes use a dashed border, darker body, and diamond dot.
+        // In-place name editor on the card. Same semantics as the sidebar's
+        // field: Enter commits when valid, Escape reverts, blur commits.
+        // `nodrag` keeps a click in the field from dragging the node.
+        function InlineRename({ data, isIface }) {
+            const [draft, setDraft] = React.useState(data.name);
+            React.useEffect(() => { setDraft(data.name); }, [data.name]);
+            const issue = data.renameIssueFor ? data.renameIssueFor(draft) : null;
+            const commit = () => { if (data.onRenameCommit) data.onRenameCommit(draft); };
+            return (
+                <input
+                    autoFocus
+                    spellCheck={false}
+                    onFocus={(e) => e.target.select()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    title={issue || ''}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            // Invalid: swallow the Enter and stay in edit mode,
+                            // the red border already says why.
+                            if (!issue) commit();
+                        } else if (e.key === 'Escape') {
+                            setDraft(data.name);
+                            if (data.onRenameCancel) data.onRenameCancel();
+                        }
+                    }}
+                    className={'nodrag min-w-0 flex-1 bg-gray-900 border rounded py-0 px-1 focus:outline-none '
+                        + (isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
+                        + (issue ? ' border-red-500' : ' border-gray-600')}
+                />
+            );
+        }
+
         function MtlxGraphNode({ data, selected }) {
             if (MTLX_PERF_LOG) {
                 const now = performance.now();
@@ -88,9 +125,13 @@
                                 <span className="w-2 h-2 rounded-full flex-none"
                                     style={{ background: getNodeColor(data) }} />
                             )}
-                            <span className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100') + ' truncate'}>
-                                {data.name}
-                            </span>
+                            {data.renaming ? (
+                                <InlineRename data={data} isIface={isIface} />
+                            ) : (
+                                <span className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100') + ' truncate'}>
+                                    {data.name}
+                                </span>
+                            )}
                             {isIface && (
                                 <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">
                                     {data.kind === 'input' ? 'interface' : 'output'}

@@ -175,6 +175,11 @@
             // Snapshot each card's input-visibility mode before a rebuild.
             // Local actions must not reset the others to the global mode;
             // only the explicit global toggle (setAllPorts) may do that.
+            // Undo/redo re-parses and replaces `parsed`, which runs the scope
+            // rebuild effect below — a fresh build from the GLOBAL mode. This
+            // carries the per-node modes across that one hop. restoringRef is
+            // already false by the time the effect runs, hence its own ref.
+            const restorePortModesRef = React.useRef(null);
             const capturePortModes = () => {
                 const map = {};
                 (flowRef.current.nodes || []).forEach((n) => {
@@ -480,6 +485,10 @@
                     p.label = parsedRef.current ? parsedRef.current.label : 'document';
                     const nextScope = (entry.scope && p.nodegraphs && p.nodegraphs.indexOf(entry.scope) === -1)
                         ? '' : (entry.scope || '');
+                    // Only for this restore: a genuine document load must still
+                    // start fresh, or a same-named node in another file would
+                    // silently inherit the previous one's visibility.
+                    restorePortModesRef.current = capturePortModes();
                     setParsed(p);
                     setScope(nextScope);
                     setDocRev((r) => r + 1);
@@ -1294,13 +1303,21 @@
                 // built flow, the same way focusNode() does.
                 const pendingSelect = pendingScopeSelectRef.current;
                 pendingScopeSelectRef.current = null;
+                // Set only by an undo/redo restore; consumed once, so the next
+                // real load or scope change builds fresh from the global.
+                const restoredModes = restorePortModesRef.current;
+                restorePortModesRef.current = null;
                 try {
                     const { descs, edges } = buildScope(parsed, scope);
                     const built = toFlow(descs, edges, {
                         portMode: globalPortsRef.current,
+                        portModes: restoredModes || undefined,
                         onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
+                        onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                        onRenameCancel: () => inlineRenameCancelRef.current(),
+                        renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                     });
                     setFlow(pendingSelect ? {
                         edges: built.edges,
@@ -2713,6 +2730,9 @@
                 return 'Invalid MaterialX name';
             };
 
+            // Read by the card's inline editor through node data; declared
+            // here because the assignment below runs during the render body.
+            const renameIssueRef = React.useRef(null);
             // Why a proposed rename of `id` to `newName` can't commit yet —
             // null when it's fine. Drives both the commit gate and the red-
             // border tooltip in the panel header.
@@ -2727,6 +2747,7 @@
                 if (existing) return 'A sibling element already has this name';
                 return null;
             };
+            renameIssueRef.current = renameIssue;
 
             // Rename a node/nodegraph/interface-input/output, then
             // rewrite every reference — MaterialX's setName does NOT
@@ -2802,17 +2823,58 @@
                 // pasteClipboard does: the simplest correct way to pick up
                 // the renamed element and every rewritten reference.
                 const { descs, edges } = buildScope(parsed, scope);
+                // The renamed node comes back under a NEW id, so carry its own
+                // visibility across to that key or it alone would fall back to
+                // the global mode — the one node the user just acted on.
+                const keptModes = capturePortModes();
+                if (keptModes[flowId] !== undefined) {
+                    keptModes[kind + newName] = keptModes[flowId];
+                    delete keptModes[flowId];
+                }
                 const rebuilt = toFlow(descs, edges, {
                     portMode: globalPortsRef.current,
-                    portModes: capturePortModes(),
+                    portModes: keptModes,
                     onOpenScope: changeScope,
                     onTogglePorts: (id2) => togglePortsRef.current(id2),
                     onPortAdd: (info) => onPortAddRef.current(info),
+                    onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
+                    onRenameCancel: () => inlineRenameCancelRef.current(),
+                    renameIssueFor: (id2, nm) => renameIssueRef.current(id2, nm),
                 });
                 setFlow(rebuilt);
                 focusNode(kind + newName, false);
                 return true;
             };
+
+            // ---- Inline rename on the node card ---------------------------
+            // The flag is patched onto ONE node in place, like togglePorts, so
+            // starting an edit costs no rebuild. renameElement's own rebuild
+            // then clears it, since toFlow never sets `renaming`.
+            const setRenamingNode = (id) => {
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => {
+                        const want = n.id === id;
+                        if (!!n.data.renaming === want) return n;
+                        return Object.assign({}, n, {
+                            data: Object.assign({}, n.data, { renaming: want }),
+                        });
+                    }),
+                }));
+            };
+            const startInlineRename = (id) => setRenamingNode(id);
+            const cancelInlineRename = () => setRenamingNode(null);
+            const commitInlineRename = (id, name) => {
+                // Leave edit mode first: renameElement rebuilds and drops the
+                // flag on its own, but an unchanged or invalid name doesn't.
+                setRenamingNode(null);
+                const trimmed = String(name == null ? '' : name).trim();
+                if (trimmed && !renameIssue(id, trimmed)) renameElement(id, trimmed);
+            };
+            const inlineRenameCommitRef = React.useRef(commitInlineRename);
+            inlineRenameCommitRef.current = commitInlineRename;
+            const inlineRenameCancelRef = React.useRef(cancelInlineRename);
+            inlineRenameCancelRef.current = cancelInlineRename;
 
             // Delete a node of ANY kind (real node, collapsed nodegraph,
             // interface input/output — all real document elements). Inputs
@@ -3429,6 +3491,9 @@
                     onOpenScope: changeScope,
                     onTogglePorts: (id) => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
+                    onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                    onRenameCancel: () => inlineRenameCancelRef.current(),
+                    renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                 });
                 const pastedIds = new Set(created.map((c) => 'n:' + c.newName)
                     .concat(createdGraphs.map((c) => 'g:' + c.newName)));
@@ -3633,6 +3698,9 @@
                         onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
+                        onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                        onRenameCancel: () => inlineRenameCancelRef.current(),
+                        renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                     });
                     const newId = 'g:' + gName;
                     setFlow({
@@ -3914,6 +3982,9 @@
                             onOpenScope: changeScope,
                             onTogglePorts: (id) => togglePortsRef.current(id),
                             onPortAdd: (info) => onPortAddRef.current(info),
+                            onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                            onRenameCancel: () => inlineRenameCancelRef.current(),
+                            renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                         });
                         const recreatedIds = Object.keys(created).map((old) => 'n:' + nameMap[old]);
                         const recreatedIdSet = new Set(recreatedIds);
@@ -4948,8 +5019,8 @@
                 ctxNode && ctxNode.data.kind === 'nodegraph' && {
                     label: 'Open Nodegraph', icon: 'cube',
                     onSelect: () => changeScope(ctxNode.data.name) },
-                { label: 'Rename…', icon: 'id', disabled: !nameEditable,
-                    onSelect: () => { setParamsOpen(true); startNameEdit(); } },
+                { label: 'Rename…', icon: 'id', disabled: !ctxNode || !nameEditable,
+                    onSelect: () => startInlineRename(ctxNode.id) },
                 { separator: true },
                 { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
                     onSelect: () => copySelectionRef.current() },

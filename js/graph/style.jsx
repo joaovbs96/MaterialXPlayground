@@ -170,6 +170,12 @@
                         ? () => o.onOpenScope(d.name) : undefined,
                     onTogglePorts: o.onTogglePorts ? () => o.onTogglePorts(d.id) : undefined,
                     onPortAdd: o.onPortAdd,
+                    // Inline rename on the card. The `renaming` flag itself is
+                    // patched onto one node in place (no rebuild); these are
+                    // the bound callbacks the editor commits through.
+                    onRenameCommit: o.onRenameCommit ? (name) => o.onRenameCommit(d.id, name) : undefined,
+                    onRenameCancel: o.onRenameCancel ? () => o.onRenameCancel(d.id) : undefined,
+                    renameIssueFor: o.renameIssueFor ? (name) => o.renameIssueFor(d.id, name) : undefined,
                 });
             });
             const posOf = layoutScope(shaped, edges);
