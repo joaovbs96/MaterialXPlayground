@@ -31,8 +31,15 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 
 const NODELIB_PATH = path.join(REPO_ROOT, "js", "gen", "nodelib.json");
 const NODELIB_INDEX_PATH = path.join(REPO_ROOT, "js", "gen", "nodelib-index.json");
+const NODELIB_STATS_PATH = path.join(REPO_ROOT, "js", "gen", "nodelib-stats.json");
 const RELATIVE_NODELIB_PATH = path.relative(REPO_ROOT, NODELIB_PATH);
 const RELATIVE_NODELIB_INDEX_PATH = path.relative(REPO_ROOT, NODELIB_INDEX_PATH);
+const RELATIVE_NODELIB_STATS_PATH = path.relative(REPO_ROOT, NODELIB_STATS_PATH);
+
+// Curated shading models for js/what-is-materialx.jsx's "By the numbers"
+// caption: real surfaceshader-output nodes, minus plumbing (convert, dot,
+// mix) and helpers (open_pbr_anisotropy). Kept hand-picked; only checked here.
+const SHADING_MODELS = ["standard_surface", "open_pbr_surface", "gltf_pbr", "disney_principled", "UsdPreviewSurface"];
 
 const CHECK_MODE = process.argv.includes("--check");
 
@@ -137,7 +144,32 @@ async function build() {
     nodes,
   };
 
-  return { db, index };
+  return { db, index, meta };
+}
+
+/** Count of lib/group rows in db, NOT unique category names (a few, like
+ * mix/add/multiply/convert, appear under two). Matches how the Node Specs
+ * sidebar walks db, so it and nodelib-stats.json's `documented` can't disagree. */
+function countDocumented(db) {
+  let count = 0;
+  for (const lib of Object.keys(db)) {
+    for (const group of Object.keys(db[lib])) {
+      count += Object.keys(db[lib][group]).length;
+    }
+  }
+  return count;
+}
+
+/** Total <nodedef> count: every version entry summed across every
+ * category's sigGroups, across the distinct categories in index.nodes. */
+function countNodedefs(index) {
+  let total = 0;
+  for (const category of Object.keys(index.nodes)) {
+    for (const g of index.nodes[category].sigGroups) {
+      total += g.versions.length;
+    }
+  }
+  return total;
 }
 
 /** Runs sanity checks against the in-memory db/index (never committed
@@ -148,12 +180,7 @@ function runSanityChecks(db, index) {
   const check = (cond, msg) => { if (!cond) problems.push(msg); };
 
   // Layer-1 category count (total categories across all lib/group pairs) >= 200.
-  let categoryCount = 0;
-  for (const lib of Object.keys(db)) {
-    for (const group of Object.keys(db[lib])) {
-      categoryCount += Object.keys(db[lib][group]).length;
-    }
-  }
+  const categoryCount = countDocumented(db);
   check(categoryCount >= 200, `Layer-1 category count is ${categoryCount}, expected >= 200`);
 
   // Every Layer-1 entry has EXACTLY the keys {description, notes, section,
@@ -189,12 +216,7 @@ function runSanityChecks(db, index) {
   if (specUrlProblems > 5) problems.push(`... and ${specUrlProblems - 5} more Layer-1 entries with a malformed spec_url`);
 
   // Total version entries summed across every category's sigGroups[*].versions >= 750.
-  let totalVersions = 0;
-  for (const category of Object.keys(index.nodes)) {
-    for (const g of index.nodes[category].sigGroups) {
-      totalVersions += g.versions.length;
-    }
-  }
+  const totalVersions = countNodedefs(index);
   check(totalVersions >= 750, `Total sigGroups version-entry count is ${totalVersions}, expected >= 750`);
 
   // standard_surface: at least 2 versions on its first sigGroup, at least
@@ -217,6 +239,13 @@ function runSanityChecks(db, index) {
 
   // open_pbr_surface exists.
   check(!!index.nodes["open_pbr_surface"], "index.nodes['open_pbr_surface'] is missing");
+
+  // Every curated shading model (js/what-is-materialx.jsx's "By the
+  // numbers" caption) must still exist, or an upstream rename/removal
+  // would silently leave a lie on that page instead of failing here.
+  for (const name of SHADING_MODELS) {
+    check(!!index.nodes[name], `index.nodes['${name}'] is missing (SHADING_MODELS in scripts/build-nodelib.mjs)`);
+  }
 
   // multiply has more than one signature group.
   const mul = index.nodes["multiply"];
@@ -254,8 +283,21 @@ function runSanityChecks(db, index) {
   return problems;
 }
 
+/** Tiny stats file for js/what-is-materialx.jsx's "By the numbers" strip,
+ * all computed from db/index/meta so a MaterialX version bump can't leave
+ * a stale literal on the page. */
+function buildStats(db, index, meta) {
+  return {
+    nodedefs: countNodedefs(index),
+    documented: countDocumented(db),
+    targets: index.allTargets.length,
+    libraryVersion: meta.version,
+    shadingModels: SHADING_MODELS,
+  };
+}
+
 async function main() {
-  const { db, index } = await build();
+  const { db, index, meta } = await build();
 
   const problems = runSanityChecks(db, index);
   if (problems.length > 0) {
@@ -266,6 +308,7 @@ async function main() {
 
   const dbSerialized = serialize(db);
   const indexSerialized = serialize(index);
+  const statsSerialized = serialize(buildStats(db, index, meta));
 
   if (CHECK_MODE) {
     let stale = false;
@@ -273,6 +316,7 @@ async function main() {
     for (const [relPath, absPath, serialized] of [
       [RELATIVE_NODELIB_PATH, NODELIB_PATH, dbSerialized],
       [RELATIVE_NODELIB_INDEX_PATH, NODELIB_INDEX_PATH, indexSerialized],
+      [RELATIVE_NODELIB_STATS_PATH, NODELIB_STATS_PATH, statsSerialized],
     ]) {
       if (!existsSync(absPath)) {
         console.error(`${relPath} — js/gen is stale — run \`npm run build:nodelib\` (or \`npm run build\`) and commit`);
@@ -287,15 +331,17 @@ async function main() {
     }
 
     if (stale) process.exit(1);
-    log(`OK — ${RELATIVE_NODELIB_PATH} and ${RELATIVE_NODELIB_INDEX_PATH} match a fresh build.`);
+    log(`OK — ${RELATIVE_NODELIB_PATH}, ${RELATIVE_NODELIB_INDEX_PATH} and ${RELATIVE_NODELIB_STATS_PATH} match a fresh build.`);
     return;
   }
 
   await mkdir(path.dirname(NODELIB_PATH), { recursive: true });
   await writeFile(NODELIB_PATH, dbSerialized);
   await writeFile(NODELIB_INDEX_PATH, indexSerialized);
+  await writeFile(NODELIB_STATS_PATH, statsSerialized);
   log(`wrote ${RELATIVE_NODELIB_PATH}: ${Buffer.byteLength(dbSerialized)} bytes`);
   log(`wrote ${RELATIVE_NODELIB_INDEX_PATH}: ${Buffer.byteLength(indexSerialized)} bytes`);
+  log(`wrote ${RELATIVE_NODELIB_STATS_PATH}: ${Buffer.byteLength(statsSerialized)} bytes`);
 }
 
 await main();
