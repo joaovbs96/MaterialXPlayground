@@ -1839,7 +1839,7 @@
                     return false;
                 }
                 const base = nameOverride || defaultExportBase();
-                const blob = new Blob([xml], { type: 'application/xml' });
+                const blob = new Blob([await attributeExportedXml(xml)], { type: 'application/xml' });
                 if (typeof window.showSaveFilePicker === 'function') {
                     let handle = null;
                     try {
@@ -1883,7 +1883,7 @@
                     return false;
                 }
                 const zip = new JSZip();
-                zip.file(name + '.mtlx', xml);
+                zip.file(name + '.mtlx', await attributeExportedXml(xml));
                 const seenPaths = new Set();
                 for (const t of (resolvedTextures || [])) {
                     const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');

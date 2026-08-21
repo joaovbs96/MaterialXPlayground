@@ -365,10 +365,10 @@
                 return { xml, meta };
             };
 
-            const onExportMtlx = () => {
+            const onExportMtlx = async () => {
                 const built = buildExportXml();
                 if (!built) return;
-                downloadXml(built.xml, built.meta.nodeName + '.mtlx');
+                downloadXml(await attributeExportedXml(built.xml), built.meta.nodeName + '.mtlx');
             };
 
             // Hand this preview graph to the node graph editor, same as the

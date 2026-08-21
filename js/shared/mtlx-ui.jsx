@@ -690,6 +690,39 @@ const downloadXml = (xml, filename) => {
     downloadBlob(new Blob([xml], { type: 'application/xml' }), filename);
 };
 
+// Attribution stamped onto every document this site exports. A comment,
+// not an attribute, so it round-trips through any MaterialX reader
+// without touching the document model.
+// The version is the release tag the header already resolves; where that
+// is unavailable (VS Code webview, embed mode, offline, rate-limited) the
+// line carries no version rather than a wrong one, and the 1.5s race
+// keeps a slow or never-settling lookup from blocking an export.
+const exportAttributionLine = async () => {
+    let version = '';
+    try {
+        const facts = await Promise.race([
+            Promise.resolve(window.mtlxSourceFacts),
+            new Promise((r) => setTimeout(() => r(null), 1500)),
+        ]);
+        const tag = facts && facts.version ? String(facts.version).trim() : '';
+        if (tag) version = ' ' + (/^v/i.test(tag) ? tag : 'v' + tag);
+    } catch (e) { /* no facts available: attribute without a version */ }
+    return '<!-- Exported by MaterialX Playground' + version + ' -->';
+};
+
+// Slots the attribution between the XML declaration and the root element:
+// a comment may not precede the declaration.
+const withExportAttribution = (xml, line) => {
+    const text = xml == null ? '' : String(xml);
+    const NL = String.fromCharCode(10);
+    const m = /^\s*<\?xml[^>]*\?>\s*/.exec(text);
+    return m
+        ? text.slice(0, m[0].length) + line + NL + text.slice(m[0].length)
+        : line + NL + text;
+};
+
+const attributeExportedXml = async (xml) => withExportAttribution(xml, await exportAttributionLine());
+
 // Bundles the viewport-control state cluster shared by the three preview
 // surfaces: rotate/env toggles, env-availability, fullscreen, screenshot.
 // `getSnapshotBase` supplies the PNG base name; no try/catch here by design.
@@ -2518,7 +2551,7 @@ Object.assign(window, {
     GEOM_LABELS, GEOM_ICONS, defaultGeomFor,
     errMsg,
     useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
-    downloadSnapshot, downloadBlob, downloadXml,
+    downloadSnapshot, downloadBlob, downloadXml, attributeExportedXml,
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
