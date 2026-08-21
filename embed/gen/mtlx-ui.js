@@ -2856,22 +2856,32 @@ const MtlxMenu = ({
       onClick: () => commitItem(row),
       style: rowStyle,
       className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' + (row.disabled ? 'cursor-default' : 'cursor-pointer')
-    }, (hasIcons || hasChecks) && /*#__PURE__*/React.createElement("span", {
+    }, hasIcons && /*#__PURE__*/React.createElement("span", {
       className: "w-3.5 flex-none"
-    }, row.checked ? /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "check",
-      className: "w-3.5 h-3.5"
-    }) : row.icon ? /*#__PURE__*/React.createElement(MtlxIcon, {
+    }, row.icon ? /*#__PURE__*/React.createElement(MtlxIcon, {
       name: row.icon,
       className: "w-3.5 h-3.5"
     }) : null), /*#__PURE__*/React.createElement("span", {
       className: "flex-1 whitespace-nowrap"
-    }, row.label), hasKeys && /*#__PURE__*/React.createElement("span", {
+    }, row.label), (hasKeys || hasChecks) && (row.checked != null ?
+    /*#__PURE__*/
+    // A switch, not a tick: these rows flip a mode that
+    // stays on, which a checkmark reads as "chosen" and
+    // a switch reads as "on". Inert spans, since the row
+    // itself is the button and carries aria-checked.
+    React.createElement("span", {
+      className: "flex-none pl-6 inline-flex items-center",
+      "aria-hidden": "true"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: 'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors ' + (row.checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')
+    }, /*#__PURE__*/React.createElement("span", {
+      className: 'inline-block h-2.5 w-2.5 rounded-full bg-white transition-transform ' + (row.checked ? 'translate-x-[13px]' : 'translate-x-[2px]')
+    }))) : /*#__PURE__*/React.createElement("span", {
       className: "flex-none pl-6 text-[10px]",
       style: {
         color: MXS_MUTED
       }
-    }, row.keys || ''));
+    }, row.keys || '')));
   })) : null;
 
   // A point-anchored menu has no trigger to render, and nothing to
