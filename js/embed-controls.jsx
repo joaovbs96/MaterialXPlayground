@@ -1,5 +1,5 @@
 // js/embed-controls.jsx: compact, portal-free HUD strip for embed/viewer.html.
-// Replaces ViewportControls/GeomSelect/EnvDialog/SettingsDialog (js/shared/
+// Replaces ViewportControls/MtlxSelect/EnvDialog/SettingsDialog (js/shared/
 // mtlx-ui.jsx) in chromeless mode; same public `controls` names, own CSS.
 
 // Below EMBED_CTL_ICON_BELOW: icons only, no labels. Below

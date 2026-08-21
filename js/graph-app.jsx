@@ -5261,9 +5261,9 @@
                                 }
                                 controlSlots={(labeled) => ({
                                     docColorspace: (
-                                        // size="sm" matches GeomSelect just below it in the
-                                        // strip (h-6 / 24px), so both dropdowns read as one
-                                        // control family.
+                                        // size="sm" matches the geometry select just below
+                                        // it in the strip (h-6 / 24px), so both dropdowns
+                                        // read as one control family.
                                         <MtlxSelect
                                             key="docColorspace"
                                             value={docColorspace}
