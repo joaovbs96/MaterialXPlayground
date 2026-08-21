@@ -4769,37 +4769,37 @@
                 && !!displayNode && displayNode.data.kind === 'nodegraph';
 
             const editMenuItems = [
-                { label: 'Undo', keys: 'Ctrl+Z', onSelect: undoDoc },
-                { label: 'Redo', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
+                { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
+                { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
                 { separator: true },
                 {
-                    label: 'Copy', keys: 'Ctrl+C', onSelect: () => copySelectionRef.current(),
+                    label: 'Copy', icon: 'copy', keys: 'Ctrl+C', onSelect: () => copySelectionRef.current(),
                     disabled: !parsed || !selectedIds.length,
                     title: 'Copy the selected nodes to the in-page clipboard',
                 },
                 {
-                    label: 'Paste', keys: 'Ctrl+V', onSelect: pasteClipboard,
+                    label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', onSelect: pasteClipboard,
                     disabled: !parsed || !clipboardFilled,
                     title: 'Paste the copied nodes into the current scope',
                 },
                 { separator: true },
                 {
-                    label: 'Auto Layout', keys: 'A', disabled: !parsed, onSelect: () => reorganize(),
+                    label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed, onSelect: () => reorganize(),
                     title: 'Re-run the automatic layout once',
                 },
                 {
-                    label: 'Show All Inputs', checked: globalPorts === 'all', disabled: !parsed,
+                    label: 'Show All Inputs', icon: 'code', checked: globalPorts === 'all', disabled: !parsed,
                     onSelect: () => setAllPorts(globalPorts === 'all' ? 'authored' : 'all'),
                     title: 'Show every input on every node, defaults included, instead of only the set ones',
                 },
                 { separator: true },
                 {
-                    label: 'Group into Nodegraph', keys: 'Ctrl+G', disabled: !canGroupSelection,
+                    label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection,
                     onSelect: encapsulateSelection,
                     title: 'Collapse the selected nodes into a new nodegraph',
                 },
                 {
-                    label: 'Ungroup Nodegraph', keys: 'Ctrl+Shift+G', disabled: !canUngroupSelection,
+                    label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G', disabled: !canUngroupSelection,
                     onSelect: () => { if (canUngroupSelection) ungroupNodegraph(displayNode.data.name); },
                     title: 'Dissolve the selected nodegraph back into its nodes, keeping every connection',
                 },
