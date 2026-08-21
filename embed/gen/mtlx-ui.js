@@ -854,16 +854,21 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
 const openInGraphEditor = ({
   xml,
   name,
-  files
+  files,
+  select
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
   // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
   if (fullscreenElement()) toggleFullscreen();
+  // `select`: optional node NAME to land on once the document settles,
+  // for handoffs where the editor's own default would pick a different
+  // node than the one the sender was showing.
   window.__mtlxPendingImport = {
     xml,
     name,
-    files: files || null
+    files: files || null,
+    select: select || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-load-document', {
     detail: window.__mtlxPendingImport

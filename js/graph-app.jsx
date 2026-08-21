@@ -1107,6 +1107,15 @@
             React.useEffect(() => {
                 const handleImport = (payload) => {
                     if (!payload) return;
+                    // Optional selection hint from a handoff (the docs page's
+                    // "Send to Editor"). Reuses the post-scope-exit ref, which
+                    // the [parsed, scope] effect below already consumes on a
+                    // document load, so this needs no timing logic of its own.
+                    // Assigned on EVERY import, null included: a hint whose
+                    // load the user then cancelled cannot outlive the next one.
+                    // A hint naming a node the document lacks is harmless —
+                    // selectedNode resolves to null and displayNode falls back.
+                    pendingScopeSelectRef.current = payload.select ? 'n:' + payload.select : null;
                     const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),

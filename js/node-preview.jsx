@@ -378,7 +378,16 @@
                 const built = buildExportXml();
                 if (!built) return;
                 const name = (built.meta && built.meta.nodeName) || 'node';
-                openInGraphEditor({ xml: built.xml, name, files: null });
+                // Land on the node this page is ABOUT. The exported graph
+                // also carries the wrappers the preview needs (for a
+                // translation node, the target shader plus a material), and
+                // the editor's default picks the renderable one instead.
+                // Read off the live instance rather than assuming a name.
+                const ed = exportDocRef.current;
+                const subject = (ed && ed.instance)
+                    ? mxSafe(() => ed.instance.getName(), null)
+                    : null;
+                openInGraphEditor({ xml: built.xml, name, files: null, select: subject || null });
             };
 
             React.useEffect(() => {
