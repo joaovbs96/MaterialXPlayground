@@ -558,6 +558,11 @@
             // recipe): undecided counts as unavailable until confirmed.
             const [versionAvailable, setVersionAvailable] = React.useState({});
             React.useEffect(() => {
+                // Chromeless renders no version picker, so this probe would be
+                // pure waste there — and its 404 is a console error wherever
+                // the gitignored build is absent, which fails the embed smoke
+                // test in CI. Nothing reads versionAvailable while chromeless.
+                if (chromeless) return undefined;
                 let cancelled = false;
                 mtlxVersions.filter((v) => v !== mtlxDefaultVersion).forEach((v) => {
                     fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', { method: 'HEAD', cache: 'no-store' })
