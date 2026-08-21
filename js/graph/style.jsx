@@ -148,6 +148,11 @@
         const toFlow = (descs, edges, opts) => {
             const o = opts || {};
             const mode = o.portMode || 'authored';
+            // Per-node overrides, id -> 'authored'|'all'. A rebuild caused by
+            // a LOCAL action passes the modes the cards already had, so one
+            // node's rename/paste/group doesn't reset every other card to the
+            // global. Absent ids (new nodes) fall back to the global mode.
+            const modes = o.portModes || null;
             const connectedIn = new Set(edges.map((e) => e.target + '|' + e.targetHandle));
             // Filter BEFORE layout: nodeHeight() counts the rows that will
             // actually render. data.inputs = the visible rows; data.allInputs
@@ -156,10 +161,11 @@
                 const withConn = d.inputs.map((inp) => Object.assign({}, inp, {
                     connected: connectedIn.has(d.id + '|in:' + inp.name),
                 }));
+                const nodeMode = (modes && modes[d.id]) || mode;
                 return Object.assign({}, d, {
                     allInputs: withConn,
-                    inputs: visiblePortsFor(withConn, mode),
-                    portMode: mode,
+                    inputs: visiblePortsFor(withConn, nodeMode),
+                    portMode: nodeMode,
                     onOpen: (d.kind === 'nodegraph' && o.onOpenScope)
                         ? () => o.onOpenScope(d.name) : undefined,
                     onTogglePorts: o.onTogglePorts ? () => o.onTogglePorts(d.id) : undefined,

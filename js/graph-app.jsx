@@ -168,6 +168,20 @@
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
+            // Live mirror, so a rebuild triggered from a ref-held handler
+            // (the keybinds) still reads THIS render's cards.
+            const flowRef = React.useRef(flow);
+            flowRef.current = flow;
+            // Snapshot each card's input-visibility mode before a rebuild.
+            // Local actions must not reset the others to the global mode;
+            // only the explicit global toggle (setAllPorts) may do that.
+            const capturePortModes = () => {
+                const map = {};
+                (flowRef.current.nodes || []).forEach((n) => {
+                    if (n.data && n.data.portMode) map[n.id] = n.data.portMode;
+                });
+                return map;
+            };
             const [status, setStatus] = React.useState('Loading the default document…');
             const [error, setError] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
@@ -2790,6 +2804,7 @@
                 const { descs, edges } = buildScope(parsed, scope);
                 const rebuilt = toFlow(descs, edges, {
                     portMode: globalPortsRef.current,
+                    portModes: capturePortModes(),
                     onOpenScope: changeScope,
                     onTogglePorts: (id2) => togglePortsRef.current(id2),
                     onPortAdd: (info) => onPortAddRef.current(info),
@@ -3410,6 +3425,7 @@
                 const { descs, edges } = buildScope(parsed, scope);
                 const rebuilt = toFlow(descs, edges, {
                     portMode: globalPortsRef.current,
+                    portModes: capturePortModes(),
                     onOpenScope: changeScope,
                     onTogglePorts: (id) => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
@@ -3613,6 +3629,7 @@
                     const { descs, edges } = buildScope(parsed, scope);
                     const rebuilt = toFlow(descs, edges, {
                         portMode: globalPortsRef.current,
+                        portModes: capturePortModes(),
                         onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
@@ -3893,6 +3910,7 @@
                         const { descs, edges } = buildScope(parsed, scope);
                         const rebuilt = toFlow(descs, edges, {
                             portMode: globalPortsRef.current,
+                            portModes: capturePortModes(),
                             onOpenScope: changeScope,
                             onTogglePorts: (id) => togglePortsRef.current(id),
                             onPortAdd: (info) => onPortAddRef.current(info),
