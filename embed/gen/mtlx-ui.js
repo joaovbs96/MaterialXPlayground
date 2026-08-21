@@ -2832,14 +2832,12 @@ const MtlxMenu = ({
       onClick: () => commitItem(row),
       style: rowStyle,
       className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' + (row.disabled ? 'cursor-default' : 'cursor-pointer')
-    }, hasChecks && /*#__PURE__*/React.createElement("span", {
+    }, (hasIcons || hasChecks) && /*#__PURE__*/React.createElement("span", {
       className: "w-3.5 flex-none"
     }, row.checked ? /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "check",
       className: "w-3.5 h-3.5"
-    }) : null), hasIcons && /*#__PURE__*/React.createElement("span", {
-      className: "w-3.5 flex-none"
-    }, row.icon ? /*#__PURE__*/React.createElement(MtlxIcon, {
+    }) : row.icon ? /*#__PURE__*/React.createElement(MtlxIcon, {
       name: row.icon,
       className: "w-3.5 h-3.5"
     }) : null), /*#__PURE__*/React.createElement("span", {

@@ -2502,14 +2502,16 @@ const MtlxMenu = ({
                         className={'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors '
                             + (row.disabled ? 'cursor-default' : 'cursor-pointer')}
                     >
-                        {hasChecks && (
+                        {/* ONE leading gutter, the way native menus work: a
+                            checked row shows its tick in place of its icon.
+                            Two gutters would indent every row of a menu that
+                            has a single checkable entry, so a menu with icons
+                            and checks no longer lines up with one without. */}
+                        {(hasIcons || hasChecks) && (
                             <span className="w-3.5 flex-none">
-                                {row.checked ? <MtlxIcon name="check" className="w-3.5 h-3.5" /> : null}
-                            </span>
-                        )}
-                        {hasIcons && (
-                            <span className="w-3.5 flex-none">
-                                {row.icon ? <MtlxIcon name={row.icon} className="w-3.5 h-3.5" /> : null}
+                                {row.checked
+                                    ? <MtlxIcon name="check" className="w-3.5 h-3.5" />
+                                    : (row.icon ? <MtlxIcon name={row.icon} className="w-3.5 h-3.5" /> : null)}
                             </span>
                         )}
                         <span className="flex-1 whitespace-nowrap">{row.label}</span>
