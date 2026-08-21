@@ -571,7 +571,11 @@
                 // that column's own first child down. Hence the extra shell.
                 <div ref={docsRootRef} className="relative md:h-full md:flex md:flex-col md:min-h-0">
                     <HeroGrid rootRef={docsRootRef} fadeRef={docsRootRef} fadeFrom="top" />
-                <div className="space-y-4 sm:space-y-6 md:flex-1 md:min-h-0 md:flex md:flex-col">
+                {/* relative, like every other HeroGrid host: the grid is an
+                    absolute sibling, and CSS paints positioned elements above
+                    the backgrounds of static ones, so without this the grid
+                    would sit ON TOP of the panels instead of behind them. */}
+                <div className="relative space-y-4 sm:space-y-6 md:flex-1 md:min-h-0 md:flex md:flex-col">
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
