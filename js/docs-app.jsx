@@ -114,6 +114,13 @@
             // applied to the Signature dropdown once nodeVersionGroups loads.
             // A ref, not state: it must not itself trigger a render.
             const pendingSigRef = React.useRef(null);
+            // Companion to pendingSigRef for `?ver=`: the nodedef version to
+            // land on once the signature's version list is known. Only ever
+            // SET from a hash, never cleared there — selecting a node
+            // rewrites the URL without the query, so a second pass over the
+            // hash would wipe a hint it can no longer see. Consumption
+            // clears it, and matching is guarded by node name.
+            const pendingVerRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
             // Which signature (port table) of the selected node is shown —
@@ -203,6 +210,7 @@
                     // doc-links.jsx's parseSigHint) is set right before
                     // setSelectedNode, so the sigIndex-reset effect above sees it.
                     pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
+                    if (fromHash.verHint) pendingVerRef.current = { name: fromHash.name, version: fromHash.verHint };
                     setSelectedNode(fromHash);
                     return;
                 }
@@ -271,6 +279,7 @@
                         // Same pending-hint queuing as applyData's
                         // fromHash branch above — see its comment.
                         pendingSigRef.current = sel.sigHint ? { name: sel.name, hint: sel.sigHint } : null;
+                        if (sel.verHint) pendingVerRef.current = { name: sel.name, version: sel.verHint };
                         setSelectedNode(sel);
                     }
                 };
@@ -355,7 +364,26 @@
             // group — reset on selection/signature change, since a
             // different signature may resolve to a different default.
             const [versionIndex, setVersionIndex] = React.useState(0);
-            React.useEffect(() => { setVersionIndex(0); }, [selectedNode, sigIndex]);
+            // Two effects, ordered: the reset stands aside while a hint is
+            // pending for THIS node, and the applier consumes it. Folding
+            // them into one meant every later run re-reset to 0 once the
+            // hint had been consumed.
+            React.useEffect(() => {
+                const p = pendingVerRef.current;
+                if (p && selectedNode && p.name === selectedNode.name) return; // the hint owns this selection
+                setVersionIndex(0);
+            }, [selectedNode, sigIndex]);
+            React.useEffect(() => {
+                const pending = pendingVerRef.current;
+                if (!pending || !selectedNode || pending.name !== selectedNode.name) return;
+                const groups = nodeVersionGroups;
+                if (!groups || !groups.length) return; // version list not loaded yet
+                const group = groups[Math.min(sigIndex, groups.length - 1)];
+                if (!group || !group.versions) return;
+                const idx = group.versions.findIndex((v) => v.version === pending.version);
+                pendingVerRef.current = null; // applies at most once
+                setVersionIndex(idx > 0 ? idx : 0);
+            }, [selectedNode, sigIndex, nodeVersionGroups]);
 
             // (Manual upload removed: the page auto-loads the live spec only.)
 

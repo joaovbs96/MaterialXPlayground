@@ -20,6 +20,22 @@
         // (see vscode_extension's extension.js/nodeSignature.js) into
         // { out, ins } or null — re-validated here since hashes are untrusted.
         const SIG_HINT_RE = /^([\w.\-:]+)(?:\(([^)]*)\))?$/;
+        // Optional `?ver=<nodedef version>` companion to sig, so a link can
+        // land on the exact version a caller had selected, not just the
+        // signature. Validated the same way: hashes are untrusted.
+        const VER_HINT_RE = /^[\w.\-]+$/;
+        const parseVerHint = (query) => {
+            if (!query) return null;
+            let raw = null;
+            for (const pair of query.split('&')) {
+                if (pair.slice(0, 4) === 'ver=') { raw = pair.slice(4); break; }
+            }
+            if (!raw) return null;
+            let v;
+            try { v = decodeURIComponent(raw); } catch (e) { return null; }
+            return VER_HINT_RE.test(v) ? v : null;
+        };
+
         const parseSigHint = (query) => {
             if (!query) return null;
             let sigRaw = null;
@@ -54,6 +70,7 @@
             // of addressing; no '?' leaves old permalinks resolving unchanged.
             const q = body.indexOf('?');
             const sigHint = q === -1 ? null : parseSigHint(body.slice(q + 1));
+            const verHint = q === -1 ? null : parseVerHint(body.slice(q + 1));
             if (q !== -1) body = body.slice(0, q);
 
             const parts = body.split('/').map((s) => { try { return decodeURIComponent(s); } catch (e) { return s; } });
@@ -61,6 +78,7 @@
             // resolved selection, on every successful return path below.
             const withSig = (sel) => {
                 if (sel && sigHint) sel.sigHint = sigHint;
+                if (sel && verHint) sel.verHint = verHint;
                 return sel;
             };
 

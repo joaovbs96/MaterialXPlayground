@@ -5367,7 +5367,23 @@
                                         && displayNode.data.category && (
                                         <button
                                             onClick={() => {
-                                                const full = nodeDocsUrl(displayNode.data);
+                                                // Carry the signature and version this panel
+                                                // currently resolves to, so the docs open on the
+                                                // same one instead of the node's first/default.
+                                                const params = [];
+                                                if (currentSigGroup && currentSigGroup.type) {
+                                                    const ins = (displayNode.data.inputs || [])
+                                                        .filter((i) => i.name && i.type)
+                                                        .map((i) => i.name + ':' + i.type)
+                                                        .join(',');
+                                                    params.push('sig=' + encodeURIComponent(
+                                                        currentSigGroup.type + (ins ? '(' + ins + ')' : '')));
+                                                    const cur = currentSigGroup.versions
+                                                        && currentSigGroup.versions.find((v) => v.name === currentDefName);
+                                                    if (cur && cur.version) params.push('ver=' + encodeURIComponent(cur.version));
+                                                }
+                                                const full = nodeDocsUrl(displayNode.data)
+                                                    + (params.length ? '?' + params.join('&') : '');
                                                 setDocsDialog({
                                                     hash: full.slice(full.indexOf('#')),
                                                     fullUrl: full,
