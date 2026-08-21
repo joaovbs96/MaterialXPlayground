@@ -792,14 +792,33 @@ const downloadXml = (xml, filename) => {
 // is unavailable (VS Code webview, embed mode, offline, rate-limited) the
 // line carries no version rather than a wrong one, and the 1.5s race
 // keeps a slow or never-settling lookup from blocking an export.
+const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
 const exportAttributionLine = async () => {
+  const NL = String.fromCharCode(10);
   let version = '';
   try {
     const facts = await Promise.race([Promise.resolve(window.mtlxSourceFacts), new Promise(r => setTimeout(() => r(null), 1500))]);
     const tag = facts && facts.version ? String(facts.version).trim() : '';
     if (tag) version = ' ' + (/^v/i.test(tag) ? tag : 'v' + tag);
   } catch (e) {/* no facts available: attribute without a version */}
-  return '<!-- Exported by MaterialX Playground' + version + ' -->';
+  // The page's own canonical declaration wins; the literal only covers
+  // hosts that ship no canonical link (the VS Code webview).
+  let site = MTLX_SITE_URL;
+  try {
+    const link = document.querySelector('link[rel="canonical"]');
+    if (link && link.href) site = link.href;
+  } catch (e) {/* keep the literal */}
+  // Both export callers go through getMxEnv() with no argument, so the
+  // default engine version is the one that actually wrote this document.
+  let engine = '';
+  try {
+    const v = window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION;
+    if (v) engine = String(v).replace(/^v/i, '');
+  } catch (e) {/* omit rather than state a version we cannot confirm */}
+  const lines = ['<!--', '  Exported by MaterialX Playground' + version, '  ' + site];
+  if (engine) lines.push('  MaterialX v' + engine);
+  lines.push('-->');
+  return lines.join(NL);
 };
 
 // Slots the attribution between the XML declaration and the root element:
