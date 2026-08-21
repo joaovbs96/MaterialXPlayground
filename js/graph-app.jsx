@@ -1834,7 +1834,12 @@
                     return;
                 }
                 const files = looseFilesFrom(fileMapRef.current);
-                openInViewer({ xml, name: defaultExportBase(), files });
+                // Carry the preview geometry across. 'pernode' is a graph-only
+                // mode and 'buffer2d' is deliberately not offered in the
+                // viewer, so neither travels: the viewer keeps its own.
+                const mode = window.readGraphGeomMode ? window.readGraphGeomMode() : null;
+                const geometry = (mode && mode !== 'pernode' && mode !== 'buffer2d') ? mode : null;
+                openInViewer({ xml, name: defaultExportBase(), files, geometry });
             };
 
             // Serialize the CURRENT document (edits, connections, layout)

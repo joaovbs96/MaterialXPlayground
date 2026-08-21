@@ -465,6 +465,13 @@ function MaterialViewerApp({
       })
     });
     setPresetPick('');
+    // A sender's geometry, re-validated here rather than trusted:
+    // resolveViewerGeom drops anything unrenderable and handles
+    // the transparent-vs-room fallback.
+    if (payload.geometry) {
+      const r = resolveViewerGeom(payload.geometry, transparent);
+      if (!r.invalid) setGeom(r.geom);
+    }
     ingestRef.current(map);
   };
   React.useEffect(() => {

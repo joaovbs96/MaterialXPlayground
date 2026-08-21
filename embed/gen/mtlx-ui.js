@@ -893,16 +893,20 @@ const looseFilesFrom = fileMap => {
 const openInViewer = ({
   xml,
   name,
-  files
+  files,
+  geometry
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
   // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
   if (fullscreenElement()) toggleFullscreen();
+  // `geometry`: optional, so a sender can hand over the geometry it was
+  // showing. The viewer re-validates it and ignores anything it cannot render.
   window.__mtlxPendingViewerImport = {
     xml,
     name,
-    files: files || null
+    files: files || null,
+    geometry: geometry || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-view-document', {
     detail: window.__mtlxPendingViewerImport
