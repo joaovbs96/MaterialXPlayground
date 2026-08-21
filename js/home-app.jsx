@@ -125,15 +125,15 @@ function HeroStage({ active, busy, onOpen }) {
     const [failed, setFailed] = React.useState(() => !(window.mtlxHasWebGL2 ? window.mtlxHasWebGL2() : true));
     const [loaded, setLoaded] = React.useState(false);
 
-    // Creates the element once and appends it while active; removes it
-    // (without destroying it) whenever this view goes inactive, so
-    // reactivating just re-appends the same instance and preset.
+    // Created lazily on first activation, then LEFT in the DOM for good.
+    // It used to be removed whenever the view went inactive, on the theory
+    // that re-appending reuses the instance — but this element is backed by
+    // an iframe, and re-appending an iframe reloads its document, so every
+    // return to the home view flashed the iframe's white ground before the
+    // first frame arrived. The shell hides this view with display:none,
+    // which already stops it rendering, so removal bought nothing.
     React.useEffect(() => {
-        if (failed) return;
-        if (!active) {
-            if (elRef.current) elRef.current.remove();
-            return;
-        }
+        if (failed || !active) return;
         if (!elRef.current) {
             if (!customElements.get('materialx-viewer')) {
                 setFailed(true);
@@ -163,8 +163,12 @@ function HeroStage({ active, busy, onOpen }) {
             });
             elRef.current = el;
         }
-        mountRef.current.appendChild(elRef.current);
-        return () => { if (elRef.current) elRef.current.remove(); };
+        // Append only when it isn't already parented here: an unconditional
+        // appendChild of an attached iframe still counts as a re-insertion,
+        // and reloads it.
+        if (elRef.current.parentElement !== mountRef.current) {
+            mountRef.current.appendChild(elRef.current);
+        }
     }, [active, failed]);
 
     // Belt-and-braces: an error reported mid-session also tears the

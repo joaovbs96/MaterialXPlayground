@@ -2829,6 +2829,11 @@ const createMtlxRenderView = async ({
     let reqId = null;
     let renderer = null;
     let resizeObs = null;
+    // While true the canvas keeps its current drawing buffer and the
+    // browser scales it to the CSS box. Lets a pane drag rescale the
+    // image smoothly instead of reallocating GL every frame.
+    let resizeSuspended = false;
+    let syncSizeRef = function () { /* set once the canvas sizing closure exists */ };
     let controls = null;
     let stopped = false;
     // Reused by snapshotPixels below — avoids a fresh canvas/2D-context
@@ -3284,6 +3289,7 @@ const createMtlxRenderView = async ({
                 // (panel reflow, mobile rotation/resize) — without this
                 // the sphere stretches on any reflow.
                 const syncSize = () => {
+                    if (resizeSuspended) return;
                     const w = canvas.clientWidth || cw;
                     const h = canvas.clientHeight || ch;
                     renderer.setSize(w, h, false);
@@ -3307,6 +3313,7 @@ const createMtlxRenderView = async ({
                     recomputeCameraFov();
                     camera.updateProjectionMatrix();
                 };
+                syncSizeRef = syncSize;
                 if (window.ResizeObserver) {
                     resizeObs = new ResizeObserver(syncSize);
                     resizeObs.observe(canvas);
@@ -4282,6 +4289,13 @@ const createMtlxRenderView = async ({
             // Whether this view HAS an environment to show — lets the
             // UI hide the toggle for unlit previews instead of
             // offering a button that can't do anything.
+            // Pane drags: suspend buffer reallocation so the existing
+            // frame just scales, then resync once on release.
+            setResizeSuspended: (on) => {
+                const was = resizeSuspended;
+                resizeSuspended = !!on;
+                if (was && !resizeSuspended) syncSizeRef();
+            },
             hasEnvBackground: () => !!envBgTexture,
             // Live rotation offset (radians) for the IBL environment —
             // takes effect next frame via uniform mutation, no rebuild.

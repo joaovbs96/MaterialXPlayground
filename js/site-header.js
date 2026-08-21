@@ -205,7 +205,7 @@
         if (hash === '#!viewer') { return 'viewer'; }
         if (hash === '#!graph') { return 'graph'; }
         if (hash === '#!compare') { return 'compare'; }
-        if (hash === '#!builder') { return 'builder'; }
+        if (hash === '#!builder' || hash.indexOf('#!builder?') === 0) { return 'builder'; }
         if (hash === '#!vscode') { return 'vscode'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
@@ -685,7 +685,12 @@
         if (window.__MTLX_VSCODE__) { resolveFacts(null); return; }
         if (document.documentElement.classList.contains('embed-mode')) { resolveFacts(null); return; }
 
-        var CACHE_KEY = 'mtlx_source_facts_v2';
+        var CACHE_KEY = 'mtlx_source_facts_v3';
+        // sessionStorage survives reloads and only dies with the tab, so
+        // without a TTL a long-lived tab pins the release tag and counts
+        // indefinitely and no amount of Ctrl+R shifts them. 30 min stays
+        // well inside GitHub's 60-per-hour unauthenticated budget.
+        var CACHE_TTL_MS = 30 * 60 * 1000;
 
         // mkdocs-material's own >999 formatter, verbatim: rounds to one
         // decimal place unless doing so would land exactly on a whole
@@ -723,7 +728,11 @@
 
         var cached = null;
         try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; }
-        if (cached) { render(cached); resolveFacts(cached); return; }
+        var fresh = cached && typeof cached.t === 'number' && (Date.now() - cached.t) < CACHE_TTL_MS;
+        // Stale-while-revalidate: paint whatever we have so the row never
+        // flashes empty, then refetch below unless it's still fresh.
+        if (cached) render(cached);
+        if (fresh) { resolveFacts(cached); return; }
 
         Promise.all([
             fetch('https://api.github.com/repos/' + REPO_SLUG)
@@ -735,7 +744,10 @@
         ]).then(function (results) {
             var repoData = results[0];
             var releaseData = results[1];
-            if (!repoData && !releaseData) { resolveFacts(null); return; } // offline/rate-limited: stay a plain link, nothing cached, retry next reload
+            // Offline/rate-limited: nothing cached, retry next reload. Any
+            // stale entry is kept and already painted above, so a dropped
+            // refresh degrades to old numbers rather than to none.
+            if (!repoData && !releaseData) { resolveFacts(cached || null); return; }
             var vsix = null;
             if (releaseData && Array.isArray(releaseData.assets)) {
                 for (var i = 0; i < releaseData.assets.length; i++) {
@@ -751,6 +763,7 @@
                 stars: repoData ? repoData.stargazers_count : undefined,
                 forks: repoData ? repoData.forks_count : undefined,
                 vsix: vsix,
+                t: Date.now(),
             };
             try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(facts)); } catch (e) { /* best-effort */ }
             render(facts);

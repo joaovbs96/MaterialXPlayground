@@ -114,6 +114,13 @@
             // applied to the Signature dropdown once nodeVersionGroups loads.
             // A ref, not state: it must not itself trigger a render.
             const pendingSigRef = React.useRef(null);
+            // Companion to pendingSigRef for `?ver=`: the nodedef version to
+            // land on once the signature's version list is known. Only ever
+            // SET from a hash, never cleared there — selecting a node
+            // rewrites the URL without the query, so a second pass over the
+            // hash would wipe a hint it can no longer see. Consumption
+            // clears it, and matching is guarded by node name.
+            const pendingVerRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
             // Which signature (port table) of the selected node is shown —
@@ -203,6 +210,7 @@
                     // doc-links.jsx's parseSigHint) is set right before
                     // setSelectedNode, so the sigIndex-reset effect above sees it.
                     pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
+                    if (fromHash.verHint) pendingVerRef.current = { name: fromHash.name, version: fromHash.verHint };
                     setSelectedNode(fromHash);
                     return;
                 }
@@ -271,6 +279,7 @@
                         // Same pending-hint queuing as applyData's
                         // fromHash branch above — see its comment.
                         pendingSigRef.current = sel.sigHint ? { name: sel.name, hint: sel.sigHint } : null;
+                        if (sel.verHint) pendingVerRef.current = { name: sel.name, version: sel.verHint };
                         setSelectedNode(sel);
                     }
                 };
@@ -355,7 +364,26 @@
             // group — reset on selection/signature change, since a
             // different signature may resolve to a different default.
             const [versionIndex, setVersionIndex] = React.useState(0);
-            React.useEffect(() => { setVersionIndex(0); }, [selectedNode, sigIndex]);
+            // Two effects, ordered: the reset stands aside while a hint is
+            // pending for THIS node, and the applier consumes it. Folding
+            // them into one meant every later run re-reset to 0 once the
+            // hint had been consumed.
+            React.useEffect(() => {
+                const p = pendingVerRef.current;
+                if (p && selectedNode && p.name === selectedNode.name) return; // the hint owns this selection
+                setVersionIndex(0);
+            }, [selectedNode, sigIndex]);
+            React.useEffect(() => {
+                const pending = pendingVerRef.current;
+                if (!pending || !selectedNode || pending.name !== selectedNode.name) return;
+                const groups = nodeVersionGroups;
+                if (!groups || !groups.length) return; // version list not loaded yet
+                const group = groups[Math.min(sigIndex, groups.length - 1)];
+                if (!group || !group.versions) return;
+                const idx = group.versions.findIndex((v) => v.version === pending.version);
+                pendingVerRef.current = null; // applies at most once
+                setVersionIndex(idx > 0 ? idx : 0);
+            }, [selectedNode, sigIndex, nodeVersionGroups]);
 
             // (Manual upload removed: the page auto-loads the live spec only.)
 
@@ -558,6 +586,7 @@
             // Keyed on selectedNode, not references: a missing
             // info.references falls back to a fresh `[]` every render,
             // which would defeat the memo even though data hasn't changed.
+            const docsRootRef = React.useRef(null);
             const refs = React.useMemo(() => {
                 const map = {};
                 references.forEach((r, i) => { map[r.key] = { n: i + 1, url: r.url, text: r.text }; });
@@ -565,7 +594,20 @@
             }, [selectedNode]);
 
             return (
-                <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
+                // The grid needs a `relative` host whose first child it can be,
+                // but the content column carries space-y-*, which would push
+                // that column's own first child down. Hence the extra shell.
+                <div ref={docsRootRef} className="relative md:h-full md:flex md:flex-col md:min-h-0">
+                    {/* Page decoration only. Inside the graph editor's docs
+                        dialog (inline) and in embed mode there is no page to
+                        decorate, and HeroGrid would measure against the HOST
+                        view's wrapper, overflowing the dialog sideways. */}
+                    {!chromeless && <HeroGrid rootRef={docsRootRef} fadeRef={docsRootRef} fadeFrom="top" />}
+                {/* relative, like every other HeroGrid host: the grid is an
+                    absolute sibling, and CSS paints positioned elements above
+                    the backgrounds of static ones, so without this the grid
+                    would sit ON TOP of the panels instead of behind them. */}
+                <div className="relative space-y-4 sm:space-y-6 md:flex-1 md:min-h-0 md:flex md:flex-col">
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
@@ -651,11 +693,18 @@
 
                             {/* Right Content Area: Node Details */}
                             <div className={(chromeless || sidebarCollapsed ? '' : 'md:col-span-3 ')
-                                + 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
-                                /* Collapsed (md+) docs pane loses its card chrome — rounded
-                                   corners, border, shadow — so it reads as edge-to-edge
-                                   content against the now-flush (md:-m-6) shell background. */
-                                + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0 md:shadow-none' : '')}>
+                                + 'bg-gray-800 p-4 sm:p-6'
+                                /* Inline (the graph editor's docs dialog): the DialogFrame
+                                   panel is the edge and its scroller already reserves a
+                                   gutter, so card chrome would box a box and a second
+                                   overflow-y-auto would reserve a second gutter. ?embed=1
+                                   keeps the shell's page padding, so it keeps the card. */
+                                + (inline ? ''
+                                    : ' rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
+                                    /* Collapsed (md+) docs pane loses its card chrome — rounded
+                                       corners, border, shadow — so it reads as edge-to-edge
+                                       content against the now-flush (md:-m-6) shell background. */
+                                    + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0 md:shadow-none' : ''))}>
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
@@ -730,45 +779,44 @@
                                                     <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
                                                         {sigCount > 1 && (
                                                             <React.Fragment>
-                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="sig-select">
+                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                                                                     Signature
                                                                 </label>
-                                                                <select
-                                                                    id="sig-select"
+                                                                <MtlxSelect
                                                                     value={sig}
-                                                                    onChange={(e) => setSigIndex(Number(e.target.value))}
-                                                                    title="This node has several signatures — pick which one to document and preview"
-                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
-                                                                >
-                                                                    {sigGroups.map((g, i) => {
+                                                                    options={sigGroups.map((g, i) => {
                                                                         const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
-                                                                        return (
-                                                                            <option key={g.key || i} value={i}>
-                                                                                {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
-                                                                            </option>
-                                                                        );
+                                                                        return { value: i, label: (i + 1) + ' / ' + sigCount + (l ? ' - ' + l : '') };
                                                                     })}
-                                                                </select>
+                                                                    onChange={setSigIndex}
+                                                                    title="This node has several signatures - pick which one to document and preview"
+                                                                    ariaLabel="Signature"
+                                                                    font="mono"
+                                                                    size="sm"
+                                                                    variant="field"
+                                                                    className="max-w-full"
+                                                                />
                                                             </React.Fragment>
                                                         )}
                                                         {showVersionPicker && (
                                                             <React.Fragment>
-                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="version-select">
+                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                                                                     Version
                                                                 </label>
-                                                                <select
-                                                                    id="version-select"
+                                                                <MtlxSelect
                                                                     value={versionIdx}
-                                                                    onChange={(e) => setVersionIndex(Number(e.target.value))}
-                                                                    title="This node has several nodedef versions — same ports, different defaults"
-                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
-                                                                >
-                                                                    {selectedGroup.versions.map((v, i) => (
-                                                                        <option key={v.name || i} value={i}>
-                                                                            {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
+                                                                    options={selectedGroup.versions.map((v, i) => ({
+                                                                        value: i,
+                                                                        label: (v.version || '?') + (v.isDefaultVersion ? ' (default)' : ''),
+                                                                    }))}
+                                                                    onChange={setVersionIndex}
+                                                                    title="This node has several nodedef versions - same ports, different defaults"
+                                                                    ariaLabel="Version"
+                                                                    font="mono"
+                                                                    size="sm"
+                                                                    variant="field"
+                                                                    className="max-w-full"
+                                                                />
                                                             </React.Fragment>
                                                         )}
                                                     </div>
@@ -879,6 +927,7 @@
                             </div>
                         </div>
                     )}
+                </div>
                 </div>
             );
         }

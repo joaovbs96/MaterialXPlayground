@@ -365,10 +365,10 @@
                 return { xml, meta };
             };
 
-            const onExportMtlx = () => {
+            const onExportMtlx = async () => {
                 const built = buildExportXml();
                 if (!built) return;
-                downloadXml(built.xml, built.meta.nodeName + '.mtlx');
+                downloadXml(await attributeExportedXml(built.xml), built.meta.nodeName + '.mtlx');
             };
 
             // Hand this preview graph to the node graph editor, same as the
@@ -378,7 +378,16 @@
                 const built = buildExportXml();
                 if (!built) return;
                 const name = (built.meta && built.meta.nodeName) || 'node';
-                openInGraphEditor({ xml: built.xml, name, files: null });
+                // Land on the node this page is ABOUT. The exported graph
+                // also carries the wrappers the preview needs (for a
+                // translation node, the target shader plus a material), and
+                // the editor's default picks the renderable one instead.
+                // Read off the live instance rather than assuming a name.
+                const ed = exportDocRef.current;
+                const subject = (ed && ed.instance)
+                    ? mxSafe(() => ed.instance.getName(), null)
+                    : null;
+                openInGraphEditor({ xml: built.xml, name, files: null, select: subject || null });
             };
 
             React.useEffect(() => {
@@ -1399,13 +1408,15 @@
                 // value IS the selected string (unlike numeric enums below).
                 if (p.type === 'string' && p.options && p.options.length) {
                     return (
-                        <select
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-1 py-1 text-xs text-gray-200"
+                        <MtlxSelect
                             value={String(cur)}
-                            onChange={(e) => onParamChange(p, e.target.value)}
-                        >
-                            {p.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
+                            options={p.options}
+                            onChange={(v) => onParamChange(p, v)}
+                            disabled={loading}
+                            size="sm"
+                            variant="field"
+                            block
+                        />
                     );
                 }
                 // Free-form string → text field (regenerates on change).
@@ -1426,13 +1437,15 @@
                         if (valOf(i) === Number(cur)) { selIdx = i; break; }
                     }
                     return (
-                        <select
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-1 py-1 text-xs text-gray-200"
+                        <MtlxSelect
                             value={selIdx}
-                            onChange={(e) => onParamChange(p, valOf(parseInt(e.target.value, 10)))}
-                        >
-                            {p.enumNames.map((nm, i) => <option key={i} value={i}>{nm}</option>)}
-                        </select>
+                            options={p.enumNames.map((nm, i) => ({ value: i, label: nm }))}
+                            onChange={(i) => onParamChange(p, valOf(i))}
+                            disabled={loading}
+                            size="sm"
+                            variant="field"
+                            block
+                        />
                     );
                 }
                 if (p.type === 'filename') {
@@ -1462,14 +1475,16 @@
                                 baked into the shader), so picking regenerates. */}
                             <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-gray-500 flex-none">colorspace</span>
-                                <select
-                                    className="flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] text-gray-200"
+                                <MtlxSelect
                                     value={csVal}
-                                    onChange={(e) => onColorspacePick(p, e.target.value)}
-                                >
-                                    <option value="">{'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}</option>
-                                    {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                                </select>
+                                    options={COLORSPACES}
+                                    emptyOption={'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}
+                                    onChange={(v) => onColorspacePick(p, v)}
+                                    disabled={loading}
+                                    size="sm"
+                                    variant="field"
+                                    className="flex-1 min-w-0"
+                                />
                             </div>
                         </div>
                     );
@@ -1625,13 +1640,14 @@
                                 picking a geometry isn't the experiment,
                                 the Auto mode is. */}
                             <div className="text-gray-200">Preview Geometry</div>
-                            <GeomSelect
+                            <MtlxSelect
                                 value={geomChoice}
                                 options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                labels={GEOM_LABELS}
                                 badges={GEOM_BADGES}
                                 onChange={setGeomChoice}
                                 title="Global preview-geometry choice (all docs previews)"
-                                className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
+                                size="sm" block className="mt-1.5"
                             />
                             <div className="mt-1 text-[11px] text-gray-400">
                                 Applies to all node docs previews. "Auto (by node type)"
@@ -1776,13 +1792,19 @@
                         {(isFullscreen || params.length === 0) ? renderViewportControls(false) : (
                             <React.Fragment>
                                 {renderViewportControls(true)}
-                                <GeomSelect
+                                <MtlxSelect
                                     value={geomChoice}
                                     options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                    labels={GEOM_LABELS}
                                     badges={GEOM_BADGES}
                                     onChange={setGeomChoice}
                                     title="Preview geometry"
-                                    className="absolute top-2 left-2 z-20 h-7 text-[11px] px-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                    size="md" variant="plain" className="absolute top-2 left-2 z-20"
+                                    theme={{
+                                        surface: 'var(--site-gray-700, #374151)',
+                                        surfaceHover: 'var(--site-gray-600, #4b5563)',
+                                        text: 'var(--site-gray-200, #e5e7eb)',
+                                    }}
                                 />
                             </React.Fragment>
                         )}

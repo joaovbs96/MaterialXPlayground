@@ -123,6 +123,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
             'js/shared/compare-ui.jsx',
             'js/docs/doc-links.jsx',
             'js/docs/rich-text.jsx',
@@ -184,7 +185,7 @@ const VIEW_DEPS = {
         // Dependency-free, self-registering custom element (docs/EMBEDDING.md)
         // that drives the live preview - a plain script, not a babelScript.
         scripts: ['embed/mtlx-viewer.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
         app: 'js/builder-app.jsx',
         globalName: 'BuilderApp',
     },
@@ -451,7 +452,16 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
-            builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            // The builder means to fill the viewport and let only its
+            // sidebar scroll, but min-h-0 alone never enforced that: any
+            // overflow reached the document, and since the preview stage
+            // derives its height from its own width, the page scrollbar
+            // could appear, narrow the stage, stop being needed, and loop.
+            // md:pb-3: this view fills the viewport, so p-6's bottom 24px is
+            // mostly dead space. Trimming it to the grid's own gap-3 hands
+            // the difference to the 1fr row (the canvas) and leaves the
+            // sidebar and snippets the same breathing room they have between cards.
+            builder: 'p-2 sm:p-6 md:pb-3 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
@@ -533,9 +543,14 @@ function Shell() {
                 // inset-0` root positions directly against #root. VS
                 // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
-            } else if (view === 'builder' || view === 'vscode') {
+            } else if (view === 'builder') {
+                // md:h-full (not scrollable, unlike home/vscode below):
+                // BuilderApp fills this and owns its own internal height
+                // chain so only its settings sidebar scrolls, not the page.
+                content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
+            } else if (view === 'vscode') {
                 // Same wrapper contract as home: a static, scrollable
-                // content page, not a full-bleed canvas (builder/vscode).
+                // content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
@@ -545,7 +560,9 @@ function Shell() {
         }
 
         return (
-            <div key={view} className={wrapClass}>
+            // data-mtlx-view-wrap: HeroGrid resolves its full-bleed extent
+            // against this element (js/shared/hero-grid.jsx).
+            <div key={view} data-mtlx-view-wrap="" className={wrapClass}>
                 {content}
             </div>
         );

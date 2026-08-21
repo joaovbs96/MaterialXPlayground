@@ -424,10 +424,12 @@
                 this._send('setGeometry', { geometry: this.geometry });
             } else if (name === 'env') {
                 var deg = this._num('env');
-                if (deg !== undefined) this._send('setEnvRotation', { degrees: deg });
+                // Absent/cleared: send the engine default, not nothing, so
+                // resetting to default actually moves the live preview back.
+                this._send('setEnvRotation', { degrees: deg !== undefined ? deg : 0 });
             } else if (name === 'exposure') {
                 var v = this._num('exposure');
-                if (v !== undefined) this._send('setEnvExposure', { value: v });
+                this._send('setEnvExposure', { value: v !== undefined ? v : 1 });
             } else if (name === 'background') {
                 this._send('setEnvBackground', { on: this.background });
             } else if (name === 'transparent') {
@@ -437,6 +439,7 @@
             } else if (name === 'envmap') {
                 this._send('setEnvMap', { url: this.envmap });
             } else if (name === 'camera') {
+                if (!this.camera) return; // cleared/absent: nothing to apply, nothing to report
                 var pose = this._parseCameraAttr(this.camera);
                 if (pose) this._send('setCamera', pose);
                 else this._reportError(new Error('materialx-viewer: invalid `camera` attribute "' + this.camera + '"; expected 6 comma-separated finite numbers: px,py,pz,tx,ty,tz.'));
