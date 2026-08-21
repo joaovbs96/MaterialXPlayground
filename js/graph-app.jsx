@@ -802,7 +802,9 @@
                 const onDbl = (e) => {
                     const t = e.target;
                     if (!(t instanceof Element)) return;
-                    if (t.closest('button, a, input, select, textarea, .react-flow__handle')) return;
+                    // .mtlx-node-name: double-clicking the name starts a rename
+                    // instead of opening the nodegraph.
+                    if (t.closest('button, a, input, select, textarea, .react-flow__handle, .mtlx-node-name')) return;
                     const nodeEl = t.closest('.react-flow__node');
                     if (!nodeEl) return;
                     const id = nodeEl.getAttribute('data-id') || '';
@@ -1315,7 +1317,8 @@
                         onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
-                        onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                        onRenameStart: (id) => inlineRenameStartRef.current(id),
+onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         onRenameCancel: () => inlineRenameCancelRef.current(),
                         renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                     });
@@ -2837,7 +2840,8 @@
                     onOpenScope: changeScope,
                     onTogglePorts: (id2) => togglePortsRef.current(id2),
                     onPortAdd: (info) => onPortAddRef.current(info),
-                    onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
+                    onRenameStart: (id2) => inlineRenameStartRef.current(id2),
+onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     onRenameCancel: () => inlineRenameCancelRef.current(),
                     renameIssueFor: (id2, nm) => renameIssueRef.current(id2, nm),
                 });
@@ -2871,6 +2875,8 @@
                 const trimmed = String(name == null ? '' : name).trim();
                 if (trimmed && !renameIssue(id, trimmed)) renameElement(id, trimmed);
             };
+            const inlineRenameStartRef = React.useRef(startInlineRename);
+            inlineRenameStartRef.current = startInlineRename;
             const inlineRenameCommitRef = React.useRef(commitInlineRename);
             inlineRenameCommitRef.current = commitInlineRename;
             const inlineRenameCancelRef = React.useRef(cancelInlineRename);
@@ -3491,7 +3497,8 @@
                     onOpenScope: changeScope,
                     onTogglePorts: (id) => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
-                    onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                    onRenameStart: (id) => inlineRenameStartRef.current(id),
+onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     onRenameCancel: () => inlineRenameCancelRef.current(),
                     renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                 });
@@ -3698,7 +3705,8 @@
                         onOpenScope: changeScope,
                         onTogglePorts: (id) => togglePortsRef.current(id),
                         onPortAdd: (info) => onPortAddRef.current(info),
-                        onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                        onRenameStart: (id) => inlineRenameStartRef.current(id),
+onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         onRenameCancel: () => inlineRenameCancelRef.current(),
                         renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                     });
@@ -3982,7 +3990,8 @@
                             onOpenScope: changeScope,
                             onTogglePorts: (id) => togglePortsRef.current(id),
                             onPortAdd: (info) => onPortAddRef.current(info),
-                            onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                            onRenameStart: (id) => inlineRenameStartRef.current(id),
+onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             onRenameCancel: () => inlineRenameCancelRef.current(),
                             renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
                         });

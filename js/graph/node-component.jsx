@@ -143,7 +143,19 @@
                             {data.renaming ? (
                                 <InlineRename data={data} isIface={isIface} />
                             ) : (
-                                <span className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100') + ' truncate'}>
+                                <span
+                                    className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
+                                        + ' mtlx-node-name truncate'
+                                        + (data.onRenameStart ? ' cursor-text' : '')}
+                                    title={data.onRenameStart ? 'Double-click to rename' : undefined}
+                                    onDoubleClick={(e) => {
+                                        // Stops React Flow's own node dblclick
+                                        // (open nodegraph); the native listener
+                                        // is handled by .mtlx-node-name.
+                                        e.stopPropagation();
+                                        if (data.onRenameStart) data.onRenameStart();
+                                    }}
+                                >
                                     {data.name}
                                 </span>
                             )}
