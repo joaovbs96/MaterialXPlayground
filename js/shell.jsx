@@ -123,6 +123,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
             'js/shared/compare-ui.jsx',
             'js/docs/doc-links.jsx',
             'js/docs/rich-text.jsx',
@@ -559,7 +560,9 @@ function Shell() {
         }
 
         return (
-            <div key={view} className={wrapClass}>
+            // data-mtlx-view-wrap: HeroGrid resolves its full-bleed extent
+            // against this element (js/shared/hero-grid.jsx).
+            <div key={view} data-mtlx-view-wrap="" className={wrapClass}>
                 {content}
             </div>
         );

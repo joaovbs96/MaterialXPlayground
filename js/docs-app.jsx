@@ -558,6 +558,7 @@
             // Keyed on selectedNode, not references: a missing
             // info.references falls back to a fresh `[]` every render,
             // which would defeat the memo even though data hasn't changed.
+            const docsRootRef = React.useRef(null);
             const refs = React.useMemo(() => {
                 const map = {};
                 references.forEach((r, i) => { map[r.key] = { n: i + 1, url: r.url, text: r.text }; });
@@ -565,7 +566,12 @@
             }, [selectedNode]);
 
             return (
-                <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
+                // The grid needs a `relative` host whose first child it can be,
+                // but the content column carries space-y-*, which would push
+                // that column's own first child down. Hence the extra shell.
+                <div ref={docsRootRef} className="relative md:h-full md:flex md:flex-col md:min-h-0">
+                    <HeroGrid rootRef={docsRootRef} fadeRef={docsRootRef} fadeFrom="top" />
+                <div className="space-y-4 sm:space-y-6 md:flex-1 md:min-h-0 md:flex md:flex-col">
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
                         <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
@@ -878,6 +884,7 @@
                             </div>
                         </div>
                     )}
+                </div>
                 </div>
             );
         }
