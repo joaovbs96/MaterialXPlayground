@@ -4734,16 +4734,16 @@
                 },
                 !IN_VSCODE && { separator: true },
                 {
-                    label: 'Export…', icon: 'file-download', disabled: !parsed, onSelect: openExportDialog,
+                    label: 'Export .mtlx…', icon: 'file-download', disabled: !parsed, onSelect: openExportDialog,
                     title: 'Export the current document as .mtlx or a .zip with textures, edits, connections and layout positions included',
                 },
                 {
-                    label: 'Shader Code…', icon: 'file-code', disabled: !parsed, onSelect: openShaderExport,
+                    label: 'Export Shader Code…', icon: 'file-code', disabled: !parsed, onSelect: openShaderExport,
                     title: 'Generate shader source for a chosen target language (GLSL, OSL, MDL, ...)',
                 },
                 { separator: true },
                 {
-                    label: 'View XML Source', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
+                    label: 'View .mtlx XML', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
                     title: 'View the raw MaterialX XML for the current document',
                 },
             ];
@@ -4832,7 +4832,7 @@
                                 onClick={undoDoc}
                                 title="Undo (Ctrl+Z)"
                                 aria-label="Undo"
-                                className={BTN_TOOLBAR}
+                                className={BTN_MENUBAR}
                             >
                                 <MtlxIcon name="arrow-back-up" className="w-3.5 h-3.5" />
                             </button>
@@ -4840,7 +4840,7 @@
                                 onClick={redoDoc}
                                 title="Redo (Ctrl+Shift+Z)"
                                 aria-label="Redo"
-                                className={BTN_TOOLBAR}
+                                className={BTN_MENUBAR}
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
                             </button>
@@ -4893,7 +4893,7 @@
                                 <button
                                     onClick={openAddSearch}
                                     title="Add a node from the standard library (shortcut: Tab)"
-                                    className={BTN_TOOLBAR}
+                                    className={BTN_MENUBAR}
                                 >
                                     <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Add Node</span>
@@ -4907,7 +4907,7 @@
                                     title={canDelete
                                         ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
                                         : 'Select nodes or edges to delete'}
-                                    className={BTN_TOOLBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
+                                    className={BTN_MENUBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
                                 >
                                     <MtlxIcon name="trash" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Delete Nodes</span>
@@ -4918,12 +4918,15 @@
                                 <button
                                     onClick={() => setValidateOpen(true)}
                                     title="Run the MaterialX library's document validation"
-                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
+                                    /* Borderless at rest like the rest of the bar, but a
+                                       validation result keeps its coloured edge: that
+                                       edge is the status, not decoration. */
+                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-transparent hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
                                         + (validateStatus && validateStatus.kind === 'valid'
                                             ? 'border-green-500/60 text-green-300'
                                             : validateStatus && validateStatus.kind === 'invalid'
                                                 ? 'border-red-500/60 text-red-300'
-                                                : 'border-gray-600 text-gray-300')}
+                                                : 'border-transparent text-gray-300 hover:border-gray-600')}
                                 >
                                     <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
                                         : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
@@ -4934,7 +4937,7 @@
                             <button
                                 onClick={() => setHelpOpen(true)}
                                 title="Help & Keybinds"
-                                className={BTN_TOOLBAR}
+                                className={BTN_MENUBAR}
                             >
                                 <MtlxIcon name="help" className="w-3.5 h-3.5" />
                                 <span className="gtb-label">Help</span>
@@ -4942,10 +4945,10 @@
                             <button
                                 onClick={() => toggleFullscreen(panelRef.current)}
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
-                                className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border backdrop-blur transition-colors whitespace-nowrap shrink-0 '
+                                className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border transition-colors whitespace-nowrap shrink-0 '
                                     + (isFullscreen
                                         ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
-                                        : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                        : 'bg-transparent border-transparent text-gray-300 hover:bg-gray-700/80 hover:border-gray-600')}
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                                 <span className="gtb-label">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>

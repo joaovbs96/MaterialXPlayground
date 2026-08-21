@@ -17,6 +17,11 @@ const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
 const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0';
+// Menu-bar variant: no resting edge or fill, both revealed on hover (the
+// VS Code menu bar idiom). The border stays declared but transparent so
+// the button never changes size between states. No backdrop-blur: the
+// menu bar it sits on is opaque, so there is nothing to blur.
+const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border border-transparent bg-transparent text-gray-300 hover:bg-gray-700/80 hover:border-gray-600 transition-colors whitespace-nowrap shrink-0';
 
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
@@ -2685,12 +2690,17 @@ const MtlxMenu = ({
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [open, hi, rows]);
+
+  // Menu-bar chrome: nothing at rest, edge and fill revealed on hover or
+  // while open. The border is always declared, only its colour changes,
+  // so the trigger never resizes between states.
+  const lit = open || triggerHover;
   const triggerStyle = Object.assign({
-    color: open ? MXS_TEXT_STRONG : MXS_TEXT,
+    color: lit ? MXS_TEXT_STRONG : MXS_TEXT,
     borderRadius: MXS_RADIUS,
     fontSize: MXS_FONT_SIZE,
-    borderColor: MXS_BORDER,
-    background: open || triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE,
+    borderColor: lit ? MXS_BORDER : 'transparent',
+    background: lit ? MXS_SURFACE_HOVER : 'transparent',
     fontFamily: 'var(--mx-select-font, inherit)'
   }, selectThemeStyle(theme));
   const ambientFont = ambient && ambient.fontFamily || 'inherit';
@@ -2849,6 +2859,7 @@ Object.assign(window, {
   MtlxMenu,
   MtlxMenuBar,
   PreviewErrorBoundary,
+  BTN_MENUBAR,
   DialogFrame,
   PresetsDialog,
   SettingsDialog,
