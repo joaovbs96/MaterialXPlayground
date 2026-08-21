@@ -2464,7 +2464,9 @@ const MtlxMenu = ({
     const lit = open || triggerHover;
     const triggerStyle = Object.assign({
         color: lit ? MXS_TEXT_STRONG : MXS_TEXT,
-        borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE,
+        // 4px, not MXS_RADIUS's 8px: a menu-bar trigger sits shoulder to
+        // shoulder with BTN_TOOLBAR buttons. An explicit theme still wins.
+        borderRadius: 'var(--mx-select-radius, 4px)', fontSize: MXS_FONT_SIZE,
         borderColor: lit ? MXS_BORDER : 'transparent',
         background: lit ? MXS_SURFACE_HOVER : 'transparent',
         fontFamily: 'var(--mx-select-font, inherit)',

@@ -5168,7 +5168,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             centre no matter what the clusters contain, and items-start keeps it on the bar's top row when a cluster wraps. */}
                         {parsed ? (
                             <div className="flex items-center h-7 min-w-0">
-                                <div className="text-[11px] font-mono text-gray-400 max-w-full truncate">
+                                <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
                                         // Cheap ref write stays immediate; changeScope is a
                                         // no-op (no overlay flash) when already at the root.
@@ -5360,21 +5360,21 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     )}
                                     {/* Minimize button, pinned to the MiniMap's
                                         corner via <Panel>. marginRight = minimapMarginRight+4;
-                                        marginBottom = 8+150-20-4 = 134 (see below). */}
+                                        marginBottom = 8+150-24-4 = 130 (see below). */}
                                     {!narrow && minimapOpen && !minimapBlocked && (
                                         <Panel
                                             position="bottom-right"
                                             style={{
                                                 marginRight: minimapMarginRight + 4,
-                                                marginBottom: 134, // 8 + 150 - 20 - 4, see comment above
+                                                marginBottom: 130, // 8 + 150 - 24 - 4, see comment above
                                                 transition: 'margin-right 200ms ease',
                                             }}
                                         >
                                             <button
                                                 onClick={() => setMinimapOpen(false)}
                                                 title="Minimize the minimap"
-                                                className="w-5 h-5 flex items-center justify-center rounded bg-gray-900/70 text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
-                                            ><MtlxIcon name="minus" className="w-3 h-3" /></button>
+                                                className="w-6 h-6 flex items-center justify-center rounded bg-gray-900/70 text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                            ><MtlxIcon name="minus" className="w-3.5 h-3.5" /></button>
                                         </Panel>
                                     )}
                                     {/* Collapsed pill: shown instead of the MiniMap
