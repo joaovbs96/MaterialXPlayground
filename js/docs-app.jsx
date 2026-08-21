@@ -570,7 +570,11 @@
                 // but the content column carries space-y-*, which would push
                 // that column's own first child down. Hence the extra shell.
                 <div ref={docsRootRef} className="relative md:h-full md:flex md:flex-col md:min-h-0">
-                    <HeroGrid rootRef={docsRootRef} fadeRef={docsRootRef} fadeFrom="top" />
+                    {/* Page decoration only. Inside the graph editor's docs
+                        dialog (inline) and in embed mode there is no page to
+                        decorate, and HeroGrid would measure against the HOST
+                        view's wrapper, overflowing the dialog sideways. */}
+                    {!chromeless && <HeroGrid rootRef={docsRootRef} fadeRef={docsRootRef} fadeFrom="top" />}
                 {/* relative, like every other HeroGrid host: the grid is an
                     absolute sibling, and CSS paints positioned elements above
                     the backgrounds of static ones, so without this the grid

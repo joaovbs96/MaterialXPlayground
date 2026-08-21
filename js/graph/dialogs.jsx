@@ -150,7 +150,7 @@
                             className="text-gray-400 hover:text-gray-200 leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
                     )}
                 >
-                    <div className="relative flex-1 min-h-0 overflow-y-auto">
+                    <div className="relative flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                         {loadError ? (
                             <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 px-6 text-center">
                                 {'Failed to load documentation — close and reopen this dialog to retry.'}
