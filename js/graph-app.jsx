@@ -4191,9 +4191,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // MiniMap/legend collision, re-measured every render: Stage 1
             // hides the MiniMap for the pill on legend overlap; Stage 2
             // auto-collapses the legend (see legendOpenRightEdge below).
-            // Flat 15: the docked sidebar is a flex sibling of the canvas
+            // Flat 8: the docked sidebar is a flex sibling of the canvas
             // host, already excluded from its rect, so no 320 term here.
-            const minimapMarginRight = 8;
+            // While the sidebar is open a 6px resize handle sits between the
+            // canvas and the aside, so the margin has to give that back or
+            // the minimap reads 14px from the sidebar against 8px from the
+            // bottom. SIDEBAR_HANDLE_W keeps the two in step.
+            const SIDEBAR_HANDLE_W = 6;
+            const minimapMarginRight = paramsOpen ? 8 - SIDEBAR_HANDLE_W : 8;
             const legendBoxRef = React.useRef(null);
             const pillRef = React.useRef(null);
             const prevPillOverlapRef = React.useRef(false);
@@ -5684,7 +5689,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                         <button
                                             onClick={openNodeDocs}
                                             title={'Open the documentation for "' + displayNode.data.category + '"'}
-                                            className={BTN_TOOLBAR + ' ml-auto'}
+                                            className={BTN_TOOLBAR + ' ml-auto font-sans'}
                                         >
                                             <MtlxIcon name="help" className="w-3.5 h-3.5" />
                                             <span>About this Node</span>
