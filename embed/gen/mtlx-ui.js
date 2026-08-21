@@ -1287,6 +1287,10 @@ function Chip({
 // Collapsible settings card shell shared by all seven fields cards. Open
 // state is local (per brief) so it survives re-renders but always starts
 // from `defaultOpen`, which the caller sets from the current column count.
+// Opaque twin of the old bg-gray-800/35: the same colour once composited
+// over the page ground, but solid. These cards sit over the hero grid on
+// builder and docs, and a translucent fill lets that grid show through.
+const CARD_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
 function SectionCard({
   icon,
   title,
@@ -1298,7 +1302,10 @@ function SectionCard({
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   return /*#__PURE__*/React.createElement("div", {
-    className: "rounded-lg border border-gray-700 bg-gray-800/35"
+    className: "rounded-lg border border-gray-700",
+    style: {
+      background: CARD_SURFACE
+    }
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => setOpen(o => !o),

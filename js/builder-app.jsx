@@ -527,8 +527,10 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
 // it always matches SnippetsCard's height (set by the row, see the
 // grid-cols-2 wrapper below) instead of a separately hand-tuned px.
 function LegendBlock() {
+    // bg-gray-900 (not /60): 60% of the ground over the ground is the same
+    // colour, but opaque, so the hero grid cannot show through it.
     return (
-        <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
+        <div className="rounded-lg border border-gray-700 bg-gray-900 p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
             <div className="flex items-center gap-1.5 text-[11px] text-gray-500 flex-wrap">
                 <LivePill />
                 lighting, look, camera, size update in place
@@ -952,6 +954,7 @@ function BuilderApp({ active } = {}) {
     };
 
     const controlsStr = controlsStrFrom(controls);
+
 
     // Builds the real <materialx-viewer> element off-DOM (not via JSX),
     // so `eager` and the initial src/geometry/controls are all set before
