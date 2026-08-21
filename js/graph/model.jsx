@@ -333,7 +333,11 @@
             if (def) {
                 group = mxSafe(() => def.getNodeGroup(), '');
                 const uri = mxSafe(() => def.getSourceUri(), '');
-                const m = uri.match(/libraries\/([^/]+)/);
+                // The whole directory path under libraries/, not just its
+                // first segment: nodelib.json keys nested libraries by path
+                // ('bxdf/translation', 'bxdf/lama', 'stdlib/genosl'), so
+                // capturing only 'bxdf' built a link that resolves to nothing.
+                const m = uri.match(/libraries\/(.+)\/[^/]+$/);
                 if (m) lib = m[1];
             }
 

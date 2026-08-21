@@ -71,12 +71,15 @@
                 if (data[lib] && data[lib][group] && data[lib][group][name]) {
                     return withSig({ lib, group, name, info: data[lib][group][name] });
                 }
-                return null;
+                // Fall through to the name search rather than giving up. A
+                // stale or wrongly-derived lib/group otherwise resolves to
+                // nothing, and the page silently shows its default node
+                // instead of the one the link asked for.
             }
 
             // Name-only deep link: #/<name> (a 2-segment hash resolves by its
             // last segment too, tolerating a future #/n/<name> style).
-            const want = parts[parts.length - 1];
+            const want = parts.length >= 3 ? parts.slice(2).join('/') : parts[parts.length - 1];
             if (!want) return null;
             const squash = (s) => String(s).replace(/[-_]/g, '').toLowerCase();
             const wantKey = squash(want);
