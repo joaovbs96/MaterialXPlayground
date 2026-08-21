@@ -1765,6 +1765,11 @@ const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, var(--site-amber-300, #fcd34
 // (embed/embed-controls.css, js/builder-app.jsx).
 const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
 const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
+// Toolbar triggers sit alongside BTN_TOOLBAR buttons, which fill at
+// gray-800/80 over backdrop-blur. Matching that 80% is what stops a
+// select reading as a darker slab than the icon buttons beside it.
+const MXS_SURFACE_BAR = 'color-mix(in srgb, ' + MXS_SURFACE + ' 80%, transparent)';
+const MXS_SURFACE_BAR_HOVER = 'color-mix(in srgb, ' + MXS_SURFACE_HOVER + ' 80%, transparent)';
 
 // theme prop keys -> the custom property each one feeds. Used to stamp
 // theme overrides as inline custom properties, and to know which
@@ -1818,7 +1823,10 @@ const SELECT_SIZE_CLS = {
     lg: 'w-full px-2.5 py-1.5',
 };
 const SELECT_VARIANT_CLS = {
-    toolbar: 'border',
+    // backdrop-blur matches BTN_TOOLBAR: a toolbar select shares a strip
+    // with those buttons, and over a bright render an opaque fill reads
+    // as a much darker slab than its neighbours.
+    toolbar: 'border backdrop-blur',
     field: 'border',
     plain: 'border-0',
 };
@@ -2076,7 +2084,10 @@ const MtlxSelect = ({
     // borderColor stays harmless since there's no border to paint it on.
     const defaultChromeStyle = {
         color: MXS_TEXT, borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE,
-        background: triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE, borderColor: MXS_BORDER,
+        background: variant === 'toolbar'
+            ? (triggerHover ? MXS_SURFACE_BAR_HOVER : MXS_SURFACE_BAR)
+            : (triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE),
+        borderColor: MXS_BORDER,
     };
     const triggerStyle = Object.assign({}, defaultChromeStyle, selectThemeStyle(theme), fontStyle);
 
