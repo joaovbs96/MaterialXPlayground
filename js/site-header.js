@@ -662,12 +662,13 @@
     }
 
     // ---- GitHub repo widget: async facts row -----------------------------
-    // Fills in a facts row (release/stars/forks) from the GitHub API,
-    // cached in sessionStorage for the tab's lifetime. Best-effort
-    // throughout: a failure must never leave more than a plain icon+name link.
+    // Merges a deploy-time baked source-facts.json (version/vsix, sidesteps
+    // the api.github.com rate limit) with the GitHub API (stars/forks).
+    // Best-effort: a failure never leaves more than a plain icon+name link.
     (function initSourceFacts() {
-        // Resolves with the facts (or null) so js/vscode-app.jsx can reuse
-        // this fetch for its download link instead of a second API call.
+        // Resolves with the merged facts (or null) so js/vscode-app.jsx can
+        // reuse this instead of a second API call. Fires exactly once, after
+        // BOTH sources below have settled.
         var resolveFacts;
         window.mtlxSourceFacts = new Promise(function (r) { resolveFacts = r; });
 
@@ -712,7 +713,33 @@
             parent.appendChild(span);
         }
 
-        function render(facts) {
+        // Best-known state from each source, merged fresh on every render.
+        // Baked wins for version/vsix identity; the API only ever adds
+        // stars/forks, plus the vsix size once the release lists the asset.
+        var bakedFacts = null;
+        var apiFacts = null;
+
+        function mergedFacts() {
+            var vsix = null;
+            if (bakedFacts && bakedFacts.vsix && bakedFacts.vsix.name && bakedFacts.vsix.url) {
+                vsix = { name: bakedFacts.vsix.name, url: bakedFacts.vsix.url };
+                if (apiFacts && apiFacts.vsix && typeof apiFacts.vsix.size === 'number') {
+                    vsix.size = apiFacts.vsix.size;
+                }
+            } else if (apiFacts && apiFacts.vsix) {
+                vsix = apiFacts.vsix;
+            }
+            return {
+                version: (bakedFacts && bakedFacts.version) || (apiFacts && apiFacts.version) || null,
+                stars: apiFacts ? apiFacts.stars : undefined,
+                forks: apiFacts ? apiFacts.forks : undefined,
+                vsix: vsix,
+                t: (apiFacts && apiFacts.t) || Date.now(),
+            };
+        }
+
+        function render() {
+            var facts = mergedFacts();
             for (var i = 0; i < factsEls.length; i++) {
                 var parent = factsEls[i];
                 while (parent.firstChild) parent.removeChild(parent.firstChild);
@@ -726,13 +753,36 @@
             scheduleMeasure();
         }
 
+        // window.mtlxSourceFacts resolves once both sources below have
+        // settled (success or failure), never sooner and never twice.
+        var settledCount = 0;
+        function settle() {
+            settledCount++;
+            if (settledCount >= 2) resolveFacts(mergedFacts());
+        }
+
+        // ---- Baked facts (deploy-time source-facts.json) --------------------
+        // Document-relative, never root-absolute: Pages serves this site under
+        // a subpath and index.html carries a base href. Cache-busted by the
+        // build id when available; no build id just fetches plain.
+        var bakedUrl = './source-facts.json' + (window.__MTLX_BUILD ? '?b=' + encodeURIComponent(window.__MTLX_BUILD) : '');
+        fetch(bakedUrl)
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .catch(function () { return null; })
+            .then(function (data) {
+                bakedFacts = data;
+                render();
+                settle();
+            });
+
+        // ---- API facts (stars/forks; version/vsix only as a fallback) -------
         var cached = null;
         try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; }
         var fresh = cached && typeof cached.t === 'number' && (Date.now() - cached.t) < CACHE_TTL_MS;
         // Stale-while-revalidate: paint whatever we have so the row never
         // flashes empty, then refetch below unless it's still fresh.
-        if (cached) render(cached);
-        if (fresh) { resolveFacts(cached); return; }
+        if (cached) { apiFacts = cached; render(); }
+        if (fresh) { settle(); return; }
 
         Promise.all([
             fetch('https://api.github.com/repos/' + REPO_SLUG)
@@ -747,7 +797,7 @@
             // Offline/rate-limited: nothing cached, retry next reload. Any
             // stale entry is kept and already painted above, so a dropped
             // refresh degrades to old numbers rather than to none.
-            if (!repoData && !releaseData) { resolveFacts(cached || null); return; }
+            if (!repoData && !releaseData) { settle(); return; }
             var vsix = null;
             if (releaseData && Array.isArray(releaseData.assets)) {
                 for (var i = 0; i < releaseData.assets.length; i++) {
@@ -758,16 +808,16 @@
                     }
                 }
             }
-            var facts = {
+            apiFacts = {
                 version: releaseData ? releaseData.tag_name : null,
                 stars: repoData ? repoData.stargazers_count : undefined,
                 forks: repoData ? repoData.forks_count : undefined,
                 vsix: vsix,
                 t: Date.now(),
             };
-            try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(facts)); } catch (e) { /* best-effort */ }
-            render(facts);
-            resolveFacts(facts);
+            try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(apiFacts)); } catch (e) { /* best-effort */ }
+            render();
+            settle();
         });
     })();
 
