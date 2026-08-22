@@ -28,7 +28,10 @@ function HeroGrid({ rootRef, fadeRef, fadeFrom }) {
             const fadeStart = (fadeFrom === 'middle' ? fr.top + fr.height * 0.5 : fr.top) - rr.top - top;
             setGrid({
                 top: Math.round(top),
-                left: Math.round(wr.left - rr.left),
+                // floor, not round: rounding a fractional offset up shifts the
+                // grid half a pixel past the wrapper edge, and Chrome renders a
+                // horizontal scrollbar for that half pixel (1px scrollWidth overflow).
+                left: Math.floor(wr.left - rr.left),
                 width: wrap.clientWidth,
                 height: Math.round(fr.bottom - rr.top - top),
                 fadeStart: Math.round(fadeStart),
