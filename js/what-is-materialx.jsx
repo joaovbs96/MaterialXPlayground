@@ -436,20 +436,19 @@ function WhatIsMaterialXApp({ active } = {}) {
 
                 {/* See it */}
                 <section aria-labelledby="seeit-h" className="space-y-4">
-                    <SectionHead id="seeit-h" title="See it" blurb="The same document, shown two ways." />
-                    <div className="grid grid-cols-1 [@media(min-width:860px)]:grid-cols-2 gap-4">
-                        <MtlxGraphPreview
-                            src={marbleSrc}
-                            chrome="card"
-                            height={360}
-                            autoFocus="fit"
-                            label="Node graph of the marble material"
-                        />
-                        <ViewerPane src={marbleSrc} geometry="shaderball-scene" className="h-[360px]" />
-                    </div>
+                    <SectionHead id="seeit-h" title="See it" blurb="The node graph and the material it renders, in one panel." />
+                    <MtlxGraphPreview
+                        src={marbleSrc}
+                        chrome="card"
+                        height={380}
+                        autoFocus="fit"
+                        label="Node graph of the marble material"
+                        preview="right"
+                    />
                     <p className="text-xs text-gray-500 text-center">
                         <code className={CODE_CLASS}>standard_surface_marble_solid.mtlx</code>: the node graph that builds
-                        the pattern (built around NG_marble1, left) and the material it renders (right).
+                        the pattern (built around NG_marble1), with a live preview of the rendered material attached
+                        alongside it.
                     </p>
                 </section>
 

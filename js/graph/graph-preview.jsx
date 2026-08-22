@@ -10,6 +10,13 @@
 // style.jsx (which it needs for typeColor/TYPE_COLORS). No top-level import
 // or export, self-exports via Object.assign(window, {}) at the bottom.
 // Single-file documents only: xi:include is never resolved here.
+//
+// The optional `preview` column hosts one <materialx-viewer> element
+// (defined by embed/mtlx-viewer.js) and reads window.mtlxHasWebGL2
+// (js/shell.jsx); a consuming view's VIEW_DEPS must load embed/mtlx-viewer.js
+// too if it uses `preview`. This file never touches js/mtlx-engine.js or
+// three.js directly, so a host page that never enables `preview` never pays
+// for the 3D engine.
 
         const RF = window.ReactFlow;
         const ReactFlowComp = RF.ReactFlow || RF.default;
@@ -19,8 +26,10 @@
 
         // Known controls keywords plus a warn-once set, module scope so the
         // warning survives across every instance and re-render, mirroring
-        // node-component.jsx's __mtlxWarnedPortLists.
-        const KNOWN_CONTROLS = ['minimap', 'legend', 'zoom', 'background'];
+        // node-component.jsx's __mtlxWarnedPortLists. The dot grid isn't
+        // here: it's unconditional (see the Background render below), not
+        // an opt-in control.
+        const KNOWN_CONTROLS = ['minimap', 'legend', 'zoom'];
         const __mtlxWarnedControls = new Set();
         const parseControls = (controls) => {
             const raw = Array.isArray(controls) ? controls
@@ -60,6 +69,107 @@
             if (!res.ok) throw new Error('MtlxGraphPreview: failed to fetch "' + url + '" (HTTP ' + res.status + ').');
             return res.text();
         };
+
+        // Container width (not viewport: this embeds into arbitrary page
+        // columns) below which the preview column auto-collapses. A manual
+        // toggle overrides this permanently, see previewUserSetRef below.
+        const PREVIEW_COLLAPSE_WIDTH = 680;
+
+        // Warn-once state for an unrecognized `preview` value and for a
+        // `preview` request that has no live document to render, module
+        // scope for the same reason as __mtlxWarnedControls above.
+        const __mtlxWarnedPreview = new Set();
+        let __mtlxWarnedPreviewGraphMode = false;
+
+        // 1x1 transparent PNG data URI, matching what-is-materialx.jsx's own
+        // copy (originally home-app.jsx's HeroStage) so a <materialx-viewer>
+        // never flashes its placeholder before the first frame.
+        const PREVIEW_TRANSPARENT_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+        // Hosts one <materialx-viewer> for the preview column, following
+        // what-is-materialx.jsx's ViewerPane/home-app.jsx's HeroStage recipe:
+        // element created off-DOM and appended once, never removed while
+        // this stays mounted. `src` sets the attribute directly; `xml` goes
+        // through the embed's queued, promise-returning load() call (the
+        // same postMessage path embed-boot.js's 'load' handler answers, and
+        // js/viewer-app.jsx's "Send to Viewer" button also uses).
+        function GraphPreviewViewer({ src, xml, geometry }) {
+            const mountRef = React.useRef(null);
+            const elRef = React.useRef(null);
+            const loadedRef = React.useRef(false);
+            const [failed, setFailed] = React.useState(() => !(window.mtlxHasWebGL2 ? window.mtlxHasWebGL2() : true));
+            const [loaded, setLoaded] = React.useState(false);
+
+            // Creates and mounts the element once; geometry stays live via
+            // the custom element's own attribute handling (embed/mtlx-viewer.js's
+            // LIVE_ATTRS), so this never re-triggers a document reload.
+            React.useEffect(() => {
+                if (failed) return undefined;
+                if (!elRef.current) {
+                    if (!customElements.get('materialx-viewer')) {
+                        setFailed(true);
+                        return undefined;
+                    }
+                    const el = document.createElement('materialx-viewer');
+                    el.wheel = 'none';
+                    // Experimental depth-peeled alpha blending for opacity and
+                    // transmission, matching what-is-materialx.jsx's ViewerPane.
+                    el.forceTransparency = true;
+                    el.poster = PREVIEW_TRANSPARENT_PIXEL;
+                    el.style.width = '100%';
+                    el.style.height = '100%';
+                    el.addEventListener('mtlx-renderables', (e) => {
+                        if (Array.isArray(e.detail) && e.detail.length) {
+                            loadedRef.current = true;
+                            setLoaded(true);
+                        }
+                    });
+                    el.addEventListener('mtlx-error', () => {
+                        if (!loadedRef.current) setFailed(true);
+                    });
+                    elRef.current = el;
+                }
+                elRef.current.geometry = geometry;
+                // Append only when it isn't already parented here: an
+                // unconditional appendChild of an attached iframe still
+                // counts as a re-insertion, and reloads it.
+                if (elRef.current.parentElement !== mountRef.current) {
+                    mountRef.current.appendChild(elRef.current);
+                }
+            }, [failed, geometry]);
+
+            React.useEffect(() => {
+                if (failed || !elRef.current) return undefined;
+                if (src) {
+                    elRef.current.src = src;
+                } else if (xml) {
+                    elRef.current.load(xml).catch((e) => {
+                        console.warn('[mtlx] MtlxGraphPreview: preview failed to load: ' + ((e && e.message) || e));
+                    });
+                }
+                return undefined;
+            }, [failed, src, xml]);
+
+            React.useEffect(() => {
+                if (failed && elRef.current) elRef.current.remove();
+            }, [failed]);
+
+            return failed ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center px-3">
+                    <MtlxIcon name="cube" className="w-5 h-5 text-gray-600" />
+                    <span className="text-[11px] text-gray-500">3D preview needs WebGL2</span>
+                </div>
+            ) : (
+                <>
+                    <div ref={mountRef} className="absolute inset-0" />
+                    {!loaded && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <span className="text-[11px] text-gray-500">Loading material</span>
+                        </div>
+                    )}
+                </>
+            );
+        }
 
         // Small child of <ReactFlow> so useReactFlow() has a provider to
         // read from, exactly like the minimap/legend panels below it.
@@ -125,6 +235,12 @@
                 interactive = true,
                 portMode = 'authored',
                 lazy = true,
+                // Optional 3D render column, right of the graph, hosted by
+                // <materialx-viewer>. false/true/'right' ('right' is the
+                // only position implemented so far); previewGeometry is the
+                // geometry attribute passed straight to that element.
+                preview = false,
+                previewGeometry = 'shaderball-scene',
                 label,
                 onReady,
                 onError,
@@ -134,7 +250,22 @@
             const focusMode = (autoFocus === false || autoFocus === 'none') ? 'none'
                 : (autoFocus === 'reading' ? 'reading' : 'fit');
 
-            const rootRef = React.useRef(null);
+            const previewRequested = preview === true || preview === 'right';
+            if (!previewRequested && preview && !__mtlxWarnedPreview.has(String(preview))) {
+                __mtlxWarnedPreview.add(String(preview));
+                console.warn('[mtlx] MtlxGraphPreview: unknown `preview` value "' + preview + '", ignoring (use true, false or "right").');
+            }
+            // No live document to render in `graph`-prop mode (parsedRef
+            // stays null there, see its declaration below): degrade to
+            // graph-only rather than show an empty preview box.
+            const previewSupported = previewRequested && !graph && !!(src || xml);
+            if (previewRequested && graph && !__mtlxWarnedPreviewGraphMode) {
+                __mtlxWarnedPreviewGraphMode = true;
+                console.warn('[mtlx] MtlxGraphPreview: `preview` has no effect in `graph`-prop mode (no live document to render).');
+            }
+
+            const rootRef = React.useRef(null); // component root; only used by the preview auto-collapse observer below
+            const graphBoxRef = React.useRef(null);
             const rfInstRef = React.useRef(null);
             const parsedRef = React.useRef(null);      // live engine handle; null in `graph`-prop mode
             const graphDataRef = React.useRef(null);   // { descs, edges } snapshot in `graph`-prop mode
@@ -158,6 +289,11 @@
             // rather than collapsed to a chip.
             const [legendOpen, setLegendOpen] = React.useState(true);
             const [legendShowAll, setLegendShowAll] = React.useState(false);
+            const [rootWidth, setRootWidth] = React.useState(0);
+            const [previewCollapsed, setPreviewCollapsed] = React.useState(false);
+            // Set on the first manual toggle, so auto-collapse never fights
+            // a visitor's explicit choice on a later resize.
+            const previewUserSetRef = React.useRef(false);
 
             const prefersReducedMotion = React.useMemo(() => {
                 try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
@@ -176,7 +312,7 @@
             // a below-the-fold preview never pays the WASM cost upfront.
             React.useEffect(() => {
                 if (shouldLoad) return undefined;
-                const el = rootRef.current;
+                const el = graphBoxRef.current;
                 if (!el || typeof IntersectionObserver === 'undefined') { setShouldLoad(true); return undefined; }
                 const io = new IntersectionObserver((entries) => {
                     if (entries.some((e) => e.isIntersecting)) { setShouldLoad(true); io.disconnect(); }
@@ -188,7 +324,7 @@
             // Width only: feeding the container's own (derived) height back
             // into this would make the 'auto' height formula oscillate.
             React.useEffect(() => {
-                const el = rootRef.current;
+                const el = graphBoxRef.current;
                 if (!el || typeof ResizeObserver === 'undefined') return undefined;
                 const ro = new ResizeObserver((entries) => {
                     const w = (entries[0] && entries[0].contentRect) ? entries[0].contentRect.width : el.clientWidth;
@@ -197,6 +333,36 @@
                 ro.observe(el);
                 return () => ro.disconnect();
             }, []);
+
+            // Component-root width, for the preview auto-collapse threshold
+            // only: a SEPARATE observer from containerWidth above, which must
+            // stay scoped to the graph box's own rendered width (the graph's
+            // 'auto' height formula), not the whole row's.
+            React.useEffect(() => {
+                if (!previewRequested) return undefined;
+                const el = rootRef.current;
+                if (!el || typeof ResizeObserver === 'undefined') return undefined;
+                const ro = new ResizeObserver((entries) => {
+                    const w = (entries[0] && entries[0].contentRect) ? entries[0].contentRect.width : el.clientWidth;
+                    setRootWidth(w);
+                });
+                ro.observe(el);
+                return () => ro.disconnect();
+            }, [previewRequested]);
+
+            // Viewport-width media queries are the wrong signal for a
+            // component embedded into an arbitrary page column, hence the
+            // container-width observer above. A manual toggle (below) wins
+            // over this on every later resize.
+            React.useEffect(() => {
+                if (!previewRequested || previewUserSetRef.current || !rootWidth) return;
+                setPreviewCollapsed(rootWidth < PREVIEW_COLLAPSE_WIDTH);
+            }, [rootWidth, previewRequested]);
+
+            const togglePreviewCollapsed = () => {
+                previewUserSetRef.current = true;
+                setPreviewCollapsed((c) => !c);
+            };
 
             // Fetch + parse (or adopt the pre-parsed `graph` prop), retaining
             // the live handle so drilling into a nodegraph never re-parses.
@@ -295,7 +461,7 @@
                 // like graph-app.jsx's fitViewSoon, instead of trusting one rAF hop.
                 const attempt = (triesLeft) => {
                     const inst = rfInstRef.current;
-                    const rect = rootRef.current ? rootRef.current.getBoundingClientRect() : null;
+                    const rect = graphBoxRef.current ? graphBoxRef.current.getBoundingClientRect() : null;
                     const nodes = inst ? inst.getNodes() : [];
                     const ready = inst && rect && rect.width > 0 && rect.height > 0
                         && nodes.length > 0 && nodes.every((n) => n.width && n.height);
@@ -320,7 +486,7 @@
             // stopImmediatePropagation, so the page's own scroll is untouched.
             React.useEffect(() => {
                 if (!(wheel === 'scroll' && interactive)) return undefined;
-                const el = rootRef.current;
+                const el = graphBoxRef.current;
                 if (!el) return undefined;
                 let timer = null;
                 const onWheel = (e) => {
@@ -341,7 +507,7 @@
             // mousedown d3-zoom listens on, which kills panning outright.
             React.useEffect(() => {
                 if (!(interactive && pan)) return undefined;
-                const el = rootRef.current;
+                const el = graphBoxRef.current;
                 if (!el) return undefined;
                 const isAnchor = (e) => !!(e.target && e.target.closest && e.target.closest('a'));
                 const onMouseDown = (e) => { if (e.button === 1) e.preventDefault(); };
@@ -388,8 +554,21 @@
             }
 
             const classNames = ['mtlx-graph-preview', 'relative', 'overflow-hidden'];
-            if (chrome === 'card') classNames.push('border', 'border-gray-700', 'rounded-lg');
-            if (!isTransparent) classNames.push('bg-gray-900');
+            if (previewRequested) {
+                // Card chrome (border, rounded corners, background) moves to the
+                // row wrapper below so the graph and the preview column read as
+                // one shared surface; only the divider between them lives here.
+                classNames.push('flex-1', 'min-w-0');
+                if (chrome === 'card' && previewSupported) classNames.push('border-r', 'border-gray-700');
+            } else {
+                if (chrome === 'card') classNames.push('border', 'border-gray-700', 'rounded-lg');
+                if (!isTransparent) classNames.push('bg-gray-900');
+            }
+
+            // Only mount the actual <materialx-viewer> once the panel is
+            // expanded AND the component is in view, the same discipline
+            // `lazy`/`shouldLoad` already applies to the 2D graph above.
+            const previewLive = previewSupported && !previewCollapsed && shouldLoad;
 
             const wheelHintStyle = {
                 position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
@@ -399,8 +578,8 @@
                 transition: prefersReducedMotion ? 'none' : 'opacity 200ms ease',
             };
 
-            return (
-                <div ref={rootRef} className={classNames.join(' ')} style={boxStyle}
+            const graphBox = (
+                <div ref={graphBoxRef} className={classNames.join(' ')} style={boxStyle}
                     role="group" aria-label={interactive ? label : undefined}>
                     {status === 'ready' ? (
                         <ReactFlowComp
@@ -438,7 +617,10 @@
 
                             proOptions={{ hideAttribution: false }}
                         >
-                            {controlsSet.has('background') && <Background color="#374151" gap={18} size={1.5} />}
+                            {/* Same dot grid as the editor, skipped when transparent: a
+                                caller asking to see through to the host page's own
+                                background doesn't want gray dots painted over it. */}
+                            {!isTransparent && <Background color="#374151" gap={18} size={1.5} />}
                             {controlsSet.has('minimap') && (
                                 <MiniMap pannable={interactive} zoomable={interactive}
                                     nodeColor={(n) => getNodeColor(n.data)} nodeStrokeColor="#111827"
@@ -481,6 +663,56 @@
                     {wheel === 'scroll' && interactive && status === 'ready' && (
                         <div aria-hidden="true" style={wheelHintStyle}>Use Ctrl + scroll to zoom</div>
                     )}
+                </div>
+            );
+
+            if (!previewRequested) return graphBox;
+
+            // Toggle button: same control (icon flips, position flips from
+            // an overlay to inline) whether the panel is open or collapsed
+            // to a rail, so open/close never drift into two implementations.
+            const previewToggleBtn = (
+                <button
+                    type="button"
+                    onClick={togglePreviewCollapsed}
+                    title={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
+                    aria-label={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
+                    aria-expanded={!previewCollapsed}
+                    className={'flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 '
+                        + 'bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 '
+                        + 'transition-colors' + (previewCollapsed ? '' : ' absolute top-1.5 right-1.5 z-10')}
+                >
+                    {/* chevron-left doesn't exist in MTLX_ICON_PATHS; chevrons-left is the nearest "point back open" glyph */}
+                    <MtlxIcon name={previewCollapsed ? 'chevrons-left' : 'chevrons-right'} className="w-3.5 h-3.5" />
+                </button>
+            );
+
+            // Card chrome (border, rounded corners, background) lives on this
+            // row, not on graphBox or the preview column, so the two read as
+            // one surface; overflow-hidden clips the flush preview column to
+            // the same outside-only corner radius.
+            const rowClassNames = ['flex', 'items-stretch'];
+            if (chrome === 'card') rowClassNames.push('border', 'border-gray-700', 'rounded-lg', 'overflow-hidden');
+            if (!isTransparent) rowClassNames.push('bg-gray-900');
+
+            return (
+                <div ref={rootRef} className={rowClassNames.join(' ')}>
+                    {graphBox}
+                    {previewSupported && (previewCollapsed ? (
+                        <div className="flex-none w-9 flex flex-col items-center justify-center">
+                            {previewToggleBtn}
+                        </div>
+                    ) : (
+                        // No self-start/aspect-square: flush against the graph
+                        // with no border or radius of its own, this stretches
+                        // to the shared row's full height instead.
+                        <div className="relative flex-none w-64 sm:w-72">
+                            {previewToggleBtn}
+                            {previewLive && (
+                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} />
+                            )}
+                        </div>
+                    ))}
                 </div>
             );
         }
