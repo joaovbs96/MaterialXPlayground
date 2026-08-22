@@ -119,6 +119,21 @@ jobs:
             --exclude='scripts' \
             ./ "$RUNNER_TEMP/site"/
 
+      # Not committed: the tag isn't knowable ahead of release, and the
+      # build-id gate byte-compares committed artifacts. vsix name/url are
+      # derived from the tag since release.yml's own upload races this job.
+      - name: Write source facts
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          VSIX_NAME="materialx-playground-vscode-${RELEASE_TAG}.vsix"
+          VSIX_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${VSIX_NAME}"
+          jq -n --arg version "$RELEASE_TAG" --arg name "$VSIX_NAME" --arg url "$VSIX_URL" \
+            '{version: $version, vsix: {name: $name, url: $url}}' \
+            > "$RUNNER_TEMP/site/source-facts.json"
+
       - name: Upload Pages artifact
         if: github.event_name == 'release'
         uses: actions/upload-pages-artifact@v5
