@@ -2969,6 +2969,10 @@ const createMtlxRenderView = async ({
     // no controls/spin, no visible backdrop. Orthogonal to sceneMode
     // (null there, so the ordinary buildPreviewGeometry path runs).
     const flat2d = geomName === 'buffer2d';
+    // Known before the renderer exists, so the shadow map can be configured
+    // up front. Flipping shadowMap.enabled after the PMREM and the materials
+    // are built invalidated program state and blacked out scene.environment.
+    const wantsStudio = !flat2d && sceneMode !== 'full';
     // Unrecognized/missing values fall back to 'studio'. envBackground
     // back-compat only applies when `backdrop` itself was never passed
     // at all; an explicit `backdrop` (even 'studio') always wins.
@@ -3209,9 +3213,13 @@ const createMtlxRenderView = async ({
                 // has ONE GL context, so a second renderer here inherits the
                 // first one's context, and a disposed predecessor can strand it.
                 try { canvas.__mtlxRendererCount = (canvas.__mtlxRendererCount || 0) + 1; } catch (e) { /* ignore */ }
-                // shadowMap.enabled is a GLOBAL renderer flag keying
-                // every lit material's program cache, so it is left at its
-                // default (off); turned on only where a studioGroup exists.
+                // GLOBAL flag keying every lit material's program cache, so set
+                // ONCE here, before any material or PMREM work, and left at the
+                // default (off) for views that never build a studio bowl.
+                if (wantsStudio) {
+                    renderer.shadowMap.enabled = true;
+                    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                }
                 renderer.setSize(cw, ch, false);
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
                 renderer.debug.checkShaderErrors = true;
@@ -3250,7 +3258,10 @@ const createMtlxRenderView = async ({
                     // EXCEPT the backplanes' MeshBasicMaterial clones
                     // (no envMap). Same duck-typing check as setEnvExposure.
                     sceneOwnedMaterials.forEach((m) => {
-                        if ('envMapIntensity' in m) patchNeutralMaterialEnvRotation(m);
+                        // BISECT: the env-rotation chunk is the only hand-injected
+                        // shader in the scene, and it is the last suspect for the
+                        // black neutral materials under an enabled shadow map.
+                        if ('envMapIntensity' in m && !wantsStudio) patchNeutralMaterialEnvRotation(m);
                     });
                 }
                 // fullScene: the full authored preset (shaderball.glb) —
@@ -3568,7 +3579,7 @@ const createMtlxRenderView = async ({
                 // Procedural white studio cyclorama + contact shadow,
                 // the third backdrop mode alongside bgMesh above. Skipped
                 // for flat2d and full-scene (its own authored room).
-                if (!flat2d && sceneMode !== 'full') {
+                if (wantsStudio) {
                     try {
                         const studioGeom = getStudioGeometry();
                         if (studioGeom) {
@@ -3587,11 +3598,6 @@ const createMtlxRenderView = async ({
                             studioCatcher.receiveShadow = true;
                             studioCatcher.material.depthWrite = false;
                             studioCatcher.renderOrder = -800;
-                            // Shadows opt in only where a studioGroup exists,
-                            // so every other view keeps the renderer default
-                            // and its pre-feature program-cache keys.
-                            renderer.shadowMap.enabled = true;
-                            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
                             // Zero intensity + castShadow: only the simple
                             // GLB's neutral glTF meshes read lights, so this
                             // casts a shadow while lighting nothing.
