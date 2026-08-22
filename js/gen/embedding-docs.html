@@ -489,7 +489,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td><code>.eager</code></td>
 <td>boolean</td>
 <td>off</td>
-<td>— (read once, on connect — skips the <code>IntersectionObserver</code> and creates the iframe immediately instead of waiting for scroll)</td>
+<td>— (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the <code>IntersectionObserver</code> still runs alongside it, so an evicted instance can come back once it&#39;s visible again.)</td>
 </tr>
 </tbody></table>
 <p><code>camera</code>, unlike the rest of the live-updating attributes, has a one-time-vs-live split: as a

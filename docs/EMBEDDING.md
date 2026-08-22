@@ -215,7 +215,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `radius` | `.radius` | CSS `<length>` | `4px` | Yes |
 | `base` | `.base` | URL string | the directory `mtlx-viewer.js` was loaded from | — (read once per activation) |
 | `poster` | `.poster` | URL string | — | — (placeholder image only, before the iframe activates) |
-| `eager` | `.eager` | boolean | off | — (read once, on connect — skips the `IntersectionObserver` and creates the iframe immediately instead of waiting for scroll) |
+| `eager` | `.eager` | boolean | off | — (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the `IntersectionObserver` still runs alongside it, so an evicted instance can come back once it's visible again.) |
 
 `camera`, unlike the rest of the live-updating attributes, has a one-time-vs-live split: as a
 query param on a plain `<iframe>` it only ever seeds the *initial* pose (see the table above).

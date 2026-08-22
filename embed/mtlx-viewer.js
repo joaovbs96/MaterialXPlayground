@@ -118,15 +118,17 @@
 
         connectedCallback() {
             if (!this._shadowBuilt) this._buildShadow();
-            if (this.eager) {
-                this._activate();
-            } else if (!this._observer) {
+            // Always observe, eager included: eviction can tear the iframe
+            // down later, and this is the only path a still-connected
+            // element has to notice it should come back (see _onIntersect).
+            if (!this._observer) {
                 this._observer = new IntersectionObserver(
                     (entries) => entries.forEach((e) => this._onIntersect(e)),
                     { root: null, rootMargin: MtlxViewerElement.rootMargin, threshold: 0 }
                 );
                 this._observer.observe(this);
             }
+            if (this.eager) this._activate(); // skip waiting for the observer's first tick.
         }
 
         disconnectedCallback() {
