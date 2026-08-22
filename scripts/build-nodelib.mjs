@@ -8,7 +8,7 @@
 // Needs network unless vendor/materialx/ is populated.
 // Usage: node scripts/build-nodelib.mjs [--check]
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -40,6 +40,12 @@ const RELATIVE_NODELIB_STATS_PATH = path.relative(REPO_ROOT, NODELIB_STATS_PATH)
 // caption: real surfaceshader-output nodes, minus plumbing (convert, dot,
 // mix) and helpers (open_pbr_anisotropy). Kept hand-picked; only checked here.
 const SHADING_MODELS = ["standard_surface", "open_pbr_surface", "gltf_pbr", "disney_principled", "UsdPreviewSurface"];
+
+// Also for "By the numbers": vendored bxdf subfolders with one file per
+// node/translation graph, counted by directory listing rather than the
+// spec-derived db/index (neither of those tracks Lama or translation graphs).
+const LAMA_DIR = path.join(REPO_ROOT, "libraries", "bxdf", "lama");
+const TRANSLATION_DIR = path.join(REPO_ROOT, "libraries", "bxdf", "translation");
 
 const CHECK_MODE = process.argv.includes("--check");
 
@@ -172,10 +178,39 @@ function countNodedefs(index) {
   return total;
 }
 
+/** Same walk as countNodedefs, scoped to a single category, for the
+ * "By the numbers" convert-nodedef count. */
+function countCategoryNodedefs(index, category) {
+  const entry = index.nodes[category];
+  if (!entry) return 0;
+  let total = 0;
+  for (const g of entry.sigGroups) total += g.versions.length;
+  return total;
+}
+
+/** Count of .mtlx files directly inside `dir` (both bxdf/lama and
+ * bxdf/translation are flat: one file per node or translation graph). */
+async function countMtlxFiles(dir) {
+  const entries = await readdir(dir);
+  return entries.filter((f) => f.toLowerCase().endsWith(".mtlx")).length;
+}
+
+/** Alphabetically first .mtlx stem in `dir`, preferring `preferred` when
+ * present there, so a renamed/removed example file can't leave a stale
+ * name on the page. */
+async function pickExampleStem(dir, preferred) {
+  const entries = await readdir(dir);
+  const stems = entries
+    .filter((f) => f.toLowerCase().endsWith(".mtlx"))
+    .map((f) => f.slice(0, -".mtlx".length))
+    .sort();
+  return stems.includes(preferred) ? preferred : (stems[0] || "");
+}
+
 /** Runs sanity checks against the in-memory db/index (never committed
  * files), so --check catches stale files AND bad generation. Collects
  * every failure and returns them as an array of strings (empty = ok). */
-function runSanityChecks(db, index) {
+function runSanityChecks(db, index, extra) {
   const problems = [];
   const check = (cond, msg) => { if (!cond) problems.push(msg); };
 
@@ -247,6 +282,15 @@ function runSanityChecks(db, index) {
     check(!!index.nodes[name], `index.nodes['${name}'] is missing (SHADING_MODELS in scripts/build-nodelib.mjs)`);
   }
 
+  // Same page's Lama/translation/convert counts (`extra`, computed in
+  // main() from index.nodes.convert and the libraries/bxdf/* directory
+  // listings): each must be a real, non-empty value.
+  check(!!index.nodes["convert"], "index.nodes['convert'] is missing");
+  check(extra.convertNodedefs > 0, `extra.convertNodedefs is ${extra.convertNodedefs}, expected > 0`);
+  check(extra.lamaNodes > 0, `extra.lamaNodes is ${extra.lamaNodes}, expected > 0`);
+  check(extra.translationGraphs > 0, `extra.translationGraphs is ${extra.translationGraphs}, expected > 0`);
+  check(!!extra.translationExample, "extra.translationExample is empty");
+
   // multiply has more than one signature group.
   const mul = index.nodes["multiply"];
   check(!!mul && mul.sigGroups.length > 1,
@@ -284,22 +328,33 @@ function runSanityChecks(db, index) {
 }
 
 /** Tiny stats file for js/what-is-materialx.jsx's "By the numbers" strip,
- * all computed from db/index/meta so a MaterialX version bump can't leave
- * a stale literal on the page. */
-function buildStats(db, index, meta) {
+ * all computed from db/index/meta/extra so a MaterialX version bump can't
+ * leave a stale literal on the page. */
+function buildStats(db, index, meta, extra) {
   return {
     nodedefs: countNodedefs(index),
     documented: countDocumented(db),
     targets: index.allTargets.length,
     libraryVersion: meta.version,
     shadingModels: SHADING_MODELS,
+    convertNodedefs: extra.convertNodedefs,
+    lamaNodes: extra.lamaNodes,
+    translationGraphs: extra.translationGraphs,
+    translationExample: extra.translationExample,
   };
 }
 
 async function main() {
   const { db, index, meta } = await build();
 
-  const problems = runSanityChecks(db, index);
+  const extra = {
+    convertNodedefs: countCategoryNodedefs(index, "convert"),
+    lamaNodes: await countMtlxFiles(LAMA_DIR),
+    translationGraphs: await countMtlxFiles(TRANSLATION_DIR),
+    translationExample: await pickExampleStem(TRANSLATION_DIR, "standard_surface_to_gltf_pbr"),
+  };
+
+  const problems = runSanityChecks(db, index, extra);
   if (problems.length > 0) {
     console.error("Sanity checks failed — refusing to write anything:");
     for (const p of problems) console.error(`  - ${p}`);
@@ -308,7 +363,7 @@ async function main() {
 
   const dbSerialized = serialize(db);
   const indexSerialized = serialize(index);
-  const statsSerialized = serialize(buildStats(db, index, meta));
+  const statsSerialized = serialize(buildStats(db, index, meta, extra));
 
   if (CHECK_MODE) {
     let stale = false;

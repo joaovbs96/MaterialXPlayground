@@ -14,11 +14,16 @@ const TRANSPARENT_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAA
 // so a portrait pane on narrow screens still can't clip, well inside 3.6.
 const HERO_CAMERA = '0,0.35,2.8,0,0,0';
 
+// ViewerPane's hover-action pill: a smaller variant of home-app.jsx's
+// HeroStage pillClass, used on every preview on this page (hero, showcase,
+// "See it") so they all read as one consistent family, just smaller.
+const PILL_CLASS = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-wait';
+
 // "What it actually is", four pillar cards in reading order.
 const WHAT_PILLARS = [
     { icon: 'article', title: 'An open standard', desc: (<>MaterialX is an open standard, with <code className={CODE_CLASS}>.mtlx</code> as its XML file format for writing a look down and moving it between applications.</>) },
     { icon: 'share', title: 'A node graph', desc: 'The look itself is a node graph: a directed acyclic graph of pattern nodes feeding a shader. Wired together, they form a material.' },
-    { icon: 'puzzle', title: 'A large standard node library', desc: 'A big library of node definitions ships with the standard: math and pattern nodes, textures, and full shading building blocks, behaving the same way in every compliant implementation.' },
+    { icon: 'puzzle', title: 'A large standard node library', desc: 'Hundreds of node definitions ship with the standard: math, patterns, textures and shading building blocks, each defined once for every implementation to start from.' },
     { icon: 'code', title: 'Shader generation', desc: 'The same graph compiles to different shading languages through ShaderGen, so one graph can target very different renderers.' },
 ];
 
@@ -27,7 +32,9 @@ const WHAT_NOT = [
     { title: 'Not a renderer', desc: 'MaterialX does not render anything itself. It describes a look; a renderer or engine turns that description into pixels.' },
     { title: 'Not a DCC or authoring app', desc: 'There is no MaterialX modeling or animation tool. Artists build looks inside a DCC, or a tool like this Playground, then save the result as .mtlx.' },
     { title: 'Not a single fixed shading model', desc: (<><code className={CODE_CLASS}>standard_surface</code>, OpenPBR Surface, glTF PBR and the others are all node graphs built from the standard library, not hardcoded modes.</>) },
-    { title: 'No promise of identical pixels', desc: 'The spec asks implementations to support standard nodes "to the degree their architecture and capabilities allow." A look transfers without being rebuilt; rendering it in two engines is not guaranteed to look pixel-identical.' },
+    { title: 'No promise of identical pixels', desc: (<>The spec asks implementations to support standard nodes{' '}
+        <a href={window.SITE_LINKS.spec} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40">"to the degree their architecture and capabilities allow."</a>{' '}
+        A look transfers without being rebuilt; rendering it in two engines is not guaranteed to look pixel-identical.</>) },
 ];
 
 // Glossary cards: an artist-readable line first, a precise one second.
@@ -47,14 +54,13 @@ const WHAT_FACTS = [
     { k: 'Documented nodes', get: (s) => s.documented },
     { k: 'Shading models', get: (s) => s.shadingModels.length },
     { k: 'Shader targets', get: (s) => s.targets, wide: true },
-    { k: 'Library Version', get: (s) => s.libraryVersion, wide: true },
+    { k: 'Library version', get: (s) => s.libraryVersion, wide: true },
 ];
 
 // "A few materials": visually distinct examples, none reused from "See it".
 // Each entry is either a `path` (resolved through MtlxAssets.repoUrl against
 // the upstream examples tree) or a direct local `src`, which wins if set.
 const SHOWCASE_MATERIALS = [
-    { path: 'StandardSurface/standard_surface_chrome.mtlx', label: 'Chrome' },
     { path: 'StandardSurface/standard_surface_wood_tiled.mtlx', label: 'Wood (tiled)' },
     { src: 'materials/Motley_Patchwork_Rug/Motley_Patchwork_Rug.mtlx', label: 'Patchwork rug', note: true },
     { path: 'OpenPbr/open_pbr_pearl.mtlx', label: 'OpenPBR pearl' },
@@ -66,7 +72,8 @@ const STEWARD_CARDS = [
     {
         icon: 'world',
         title: 'Jointly launched in 2018',
-        desc: 'The Academy Software Foundation was jointly launched by the Academy of Motion Picture Arts and Sciences and the Linux Foundation in August 2018. It provides a neutral forum for developers across the motion picture and broader media industries to collaborate on tools for image creation, visual effects, animation and sound.',
+        desc: (<>The Academy Software Foundation was{' '}
+            <a href="https://www.linuxfoundation.org/press/press-release/academy-of-motion-picture-arts-and-sciences-and-the-linux-foundation-launch-the-academy-software-foundation" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">jointly launched<MtlxIcon name="external-link" className="w-3 h-3" /></a> by the Academy of Motion Picture Arts and Sciences and the Linux Foundation in August 2018, as a neutral forum for the motion picture and media industries to collaborate on tools for image creation, visual effects and animation.</>),
     },
     {
         icon: 'id',
@@ -76,7 +83,8 @@ const STEWARD_CARDS = [
     {
         icon: 'share',
         title: "MaterialX's place in the Foundation",
-        desc: 'MaterialX has been hosted by the Academy Software Foundation since 2021, and reached its Graduated stage in 2024. It is Apache-2.0 licensed. Sibling projects include OpenEXR, OpenColorIO, OpenVDB, Open Shading Language and OpenTimelineIO.',
+        desc: (<>MaterialX has been hosted by the Academy Software Foundation since 2021, and reached its{' '}
+            <a href="https://tac.aswf.io/process/lifecycle.html" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">Graduated stage<MtlxIcon name="external-link" className="w-3 h-3" /></a> in 2024. It is Apache-2.0 licensed. Sibling projects include OpenEXR, OpenColorIO, OpenVDB, Open Shading Language and OpenTimelineIO.</>),
     },
 ];
 
@@ -86,37 +94,46 @@ const HISTORY = [
     {
         year: '2012',
         title: 'Originated at Lucasfilm',
-        desc: 'MaterialX describes its own start as "Launched at Industrial Light and Magic in 2012." That year was a proposal; funded development began in 2013.',
+        // Plain underlined link, not the inline-flex icon idiom: an atomic
+        // inline-flex anchor this long cannot wrap and shatters the narrow
+        // timeline column into ragged fragments.
+        desc: (<>MaterialX launched at <a href="https://materialx.org/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40">Industrial Light and Magic (ILM)</a> in 2012.</>),
     },
     {
         year: '2015',
         title: 'First production use',
-        desc: (<>First used in production on <em>Star Wars: The Force Awakens</em>. It has been the central format for material description at ILM since.</>),
+        desc: (<>First used in production on <em>Star Wars: The Force Awakens</em>. It has been the{' '}
+            <a href="https://www.aswf.io/blog/materialx-joins-the-academy-software-foundation-as-a-hosted-project/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">central format for material description at ILM<MtlxIcon name="external-link" className="w-3 h-3" /></a> since.</>),
     },
     {
         year: '2017',
         title: 'Released as open source',
-        desc: (<>Released as open source on 11 July 2017. The first public release, <code className={CODE_CLASS}>v1.35.2</code>, was tagged later that month.</>),
+        desc: (<><a href="https://www.ilm.com/materialx-released/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">Released as open source<MtlxIcon name="external-link" className="w-3 h-3" /></a> in July 2017. The first public release tag was <code className={CODE_CLASS}>v1.35.2</code>.</>),
     },
     {
         year: '2019',
         title: 'Autodesk collaboration',
-        desc: (<>MaterialX v1.36.3 (2 August 2019) merged Autodesk's shader code generation and physically based shading nodes, adding the <code className={CODE_CLASS}>MaterialXGenShader</code> library with GLSL and OSL support.</>),
+        desc: (<><a href="https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">MaterialX v1.36.3<MtlxIcon name="external-link" className="w-3 h-3" /></a> (2 August 2019) merged Autodesk's shader code generation and physically based shading nodes, adding the <code className={CODE_CLASS}>MaterialXGenShader</code> library with GLSL and OSL support.</>),
     },
     {
         year: '2021',
         title: 'Joins the Academy Software Foundation',
-        desc: 'Joined the Academy Software Foundation on 14 July 2021 as its seventh hosted project.',
+        desc: (<><a href="https://www.aswf.io/blog/materialx-joins-the-academy-software-foundation-as-a-hosted-project/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">Joined the Academy Software Foundation<MtlxIcon name="external-link" className="w-3 h-3" /></a> on 14 July 2021 as its seventh hosted project.</>),
     },
     {
         year: '2023',
         title: 'OpenPBR announced',
-        desc: 'OpenPBR announced on 2 August 2023: a shading model built by Autodesk and Adobe as a MaterialX subproject, succeeding Autodesk Standard Surface and Adobe Standard Material.',
+        desc: (<><a href="https://github.com/AcademySoftwareFoundation/OpenPBR" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">OpenPBR<MtlxIcon name="external-link" className="w-3 h-3" /></a> announced in August 2023: a shading model built by Autodesk and Adobe as a MaterialX subproject, succeeding Autodesk Standard Surface and Adobe Standard Material.</>),
     },
     {
         year: '2024',
         title: 'OpenPBR 1.0, and Graduated stage',
-        desc: "OpenPBR 1.0 released on 4 June 2024. MaterialX itself reached the Foundation's Graduated stage that September.",
+        desc: (<><a href="https://www.aswf.io/blog/academy-software-foundation-releases-openpbr-1-0/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">OpenPBR 1.0 released<MtlxIcon name="external-link" className="w-3 h-3" /></a> on 4 June 2024. MaterialX itself reached the Foundation's Graduated stage the same year.</>),
+    },
+    {
+        year: '2025',
+        title: 'OpenPBR Volume announced',
+        desc: (<><a href="https://www.aswf.io/blog/openpbr-volume/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">OpenPBR Volume<MtlxIcon name="external-link" className="w-3 h-3" /></a> announced at SIGGRAPH 2025: an OpenPBR shading model for volumetrics like clouds, smoke and fire, proposed by Autodesk and SideFX.</>),
     },
 ];
 
@@ -168,7 +185,7 @@ function SectionHead({ id, title, blurb }) {
 // One live <materialx-viewer>, following home-app.jsx's HeroStage recipe:
 // created off-DOM, never re-appended. No `eager`: only non-eager panes
 // ever get an observer, so the hero can recover after an LRU eviction.
-function ViewerPane({ src, label, glow, className, geometry, transparent, autorotate, camera, frame = true }) {
+function ViewerPane({ src, label, glow, className, geometry, transparent, autorotate, camera, frame = true, chip, actions, busyLock }) {
     const mountRef = React.useRef(null);
     const elRef = React.useRef(null);
     const loadedRef = React.useRef(false);
@@ -176,6 +193,10 @@ function ViewerPane({ src, label, glow, className, geometry, transparent, autoro
     const [loaded, setLoaded] = React.useState(false);
     // Only the orbitable 'shaderball-scene' backdrop needs a reset button.
     const showReset = geometry === 'shaderball-scene';
+    // Any action busy disables the whole row, matching home's HeroStage
+    // (one in-flight hand-off at a time; only its own pill reads "Loading").
+    // `busyLock` extends that across sibling panes sharing one busy state.
+    const actionsBusy = !!(busyLock || (actions && actions.some((a) => a.busy)));
 
     React.useEffect(() => {
         if (failed) return;
@@ -245,13 +266,34 @@ function ViewerPane({ src, label, glow, className, geometry, transparent, autoro
                                     <span className="text-xs text-gray-500">Loading material</span>
                                 </div>
                             )}
+                            {chip && (
+                                <div className="absolute top-3 left-3 flex items-center gap-2 text-[11px] leading-[14px] pointer-events-none">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                                    <span className="text-gray-400">{chip.label}</span>
+                                    <span className="text-gray-600">/</span>
+                                    <span className="font-mono text-gray-500">{chip.file}</span>
+                                </div>
+                            )}
+                            {actions && actions.length > 0 && (
+                                <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
+                                    {actions.map((a) => (
+                                        <button key={a.label} type="button" disabled={actionsBusy} onClick={a.onClick} className={PILL_CLASS}>
+                                            <MtlxIcon name={a.icon} className="w-3 h-3 text-gray-500 transition-colors" />
+                                            {a.busy ? 'Loading' : a.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                             {showReset && (
                                 <button
                                     type="button"
                                     onClick={() => elRef.current && elRef.current.resetCamera()}
                                     title="Reset camera"
                                     aria-label="Reset camera"
-                                    className="absolute bottom-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [@media(hover:none)]:opacity-100"
+                                    className={'absolute right-2 inline-flex items-center justify-center w-7 h-7 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [@media(hover:none)]:opacity-100 '
+                                        // Bumped above the pill row (bottom-2, h-6) when one is
+                                        // present, so the two never overlap on a narrow pane.
+                                        + (actions && actions.length > 0 ? 'bottom-9' : 'bottom-2')}
                                 >
                                     <MtlxIcon name="camera-reset" className="w-4 h-4" />
                                 </button>
@@ -330,13 +372,80 @@ function WhatIsMaterialXApp({ active } = {}) {
     const heroSrc = window.MtlxAssets.repoUrl('resources/Materials/Examples/StandardSurface/standard_surface_gold.mtlx');
     const marbleSrc = window.MtlxAssets.repoUrl('resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx');
 
+    // Hero "Open in ..." hand-off, mirroring home-app.jsx's openHeroIn: load
+    // the target view's deps, fetch the preset's file map, then push the
+    // document over and hash-route there.
+    const [heroBusy, setHeroBusy] = React.useState(null);
+    const openHeroIn = async (target) => {
+        if (heroBusy) return;
+        setHeroBusy(target);
+        try {
+            await window.mtlxLoadViewDeps(target);
+            const { map, rootKey } = await window.fetchPresetFiles({ label: 'Gold', path: 'StandardSurface/standard_surface_gold.mtlx' });
+            const xml = await map[rootKey].text();
+            const files = window.looseFilesFrom(map);
+            const name = rootKey.replace(/\.mtlx$/i, '');
+            (target === 'viewer' ? window.openInViewer : window.openInGraphEditor)({ xml, name, files });
+        } catch (e) {
+            console.error('[what-is-materialx] hero hand-off failed', e);
+        } finally {
+            setHeroBusy(null);
+        }
+    };
+
+    // Same hand-off as the hero, generalized to either target, for the
+    // "See it" panel's own pill row (both "Open in Viewer" and "Open in
+    // Graph Editor" on the marble material this section already shows).
+    const [seeItBusy, setSeeItBusy] = React.useState(null);
+    const openSeeItIn = async (target) => {
+        if (seeItBusy) return;
+        setSeeItBusy(target);
+        try {
+            await window.mtlxLoadViewDeps(target);
+            const { map, rootKey } = await window.fetchPresetFiles({ label: 'Marble (solid)', path: 'StandardSurface/standard_surface_marble_solid.mtlx' });
+            const xml = await map[rootKey].text();
+            const files = window.looseFilesFrom(map);
+            const name = rootKey.replace(/\.mtlx$/i, '');
+            (target === 'viewer' ? window.openInViewer : window.openInGraphEditor)({ xml, name, files });
+        } catch (e) {
+            console.error('[what-is-materialx] see-it hand-off failed', e);
+        } finally {
+            setSeeItBusy(null);
+        }
+    };
+
+    // Showcase ("A few materials") hand-off: one shared busy key across all
+    // four panes, so any in-flight hand-off disables every pane's pills, not
+    // just the one that started it (see ViewerPane's busyLock). The rug is a
+    // local same-origin doc (fetchRemoteDocumentFiles resolves its sibling
+    // textures the same way fetchPresetFiles does for the repo-hosted ones).
+    const [showcaseBusy, setShowcaseBusy] = React.useState(null);
+    const openShowcaseIn = async (m, target) => {
+        if (showcaseBusy) return;
+        const key = m.src || m.path;
+        setShowcaseBusy(key + '|' + target);
+        try {
+            await window.mtlxLoadViewDeps(target);
+            const { map, rootKey } = m.src
+                ? await window.fetchRemoteDocumentFiles(m.src)
+                : await window.fetchPresetFiles({ label: m.label, path: m.path });
+            const xml = await map[rootKey].text();
+            const files = window.looseFilesFrom(map);
+            const name = rootKey.replace(/\.mtlx$/i, '');
+            (target === 'viewer' ? window.openInViewer : window.openInGraphEditor)({ xml, name, files });
+        } catch (e) {
+            console.error('[what-is-materialx] showcase hand-off failed', e);
+        } finally {
+            setShowcaseBusy(null);
+        }
+    };
+
     const officialLinks = [
-        { href: links.spec, title: 'Specification (v1.39, pinned build)' },
-        { href: links.specMain, title: 'Specification source (latest)' },
+        { href: links.spec, title: 'Specification (v1.39)' },
         { href: links.repo, title: 'MaterialX on GitHub' },
         { href: 'https://materialx.org/', title: 'materialx.org' },
         { href: 'https://academysoftwarefoundation.github.io/OpenPBR/', title: 'OpenPBR specification' },
-        { href: 'https://academysoftwarefdn.slack.com/archives/C0230LWBE2X', title: 'MaterialX on ASWF Slack' },
+        { href: 'https://slack.aswf.io', title: 'MaterialX on ASWF Slack' },
     ];
 
     // The hero glow spreads vertically only (-inset-y-16, inset-x-0). Horizontal
@@ -382,7 +491,15 @@ function WhatIsMaterialXApp({ active } = {}) {
                         </div>
                     </div>
                     <div className="min-w-0">
-                        <ViewerPane src={heroSrc} label="Gold, rendered live" geometry="shaderball" transparent autorotate camera={HERO_CAMERA} frame={false} glow className="h-[280px] sm:h-[340px] lg:h-[380px]" />
+                        <ViewerPane
+                            src={heroSrc} geometry="shaderball" transparent autorotate
+                            camera={HERO_CAMERA} frame={false} glow className="h-[280px] sm:h-[340px] lg:h-[380px]"
+                            chip={{ label: 'Gold', file: 'standard_surface_gold.mtlx' }}
+                            actions={[
+                                { label: 'Open in Viewer', icon: 'camera', busy: heroBusy === 'viewer', onClick: () => openHeroIn('viewer') },
+                                { label: 'Open in Graph Editor', icon: 'share', busy: heroBusy === 'graph', onClick: () => openHeroIn('graph') },
+                            ]}
+                        />
                     </div>
                 </section>
 
@@ -434,19 +551,34 @@ function WhatIsMaterialXApp({ active } = {}) {
                     </div>
                 </section>
 
-                {/* See it: wider than the page's max-w-5xl column, but only
-                    from xl+ (1280px+) where there's guaranteed room to bleed
-                    out with zero risk of horizontal scroll below that. */}
-                <section aria-labelledby="seeit-h" className="space-y-4 xl:w-[calc(100%+16rem)] xl:max-w-[1280px] xl:-mx-32">
+                {/* See it: wider than the page's max-w-5xl column. Gated at
+                    1360px, not xl: the scroll wrapper loses p-6 padding plus the
+                    reserved scrollbar gutter, so 1280px of content needs ~1345. */}
+                <section aria-labelledby="seeit-h" className="space-y-4 [@media(min-width:1360px)]:w-[calc(100%+16rem)] [@media(min-width:1360px)]:max-w-[1280px] [@media(min-width:1360px)]:-mx-32">
                     <SectionHead id="seeit-h" title="See it" blurb="The node graph and the material it renders, in one panel." />
-                    <MtlxGraphPreview
-                        src={marbleSrc}
-                        chrome="card"
-                        height={380}
-                        autoFocus="fit"
-                        label="Node graph of the marble material"
-                        preview="right"
-                    />
+                    <div className="relative group">
+                        <MtlxGraphPreview
+                            src={marbleSrc}
+                            chrome="card"
+                            height={380}
+                            autoFocus="fit"
+                            label="Node graph of the marble material"
+                            preview="right"
+                        />
+                        {/* Overlaid here, not inside graph-preview.jsx: centred so it
+                           clears both the graph's own React Flow attribution and the
+                           3D column's reset button, which both sit at the far right. */}
+                        <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
+                            <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('viewer')} className={PILL_CLASS}>
+                                <MtlxIcon name="camera" className="w-3 h-3 text-gray-500 transition-colors" />
+                                {seeItBusy === 'viewer' ? 'Loading' : 'Open in Viewer'}
+                            </button>
+                            <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('graph')} className={PILL_CLASS}>
+                                <MtlxIcon name="share" className="w-3 h-3 text-gray-500 transition-colors" />
+                                {seeItBusy === 'graph' ? 'Loading' : 'Open in Graph Editor'}
+                            </button>
+                        </div>
+                    </div>
                     <p className="text-xs text-gray-500 text-center">
                         <code className={CODE_CLASS}>standard_surface_marble_solid.mtlx</code>: the node graph that builds
                         the pattern (built around NG_marble1), with a live preview of the rendered material attached
@@ -488,32 +620,57 @@ function WhatIsMaterialXApp({ active } = {}) {
                             </div>
                         ))}
                     </div>
-                    <p className="text-xs text-gray-500">
-                        <Stat value={stats && stats.nodedefs} /> node definitions sit behind the <Stat value={stats && stats.documented} />{' '}
-                        nodes in Node Specs: one node can have many definitions, one per type signature{' '}
-                        (<code className={CODE_CLASS}>convert</code> alone has 47).
-                        All <Stat value={stats && stats.shadingModels && stats.shadingModels.length} /> shading models,{' '}
-                        <ShadingModelNames names={stats && stats.shadingModels} />, are node graphs built from standard BSDF
-                        nodes rather than per-renderer native code, alongside 13 MaterialX Lama nodes and 4 translation
-                        graphs between models such as <code className={CODE_CLASS}>standard_surface_to_gltf_pbr</code>.
-                        Of the <Stat value={stats && stats.targets} /> shader targets, genglsl, genosl and genmdl are
-                        independent roots; essl, genmsl and genslang build on the GLSL implementations.
-                    </p>
+                    {/* Labeled footnotes, two-up: each elaborates a cell of the
+                        strip above, reusing its uppercase label idiom. */}
+                    <div className="grid grid-cols-1 [@media(min-width:720px)]:grid-cols-3 gap-x-6 gap-y-4">
+                        <div className="space-y-0.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Definitions per node</div>
+                            <p className="text-xs leading-[18px] text-gray-400">
+                                <Stat value={stats && stats.nodedefs} /> definitions behind the{' '}
+                                <Stat value={stats && stats.documented} /> nodes in Node Specs: one node can carry
+                                many, one per type signature (<code className={CODE_CLASS}>convert</code> alone
+                                has <Stat value={stats && stats.convertNodedefs} />).
+                            </p>
+                        </div>
+                        <div className="space-y-0.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Shading models</div>
+                            <p className="text-xs leading-[18px] text-gray-400">
+                                All <Stat value={stats && stats.shadingModels && stats.shadingModels.length} />,{' '}
+                                <ShadingModelNames names={stats && stats.shadingModels} />, are node graphs built
+                                from standard BSDF nodes, not per-renderer native code.
+                            </p>
+                        </div>
+                        <div className="space-y-0.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Shader targets</div>
+                            <p className="text-xs leading-[18px] text-gray-400">
+                                <Stat value={stats && stats.targets} /> targets: genglsl, genosl and genmdl are
+                                independent roots; essl, genmsl and genslang build on the GLSL implementations.
+                            </p>
+                        </div>
+                    </div>
                 </section>
 
                 {/* A few materials */}
                 <section aria-labelledby="materials-h" className="space-y-5">
                     <SectionHead id="materials-h" title="A few materials" blurb="Different looks, the same node system underneath." />
-                    <div className="grid grid-cols-1 [@media(min-width:720px)]:grid-cols-2 [@media(min-width:860px)]:grid-cols-4 gap-4">
-                        {SHOWCASE_MATERIALS.map((m) => (
-                            <ViewerPane
-                                key={m.src || m.path}
-                                src={m.src || window.MtlxAssets.repoUrl('resources/Materials/Examples/' + m.path)}
-                                label={m.note ? (<>{m.label} <LicenseRef /></>) : m.label}
-                                geometry="shaderball-scene"
-                                className="h-56 sm:h-64"
-                            />
-                        ))}
+                    <div className="grid grid-cols-1 [@media(min-width:720px)]:grid-cols-3 gap-4">
+                        {SHOWCASE_MATERIALS.map((m) => {
+                            const key = m.src || m.path;
+                            return (
+                                <ViewerPane
+                                    key={key}
+                                    src={m.src || window.MtlxAssets.repoUrl('resources/Materials/Examples/' + m.path)}
+                                    label={m.note ? (<>{m.label} <LicenseRef /></>) : m.label}
+                                    geometry="shaderball-scene"
+                                    className="h-56 sm:h-64"
+                                    busyLock={!!showcaseBusy}
+                                    actions={[
+                                        { label: 'Viewer', icon: 'camera', busy: showcaseBusy === key + '|viewer', onClick: () => openShowcaseIn(m, 'viewer') },
+                                        { label: 'Graph Editor', icon: 'share', busy: showcaseBusy === key + '|graph', onClick: () => openShowcaseIn(m, 'graph') },
+                                    ]}
+                                />
+                            );
+                        })}
                     </div>
                 </section>
 
@@ -535,7 +692,7 @@ function WhatIsMaterialXApp({ active } = {}) {
 
                 {/* A short history */}
                 <section aria-labelledby="history-h" className="space-y-5">
-                    <SectionHead id="history-h" title="A short history" blurb="From a proposal at Lucasfilm to a Graduated project of the Academy Software Foundation." />
+                    <SectionHead id="history-h" title="A short history" blurb="From its start at ILM to a Graduated project of the Academy Software Foundation." />
                     <ol className="relative list-none m-0 p-0 mx-auto max-w-3xl">
                         {/* One continuous spine for the whole list: centred on wide
                            screens, left gutter below 720px. Badges have a solid
@@ -544,9 +701,11 @@ function WhatIsMaterialXApp({ active } = {}) {
                         {HISTORY.map((h, i) => (
                             <li key={h.year} className={'relative grid grid-cols-[auto_minmax(0,1fr)] [@media(min-width:720px)]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-4 sm:gap-x-6' + (i < HISTORY.length - 1 ? ' pb-8' : '')}>
                                 <span className="w-11 h-8 rounded-full bg-gray-800 border border-gray-600 text-blue-300 text-[13px] font-semibold flex items-center justify-center tabular-nums [@media(min-width:720px)]:col-start-2 [@media(min-width:720px)]:justify-self-center">{h.year}</span>
-                                <div className={'flex flex-col gap-1 pt-1 min-w-0'
+                                <div className={'flex flex-col gap-1 min-w-0'
                                     + (i % 2 === 1 ? ' [@media(min-width:720px)]:col-start-3' : ' [@media(min-width:720px)]:col-start-1 [@media(min-width:720px)]:text-right')}>
-                                    <h3 className="text-[15px] font-semibold text-gray-100">{h.title}</h3>
+                                    {/* leading-8 makes this line a 32px box, matching the h-8
+                                       badge, so the two share a vertical centre (both items-start). */}
+                                    <h3 className="text-[15px] leading-8 font-semibold text-gray-100">{h.title}</h3>
                                     <p className="text-sm leading-[21px] text-gray-400">{h.desc}</p>
                                 </div>
                             </li>
@@ -614,8 +773,9 @@ function WhatIsMaterialXApp({ active } = {}) {
                     <p className="text-xs text-gray-500">
                         This is an independent community project. It is not affiliated with, endorsed by, or sponsored
                         by the MaterialX project, the Academy Software Foundation, or the Linux Foundation. MaterialX is
-                        a trademark of the Academy Software Foundation. The MaterialX specification is the definitive
-                        source of truth.
+                        a trademark of{' '}
+                        <a href="https://lfprojects.org/policies/trademark-policy/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">LF Projects, LLC<MtlxIcon name="external-link" className="w-3 h-3" /></a>.
+                        The MaterialX specification is the definitive source of truth.
                     </p>
                 </div>
             </div>

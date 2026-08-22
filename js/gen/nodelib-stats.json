@@ -9,5 +9,9 @@
   "gltf_pbr",
   "disney_principled",
   "UsdPreviewSurface"
- ]
+ ],
+ "convertNodedefs": 47,
+ "lamaNodes": 13,
+ "translationGraphs": 4,
+ "translationExample": "standard_surface_to_gltf_pbr"
 }
