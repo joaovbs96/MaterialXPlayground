@@ -3,6 +3,11 @@ node_modules/
 vendor/materialx/
 *.vsix
 
+# Generated into the Pages artifact by deploy.yml at release time, never
+# committed: a committed copy would serve a stale version locally. Kept out
+# of js/** on purpose since the deterministic build id hashes js/** from disk.
+/source-facts.json
+
 # js/materialx/<version>/: only the default MaterialX version (see
 # DEFAULT_MTLX_VERSION in scripts/lib/mtlx-versions.mjs) is committed to
 # git. Every other pinned version is fetched on demand by
