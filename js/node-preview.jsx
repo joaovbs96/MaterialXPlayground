@@ -156,7 +156,7 @@
             const controlsViewRef = React.useMemo(() => makeFanoutViewRef(viewRef, sourceViewRef), []);
             const {
                 rotating, toggleRotating,
-                envBg, toggleEnvBg,
+                backdrop, setBackdrop,
                 envAvail, setEnvAvail,
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
@@ -955,7 +955,7 @@
                             // editor's preview. Ignored for other geoms.
                             sceneOrbit: false,
                             autoRotate: rotating,
-                            envBackground: envBg,
+                            backdrop,
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
                             debugKind: kind,
@@ -1054,7 +1054,7 @@
                                         geomName: geom,
                                         sceneOrbit: false,
                                         autoRotate: rotating,
-                                        envBackground: envBg,
+                                        backdrop,
                                         isMounted: () => mounted,
                                         isActive: () => activeRef.current,
                                         debugKind: kind,
@@ -1613,7 +1613,7 @@
                     // the fixed 2D buffer (no bgMesh at all) —
                     // hide both controls while either is selected.
                     showRotate={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
-                    showBackgroundToggle={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
+                    showBackdropPicker={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
                     // No reset button for the fixed cameras — the 2D
                     // buffer and the full scene (engine's resetCamera
                     // no-ops for both anyway).
@@ -1621,8 +1621,8 @@
                         const v = controlsViewRef.current;
                         if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
                     }}
-                    envBg={envBg}
-                    onToggleEnvBg={toggleEnvBg}
+                    backdrop={backdrop}
+                    onBackdropChange={setBackdrop}
                     envAvail={envAvail}
                     viewRef={controlsViewRef}
                     viewEpoch={viewEpoch}

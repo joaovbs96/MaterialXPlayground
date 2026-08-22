@@ -227,7 +227,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     // No auto-rotate on this page — two independent rAF
                     // loops would drift the two cameras apart.
                     autoRotate: false,
-                    envBackground: envUIRef.current.bg,
+                    backdrop: envUIRef.current.backdrop,
                     maxPixelRatio: 1.5,
                     isMounted: () => mounted,
                     // Idle the rAF loop while the heatmap covers the stage —
@@ -439,7 +439,10 @@ function MaterialCompareApp({ active = true } = {}) {
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     const [geom, setGeom] = React.useState('shaderball-scene');
-    const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, bg: true });
+    // Deliberate exception to the engine's 'studio' default: this is the
+    // only page that starts with the environment shown as the backdrop,
+    // since side-by-side comparison reads best against the real HDRI.
+    const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'environment' });
     const [envImportError, setEnvImportError] = React.useState(null);
     const envUIRef = React.useRef(envUI);
     envUIRef.current = envUI;
@@ -545,21 +548,21 @@ function MaterialCompareApp({ active = true } = {}) {
     const versionTag = (v) => 'v' + v;
 
     // Re-apply the current env sliders to a freshly (re)built view — a
-    // rebuild starts from envUI.bg only (see useCompareRenderEffect);
+    // rebuild starts from envUI.backdrop only (see useCompareRenderEffect);
     // rotation/exposure need this separate pass.
     React.useEffect(() => {
         [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => {
             if (!v) return;
-            if (v.setEnvBackground) v.setEnvBackground(envUIRef.current.bg);
+            if (v.setBackdrop) v.setBackdrop(envUIRef.current.backdrop);
             if (v.setEnvRotation) v.setEnvRotation(envUIRef.current.rotation * Math.PI / 180);
             if (v.setEnvExposure) v.setEnvExposure(envUIRef.current.exposure);
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slotA.viewEpoch, slotB.viewEpoch]);
 
-    const setEnvBg = (on) => {
-        setEnvUI((s) => ({ ...s, bg: on }));
-        [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => v && v.setEnvBackground && v.setEnvBackground(on));
+    const setBackdrop = (mode) => {
+        setEnvUI((s) => ({ ...s, backdrop: mode }));
+        [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => v && v.setBackdrop && v.setBackdrop(mode));
         statsDirtyRef.current = true; diffDirtyRef.current = true;
     };
     const setEnvRotationDeg = (deg) => {
@@ -586,7 +589,9 @@ function MaterialCompareApp({ active = true } = {}) {
     const resetEnv = () => {
         setEnvOverride(null);
         setEnvImportError(null);
-        setEnvUI({ rotation: 0, exposure: 1, bg: true });
+        // Same deliberate exception as the initial state above: Reset
+        // restores 'environment', not the engine's 'studio' default.
+        setEnvUI({ rotation: 0, exposure: 1, backdrop: 'environment' });
         [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => {
             if (!v) return;
             if (v.setEnvRotation) v.setEnvRotation(0);
@@ -1268,10 +1273,16 @@ function MaterialCompareApp({ active = true } = {}) {
                                 onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                                 onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                             />
-                            <label className="flex items-center justify-between cursor-pointer">
-                                <span className="text-xs font-medium text-gray-400">Show environment as background</span>
-                                <Toggle checked={envUI.bg} onChange={setEnvBg} />
-                            </label>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                                <MtlxSelect
+                                    value={envUI.backdrop}
+                                    options={['studio', 'environment', 'none']}
+                                    labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                                    onChange={setBackdrop}
+                                    size="sm"
+                                />
+                            </div>
                             <div className="flex items-center gap-2">
                                 <button
                                     onClick={() => envFileInputRef.current && envFileInputRef.current.click()}

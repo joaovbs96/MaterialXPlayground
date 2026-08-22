@@ -33,7 +33,7 @@ const EmbedControls = ({
     materialList, chosenMat, onMaterialChange, showMaterial,
     rotating, onToggleRotating, showRotate,
     onCameraReset, showReset,
-    envBg, onToggleEnvBg, showBackgroundToggle, showEnv,
+    backdrop, onBackdropChange, showBackdropPicker, showEnv,
     initialEnvRotation, initialEnvExposure,
     viewRef, viewEpoch,
     onScreenshot, showScreenshot,
@@ -183,17 +183,19 @@ const EmbedControls = ({
             </div>
             {openPanel === 'env' && (
                 <div className="mtlx-ec-panel">
-                    {showBackgroundToggle && (
+                    {showBackdropPicker && (
                         <div className="mtlx-ec-panel-row">
-                            <span>Background</span>
-                            <button
-                                type="button"
-                                className={'mtlx-ec-toggle' + (envBg ? ' is-on' : '')}
-                                onClick={onToggleEnvBg}
-                                title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
+                            <span>Backdrop</span>
+                            <select
+                                className="mtlx-ec-select"
+                                value={backdrop}
+                                onChange={(e) => onBackdropChange(e.target.value)}
+                                title="Studio: a white room. Environment: the HDRI as background. None: a dark void."
                             >
-                                {envBg ? 'On' : 'Off'}
-                            </button>
+                                <option value="studio">Studio</option>
+                                <option value="environment">Environment</option>
+                                <option value="none">None</option>
+                            </select>
                         </div>
                     )}
                     <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider">

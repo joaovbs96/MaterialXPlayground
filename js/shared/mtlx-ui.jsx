@@ -662,6 +662,18 @@ const useViewToggle = (viewRef, method, initial) => {
     return [value, toggle];
 };
 
+// String-valued sibling of useViewToggle (backdrop picker, etc.): same
+// idea, but the value is any string the caller hands it instead of a
+// flipped boolean, so the setter takes the next value directly.
+const useViewEnum = (viewRef, method, initial) => {
+    const [value, setValue] = React.useState(initial);
+    const set = (next) => {
+        setValue(next);
+        if (viewRef.current && viewRef.current[method]) viewRef.current[method](next);
+    };
+    return [value, set];
+};
+
 // PNG snapshot of the given render view's frame, downloaded as
 // `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
 // view.snapshot() returns a plain data: URL, so there's no URL to revoke.
@@ -751,9 +763,12 @@ const attributeExportedXml = async (xml) => withExportAttribution(xml, await exp
 // js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
 // every existing caller omits these, and `!!undefined` is `false`, so
 // today's default (both off) is unchanged.
-const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg) => {
+// `initialBackdrop`: seed for the three-way backdrop picker (studio /
+// environment / none). Defaults to 'studio', the engine's new default.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg, initialBackdrop = 'studio') => {
     const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
     const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
+    const [backdrop, setBackdrop] = useViewEnum(viewRef, 'setBackdrop', initialBackdrop);
     const [envAvail, setEnvAvail] = React.useState(false);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
@@ -767,6 +782,7 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
     return {
         rotating, toggleRotating,
         envBg, toggleEnvBg,
+        backdrop, setBackdrop,
         envAvail, setEnvAvail,
         viewEpoch, setViewEpoch,
         isFullscreen, toggleFullscreen,
@@ -901,8 +917,8 @@ const formatEv = (ev) => (ev >= 0 ? '+' : '') + (Math.round(ev * 10) / 10).toFix
 
 const EnvDialog = ({
     anchorRef, open, onClose,
-    envBg, onToggleEnvBg,
-    showBackgroundToggle = true,
+    backdrop, onBackdropChange,
+    showBackdropPicker = true,
     rotation, onRotationChange,
     exposure, onExposureChange,
     onImportFile, onReset,
@@ -984,18 +1000,19 @@ const EnvDialog = ({
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
             className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
         >
-            {showBackgroundToggle && (
-                <div className="flex items-center justify-between">
-                    <span>Background</span>
-                    <button
-                        onClick={onToggleEnvBg}
-                        title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
-                        className={`h-5 px-2 rounded border transition-colors ${
-                            envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
-                        }`}
-                    >
-                        {envBg ? 'On' : 'Off'}
-                    </button>
+            {showBackdropPicker && (
+                <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                        <span>Backdrop</span>
+                    </div>
+                    <MtlxSelect
+                        value={backdrop}
+                        options={['studio', 'environment', 'none']}
+                        labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                        onChange={onBackdropChange}
+                        title="Studio: a white room. Environment: the HDRI as background. None: a dark void."
+                        size="sm" block
+                    />
                 </div>
             )}
             <div className="flex items-center justify-between">
@@ -1267,7 +1284,8 @@ const ViewportControls = ({
     labelsClass = 'flex-wrap justify-end max-w-[calc(100%-1rem)]',
     onCameraReset,
     envBg, onToggleEnvBg, envAvail = true,
-    showBackgroundToggle = true,
+    backdrop, onBackdropChange,
+    showBackdropPicker = true,
     viewRef, viewEpoch,
     onScreenshot,
     // Hides the screenshot button. Additive — every existing caller omits
@@ -1411,7 +1429,7 @@ const ViewportControls = ({
                             ref={envBtnRef}
                             onClick={() => (viewRef ? setEnvOpen((o) => !o) : onToggleEnvBg())}
                             title="Environment…"
-                            className={buttonClassName(envBg || envOpen)}
+                            className={buttonClassName(envOpen)}
                         >
                             <MtlxIcon name="environment" className="w-3.5 h-3.5" />
                             {showLabels && <span className="ml-1.5 whitespace-nowrap">Environment</span>}
@@ -1423,9 +1441,9 @@ const ViewportControls = ({
                                 open={envOpen}
                                 onClose={() => setEnvOpen(false)}
                                 placement={envDialogPlacement}
-                                envBg={envBg}
-                                onToggleEnvBg={onToggleEnvBg}
-                                showBackgroundToggle={showBackgroundToggle}
+                                backdrop={backdrop}
+                                onBackdropChange={onBackdropChange}
+                                showBackdropPicker={showBackdropPicker}
                                 rotation={envRotation}
                                 onRotationChange={(deg) => {
                                     setEnvRotation(deg);
@@ -2613,7 +2631,7 @@ Object.assign(window, {
     BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
     GEOM_LABELS, GEOM_ICONS, defaultGeomFor,
     errMsg,
-    useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
+    useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle, useViewEnum,
     downloadSnapshot, downloadBlob, downloadXml, attributeExportedXml,
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,

@@ -29,6 +29,13 @@
             return { geom: fellBackForTransparency ? 'shaderball' : base, invalid, fellBackForTransparency };
         }
 
+        // A studio backdrop is just as opaque as the shaderball-scene room
+        // above, so transparent forces it to 'none' too. Unlike
+        // resolveViewerGeom this never touches the geometry, only the backdrop.
+        function resolveViewerBackdrop(requested, wantTransparent) {
+            return wantTransparent ? 'none' : (requested || 'studio');
+        }
+
         // Resolves the `material` controlled prop against the current
         // renderables list: exact name, then case-insensitive name, then
         // a non-negative integer index ("2"). -1 when unresolved.
@@ -100,6 +107,7 @@
             // passes only `active` — so the main app is bit-for-bit
             // unaffected by their existence.
             geometry, envRotation, envExposure, envBackground, autoRotate, wheelMode,
+            backdrop = 'studio',
             transparent = false,
             documentUrl, mtlxVersion, material, onView, onRenderables, onReady, onError,
         } = {}) {
@@ -255,15 +263,34 @@
             };
             const {
                 rotating, toggleRotating,
-                envBg, toggleEnvBg,
+                backdrop: backdropMode, setBackdrop: setBackdropMode,
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: onToggleFullscreen,
                 takeScreenshot: takeScreenshotRaw,
             // autoRotate/envBackground: controlled props seed the hook's
             // initial toggle state (`!!undefined` -> false for every
             // existing, uncontrolled caller — see useViewportControls'
-            // header comment in js/shared/mtlx-ui.jsx).
-            } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground);
+            // header comment in js/shared/mtlx-ui.jsx). The `backdrop` prop
+            // is resolved against `transparent` first (resolveViewerBackdrop
+            // above), same as the geometry resolution at mount.
+            } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground, resolveViewerBackdrop(backdrop, transparent));
+            // Live transparent toggle for the backdrop: mirrors the geometry
+            // effect above, but only ever forces the backdrop to 'none' -
+            // it never touches geom.
+            React.useEffect(() => {
+                if (transparent && backdropMode !== 'none') setBackdropMode('none');
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [transparent]);
+            // `backdrop` controlled-prop sync, mirroring the geometry prop
+            // sync effect further below: a host changing `backdrop` after
+            // mount (e.g. an embed re-render) updates the local state too.
+            const backdropPropRef = React.useRef(backdrop);
+            React.useEffect(() => {
+                if (backdrop === backdropPropRef.current) return;
+                backdropPropRef.current = backdrop;
+                setBackdropMode(resolveViewerBackdrop(backdrop, transparent));
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [backdrop]);
             // The hook's takeScreenshot has no internal try/catch (the
             // previewers swallow failures silently); here it surfaces as
             // an error banner instead, so the wrapping stays local.
@@ -422,6 +449,10 @@
                     const r = resolveViewerGeom(payload.geometry, transparent);
                     if (!r.invalid) setGeom(r.geom);
                 }
+                // Same guard as the geometry one above, kept consistent
+                // across an inbound import (Send to Viewer, or the embed's
+                // own `load` message, both funnel through here).
+                setBackdropMode(resolveViewerBackdrop(backdropMode, transparent));
                 ingestRef.current(map);
             };
             React.useEffect(() => {
@@ -740,7 +771,7 @@
                             sceneOrbit: geom === 'shaderball-scene',
                             autoRotate: rotating,
                             wheelMode,
-                            envBackground: envBg,
+                            backdrop: backdropMode,
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
                             debugKind: 'material',
@@ -1022,13 +1053,13 @@
                                         onToggleRotating={toggleRotating}
                                         // Hidden while shaderball-scene is active
                                         // (roomGeomActive above), same for the
-                                        // background toggle below; not reported.
+                                        // backdrop picker below; not reported.
                                         showRotate={ctlFlags.rotate}
                                         onCameraReset={handleCameraReset}
                                         showReset={ctlFlags.reset}
-                                        envBg={envBg}
-                                        onToggleEnvBg={toggleEnvBg}
-                                        showBackgroundToggle={!roomGeomActive}
+                                        backdrop={backdropMode}
+                                        onBackdropChange={setBackdropMode}
+                                        showBackdropPicker={!roomGeomActive}
                                         showEnv={ctlFlags.env}
                                         initialEnvRotation={envRotation}
                                         initialEnvExposure={envExposure}
@@ -1053,15 +1084,15 @@
                                         showGeomSelect={showCtl('geometry')}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
-                                        // Engine no-ops auto-rotate for the full scene, and the
-                                        // backdrop box fully occludes the env-background sky
-                                        // sphere - hide both controls while it's selected.
+                                        // Engine no-ops auto-rotate for the full scene, and
+                                        // shaderball-scene is an authored room that ignores
+                                        // the backdrop entirely - hide both while it's selected.
                                         showRotate={showCtl('rotate') && geom !== 'shaderball-scene'}
-                                        showBackgroundToggle={geom !== 'shaderball-scene'}
+                                        showBackdropPicker={geom !== 'shaderball-scene'}
                                         onCameraReset={showCtl('reset') ? handleCameraReset : undefined}
                                         envAvail={showCtl('env')}
-                                        envBg={envBg}
-                                        onToggleEnvBg={toggleEnvBg}
+                                        backdrop={backdropMode}
+                                        onBackdropChange={setBackdropMode}
                                         viewRef={viewRef}
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}

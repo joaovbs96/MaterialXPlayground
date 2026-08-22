@@ -84,7 +84,7 @@ const BUILDER_DEFAULTS = {
     src: '',
     geometry: BUILDER_DEFAULT_GEOM,
     controls: {},
-    background: false,
+    backdrop: 'studio',
     transparent: false,
     autorotate: false,
     env: '',
@@ -146,7 +146,8 @@ const BUILDER_TEMPLATES = [
         id: 'product-card', name: 'Product card', icon: 'id',
         desc: 'Square, transparent, no HUD. Sits inside your own card.',
         // geometry: transparent can't render the default backdrop room.
-        tags: ['1:1', 'transparent'], values: { width: 480, height: 480, transparent: true, geometry: 'shaderball' },
+        // backdrop: 'studio' is just as opaque, so it's also turned off.
+        tags: ['1:1', 'transparent'], values: { width: 480, height: 480, transparent: true, geometry: 'shaderball', backdrop: 'none' },
     },
     {
         id: 'blog', name: 'Inline in a blog', icon: 'article',
@@ -157,7 +158,8 @@ const BUILDER_TEMPLATES = [
         id: 'hero', name: 'Full-width hero', icon: 'layout-navbar',
         desc: 'Responsive 21:9, auto-rotate, chromeless, transparent.',
         // geometry: transparent can't render the default backdrop room.
-        tags: ['responsive', 'auto-rotate'], values: { sizing: 'responsive', width: 21, height: 9, autorotate: true, transparent: true, geometry: 'shaderball' },
+        // backdrop: 'studio' is just as opaque, so it's also turned off.
+        tags: ['responsive', 'auto-rotate'], values: { sizing: 'responsive', width: 21, height: 9, autorotate: true, transparent: true, geometry: 'shaderball', backdrop: 'none' },
     },
 ];
 const isTemplateActive = (t, settings) => Object.keys(BUILDER_DEFAULTS).every((key) => {
@@ -202,7 +204,9 @@ const parseBuilderHashSettings = () => {
     if (params.has('envmap')) patch.envmap = params.get('envmap');
     if (params.has('autorotate')) patch.autorotate = builderParseBool(params.get('autorotate'));
     if (params.has('controls')) patch.controls = controlsObjFromStr(params.get('controls'));
-    if (params.has('background')) patch.background = builderParseBool(params.get('background'));
+    if (params.has('backdrop') && ['studio', 'environment', 'none'].includes(params.get('backdrop'))) {
+        patch.backdrop = params.get('backdrop');
+    }
     if (params.has('transparent')) patch.transparent = builderParseBool(params.get('transparent'));
     if (params.has('accent')) patch.accent = params.get('accent');
     if (params.has('surface')) patch.surface = params.get('surface');
@@ -219,10 +223,10 @@ const parseBuilderHashSettings = () => {
     // pasted link can't resurrect the transparent + backdrop-room combo.
     const effectiveGeometry = params.has('geometry') ? patch.geometry : BUILDER_DEFAULTS.geometry;
     if (patch.transparent && effectiveGeometry === 'shaderball-scene') patch.geometry = 'shaderball';
-    // Same for transparent vs. the env-as-background toggle - the two
-    // cancel each other out, so a pasted link can't resurrect that combo.
-    const effectiveBackground = params.has('background') ? patch.background : BUILDER_DEFAULTS.background;
-    if (patch.transparent && effectiveBackground) patch.background = false;
+    // Same for transparent vs. an opaque backdrop - the two cancel each
+    // other out, so a pasted link can't resurrect that combo.
+    const effectiveBackdrop = params.has('backdrop') ? patch.backdrop : BUILDER_DEFAULTS.backdrop;
+    if (patch.transparent && effectiveBackdrop !== 'none') patch.backdrop = 'none';
     return patch;
 };
 const buildShareParams = (s) => {
@@ -237,7 +241,7 @@ const buildShareParams = (s) => {
     if (s.autorotate) params.set('autorotate', '1');
     const cs = controlsStrFrom(s.controls);
     if (cs) params.set('controls', cs);
-    if (s.background) params.set('background', '1');
+    if (!isBuilderDefault('backdrop', s.backdrop)) params.set('backdrop', s.backdrop);
     if (s.transparent) params.set('transparent', '1');
     if (!isBuilderDefault('accent', s.accent)) params.set('accent', s.accent.trim());
     if (!isBuilderDefault('surface', s.surface)) params.set('surface', s.surface.trim());
@@ -916,7 +920,7 @@ function BuilderApp({ active } = {}) {
     const [settings, setSettings] = React.useState(() => ({ ...BUILDER_DEFAULTS, ...parseBuilderHashSettings() }));
     const patch = (values) => setSettings((s) => ({ ...s, ...values }));
     const {
-        src, geometry, controls, background, transparent, autorotate, env, exposure, envmap,
+        src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
         accent, surface, text, radius, width, height, sizing, material, camera, wheelZoom,
         version, poster, eager,
     } = settings;
@@ -989,7 +993,7 @@ function BuilderApp({ active } = {}) {
         if (exposure.trim() !== '') el.exposure = exposure.trim();
         el.autorotate = autorotate;
         el.controls = controlsStr;
-        el.background = background;
+        el.backdrop = backdrop;
         el.transparent = transparent;
         el.accent = accent;
         el.surface = surface;
@@ -1032,7 +1036,7 @@ function BuilderApp({ active } = {}) {
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.geometry = geometry; }, [geometry]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.env = env.trim(); }, [env]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.exposure = exposure.trim(); }, [exposure]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.background = background; }, [background]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.backdrop = backdrop; }, [backdrop]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.transparent = transparent; }, [transparent]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = accent; }, [accent]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = surface; }, [surface]);
@@ -1174,7 +1178,7 @@ function BuilderApp({ active } = {}) {
         if (envmap.trim()) entries.push(['envmap', envmap.trim()]);
         if (autorotate) entries.push(['autorotate', '1']);
         if (controlsStr) entries.push(['controls', controlsStr]);
-        if (background) entries.push(['background', '1']);
+        if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
         if (transparent) entries.push(['transparent', '1']);
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) entries.push(['accent', accent.trim()]);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) entries.push(['surface', surface.trim()]);
@@ -1217,7 +1221,7 @@ function BuilderApp({ active } = {}) {
         if (envmap.trim()) attrs.push(`envmap="${builderEscAttr(envmap.trim())}"`);
         if (autorotate) attrs.push('autorotate');
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
-        if (background) attrs.push('background');
+        if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
         if (transparent) attrs.push('transparent');
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
@@ -1247,10 +1251,10 @@ function BuilderApp({ active } = {}) {
     // Std. Shader Ball w/ Backdrop is an opaque authored room; several
     // controls below are dead against it, all keyed on this condition.
     const roomGeom = geometry === 'shaderball-scene';
-    // Room geometry can't render transparent (docs/EMBEDDING.md); the env
-    // background toggle draws an equally opaque backdrop. Either cause
-    // makes every pixel opaque, so block transparent from both.
-    const transparentDisabled = roomGeom || background;
+    // Room geometry can't render transparent (docs/EMBEDDING.md); a
+    // studio or environment backdrop is an equally opaque backdrop.
+    // Either cause makes every pixel opaque, so block transparent from both.
+    const transparentDisabled = roomGeom || backdrop !== 'none';
     // Same geometry also has no turntable rotation (js/viewer-app.jsx hides
     // the rotate button whenever roomGeomActive) - the HUD control still
     // toggles, but the button it would add never renders. Explain it rather
@@ -1259,9 +1263,9 @@ function BuilderApp({ active } = {}) {
     // The engine forces autoRotate off unconditionally for this geometry
     // and setAutoRotate returns early - the Behavior toggle is a no-op.
     const autorotateDisabled = roomGeom;
-    // The env background is an inverted sphere the room fully occludes,
-    // and with transparent on it would defeat transparent's whole point.
-    const envBackgroundDisabled = roomGeom || transparent;
+    // Studio/environment are both drawn behind the room's own walls, and
+    // with transparent on either would defeat transparent's whole point.
+    const backdropPickerDisabled = roomGeom || transparent;
     // Accent/surface/text/radius only ever become CSS vars for the HUD
     // strip's stylesheet - a hint, not a disable (also the default state).
     const noHudControls = !controlsStr;
@@ -1446,11 +1450,18 @@ function BuilderApp({ active } = {}) {
                 />
             </div>
             <div>
-                <label className={'flex items-center justify-between ' + (envBackgroundDisabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
-                    <span className="text-xs font-medium text-gray-400">Show environment as background</span>
-                    <Toggle checked={background} onChange={(v) => patch({ background: v })} disabled={envBackgroundDisabled} />
-                </label>
-                {envBackgroundDisabled && (
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                    <MtlxSelect
+                        value={backdrop}
+                        options={['studio', 'environment', 'none']}
+                        labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                        onChange={(v) => patch({ backdrop: v })}
+                        disabled={backdropPickerDisabled}
+                        size="sm"
+                    />
+                </div>
+                {backdropPickerDisabled && (
                     <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
                         <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
                         <span>{roomGeom
@@ -1501,7 +1512,7 @@ function BuilderApp({ active } = {}) {
                         <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-px" />
                         <span>{roomGeom
                             ? 'Disabled: Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable it.'
-                            : 'Disabled: Show environment as background is on, covering every pixel. Turn off Show environment as background to enable it.'}</span>
+                            : 'Disabled: Backdrop is not set to None, covering every pixel. Set Backdrop to None to enable it.'}</span>
                     </div>
                 ) : (
                     <p className="text-[11px] mt-1 text-gray-500">Not compatible with Std. Shader Ball w/ Backdrop.</p>
