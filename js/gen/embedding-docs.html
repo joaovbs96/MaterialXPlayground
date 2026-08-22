@@ -45,7 +45,7 @@ in-page, for reference while you work.</p>
 <td><code>src</code></td>
 <td>URL</td>
 <td><em>(the built-in default material)</em></td>
-<td>The <code>.mtlx</code> document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see <a href="#loading-a-document-without-cors">Loading a document without CORS</a> if it isn&#39;t). The iframe also crawls the document for the textures and <code>xi:include</code> files it references, fetching each one resolved against the document&#39;s own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the built-in checker texture and is reported through <code>mtlx-error</code>.</td>
+<td>The <code>.mtlx</code> document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see <a href="#loading-a-document-without-cors">Loading a document without CORS</a> if it isn&#39;t). The iframe also crawls the document for the textures and <code>xi:include</code> files it references, fetching each one resolved against the document&#39;s own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the image node&#39;s default color and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>version</code></td>

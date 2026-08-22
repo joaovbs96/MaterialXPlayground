@@ -192,6 +192,9 @@
                     const n = Number(v);
                     if (!isNaN(n)) u.value = n;
                 }
+                // An image node's `default` is carried by its sampler, not
+                // by this uniform: the generated GLSL never reads it.
+                rebindFilenameDefault(store, uniformName, p.type, v);
             };
             const setUniformFromPlain = (p, v) => {
                 writeUniformPlain(uniformsRef.current, p.uniform, p, v);
@@ -259,7 +262,9 @@
                 for (const p of params) {
                     if (p.readonly) continue;
                     if (p.type === 'filename') {
-                        if (store && store[p.uniform]) store[p.uniform].value = getDefaultTexture();
+                        const rv = viewRef.current;
+                        const dtex = rv ? getFilenameDefaultTexture(rv.introspected, p.uniform) : null;
+                        if (store && store[p.uniform]) store[p.uniform].value = dtex;
                         next[p.uniform] = null;
                         continue;
                     }
@@ -1468,7 +1473,7 @@
                                     />
                                 </label>
                                 <span className="text-xs text-gray-400 truncate min-w-0">
-                                    {cur || 'default checker'}
+                                    {cur || 'no file'}
                                 </span>
                             </div>
                             {/* Colorspace: a codegen decision (CMS transform

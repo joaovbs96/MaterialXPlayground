@@ -979,7 +979,7 @@ const readMtlxText = async (entry, path, map) => {
 
 // Session-lifetime texture cache, keyed by file identity — re-binding the
 // same dropped file after a view rebuild reuses the decoded THREE.Texture
-// instead of a fresh async load, which let the checker placeholder flash.
+// instead of a fresh async load, which let the default color flash.
 const TEXTURE_CACHE = new Map();
 const textureCacheKey = (blob, fallback) => {
   if (blob && blob.name != null && blob.size != null && blob.lastModified != null) {
@@ -993,7 +993,7 @@ const textureCacheKey = (blob, fallback) => {
 // HalfFloatType, silently swapping d.data to a Uint16Array otherwise.
 const loadExrTexture = async blob => {
   if (typeof THREE.EXRLoader === 'undefined') {
-    console.warn('mtlx-engine: THREE.EXRLoader unavailable (script blocked/offline) — .exr textures fall back to the checker.');
+    console.warn('mtlx-engine: THREE.EXRLoader unavailable (script blocked/offline); .exr textures keep the node default color.');
     return null;
   }
   try {
@@ -1004,7 +1004,7 @@ const loadExrTexture = async blob => {
     tex.minFilter = tex.magFilter = THREE.LinearFilter;
     return tex;
   } catch (e) {
-    console.warn('mtlx-engine: failed to parse dropped .exr texture, falling back to the checker:', e);
+    console.warn('mtlx-engine: failed to parse dropped .exr texture, keeping the node default color:', e);
     return null;
   }
 };
@@ -1014,7 +1014,7 @@ const loadExrTexture = async blob => {
 // MaterialX sampler, which has no RGBE decode step, reads linear values.
 const loadHdrTexture = async blob => {
   if (typeof THREE.RGBELoader === 'undefined') {
-    console.warn('mtlx-engine: THREE.RGBELoader unavailable — .hdr textures fall back to the checker.');
+    console.warn('mtlx-engine: THREE.RGBELoader unavailable; .hdr textures keep the node default color.');
     return null;
   }
   try {
@@ -1025,7 +1025,7 @@ const loadHdrTexture = async blob => {
     tex.minFilter = tex.magFilter = THREE.LinearFilter;
     return tex;
   } catch (e) {
-    console.warn('mtlx-engine: failed to parse dropped .hdr texture, falling back to the checker:', e);
+    console.warn('mtlx-engine: failed to parse dropped .hdr texture, keeping the node default color:', e);
     return null;
   }
 };
@@ -1061,7 +1061,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
       if (ext === 'exr' || ext === 'hdr') {
         const parsePromise = ext === 'exr' ? loadExrTexture(blob) : loadHdrTexture(blob);
         parsePromise.then(tex => {
-          if (!tex) return; // unsupported/corrupt — checker default stands
+          if (!tex) return; // unsupported/corrupt, the node default color stands
           configureLoadedTexture(tex);
           TEXTURE_CACHE.set(cacheKey, tex);
           if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
@@ -1284,55 +1284,89 @@ const rgbToHex = rgb => '#' + rgb.slice(0, 3).map(c => {
 }).join('');
 const hexToRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
 
-// Shared default texture for `filename` inputs: a canvas UV checker so
-// image nodes preview instead of sampling unbound black. getDefaultTexture()
-// stays synchronous; a later async load UPGRADES this same object in place.
-let defaultTexture = null;
-// Fires exactly once, from the first getDefaultTexture() call, and
-// mutates `defaultTexture` (never reassigns it) when the real asset
-// arrives — see the design note above.
-const startDefaultTextureUpgrade = () => {
-  const img = new Image();
-  img.onload = () => {
-    defaultTexture.image = img;
-    defaultTexture.needsUpdate = true;
-  };
-  img.onerror = () => {
-    console.warn('default texture upgrade failed: could not load the UV checker image asset; keeping canvas checker.');
-  };
-  // Document-relative: resolves against the page's <base href> in
-  // both the plain website and the VS Code webview.
-  img.src = './images/CustomUVChecker_byValle_2K.png';
-};
-const getDefaultTexture = () => {
-  if (defaultTexture) return defaultTexture;
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const ctx = c.getContext('2d');
-  const n = 8,
-    sz = 256 / n;
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      ctx.fillStyle = (x + y) % 2 ? '#7d7d7d' : '#c8c8c8';
-      ctx.fillRect(x * sz, y * sz, sz, sz);
-    }
+// MaterialXView parity: the generated GLSL takes `defaultval` and never
+// reads it, so a filename sampler with no image binds a 1x1 texture of
+// that value instead. Shared per value, like the env textures.
+const DEFAULT_VALUE_TEXTURES = new Map();
+// Membership lives here, not on the texture: r128's Texture has no
+// userData (it ends at onUpdate), so tagging one throws.
+const DEFAULT_VALUE_TEXTURE_SET = new WeakSet();
+const defaultValueToRgba = (type, data) => {
+  if (type === 'float') {
+    const n = Number(data);
+    return isNaN(n) ? null : [n, n, n, 1];
   }
-  // Orientation markers so UV flips are visible at a glance. Shaders
-  // sample files at (u, 1-v) (fileTextureVerticalFlip), so UV origin
-  // reads the canvas BOTTOM row — draw the V0 markers there.
-  ctx.fillStyle = '#d33';
-  ctx.fillRect(0, (n - 1) * sz, sz, sz); // U0 V0
-  ctx.fillStyle = '#36c';
-  ctx.fillRect((n - 1) * sz, (n - 1) * sz, sz, sz); // U1 V0
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.flipY = false; // MaterialX image convention; keep loads consistent
+  const a = mxDataToPlainArray(data);
+  if (!a) return null;
+  const c = i => Number(a[i]) || 0;
+  switch (type) {
+    case 'vector2':
+      return [c(0), c(1), 0, 1];
+    case 'color3':
+    case 'vector3':
+      return [c(0), c(1), c(2), 1];
+    case 'color4':
+    case 'vector4':
+      return [c(0), c(1), c(2), a[3] == null ? 1 : c(3)];
+    default:
+      return null;
+  }
+};
+// Mirrors ImageSamplingProperties::setProperties: strip the sampler's
+// trailing `_file` and read the sibling `_default`, or `_default_cm_in`
+// when a colorspace on the image node renamed it.
+const getFilenameDefaultTexture = (introspected, samplerName) => {
+  const cut = samplerName.lastIndexOf('_');
+  if (cut <= 0) return null;
+  const root = samplerName.slice(0, cut);
+  let port = null;
+  for (const u of introspected) {
+    if (u.name === root + '_default') {
+      port = u;
+      break;
+    }
+    if (u.name === root + '_default_cm_in' && !port) port = u;
+  }
+  if (!port || port.data == null) return null;
+  const rgba = defaultValueToRgba(port.type, port.data);
+  if (!rgba) return null;
+  return defaultValueTexture(rgba);
+};
+// Upstream's own caveat rides along: the default is assumed to be in the
+// missing image's color space already, so nothing transforms it. Tracked
+// so a live edit can tell our bake from a real image the user bound.
+const defaultValueTexture = rgba => {
+  const key = rgba.join(',');
+  const hit = DEFAULT_VALUE_TEXTURES.get(key);
+  if (hit) return hit;
+  const t = new THREE.DataTexture(new Float32Array(rgba), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   t.needsUpdate = true;
-  defaultTexture = t;
-  startDefaultTextureUpgrade();
+  DEFAULT_VALUE_TEXTURE_SET.add(t);
+  DEFAULT_VALUE_TEXTURES.set(key, t);
   return t;
 };
-// Configure a user-loaded texture the same way as the default.
+const isFilenameDefaultTexture = t => !!t && DEFAULT_VALUE_TEXTURE_SET.has(t);
+// A sampler still showing our bake may be re-baked; one holding a real
+// image must not be. Null counts as ours (a node with no default).
+const samplerHoldsDefault = slot => !!slot && (!slot.value || isFilenameDefaultTexture(slot.value));
+// The generated GLSL ignores `defaultval`, so the sampler's 1x1 texture is
+// what carries the value: editing a `_default` uniform live has to re-bake
+// it. `value` is a plain number or array, not MaterialX heap data.
+const rebindFilenameDefault = (uniforms, defaultUniformName, type, value) => {
+  const m = /^(.*)_default(?:_cm_in)?$/.exec(defaultUniformName || '');
+  if (!m) return false;
+  const slot = uniforms ? uniforms[m[1] + '_file'] : null;
+  if (!samplerHoldsDefault(slot)) return false;
+  const rgba = defaultValueToRgba(type, value);
+  if (!rgba) return false;
+  slot.value = defaultValueTexture(rgba);
+  return true;
+};
+
+// Configure a user-loaded texture the way the generated shaders expect
+// to sample a `filename` input: repeat wrapping, no flipY.
 const configureLoadedTexture = t => {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.flipY = false;
@@ -3067,13 +3101,13 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, {
       const tu = mxValueToThreeUniform(u.type, u.data);
       if (tu) uniforms[u.name] = tu;
     }
-    // Bind the default checker to every `filename` sampler so
-    // image/tiledimage nodes render out of the box — an unbound
-    // sampler reads black. (Env samplers aren't `filename` ports.)
+    // A filename sampler with no image samples a 1x1 texture of the
+    // node's `default` input; null (three's empty texture, so black)
+    // only when codegen published no default for it.
     for (const u of introspected) {
       if (u.type === 'filename' && !uniforms[u.name]) {
         uniforms[u.name] = {
-          value: getDefaultTexture()
+          value: getFilenameDefaultTexture(introspected, u.name)
         };
       }
     }
@@ -3095,6 +3129,14 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, {
     const tu = mxValueToThreeUniform(u.type, u.data);
     if (!tu) continue;
     if (uniforms[u.name]) uniforms[u.name].value = tu.value;else uniforms[u.name] = tu;
+  }
+  // Fast-refresh keeps the live sampler bindings, so a `default` that
+  // changed has to re-bake its 1x1 texture here as well.
+  for (const u of introspected) {
+    if (u.type !== 'filename') continue;
+    const slot = uniforms[u.name];
+    if (!samplerHoldsDefault(slot)) continue;
+    slot.value = getFilenameDefaultTexture(introspected, u.name);
   }
 };
 
@@ -5420,7 +5462,8 @@ Object.assign(window, {
   srgbToLin,
   rgbToHex,
   hexToRgb,
-  getDefaultTexture,
+  getFilenameDefaultTexture,
+  rebindFilenameDefault,
   configureLoadedTexture,
   prepGeometry,
   normalizeGeometry,
