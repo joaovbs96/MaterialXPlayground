@@ -3745,6 +3745,12 @@ const createMtlxRenderView = async ({
       antialias: true,
       alpha: true
     });
+    // TEMPORARY: how many renderers this canvas has seen. A canvas
+    // has ONE GL context, so a second renderer here inherits the
+    // first one's context, and a disposed predecessor can strand it.
+    try {
+      canvas.__mtlxRendererCount = (canvas.__mtlxRendererCount || 0) + 1;
+    } catch (e) {/* ignore */}
     // shadowMap.enabled is a GLOBAL renderer flag keying
     // every lit material's program cache, so it is left at its
     // default (off); turned on only where a studioGroup exists.
@@ -4656,7 +4662,11 @@ const createMtlxRenderView = async ({
               hasEnvMap: !!o.material.envMap,
               visible: o.visible,
               color: o.material.color && o.material.color.getHexString(),
-              needsUpdate: o.material.needsUpdate
+              map: o.material.map ? {
+                w: o.material.map.image && o.material.map.image.width,
+                h: o.material.map.image && o.material.map.image.height,
+                v: o.material.map.version
+              } : null
             });
           }
         });
@@ -4678,7 +4688,15 @@ const createMtlxRenderView = async ({
         envRadiance: !!envRadiance,
         envExposure,
         neutralCount: neutrals.length,
-        neutrals: neutrals.slice(0, 4)
+        neutrals: neutrals.slice(0, 4),
+        // The load-bearing ones: a PMREM target is GPU-only, so it
+        // can exist with no content if it lost the renderer that made it.
+        renderersOnCanvas: canvas.__mtlxRendererCount,
+        contextLost: renderer.getContext().isContextLost(),
+        envIsRenderTarget: !!(envTex && envTex.isRenderTargetTexture),
+        envHasCpuData: !!(envTex && envTex.image && envTex.image.data),
+        envVersion: envTex && envTex.version,
+        memory: JSON.parse(JSON.stringify(renderer.info.memory))
       }));
     } catch (e) {
       console.log('[mtlx-studio-diag] failed', e && e.message);
