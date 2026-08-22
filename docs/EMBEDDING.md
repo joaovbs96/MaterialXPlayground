@@ -44,7 +44,7 @@ in-page, for reference while you work.
 | --- | --- | --- | --- |
 | `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). The iframe also crawls the document for the textures and `xi:include` files it references, fetching each one resolved against the document's own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the built-in checker texture and is reported through `mtlx-error`. |
 | `version` | one of the versions in `js/gen/mtlx-versions.json` (currently `1.39.5`, `1.39.4`) | `1.39.5` | Which MaterialX engine build parses and renders the document. Validated against that version list; an unrecognized value falls back to the default and is reported through `mtlx-error`. See [Self-hosting](#self-hosting) for where non-default builds come from on a self-hosted deploy. |
-| `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes a full backdrop scene and is the heaviest option (1.86 MB GLB); `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default and is also reported through the `mtlx-error` event (see [Events](#events)), so a typo doesn't fail silently. |
+| `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes its own authored backdrop room baked into the model itself and is the heaviest option (1.86 MB GLB); it ignores the `backdrop` param entirely, see the row below. Every other geometry instead gets whichever backdrop `backdrop` selects. `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default and is also reported through the `mtlx-error` event (see [Events](#events)), so a typo doesn't fail silently. |
 | `material` | string: a renderable name, or an index | *(the first renderable)* | Which renderable to display in a multi-material document. Resolved in order: an exact name match, then a case-insensitive name match, then a non-negative integer index (`"0"`, `"1"`, …). An unresolved value falls back to the first renderable and is reported through `mtlx-error`. Re-resolved every time a new document loads. |
 | `env` | number (degrees) | *(engine default)* | Environment map rotation. |
 | `exposure` | number | *(engine default)* | Environment exposure multiplier. |
@@ -52,9 +52,10 @@ in-page, for reference while you work.
 | `wheel` | `scroll`, `zoom`, `none` | `scroll` | Plain mouse-wheel behavior over the viewport. `scroll` (the default) leaves a plain wheel event to scroll the *host page*, since an embed has no business hijacking the scroll of the page it's sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there's no host page left to scroll at that point. `zoom` restores plain-wheel zooming everywhere. `none` disables zooming entirely (wheel, Ctrl+wheel and touch pinch); dragging to orbit still works and a plain wheel scrolls the host page. An unrecognized value falls back to `scroll` and is reported through `mtlx-error`. |
 | `camera` | `"px,py,pz,tx,ty,tz"` (six comma-separated numbers) | *(the engine's default framing)* | Initial camera position (`px,py,pz`) and orbit target (`tx,ty,tz`), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. It also becomes the pose the HUD Reset button and the `resetCamera` message return to, in place of the engine's authored default framing; a later `setCamera` call, or a live `.camera` attribute change, rebases that pose again to wherever it moved the camera. A malformed value (wrong count, non-numeric) is ignored and reported through `mtlx-error`. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with `el.getCamera()` (see [Methods](#methods)). The site's Embed Builder page does this for you: its "Use current view" button reads the live preview's pose and fills it into the generated snippets, so the resulting embed's Reset returns to that captured view. |
 | `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the eight names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
-| `background` | boolean | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as `transparent` below. |
-| `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `background` is on) the visible backdrop; the current `env`/`exposure`/`background` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
-| `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of the viewer's usual dark backdrop. See [Transparent background](#transparent-background). |
+| `backdrop` | `studio`, `environment`, `none` | `studio` | What surrounds the preview geometry. `studio` is a plain white photo-studio room, the new default look for every geometry except `shaderball-scene` (which has its own authored room and ignores this param entirely, see the `geometry` row above). `environment` shows the HDRI environment map itself as the visible backdrop, identical to the legacy `background=1`. `none` is a plain dark void, identical to the legacy `background=0`. The environment's own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. `transparent` below overrides `backdrop` entirely, forcing it off so the host page shows through instead of any of the three. An unrecognized value falls back to `studio` and is reported through `mtlx-error`. |
+| `background` | boolean | off | Legacy alias for `backdrop` above, kept working for existing embeds. With no `backdrop` param present, `background=1` resolves to `backdrop=environment` and `background=0` resolves to `backdrop=none`, exactly this param's old meaning. If `backdrop` is present, it wins and this param is ignored. One deliberate change either way: leaving *both* params unset used to mean the old dark void and now means the new `studio` room, since `studio` is `backdrop`'s default. New embeds should set `backdrop` directly. |
+| `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `backdrop` is `environment`) the visible backdrop; the current `env`/`exposure`/`backdrop` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
+| `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of whatever `backdrop` would otherwise show (the studio room, by default). See [Transparent background](#transparent-background). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -85,17 +86,12 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | `material` | The material-picker dropdown. Shown only when the loaded document has two or more renderables; otherwise there's nothing to switch between, so it's hidden even if requested. |
 | `rotate` | The auto-rotate toggle. |
 | `reset` | A "reset camera" button. Returns to the pose set via `camera`/`setCamera` (or the `.camera` attribute), if one was ever provided, instead of the engine's default framing; also restores the host-provided `env`/`exposure` values, if any. |
-| `env` | The environment popover (rotation, exposure, background toggle, HDR import, key-light toggle). |
+| `env` | The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle). |
 | `screenshot` | A "save PNG" button. |
 | `settings` | The settings popover (force-transparency, etc.). |
 | `fullscreen` | A fullscreen toggle button. Requires `allowfullscreen` on the `<iframe>` itself — see [Limitations](#limitations). |
 
-`rotate` and the Environment panel's background toggle have no effect on the default
-`shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its walls
-occlude the sky sphere), so both are hidden while it's selected and come back as soon as
-the geometry changes to something else. Neither is reported through `mtlx-error`:
-`shaderball-scene` is the default geometry, so reporting it would make every
-`controls=all` embed noisy from the moment it loads.
+`rotate` and the Environment panel's backdrop picker have no effect on the default `shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its authored room ignores `backdrop` entirely, occluding the sky sphere too), so both are hidden while it's selected and come back as soon as the geometry changes to something else. Neither is reported through `mtlx-error`: `shaderball-scene` is the default geometry, so reporting it would make every `controls=all` embed noisy from the moment it loads.
 
 Two extra keywords, both case-insensitive (`ALL`/`None` work the same as `all`/`none`):
 
@@ -117,8 +113,7 @@ always reported through the `mtlx-error` event so the mistake isn't silent:
 
 ### Transparent background
 
-`transparent=1` makes the iframe itself see-through, so the host page shows behind the
-rendered geometry instead of the viewer's usual dark backdrop:
+`transparent=1` makes the iframe itself see-through, so the host page shows behind the rendered geometry instead of whatever `backdrop` would otherwise show:
 
 ```html
 <iframe
@@ -128,11 +123,9 @@ rendered geometry instead of the viewer's usual dark backdrop:
 </iframe>
 ```
 
-**Geometry constraint.** `shaderball-scene`, the default geometry, is an authored room (walls,
-floor, backdrop) that fills the whole frame, so it can never look transparent. Requesting
-`transparent=1` against it (including by simply omitting `geometry` altogether) falls back to
-`shaderball` instead, and reports the substitution through `mtlx-error`. The geometries that
-do work with `transparent` are `shaderball`, `sphere`, `cube`, `cloth`, and `shaderball-mtlx`.
+**Geometry constraint.** `shaderball-scene`, the default geometry, is an authored room (walls, floor, backdrop) that fills the whole frame, so it can never look transparent. Requesting `transparent=1` against it (including by simply omitting `geometry` altogether) falls back to `shaderball` instead, and reports the substitution through `mtlx-error`. The geometries that do work with `transparent` are `shaderball`, `sphere`, `cube`, `cloth`, and `shaderball-mtlx`.
+
+**Backdrop suppression.** Separately from the geometry constraint above, `transparent=1` also forces `backdrop` off for whichever geometry it renders against: a `studio` room or an `environment` sky would otherwise fill the frame with something opaque, defeating the point of `transparent` entirely. This is a narrower rule than the geometry one above: it never changes what geometry loads, it only turns the backdrop off behind it, so `transparent=1&geometry=sphere&backdrop=studio` still renders the sphere, just with the studio room switched off rather than falling back to a different geometry.
 
 ## The `<materialx-viewer>` custom element
 
@@ -177,6 +170,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `wheel` | `.wheel` | `scroll`, `zoom`, `none` | `scroll` | No (reload) |
 | `camera` | `.camera` | `"px,py,pz,tx,ty,tz"` | (none) | Yes |
 | `controls` | `.controls` | comma list (or an array via the property), plus `all`/`none` | `none` | No (reload) |
+| `backdrop` | `.backdrop` | `studio`, `environment`, `none` | `studio` | Yes |
 | `background` | `.background` | boolean | off | Yes |
 | `envmap` | `.envmap` | URL string (`.hdr`/`.exr`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
@@ -242,7 +236,7 @@ Dispatched as `CustomEvent`s on the element itself:
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
 | `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, or an unrecognized `wheel`/`version` value. |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, or an unrecognized `wheel`/`version`/`backdrop` value. |
 
 ```js
 const el = document.querySelector('materialx-viewer');

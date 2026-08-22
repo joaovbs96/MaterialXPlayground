@@ -32,7 +32,7 @@ A searchable, browsable reference for the entire MaterialX standard node library
 
 Load and inspect MaterialX materials in 3D.
 
-- **Image-based lighting** from a built-in HDR environment, with automatic key-light extraction (a strong sun in the image becomes a sharp analytic directional light, toggleable) and a toggle to show or hide the environment as the visible backdrop (the lighting stays on either way).
+- **Image-based lighting** from a built-in HDR environment, with automatic key-light extraction (a strong sun in the image becomes a sharp analytic directional light, toggleable) and a three-way backdrop choice: a white studio room (the default), the environment itself, or none (the environment's lighting stays on in all three).
 - **Drag-and-drop loading.** Drop a `.mtlx` document anywhere on the page, alone or with loose textures, a folder of textures, or a `.zip`. Textures are matched by relative path, with a UV-checker fallback for anything unresolved.
 - **Curated examples.** Load official MaterialX example materials, textures included, from a built-in presets list.
 - **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, a cube, or a draped cloth mesh), a material picker when a document defines several, save-as-PNG, and fullscreen.
