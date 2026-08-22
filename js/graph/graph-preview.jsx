@@ -226,6 +226,10 @@
             );
         }
 
+        // ReactFlow defaults every instance to rfId "1", and Background's SVG
+        // <pattern> id embeds rfId. Two instances (the editor mounts and stays
+        // mounted) collide document-wide, so each preview claims a unique id.
+        let GRAPH_PREVIEW_SEQ = 0;
         function MtlxGraphPreview(props) {
             const {
                 src, xml, graph,
@@ -277,7 +281,9 @@
                 console.warn('[mtlx] MtlxGraphPreview: `preview` has no effect in `graph`-prop mode (no live document to render).');
             }
 
-            const rootRef = React.useRef(null); // component root; only used by the preview auto-collapse observer below
+            const rootRef = React.useRef(null);
+            const rfIdRef = React.useRef(null);
+            if (!rfIdRef.current) rfIdRef.current = 'mtlx-gp-' + (++GRAPH_PREVIEW_SEQ); // component root; only used by the preview auto-collapse observer below
             const graphBoxRef = React.useRef(null);
             const rfInstRef = React.useRef(null);
             const parsedRef = React.useRef(null);      // live engine handle; null in `graph`-prop mode
@@ -524,6 +530,7 @@
                     // Skips the observer's first delivery (initial size, not a
                     // resize) and no-op deliveries; fitView/setCenter never
                     // touch graphBox's own CSS size, so this can't loop.
+                    if (!w || !h) return;
                     if (!prev || (prev.w === w && prev.h === h) || focusMode === 'none') return;
                     if (fitResizeRafRef.current) cancelAnimationFrame(fitResizeRafRef.current);
                     fitResizeRafRef.current = requestAnimationFrame(() => runAutoFocus(40));
@@ -656,6 +663,7 @@
                     role="group" aria-label={interactive ? label : undefined}>
                     {status === 'ready' ? (
                         <ReactFlowComp
+                            id={rfIdRef.current}
                             style={{ width: '100%', height: '100%' }}
                             nodes={flow.nodes} edges={flow.edges} nodeTypes={NODE_TYPES}
                             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}

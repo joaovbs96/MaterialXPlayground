@@ -5145,7 +5145,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             the MiniMap, bottom-aligned with it, instead of
                             underneath it (kept, not hidden: see below). */}
                         <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; } '
-                            + '.react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
+                            + '.mtlx-graph-editor-canvas .react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
                             {mtlxPaths.length > 1 && (
                                 <MtlxSelect
@@ -5236,7 +5236,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             none of the four callbacks below fire on. The params
                             sidebar is a SIBLING, so its inputs keep the native
                             menu. */}
-                        <div ref={canvasHostRef} className="relative flex-1 min-w-0"
+                        <div ref={canvasHostRef} className="mtlx-graph-editor-canvas relative flex-1 min-w-0"
                             onContextMenu={(e) => e.preventDefault()}>
                             <div className="absolute inset-0">
                                 <ReactFlowComp
