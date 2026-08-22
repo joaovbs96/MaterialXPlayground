@@ -533,8 +533,8 @@
             // swallows the wheel, the second alone never gets to run.
             const effWheelZoom = interactive && wheel === 'zoom';
 
-            // Same derivation as the editor's legend, scanning every
-            // input/output port type across the current flow's nodes.
+            // Same derivation as the editor's legend: port types plus
+            // nodegraph/generic node kinds across the current flow's nodes.
             const legendTypes = React.useMemo(() => legendTypesFor(flow.nodes), [flow]);
             const legendDisplayTypes = React.useMemo(() =>
                 legendDisplayTypesFor(legendTypes, legendShowAll), [legendTypes, legendShowAll]);

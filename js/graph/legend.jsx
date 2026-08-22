@@ -2,8 +2,8 @@
 // graph editor and the read-only graph preview so the two cannot drift.
 // Exports legendTypesFor/legendDisplayTypesFor (pure derivations) and
 // MtlxTypeLegend (open card, collapsed pill, tri-state control). Loaded
-// after js/graph/style.jsx (needs typeColor/TYPE_COLORS) and before
-// js/graph-app.jsx, per js/shell.jsx's VIEW_DEPS.graph manifest.
+// after js/graph/style.jsx (needs typeColor/TYPE_COLORS/getNodeColor) and
+// before js/graph-app.jsx, per js/shell.jsx's VIEW_DEPS.graph manifest.
 //
 // BTN_TOOLBAR, used by the collapsed pill, is a global from
 // js/shared/mtlx-ui.jsx: any consumer must load that file first.
@@ -14,9 +14,9 @@
 // embedding this legend must carry those rules itself; do not
 // duplicate them into a stylesheet.
 
-        // Every type used anywhere in the given nodes (any node shape with
-        // data.inputs/data.outputs port arrays), deduped and alphabetized.
-        // Each type's color is intrinsic to its name (typeColor); this list is not.
+        // Every type used anywhere in the given nodes: port types (data.inputs/
+        // data.outputs), plus 'nodegraph'/'node' when a node's header dot
+        // (getNodeColor) falls back to that kind color, deduped and alphabetized.
         function legendTypesFor(nodes) {
             const s = new Set();
             for (const n of nodes) {
@@ -25,6 +25,13 @@
                 // Scan every input/output port's type
                 for (const p of (d.inputs || [])) if (p.type) s.add(p.type);
                 for (const p of (d.outputs || [])) if (p.type) s.add(p.type);
+
+                // Node KINDS (not MaterialX data types) get their own dot
+                // color in getNodeColor; report them so nodegraph/generic
+                // nodes actually show up in the in-graph legend too.
+                const nc = getNodeColor(d);
+                if (nc === typeColor('nodegraph')) s.add('nodegraph');
+                else if (nc === typeColor('node')) s.add('node');
             }
             return Array.from(s).sort((a, b) =>
                 a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));

@@ -4132,9 +4132,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // the drop zone is the whole stage now, so it explains itself.
             const emptyHint = !parsed && !busy;
 
-            // Legend: exactly the types present in the CURRENT scope —
-            // every port/edge on screen. Alphabetical; each type's color
-            // is intrinsic to its name (typeColor), never changes between sessions.
+            // Legend: every type in the CURRENT scope, MaterialX data types
+            // plus nodegraph/generic node kinds (legendTypesFor). Alphabetical;
+            // each type's color is intrinsic to its name (typeColor).
             const legendTypes = React.useMemo(() => legendTypesFor(flow.nodes), [flow]);
 
             // What the legend actually renders: just the in-scope types, or
