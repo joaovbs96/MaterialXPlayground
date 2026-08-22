@@ -4057,6 +4057,42 @@ const createMtlxRenderView = async ({
                     studioGroup.position.y = floorY;
                 }
 
+                // TEMPORARY DIAGNOSTIC, remove once the black-room bug is
+                // found. Dumps the lighting inputs the neutral glTF
+                // materials depend on, on every view build.
+                try {
+                    const neutrals = [];
+                    if (sceneGroup) {
+                        sceneGroup.traverse((o) => {
+                            if (o.isMesh && o !== mesh && o.material && 'envMapIntensity' in o.material) {
+                                neutrals.push({
+                                    name: o.name,
+                                    intensity: o.material.envMapIntensity,
+                                    hasEnvMap: !!o.material.envMap,
+                                    visible: o.visible,
+                                    color: o.material.color && o.material.color.getHexString(),
+                                    needsUpdate: o.material.needsUpdate,
+                                });
+                            }
+                        });
+                    }
+                    const envTex = scene.environment;
+                    console.log('[mtlx-studio-diag]', JSON.stringify({
+                        geom: geomName,
+                        sceneMode,
+                        backdrop: backdropMode,
+                        studioGroup: !!studioGroup,
+                        shadowsOn: renderer.shadowMap.enabled,
+                        shadowType: renderer.shadowMap.type,
+                        sceneEnvironment: envTex ? { uuid: envTex.uuid.slice(0, 8), w: envTex.image && envTex.image.width, h: envTex.image && envTex.image.height } : null,
+                        pmremRT: !!pmremRT,
+                        envRadiance: !!envRadiance,
+                        envExposure,
+                        neutralCount: neutrals.length,
+                        neutrals: neutrals.slice(0, 4),
+                    }));
+                } catch (e) { console.log('[mtlx-studio-diag] failed', e && e.message); }
+
                 // ------------------------------------------------------
                 // freePeel — release this view's depth-peel GPU resources
                 // (render targets, their depth textures, the fullscreen-
