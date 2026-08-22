@@ -57,7 +57,7 @@ in-page, for reference while you work.</p>
 <td><code>geometry</code></td>
 <td><code>shaderball</code>, <code>shaderball-scene</code>, <code>shaderball-mtlx</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code></td>
 <td><code>shaderball-scene</code></td>
-<td>Preview geometry. <code>shaderball-scene</code> includes a full backdrop scene and is the heaviest option (1.86 MB GLB); <code>sphere</code> and <code>cube</code> need no model download at all. An unrecognized value falls back to the default and is also reported through the <code>mtlx-error</code> event (see <a href="#events">Events</a>), so a typo doesn&#39;t fail silently.</td>
+<td>Preview geometry. <code>shaderball-scene</code> includes its own authored backdrop room baked into the model itself and is the heaviest option (1.86 MB GLB); it ignores the <code>backdrop</code> param entirely, see the row below. Every other geometry instead gets whichever backdrop <code>backdrop</code> selects. <code>sphere</code> and <code>cube</code> need no model download at all. An unrecognized value falls back to the default and is also reported through the <code>mtlx-error</code> event (see <a href="#events">Events</a>), so a typo doesn&#39;t fail silently.</td>
 </tr>
 <tr>
 <td><code>material</code></td>
@@ -102,22 +102,28 @@ in-page, for reference while you work.</p>
 <td>Which HUD buttons to show over the viewport. Accepts the eight names below plus the <code>none</code>/<code>all</code> keywords. Omitting the param entirely is identical to <code>controls=none</code>. Unrecognized names are dropped and reported through <code>mtlx-error</code>; recognized ones still work.</td>
 </tr>
 <tr>
+<td><code>backdrop</code></td>
+<td><code>studio</code>, <code>environment</code>, <code>none</code></td>
+<td><code>studio</code></td>
+<td>What surrounds the preview geometry. <code>studio</code> is a plain white photo-studio room, the new default look for every geometry except <code>shaderball-scene</code> (which has its own authored room and ignores this param entirely, see the <code>geometry</code> row above). <code>environment</code> shows the HDRI environment map itself as the visible backdrop, identical to the legacy <code>background=1</code>. <code>none</code> is a plain dark void, identical to the legacy <code>background=0</code>. The environment&#39;s own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. <code>transparent</code> below overrides <code>backdrop</code> entirely, forcing it off so the host page shows through instead of any of the three. An unrecognized value falls back to <code>studio</code> and is reported through <code>mtlx-error</code>.</td>
+</tr>
+<tr>
 <td><code>background</code></td>
 <td>boolean</td>
 <td>off</td>
-<td>Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as <code>transparent</code> below.</td>
+<td>Legacy alias for <code>backdrop</code> above, kept working for existing embeds. With no <code>backdrop</code> param present, <code>background=1</code> resolves to <code>backdrop=environment</code> and <code>background=0</code> resolves to <code>backdrop=none</code>, exactly this param&#39;s old meaning. If <code>backdrop</code> is present, it wins and this param is ignored. One deliberate change either way: leaving <em>both</em> params unset used to mean the old dark void and now means the new <code>studio</code> room, since <code>studio</code> is <code>backdrop</code>&#39;s default. New embeds should set <code>backdrop</code> directly.</td>
 </tr>
 <tr>
 <td><code>envmap</code></td>
 <td>URL to a <code>.hdr</code> or <code>.exr</code> file</td>
 <td><em>(the default HDRI environment)</em></td>
-<td>Custom environment map. Fetched by the iframe itself, under the same CORS requirement as <code>src</code>; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when <code>background</code> is on) the visible backdrop; the current <code>env</code>/<code>exposure</code>/<code>background</code> settings carry over, and it&#39;s reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than <code>.hdr</code>/<code>.exr</code>, leaves whatever environment was already showing untouched and is reported through <code>mtlx-error</code>.</td>
+<td>Custom environment map. Fetched by the iframe itself, under the same CORS requirement as <code>src</code>; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when <code>backdrop</code> is <code>environment</code>) the visible backdrop; the current <code>env</code>/<code>exposure</code>/<code>backdrop</code> settings carry over, and it&#39;s reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than <code>.hdr</code>/<code>.exr</code>, leaves whatever environment was already showing untouched and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>transparent</code></td>
 <td>boolean</td>
 <td>off</td>
-<td>Makes the page itself see-through, so the host page&#39;s own background shows behind the rendered geometry, instead of the viewer&#39;s usual dark backdrop. See <a href="#transparent-background">Transparent background</a>.</td>
+<td>Makes the page itself see-through, so the host page&#39;s own background shows behind the rendered geometry, instead of whatever <code>backdrop</code> would otherwise show (the studio room, by default). See <a href="#transparent-background">Transparent background</a>.</td>
 </tr>
 <tr>
 <td><code>accent</code></td>
@@ -213,7 +219,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>env</code></td>
-<td>The environment popover (rotation, exposure, background toggle, HDR import, key-light toggle).</td>
+<td>The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle).</td>
 </tr>
 <tr>
 <td><code>screenshot</code></td>
@@ -228,12 +234,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 <td>A fullscreen toggle button. Requires <code>allowfullscreen</code> on the <code>&lt;iframe&gt;</code> itself — see <a href="#limitations">Limitations</a>.</td>
 </tr>
 </tbody></table>
-<p><code>rotate</code> and the Environment panel&#39;s background toggle have no effect on the default
-<code>shaderball-scene</code> geometry (auto-rotate is disabled for the full scene, and its walls
-occlude the sky sphere), so both are hidden while it&#39;s selected and come back as soon as
-the geometry changes to something else. Neither is reported through <code>mtlx-error</code>:
-<code>shaderball-scene</code> is the default geometry, so reporting it would make every
-<code>controls=all</code> embed noisy from the moment it loads.</p>
+<p><code>rotate</code> and the Environment panel&#39;s backdrop picker have no effect on the default <code>shaderball-scene</code> geometry (auto-rotate is disabled for the full scene, and its authored room ignores <code>backdrop</code> entirely, occluding the sky sphere too), so both are hidden while it&#39;s selected and come back as soon as the geometry changes to something else. Neither is reported through <code>mtlx-error</code>: <code>shaderball-scene</code> is the default geometry, so reporting it would make every <code>controls=all</code> embed noisy from the moment it loads.</p>
 <p>Two extra keywords, both case-insensitive (<code>ALL</code>/<code>None</code> work the same as <code>all</code>/<code>none</code>):</p>
 <ul>
 <li><strong><code>none</code></strong> - no controls at all. This is also what an absent <code>controls</code> param means, so
@@ -270,19 +271,15 @@ always reported through the <code>mtlx-error</code> event so the mistake isn&#39
 </tr>
 </tbody></table>
 <h3 id="transparent-background">Transparent background</h3>
-<p><code>transparent=1</code> makes the iframe itself see-through, so the host page shows behind the
-rendered geometry instead of the viewer&#39;s usual dark backdrop:</p>
+<p><code>transparent=1</code> makes the iframe itself see-through, so the host page shows behind the rendered geometry instead of whatever <code>backdrop</code> would otherwise show:</p>
 <pre><code class="language-html">&lt;iframe
   src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;transparent=1&quot;
   width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
   title=&quot;MaterialX material preview&quot;&gt;
 &lt;/iframe&gt;
 </code></pre>
-<p><strong>Geometry constraint.</strong> <code>shaderball-scene</code>, the default geometry, is an authored room (walls,
-floor, backdrop) that fills the whole frame, so it can never look transparent. Requesting
-<code>transparent=1</code> against it (including by simply omitting <code>geometry</code> altogether) falls back to
-<code>shaderball</code> instead, and reports the substitution through <code>mtlx-error</code>. The geometries that
-do work with <code>transparent</code> are <code>shaderball</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code>, and <code>shaderball-mtlx</code>.</p>
+<p><strong>Geometry constraint.</strong> <code>shaderball-scene</code>, the default geometry, is an authored room (walls, floor, backdrop) that fills the whole frame, so it can never look transparent. Requesting <code>transparent=1</code> against it (including by simply omitting <code>geometry</code> altogether) falls back to <code>shaderball</code> instead, and reports the substitution through <code>mtlx-error</code>. The geometries that do work with <code>transparent</code> are <code>shaderball</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code>, and <code>shaderball-mtlx</code>.</p>
+<p><strong>Backdrop suppression.</strong> Separately from the geometry constraint above, <code>transparent=1</code> also forces <code>backdrop</code> off for whichever geometry it renders against: a <code>studio</code> room or an <code>environment</code> sky would otherwise fill the frame with something opaque, defeating the point of <code>transparent</code> entirely. This is a narrower rule than the geometry one above: it never changes what geometry loads, it only turns the backdrop off behind it, so <code>transparent=1&amp;geometry=sphere&amp;backdrop=studio</code> still renders the sphere, just with the studio room switched off rather than falling back to a different geometry.</p>
 <h2 id="the-materialx-viewer-custom-element">The <code>&lt;materialx-viewer&gt;</code> custom element</h2>
 <p>For anything beyond a single static embed — a docs page with several materials, a product
 grid, a listing that scrolls — use the wrapper element instead of hand-writing iframes. It
@@ -386,6 +383,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>comma list (or an array via the property), plus <code>all</code>/<code>none</code></td>
 <td><code>none</code></td>
 <td>No (reload)</td>
+</tr>
+<tr>
+<td><code>backdrop</code></td>
+<td><code>.backdrop</code></td>
+<td><code>studio</code>, <code>environment</code>, <code>none</code></td>
+<td><code>studio</code></td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><code>background</code></td>
@@ -557,7 +561,7 @@ calling these.</p>
 <tr>
 <td><code>mtlx-error</code></td>
 <td><code>{ message: string }</code></td>
-<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, or an unrecognized <code>wheel</code>/<code>version</code> value.</td>
+<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code> value.</td>
 </tr>
 </tbody></table>
 <pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);

@@ -755,6 +755,18 @@ const useViewToggle = (viewRef, method, initial) => {
   return [value, toggle];
 };
 
+// String-valued sibling of useViewToggle (backdrop picker, etc.): same
+// idea, but the value is any string the caller hands it instead of a
+// flipped boolean, so the setter takes the next value directly.
+const useViewEnum = (viewRef, method, initial) => {
+  const [value, setValue] = React.useState(initial);
+  const set = next => {
+    setValue(next);
+    if (viewRef.current && viewRef.current[method]) viewRef.current[method](next);
+  };
+  return [value, set];
+};
+
 // PNG snapshot of the given render view's frame, downloaded as
 // `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
 // view.snapshot() returns a plain data: URL, so there's no URL to revoke.
@@ -839,9 +851,12 @@ const attributeExportedXml = async xml => withExportAttribution(xml, await expor
 // js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
 // every existing caller omits these, and `!!undefined` is `false`, so
 // today's default (both off) is unchanged.
-const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg) => {
+// `initialBackdrop`: seed for the three-way backdrop picker (studio /
+// environment / none). Defaults to 'studio', the engine's new default.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg, initialBackdrop = 'studio') => {
   const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
   const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
+  const [backdrop, setBackdrop] = useViewEnum(viewRef, 'setBackdrop', initialBackdrop);
   const [envAvail, setEnvAvail] = React.useState(false);
   const [viewEpoch, setViewEpoch] = React.useState(0);
   const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
@@ -857,6 +872,8 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
     toggleRotating,
     envBg,
     toggleEnvBg,
+    backdrop,
+    setBackdrop,
     envAvail,
     setEnvAvail,
     viewEpoch,
@@ -1040,9 +1057,9 @@ const EnvDialog = ({
   anchorRef,
   open,
   onClose,
-  envBg,
-  onToggleEnvBg,
-  showBackgroundToggle = true,
+  backdrop,
+  onBackdropChange,
+  showBackdropPicker = true,
   rotation,
   onRotationChange,
   exposure,
@@ -1128,13 +1145,21 @@ const EnvDialog = ({
       width: ENV_DIALOG_W
     }, pos || {}),
     className: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
-  }, showBackgroundToggle && /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between"
-  }, /*#__PURE__*/React.createElement("span", null, "Background"), /*#__PURE__*/React.createElement("button", {
-    onClick: onToggleEnvBg,
-    title: envBg ? 'Hide the environment map background' : 'Show the environment map as background',
-    className: `h-5 px-2 rounded border transition-colors ${envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'}`
-  }, envBg ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
+  }, showBackdropPicker && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-0.5"
+  }, /*#__PURE__*/React.createElement("span", null, "Backdrop")), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: backdrop,
+    options: ['studio', 'environment', 'none'],
+    labels: {
+      studio: 'Studio',
+      environment: 'Environment',
+      none: 'None'
+    },
+    onChange: onBackdropChange,
+    title: "Studio: a white room. Environment: the HDRI as background. None: a dark void.",
+    size: "sm",
+    block: true
+  })), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("span", null, "Extract key light"), /*#__PURE__*/React.createElement("button", {
     onClick: handleToggleKeyLight,
@@ -1427,7 +1452,9 @@ const ViewportControls = ({
   envBg,
   onToggleEnvBg,
   envAvail = true,
-  showBackgroundToggle = true,
+  backdrop,
+  onBackdropChange,
+  showBackdropPicker = true,
   viewRef,
   viewEpoch,
   onScreenshot,
@@ -1563,7 +1590,7 @@ const ViewportControls = ({
           ref: envBtnRef,
           onClick: () => viewRef ? setEnvOpen(o => !o) : onToggleEnvBg(),
           title: "Environment\u2026",
-          className: buttonClassName(envBg || envOpen)
+          className: buttonClassName(envOpen)
         }, /*#__PURE__*/React.createElement(MtlxIcon, {
           name: "environment",
           className: "w-3.5 h-3.5"
@@ -1575,9 +1602,9 @@ const ViewportControls = ({
           open: envOpen,
           onClose: () => setEnvOpen(false),
           placement: envDialogPlacement,
-          envBg: envBg,
-          onToggleEnvBg: onToggleEnvBg,
-          showBackgroundToggle: showBackgroundToggle,
+          backdrop: backdrop,
+          onBackdropChange: onBackdropChange,
+          showBackdropPicker: showBackdropPicker,
           rotation: envRotation,
           onRotationChange: deg => {
             setEnvRotation(deg);
@@ -2953,6 +2980,7 @@ Object.assign(window, {
   useNarrowPane,
   useFullscreen,
   useViewToggle,
+  useViewEnum,
   downloadSnapshot,
   downloadBlob,
   downloadXml,
