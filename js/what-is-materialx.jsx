@@ -434,8 +434,10 @@ function WhatIsMaterialXApp({ active } = {}) {
                     </div>
                 </section>
 
-                {/* See it */}
-                <section aria-labelledby="seeit-h" className="space-y-4">
+                {/* See it: wider than the page's max-w-5xl column, but only
+                    from xl+ (1280px+) where there's guaranteed room to bleed
+                    out with zero risk of horizontal scroll below that. */}
+                <section aria-labelledby="seeit-h" className="space-y-4 xl:w-[calc(100%+16rem)] xl:max-w-[1280px] xl:-mx-32">
                     <SectionHead id="seeit-h" title="See it" blurb="The node graph and the material it renders, in one panel." />
                     <MtlxGraphPreview
                         src={marbleSrc}

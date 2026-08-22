@@ -99,6 +99,7 @@
             const loadedRef = React.useRef(false);
             const [failed, setFailed] = React.useState(() => !(window.mtlxHasWebGL2 ? window.mtlxHasWebGL2() : true));
             const [loaded, setLoaded] = React.useState(false);
+            const [mounted, setMounted] = React.useState(false);
 
             // Creates and mounts the element once; geometry stays live via
             // the custom element's own attribute handling (embed/mtlx-viewer.js's
@@ -136,6 +137,7 @@
                 if (elRef.current.parentElement !== mountRef.current) {
                     mountRef.current.appendChild(elRef.current);
                 }
+                setMounted(true);
             }, [failed, geometry]);
 
             React.useEffect(() => {
@@ -166,6 +168,17 @@
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                             <span className="text-[11px] text-gray-500">Loading material</span>
                         </div>
+                    )}
+                    {mounted && (
+                        <button
+                            type="button"
+                            onClick={() => elRef.current && elRef.current.resetCamera()}
+                            title="Reset camera"
+                            aria-label="Reset camera"
+                            className="flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors absolute bottom-1.5 right-1.5 z-10"
+                        >
+                            <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
+                        </button>
                     )}
                 </>
             );
@@ -272,6 +285,8 @@
             const graphAspectRef = React.useRef(null); // set once, from the initial scope only
             const graphAspectSetRef = React.useRef(false);
             const focusRafRef = React.useRef(null); // pending retry frame for the auto-focus effect below
+            const collapseFocusRafRef = React.useRef(null); // pending retry frame for the collapse-refit effect below
+            const skipCollapseFocusRef = React.useRef(true); // the panel's initial mount isn't a layout change
 
             const [shouldLoad, setShouldLoad] = React.useState(!lazy);
             const [status, setStatus] = React.useState('idle');
@@ -451,36 +466,47 @@
                 setFlow((prev) => ({ ...prev, edges: applyEdgeChanges(sel, prev.edges) }));
             }, []);
 
+            // Node width/height arrive async via RF's ResizeObserver, so fitView
+            // silently no-ops until every node is measured. Retry across frames,
+            // like graph-app.jsx's fitViewSoon, instead of trusting one rAF hop.
+            const runAutoFocus = React.useCallback((triesLeft) => {
+                const inst = rfInstRef.current;
+                const rect = graphBoxRef.current ? graphBoxRef.current.getBoundingClientRect() : null;
+                const nodes = inst ? inst.getNodes() : [];
+                const ready = inst && rect && rect.width > 0 && rect.height > 0
+                    && nodes.length > 0 && nodes.every((n) => n.width && n.height);
+                if (!ready) {
+                    if (triesLeft > 0) requestAnimationFrame(() => runAutoFocus(triesLeft - 1));
+                    return;
+                }
+                if (focusMode === 'reading') {
+                    const zoom = focusZoom === undefined ? 1 : focusZoom;
+                    const bounds = getNodesBounds(nodes);
+                    inst.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, { zoom });
+                } else {
+                    const maxZoom = focusZoom === undefined ? 1.2 : focusZoom;
+                    inst.fitView({ padding: 0.15, maxZoom });
+                }
+            }, [focusMode, focusZoom]);
+
             // Keyed on graphVersion (bumped only by a real rebuild above), not
             // `flow`, so a selection-only flow update from onNodesChange never
             // re-fits or re-centres the viewport.
             React.useEffect(() => {
                 if (focusMode === 'none') return undefined;
-                // Node width/height arrive async via RF's ResizeObserver, so fitView
-                // silently no-ops until every node is measured. Retry across frames,
-                // like graph-app.jsx's fitViewSoon, instead of trusting one rAF hop.
-                const attempt = (triesLeft) => {
-                    const inst = rfInstRef.current;
-                    const rect = graphBoxRef.current ? graphBoxRef.current.getBoundingClientRect() : null;
-                    const nodes = inst ? inst.getNodes() : [];
-                    const ready = inst && rect && rect.width > 0 && rect.height > 0
-                        && nodes.length > 0 && nodes.every((n) => n.width && n.height);
-                    if (!ready) {
-                        if (triesLeft > 0) focusRafRef.current = requestAnimationFrame(() => attempt(triesLeft - 1));
-                        return;
-                    }
-                    if (focusMode === 'reading') {
-                        const zoom = focusZoom === undefined ? 1 : focusZoom;
-                        const bounds = getNodesBounds(nodes);
-                        inst.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, { zoom });
-                    } else {
-                        const maxZoom = focusZoom === undefined ? 1.2 : focusZoom;
-                        inst.fitView({ padding: 0.15, maxZoom });
-                    }
-                };
-                focusRafRef.current = requestAnimationFrame(() => attempt(40));
+                focusRafRef.current = requestAnimationFrame(() => runAutoFocus(40));
                 return () => cancelAnimationFrame(focusRafRef.current);
-            }, [graphVersion, focusMode, focusZoom]);
+            }, [graphVersion, focusMode, focusZoom, runAutoFocus]);
+
+            // Re-fits when the preview column's presence changes graphBox's
+            // available width. Skips the initial mount (not a real layout
+            // change) and respects autoFocus='none' like the effect above.
+            React.useEffect(() => {
+                if (skipCollapseFocusRef.current) { skipCollapseFocusRef.current = false; return undefined; }
+                if (focusMode === 'none') return undefined;
+                collapseFocusRafRef.current = requestAnimationFrame(() => runAutoFocus(40));
+                return () => cancelAnimationFrame(collapseFocusRafRef.current);
+            }, [previewCollapsed, focusMode, runAutoFocus]);
 
             // Observes only, to drive the hint pill; never preventDefault or
             // stopImmediatePropagation, so the page's own scroll is untouched.
@@ -559,7 +585,10 @@
                 // row wrapper below so the graph and the preview column read as
                 // one shared surface; only the divider between them lives here.
                 classNames.push('flex-1', 'min-w-0');
-                if (chrome === 'card' && previewSupported) classNames.push('border-r', 'border-gray-700');
+                // Only a real column (never the collapsed no-rail state) needs
+                // a divider: with no column left of it, this would just be a
+                // stray line along the graph's own outer edge.
+                if (chrome === 'card' && previewSupported && !previewCollapsed) classNames.push('border-r', 'border-gray-700');
             } else {
                 if (chrome === 'card') classNames.push('border', 'border-gray-700', 'rounded-lg');
                 if (!isTransparent) classNames.push('bg-gray-900');
@@ -577,6 +606,23 @@
                 zIndex: 30, whiteSpace: 'nowrap', opacity: wheelHintOn ? 1 : 0,
                 transition: prefersReducedMotion ? 'none' : 'opacity 200ms ease',
             };
+
+            // Same control whether collapsed (overlays the graph's own
+            // corner) or open (overlays the preview column's corner), always
+            // an absolute overlay so open/close never need two implementations.
+            const previewToggleBtn = (
+                <button
+                    type="button"
+                    onClick={togglePreviewCollapsed}
+                    title={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
+                    aria-label={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
+                    aria-expanded={!previewCollapsed}
+                    className="flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors absolute top-1.5 right-1.5 z-10"
+                >
+                    {/* chevron-left doesn't exist in MTLX_ICON_PATHS; chevrons-left is the nearest "point back open" glyph */}
+                    <MtlxIcon name={previewCollapsed ? 'chevrons-left' : 'chevrons-right'} className="w-3.5 h-3.5" />
+                </button>
+            );
 
             const graphBox = (
                 <div ref={graphBoxRef} className={classNames.join(' ')} style={boxStyle}
@@ -663,29 +709,13 @@
                     {wheel === 'scroll' && interactive && status === 'ready' && (
                         <div aria-hidden="true" style={wheelHintStyle}>Use Ctrl + scroll to zoom</div>
                     )}
+                    {/* Collapsed state has no rail column of its own anymore,
+                        so the expand pill floats over the graph's own corner. */}
+                    {previewSupported && previewCollapsed && previewToggleBtn}
                 </div>
             );
 
             if (!previewRequested) return graphBox;
-
-            // Toggle button: same control (icon flips, position flips from
-            // an overlay to inline) whether the panel is open or collapsed
-            // to a rail, so open/close never drift into two implementations.
-            const previewToggleBtn = (
-                <button
-                    type="button"
-                    onClick={togglePreviewCollapsed}
-                    title={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
-                    aria-label={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
-                    aria-expanded={!previewCollapsed}
-                    className={'flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 '
-                        + 'bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 '
-                        + 'transition-colors' + (previewCollapsed ? '' : ' absolute top-1.5 right-1.5 z-10')}
-                >
-                    {/* chevron-left doesn't exist in MTLX_ICON_PATHS; chevrons-left is the nearest "point back open" glyph */}
-                    <MtlxIcon name={previewCollapsed ? 'chevrons-left' : 'chevrons-right'} className="w-3.5 h-3.5" />
-                </button>
-            );
 
             // Card chrome (border, rounded corners, background) lives on this
             // row, not on graphBox or the preview column, so the two read as
@@ -698,11 +728,7 @@
             return (
                 <div ref={rootRef} className={rowClassNames.join(' ')}>
                     {graphBox}
-                    {previewSupported && (previewCollapsed ? (
-                        <div className="flex-none w-9 flex flex-col items-center justify-center">
-                            {previewToggleBtn}
-                        </div>
-                    ) : (
+                    {previewSupported && !previewCollapsed && (
                         // No self-start/aspect-square: flush against the graph
                         // with no border or radius of its own, this stretches
                         // to the shared row's full height instead.
@@ -712,7 +738,7 @@
                                 <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} />
                             )}
                         </div>
-                    ))}
+                    )}
                 </div>
             );
         }
