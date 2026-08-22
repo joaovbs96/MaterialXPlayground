@@ -285,8 +285,8 @@
             const graphAspectRef = React.useRef(null); // set once, from the initial scope only
             const graphAspectSetRef = React.useRef(false);
             const focusRafRef = React.useRef(null); // pending retry frame for the auto-focus effect below
-            const collapseFocusRafRef = React.useRef(null); // pending retry frame for the collapse-refit effect below
-            const skipCollapseFocusRef = React.useRef(true); // the panel's initial mount isn't a layout change
+            const fitResizeRafRef = React.useRef(null); // pending retry frame for the box-resize refit effect below
+            const lastFitSizeRef = React.useRef(null); // last graphBox size the refit effect actually saw
 
             const [shouldLoad, setShouldLoad] = React.useState(!lazy);
             const [status, setStatus] = React.useState('idle');
@@ -309,6 +309,10 @@
             // Set on the first manual toggle, so auto-collapse never fights
             // a visitor's explicit choice on a later resize.
             const previewUserSetRef = React.useRef(false);
+            // Sticky, never reset: once the viewer was ever eligible to exist,
+            // later collapses hide it with CSS instead of unmounting it, so
+            // <materialx-viewer> and its iframe survive every toggle.
+            const [previewEverLoaded, setPreviewEverLoaded] = React.useState(false);
 
             const prefersReducedMotion = React.useMemo(() => {
                 try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
@@ -378,6 +382,13 @@
                 previewUserSetRef.current = true;
                 setPreviewCollapsed((c) => !c);
             };
+
+            // Lazy first mount: flips only once expanded AND shouldLoad has
+            // fired (component in view), matching the 2D graph's own lazy
+            // mount below. Sticky after that, see the declaration above.
+            React.useEffect(() => {
+                if (previewSupported && shouldLoad && !previewCollapsed) setPreviewEverLoaded(true);
+            }, [previewSupported, shouldLoad, previewCollapsed]);
 
             // Fetch + parse (or adopt the pre-parsed `graph` prop), retaining
             // the live handle so drilling into a nodegraph never re-parses.
@@ -498,15 +509,31 @@
                 return () => cancelAnimationFrame(focusRafRef.current);
             }, [graphVersion, focusMode, focusZoom, runAutoFocus]);
 
-            // Re-fits when the preview column's presence changes graphBox's
-            // available width. Skips the initial mount (not a real layout
-            // change) and respects autoFocus='none' like the effect above.
+            // Re-fits to graphBox's ACTUAL size: a rAF keyed on previewCollapsed
+            // can fire before the flex reflow settles. Distinct from the
+            // rootRef (680px auto-collapse) and containerWidth (auto height) observers above.
             React.useEffect(() => {
-                if (skipCollapseFocusRef.current) { skipCollapseFocusRef.current = false; return undefined; }
-                if (focusMode === 'none') return undefined;
-                collapseFocusRafRef.current = requestAnimationFrame(() => runAutoFocus(40));
-                return () => cancelAnimationFrame(collapseFocusRafRef.current);
-            }, [previewCollapsed, focusMode, runAutoFocus]);
+                const el = graphBoxRef.current;
+                if (!el || typeof ResizeObserver === 'undefined') return undefined;
+                const ro = new ResizeObserver((entries) => {
+                    const rect = entries[0] && entries[0].contentRect;
+                    const w = rect ? rect.width : el.clientWidth;
+                    const h = rect ? rect.height : el.clientHeight;
+                    const prev = lastFitSizeRef.current;
+                    lastFitSizeRef.current = { w, h };
+                    // Skips the observer's first delivery (initial size, not a
+                    // resize) and no-op deliveries; fitView/setCenter never
+                    // touch graphBox's own CSS size, so this can't loop.
+                    if (!prev || (prev.w === w && prev.h === h) || focusMode === 'none') return;
+                    if (fitResizeRafRef.current) cancelAnimationFrame(fitResizeRafRef.current);
+                    fitResizeRafRef.current = requestAnimationFrame(() => runAutoFocus(40));
+                });
+                ro.observe(el);
+                return () => {
+                    ro.disconnect();
+                    if (fitResizeRafRef.current) cancelAnimationFrame(fitResizeRafRef.current);
+                };
+            }, [focusMode, runAutoFocus]);
 
             // Observes only, to drive the hint pill; never preventDefault or
             // stopImmediatePropagation, so the page's own scroll is untouched.
@@ -594,10 +621,10 @@
                 if (!isTransparent) classNames.push('bg-gray-900');
             }
 
-            // Only mount the actual <materialx-viewer> once the panel is
-            // expanded AND the component is in view, the same discipline
-            // `lazy`/`shouldLoad` already applies to the 2D graph above.
-            const previewLive = previewSupported && !previewCollapsed && shouldLoad;
+            // Mounted whenever expanded (placeholder/toggle need somewhere to
+            // render), or once previewEverLoaded so collapsing only hides the
+            // column with CSS, never unmounts the live <materialx-viewer>.
+            const previewColumnMounted = previewSupported && (!previewCollapsed || previewEverLoaded);
 
             const wheelHintStyle = {
                 position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
@@ -728,13 +755,13 @@
             return (
                 <div ref={rootRef} className={rowClassNames.join(' ')}>
                     {graphBox}
-                    {previewSupported && !previewCollapsed && (
-                        // No self-start/aspect-square: flush against the graph
-                        // with no border or radius of its own, this stretches
-                        // to the shared row's full height instead.
-                        <div className="relative flex-none w-64 sm:w-72">
-                            {previewToggleBtn}
-                            {previewLive && (
+                    {previewColumnMounted && (
+                        // No self-start/aspect-square: flush, full row height.
+                        // `hidden` (not unmounting) keeps GraphPreviewViewer
+                        // alive underneath once previewEverLoaded is set.
+                        <div className={'relative flex-none w-64 sm:w-72' + (previewCollapsed ? ' hidden' : '')}>
+                            {!previewCollapsed && previewToggleBtn}
+                            {previewEverLoaded && (
                                 <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} />
                             )}
                         </div>
