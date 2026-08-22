@@ -955,7 +955,7 @@
                         <SectionCard icon="alert-triangle" title="Textures" summary={texReport.missing.length + ' unresolved'}>
                             <div className="space-y-2">
                                 {texReport.missing.map((m, i) => (
-                                    <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">
+                                    <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files, so the image node's default color is shown instead.">
                                         <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
                                     </div>
                                 ))}
@@ -1226,7 +1226,7 @@
                             </div>
                             {filesPanelBody}
                             <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
-                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.
+                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                             </div>
                         </div>
                     )}

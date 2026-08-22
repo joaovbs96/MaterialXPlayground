@@ -648,7 +648,7 @@
                             if (res.refreshed) {
                                 // Bind any dropped texture files onto the shader's
                                 // filename uniforms (same pass as the viewer/apply
-                                // path); missing refs keep the checker texture.
+                                // path); missing refs keep the node default color.
                                 const rep = bindDroppedTextures(live, fileMap || {});
                                 if (rep.missing.length) {
                                     mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
@@ -766,7 +766,7 @@
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         // Bind any dropped texture files onto the shader's
                         // filename uniforms (same pass as the viewer). Missing
-                        // references keep the built-in checker texture.
+                        // references keep the node default color.
                         const rep = bindDroppedTextures(view, fileMap || {});
                         if (rep.missing.length) {
                             mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);

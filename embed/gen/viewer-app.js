@@ -1015,7 +1015,7 @@ function MaterialViewerApp({
   }, texReport.missing.map((m, i) => /*#__PURE__*/React.createElement("div", {
     key: 'm' + i,
     className: "flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all",
-    title: "Referenced by the document but not found among the dropped files \u2014 the checker texture is shown instead."
+    title: "Referenced by the document but not found among the dropped files, so the image node's default color is shown instead."
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "alert-triangle",
     className: "w-3.5 h-3.5 shrink-0 mt-0.5"
@@ -1233,7 +1233,7 @@ function MaterialViewerApp({
       className: "w-4 h-4"
     }))), filesPanelBody, /*#__PURE__*/React.createElement("div", {
       className: "flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500"
-    }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.")), IN_VSCODE ? stage : /*#__PURE__*/React.createElement("div", {
+    }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.")), IN_VSCODE ? stage : /*#__PURE__*/React.createElement("div", {
       className: "relative flex-1 min-w-0"
     }, stage), !chromeless && /*#__PURE__*/React.createElement(PresetsDialog, {
       open: presetsOpen,

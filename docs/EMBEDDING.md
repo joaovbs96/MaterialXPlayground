@@ -42,7 +42,7 @@ in-page, for reference while you work.
 
 | Param | Type / values | Default | Description |
 | --- | --- | --- | --- |
-| `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). The iframe also crawls the document for the textures and `xi:include` files it references, fetching each one resolved against the document's own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the built-in checker texture and is reported through `mtlx-error`. |
+| `src` | URL | *(the built-in default material)* | The `.mtlx` document to load. Fetched by the iframe itself, so it must be reachable cross-origin (same-origin, or served with CORS headers, see [Loading a document without CORS](#loading-a-document-without-cors) if it isn't). The iframe also crawls the document for the textures and `xi:include` files it references, fetching each one resolved against the document's own URL and restricted to http(s) URLs on the same origin as the document, under the same CORS requirement. A reference that is cross-origin, fails to fetch, or is otherwise blocked falls back to the image node's default color and is reported through `mtlx-error`. |
 | `version` | one of the versions in `js/gen/mtlx-versions.json` (currently `1.39.5`, `1.39.4`) | `1.39.5` | Which MaterialX engine build parses and renders the document. Validated against that version list; an unrecognized value falls back to the default and is reported through `mtlx-error`. See [Self-hosting](#self-hosting) for where non-default builds come from on a self-hosted deploy. |
 | `geometry` | `shaderball`, `shaderball-scene`, `shaderball-mtlx`, `sphere`, `cube`, `cloth` | `shaderball-scene` | Preview geometry. `shaderball-scene` includes a full backdrop scene and is the heaviest option (1.86 MB GLB); `sphere` and `cube` need no model download at all. An unrecognized value falls back to the default and is also reported through the `mtlx-error` event (see [Events](#events)), so a typo doesn't fail silently. |
 | `material` | string: a renderable name, or an index | *(the first renderable)* | Which renderable to display in a multi-material document. Resolved in order: an exact name match, then a case-insensitive name match, then a non-negative integer index (`"0"`, `"1"`, …). An unresolved value falls back to the first renderable and is reported through `mtlx-error`. Re-resolved every time a new document loads. |
@@ -55,6 +55,7 @@ in-page, for reference while you work.
 | `background` | boolean | off | Shows the environment map itself as the visible backdrop. Lighting from it is always on regardless of this flag. Not the same as `transparent` below. |
 | `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `background` is on) the visible backdrop; the current `env`/`exposure`/`background` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of the viewer's usual dark backdrop. See [Transparent background](#transparent-background). |
+| `forcetransparency` | boolean | *(off, or the visitor's last Settings choice)* | Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as `transparent` above. See [Force transparency](#force-transparency). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -134,6 +135,33 @@ floor, backdrop) that fills the whole frame, so it can never look transparent. R
 `shaderball` instead, and reports the substitution through `mtlx-error`. The geometries that
 do work with `transparent` are `shaderball`, `sphere`, `cube`, `cloth`, and `shaderball-mtlx`.
 
+### Force transparency
+
+Despite the similar name, `forcetransparency` is unrelated to `transparent` above: it changes
+how *materials* render, not the page background. A material with opacity or transmission
+normally renders opaque, matching the official MaterialX viewer; `forcetransparency=1` instead
+renders it with real alpha blending (front-to-back depth-peeled order-independent transparency).
+This is experimental.
+
+```html
+<iframe
+  src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=shaderball-scene&forcetransparency=1"
+  width="480" height="360" loading="lazy" style="border:0"
+  title="MaterialX material preview">
+</iframe>
+```
+
+Unlike `transparent`, there is no geometry constraint: it works with every `geometry` value,
+including the default `shaderball-scene`. It is also gated per material, not per geometry, so an
+opaque material in the same document renders exactly the same either way.
+
+This mirrors the "Force Transparency" toggle in the viewer's own Settings HUD panel, and, like
+that toggle, persists to the visitor's browser storage for this site (`localStorage`, shared by
+origin). An embed that sets `forcetransparency` writes that same shared preference, so it can
+also change the starting state of the next unrelated embed or page view on the same origin,
+unless that one passes its own explicit `forcetransparency` value too. Omitting the param
+entirely leaves whatever that shared preference already is untouched.
+
 ## The `<materialx-viewer>` custom element
 
 For anything beyond a single static embed — a docs page with several materials, a product
@@ -180,13 +208,14 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `background` | `.background` | boolean | off | Yes |
 | `envmap` | `.envmap` | URL string (`.hdr`/`.exr`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
+| `forcetransparency` | `.forceTransparency` | boolean | off | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
 | `radius` | `.radius` | CSS `<length>` | `4px` | Yes |
 | `base` | `.base` | URL string | the directory `mtlx-viewer.js` was loaded from | — (read once per activation) |
 | `poster` | `.poster` | URL string | — | — (placeholder image only, before the iframe activates) |
-| `eager` | `.eager` | boolean | off | — (read once, on connect — skips the `IntersectionObserver` and creates the iframe immediately instead of waiting for scroll) |
+| `eager` | `.eager` | boolean | off | — (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the `IntersectionObserver` still runs alongside it, so an evicted instance can come back once it's visible again.) |
 
 `camera`, unlike the rest of the live-updating attributes, has a one-time-vs-live split: as a
 query param on a plain `<iframe>` it only ever seeds the *initial* pose (see the table above).
@@ -205,11 +234,11 @@ Two read-only diagnostic properties, not reflected as attributes: `el.ready` (`t
 iframe has posted `ready`) and `el.active` (`true` while the element currently owns a live
 iframe/WebGL context).
 
-Boolean attributes on the element itself (`autorotate`, `background`, `transparent`, `eager`)
-follow the ordinary HTML convention: presence means true, regardless of value, so
-`transparent="0"` is still on. Use `el.removeAttribute('transparent')`, or the property
-(`el.transparent = false`), to turn one off. This is a different rule from the `boolean`
-query params above, which do parse the value (`1`/`true`/`yes`/`on`).
+Boolean attributes on the element itself (`autorotate`, `background`, `transparent`,
+`forcetransparency`, `eager`) follow the ordinary HTML convention: presence means true,
+regardless of value, so `transparent="0"` is still on. Use `el.removeAttribute('transparent')`,
+or the property (`el.transparent = false`), to turn one off. This is a different rule from the
+`boolean` query params above, which do parse the value (`1`/`true`/`yes`/`on`).
 
 `base` only needs setting explicitly if `mtlx-viewer.js` isn't loaded as a plain, synchronous
 `<script src>` next to `viewer.html` (for example, if you copy the script into a bundler or
@@ -242,7 +271,7 @@ Dispatched as `CustomEvent`s on the element itself:
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
 | `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, or an unrecognized `wheel`/`version` value. |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, or an unrecognized `wheel`/`version`/`forcetransparency` value. |
 
 ```js
 const el = document.querySelector('materialx-viewer');

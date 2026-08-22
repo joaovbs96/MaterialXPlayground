@@ -13,8 +13,9 @@
 // instead of accidentally reacting to a foreign message shaped like ours.
 //
 // Inbound (host -> iframe): load, setGeometry, setEnvRotation,
-// setEnvExposure, setEnvBackground, setEnvMap, setTransparent, setTheme,
-// resetCamera, snapshot, setMaterial, setCamera, getCamera.
+// setEnvExposure, setEnvBackground, setEnvMap, setTransparent,
+// setForceTransparency, setTheme, resetCamera, snapshot, setMaterial,
+// setCamera, getCamera.
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
 (function () {
     'use strict';
@@ -239,6 +240,25 @@
     }
     applyPageBackground(props.transparent);
 
+    // `forcetransparency` drives the shared engine "Force Transparency" flag
+    // (js/mtlx-engine.js) directly, not a viewer-app.jsx prop. Absent leaves
+    // the visitor's persisted localStorage default untouched (docs/EMBEDDING.md).
+    function parseForceTransparency(v) {
+        if (v == null || v === '') return undefined;
+        var s = String(v).trim().toLowerCase();
+        if (TRUE_WORDS.indexOf(s) !== -1) return true;
+        if (FALSE_WORDS.indexOf(s) !== -1) return false;
+        post('error', { message: 'Unknown `forcetransparency` value "' + v + '". Valid values: 1, true, yes, on, 0, false, no, off.' });
+        return undefined;
+    }
+    // window.setForceTransparency is guaranteed defined here: viewer.html
+    // fetches-and-runs embed/gen/mtlx-engine.js inline (unwrapped, shares
+    // globals via window) before this script loads.
+    var initialForceTransparency = parseForceTransparency(qs.get('forcetransparency'));
+    if (initialForceTransparency !== undefined && typeof window.setForceTransparency === 'function') {
+        window.setForceTransparency(initialForceTransparency);
+    }
+
     // Live env state, tracked here (not just handed to the engine once) so
     // it survives a view REBUILD (a geometry/material change disposes the
     // old handle and creates a new one — see js/viewer-app.jsx's render
@@ -448,6 +468,13 @@
         render();
     }
 
+    // Live `forceTransparency` update (LIVE_ATTRS): drives the shared
+    // engine flag directly (js/mtlx-engine.js), which refreshes every
+    // live view itself, so no render() call is needed here.
+    function handleSetForceTransparency(msg) {
+        if (typeof window.setForceTransparency === 'function') window.setForceTransparency(!!msg.on);
+    }
+
     // Live theme update (LIVE_ATTRS): re-validates before applying, same
     // as the initial query-param pass, so a bad live value still can't
     // reach the stylesheet.
@@ -525,6 +552,7 @@
         setEnvBackground: handleSetEnvBackground,
         setEnvMap: handleSetEnvMap,
         setTransparent: handleSetTransparent,
+        setForceTransparency: handleSetForceTransparency,
         setTheme: handleSetTheme,
         resetCamera: handleResetCamera,
         snapshot: handleSnapshot,

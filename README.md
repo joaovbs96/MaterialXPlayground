@@ -98,6 +98,7 @@ The app is a hash-routed single page:
 | Material Viewer | `index.html#!viewer` |
 | Material Compare | `index.html#!compare` |
 | Node Graph Editor | `index.html#!graph` |
+| What is MaterialX? | `index.html#!what-is-materialx` |
 | VS Code extension | `index.html#!vscode` |
 
 ### Debugging
@@ -189,6 +190,8 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 **Icons.** UI icons are from [Tabler Icons](https://tabler.io/icons) by Paweł Kuna, licensed [MIT](images/tabler-icons/LICENSE.txt), inlined as SVG paths in `js/shared/ui-commons.js`.
 
 **MaterialX logo.** `images/materialx-logo.svg` is the official MaterialX project logo, © the Academy Software Foundation, from [AcademySoftwareFoundation/artwork](https://github.com/AcademySoftwareFoundation/artwork). It is used here only to identify the MaterialX project; see [Trademarks](#trademarks).
+
+**Patchwork rug material.** `materials/Motley_Patchwork_Rug/` is the Motley Patchwork Rug material from the [AMD GPU Open](https://gpuopen.com/) material library, licensed [MIT](materials/Motley_Patchwork_Rug/LICENSE.txt), copyright 2022 AMD.
 
 ## License
 
