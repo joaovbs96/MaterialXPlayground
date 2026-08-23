@@ -4919,7 +4919,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
                 },
                 !IN_VSCODE && {
-                    label: 'Import…', icon: 'file-upload',
+                    label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
                     title: 'Add textures or more .mtlx documents to the session without replacing it',
                 },
