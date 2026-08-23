@@ -1394,6 +1394,9 @@ const ViewportControls = ({
     // (see MtlxSelect) — e.g. marking the docs previewer's Auto entry
     // as experimental.
     geomBadges,
+    // Optional pinned footer action for the geometry dropdown (see
+    // MtlxSelect's footerAction), e.g. an "Import model..." row.
+    geomFooterAction,
     showGeomSelect = true,
     rotating, onToggleRotating,
     showRotate = true,
@@ -1535,6 +1538,7 @@ const ViewportControls = ({
                         onChange={onGeomChange}
                         title="Preview geometry"
                         size={selectSize}
+                        footerAction={geomFooterAction}
                     />
                 ) : null;
             case 'rotate':
@@ -1946,6 +1950,10 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 // native fullscreen, and ancestor backdrop-blur mispositions position:fixed.
 const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
 
+// NUL-prefixed so no real option value can ever collide with it; keeps
+// selected-row lookups and openPopover's findIndex inert for this row.
+const SELECT_FOOTER_VALUE = '\u0000footer';
+
 // The height a popover needs in order NOT to scroll. max-height resolves
 // against the box-sizing box while scrollHeight is always content+padding,
 // so under Tailwind's border-box preflight a max-height set straight from
@@ -2089,6 +2097,9 @@ const MtlxSelect = ({
     size = 'sm', variant = 'toolbar', block, font,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
+    // Optional pinned row rendered last, below a divider, e.g. an
+    // "Import model..." action. Shape: { label, icon, onSelect, title }.
+    footerAction,
 }) => {
     // `defValue`: the value that's this select's real default, badged
     // automatically; pass `null` to declare no default exists. Omitting
@@ -2118,12 +2129,20 @@ const MtlxSelect = ({
 
     const normalized = React.useMemo(() => {
         const base = normalizeSelectOptions(options, labels, { icons, titles, disabledOptions, badges, dots, defValue });
-        if (!emptyOption) return base;
         // A real, selectable "back to default" row (value ''), distinct
         // from `placeholder` which only affects the trigger's own text.
         const emptyLabel = typeof emptyOption === 'string' ? emptyOption : (placeholder || '');
-        return [{ value: '', label: emptyLabel, icon: undefined, badge: null, dot: undefined, title: undefined, disabled: false }].concat(base);
-    }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder]);
+        const withEmpty = emptyOption
+            ? [{ value: '', label: emptyLabel, icon: undefined, badge: null, dot: undefined, title: undefined, disabled: false }].concat(base)
+            : base;
+        if (!footerAction) return withEmpty;
+        // Pinned footer row appended last; SELECT_FOOTER_VALUE keeps it
+        // out of the real value space so it can never look "selected".
+        return withEmpty.concat([{
+            value: SELECT_FOOTER_VALUE, label: footerAction.label, icon: footerAction.icon,
+            badge: null, dot: null, title: footerAction.title, disabled: false, isFooter: true,
+        }]);
+    }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder, footerAction]);
 
     // Wider popover when badge pills share the rows with the labels,
     // unless the caller knows its content is narrower and overrides it.
@@ -2199,8 +2218,15 @@ const MtlxSelect = ({
     };
 
     // Row click commit: a disabled row is not clickable, so this is a
-    // no-op for it (no onChange, popover stays open).
+    // no-op for it (no onChange, popover stays open). A footer row commits
+    // itself via onSelect instead of a value, never onChange.
     const commitRow = (opt) => {
+        if (opt.isFooter) {
+            setOpen(false);
+            if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
+            footerAction.onSelect();
+            return;
+        }
         if (opt.disabled) return;
         onChange(opt.value);
         setOpen(false);
@@ -2278,17 +2304,24 @@ const MtlxSelect = ({
             else if (e.key === 'Enter') {
                 e.preventDefault();
                 const opt = normalized[hi];
-                if (opt != null && !opt.disabled) onChange(opt.value);
-                setOpen(false);
-                if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
+                if (opt != null && opt.isFooter) {
+                    setOpen(false);
+                    if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
+                    footerAction.onSelect();
+                } else {
+                    if (opt != null && !opt.disabled) onChange(opt.value);
+                    setOpen(false);
+                    if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
+                }
             } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
                 // Type-ahead: a short timestamped buffer, prefix-matched
-                // against resolved labels, skipping disabled rows.
+                // against resolved labels, skipping disabled rows and
+                // the pinned footer action (it isn't a value to jump to).
                 const now = Date.now();
                 const ta = typeAheadRef.current;
                 ta.buf = (now - ta.t < 800 ? ta.buf : '') + e.key.toLowerCase();
                 ta.t = now;
-                const match = normalized.findIndex((o) => !o.disabled && String(o.label).toLowerCase().indexOf(ta.buf) === 0);
+                const match = normalized.findIndex((o) => !o.disabled && !o.isFooter && String(o.label).toLowerCase().indexOf(ta.buf) === 0);
                 if (match !== -1) setHi(match);
             }
         };
@@ -2383,13 +2416,13 @@ const MtlxSelect = ({
                     color: o.disabled ? MXS_MUTED : (isHi ? MXS_ACCENT_TEXT : (isSelected ? MXS_TEXT_STRONG : MXS_TEXT)),
                     background: isHi ? MXS_ACCENT_SOFT : undefined,
                 };
-                return (
+                const row = (
                     <button
                         key={o.value}
                         ref={(el) => { rowRefs.current[i] = el; }}
                         type="button"
                         role="option"
-                        aria-selected={o.value === value}
+                        aria-selected={o.isFooter ? false : o.value === value}
                         title={o.title}
                         aria-disabled={o.disabled || undefined}
                         onMouseEnter={() => { if (!o.disabled) setHi(i); }}
@@ -2401,7 +2434,7 @@ const MtlxSelect = ({
                         {/* Fixed check gutter so labels align selected or not,
                             disabled rows included. */}
                         <span className="w-3.5 flex-none">
-                            {o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
+                            {!o.isFooter && o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
                         </span>
                         {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
                         {o.dot && (
@@ -2418,6 +2451,15 @@ const MtlxSelect = ({
                             >{o.badge.text}</span>
                         )}
                     </button>
+                );
+                if (!o.isFooter) return row;
+                // Divider sets the pinned footer action apart from the
+                // real options above it; row styling otherwise matches.
+                return (
+                    <React.Fragment key={'wrap:' + o.value}>
+                        <div className="my-1 border-t" style={{ borderColor: MXS_BORDER }} />
+                        {row}
+                    </React.Fragment>
                 );
             })}
         </div>

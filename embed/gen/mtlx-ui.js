@@ -1575,6 +1575,9 @@ const ViewportControls = ({
   // (see MtlxSelect) — e.g. marking the docs previewer's Auto entry
   // as experimental.
   geomBadges,
+  // Optional pinned footer action for the geometry dropdown (see
+  // MtlxSelect's footerAction), e.g. an "Import model..." row.
+  geomFooterAction,
   showGeomSelect = true,
   rotating,
   onToggleRotating,
@@ -1712,7 +1715,8 @@ const ViewportControls = ({
           defValue: null,
           onChange: onGeomChange,
           title: "Preview geometry",
-          size: selectSize
+          size: selectSize,
+          footerAction: geomFooterAction
         }) : null;
       case 'rotate':
         return showRotate ? /*#__PURE__*/React.createElement("button", {
@@ -2182,6 +2186,10 @@ const ColorSwatch = ({
 const SELECT_POP_W = 190,
   SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
 
+// NUL-prefixed so no real option value can ever collide with it; keeps
+// selected-row lookups and openPopover's findIndex inert for this row.
+const SELECT_FOOTER_VALUE = '\u0000footer';
+
 // The height a popover needs in order NOT to scroll. max-height resolves
 // against the box-sizing box while scrollHeight is always content+padding,
 // so under Tailwind's border-box preflight a max-height set straight from
@@ -2358,7 +2366,10 @@ const MtlxSelect = ({
   theme,
   commitFocus = 'trigger',
   ariaLabel,
-  align
+  align,
+  // Optional pinned row rendered last, below a divider, e.g. an
+  // "Import model..." action. Shape: { label, icon, onSelect, title }.
+  footerAction
 }) => {
   // `defValue`: the value that's this select's real default, badged
   // automatically; pass `null` to declare no default exists. Omitting
@@ -2397,11 +2408,10 @@ const MtlxSelect = ({
       dots,
       defValue
     });
-    if (!emptyOption) return base;
     // A real, selectable "back to default" row (value ''), distinct
     // from `placeholder` which only affects the trigger's own text.
     const emptyLabel = typeof emptyOption === 'string' ? emptyOption : placeholder || '';
-    return [{
+    const withEmpty = emptyOption ? [{
       value: '',
       label: emptyLabel,
       icon: undefined,
@@ -2409,8 +2419,21 @@ const MtlxSelect = ({
       dot: undefined,
       title: undefined,
       disabled: false
-    }].concat(base);
-  }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder]);
+    }].concat(base) : base;
+    if (!footerAction) return withEmpty;
+    // Pinned footer row appended last; SELECT_FOOTER_VALUE keeps it
+    // out of the real value space so it can never look "selected".
+    return withEmpty.concat([{
+      value: SELECT_FOOTER_VALUE,
+      label: footerAction.label,
+      icon: footerAction.icon,
+      badge: null,
+      dot: null,
+      title: footerAction.title,
+      disabled: false,
+      isFooter: true
+    }]);
+  }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder, footerAction]);
 
   // Wider popover when badge pills share the rows with the labels,
   // unless the caller knows its content is narrower and overrides it.
@@ -2497,8 +2520,15 @@ const MtlxSelect = ({
   };
 
   // Row click commit: a disabled row is not clickable, so this is a
-  // no-op for it (no onChange, popover stays open).
+  // no-op for it (no onChange, popover stays open). A footer row commits
+  // itself via onSelect instead of a value, never onChange.
   const commitRow = opt => {
+    if (opt.isFooter) {
+      setOpen(false);
+      if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
+      footerAction.onSelect();
+      return;
+    }
     if (opt.disabled) return;
     onChange(opt.value);
     setOpen(false);
@@ -2597,17 +2627,24 @@ const MtlxSelect = ({
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const opt = normalized[hi];
-        if (opt != null && !opt.disabled) onChange(opt.value);
-        setOpen(false);
-        if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
+        if (opt != null && opt.isFooter) {
+          setOpen(false);
+          if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
+          footerAction.onSelect();
+        } else {
+          if (opt != null && !opt.disabled) onChange(opt.value);
+          setOpen(false);
+          if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
+        }
       } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // Type-ahead: a short timestamped buffer, prefix-matched
-        // against resolved labels, skipping disabled rows.
+        // against resolved labels, skipping disabled rows and
+        // the pinned footer action (it isn't a value to jump to).
         const now = Date.now();
         const ta = typeAheadRef.current;
         ta.buf = (now - ta.t < 800 ? ta.buf : '') + e.key.toLowerCase();
         ta.t = now;
-        const match = normalized.findIndex(o => !o.disabled && String(o.label).toLowerCase().indexOf(ta.buf) === 0);
+        const match = normalized.findIndex(o => !o.disabled && !o.isFooter && String(o.label).toLowerCase().indexOf(ta.buf) === 0);
         if (match !== -1) setHi(match);
       }
     };
@@ -2696,14 +2733,14 @@ const MtlxSelect = ({
       color: o.disabled ? MXS_MUTED : isHi ? MXS_ACCENT_TEXT : isSelected ? MXS_TEXT_STRONG : MXS_TEXT,
       background: isHi ? MXS_ACCENT_SOFT : undefined
     };
-    return /*#__PURE__*/React.createElement("button", {
+    const row = /*#__PURE__*/React.createElement("button", {
       key: o.value,
       ref: el => {
         rowRefs.current[i] = el;
       },
       type: "button",
       role: "option",
-      "aria-selected": o.value === value,
+      "aria-selected": o.isFooter ? false : o.value === value,
       title: o.title,
       "aria-disabled": o.disabled || undefined,
       onMouseEnter: () => {
@@ -2714,7 +2751,7 @@ const MtlxSelect = ({
       className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' + (o.disabled ? 'cursor-default' : 'cursor-pointer')
     }, /*#__PURE__*/React.createElement("span", {
       className: "w-3.5 flex-none"
-    }, o.value === value && /*#__PURE__*/React.createElement(MtlxIcon, {
+    }, !o.isFooter && o.value === value && /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "check",
       className: "w-3.5 h-3.5"
     })), o.icon && /*#__PURE__*/React.createElement(MtlxIcon, {
@@ -2733,6 +2770,17 @@ const MtlxSelect = ({
       } : undefined,
       className: 'flex-none font-sans text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]
     }, o.badge.text));
+    if (!o.isFooter) return row;
+    // Divider sets the pinned footer action apart from the
+    // real options above it; row styling otherwise matches.
+    return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: 'wrap:' + o.value
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "my-1 border-t",
+      style: {
+        borderColor: MXS_BORDER
+      }
+    }), row);
   })) : null;
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     type: "button",
