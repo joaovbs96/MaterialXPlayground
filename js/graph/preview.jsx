@@ -177,11 +177,17 @@
         const readGraphGeomMode = () => {
             try {
                 const v = localStorage.getItem(GRAPH_GEOM_KEY);
+                // Registry is session-only, localStorage is not: 'custom'
+                // only sticks when the registry still holds a model. Also
+                // guards Send to Viewer, which calls this window-exported fn.
+                if (v === 'custom') {
+                    return (window.getCustomPreviewGeom && window.getCustomPreviewGeom()) ? 'custom' : 'shaderball-scene';
+                }
                 return GRAPH_GEOM_MODES.indexOf(v) !== -1 ? v : 'shaderball-scene';
             } catch (e) { return 'shaderball-scene'; }
         };
         const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
-        const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default' };
+        const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default', 'custom': 'Experimental' };
         // Row layout for the docked/fullscreen viewport strip: docked splits
         // send/colorspace/collapse from the geometry/screenshot/env/settings
         // group; fullscreen folds everything into one row, same order.
@@ -485,6 +491,52 @@
                 setGeomModeState(mode);
                 try { localStorage.setItem(GRAPH_GEOM_KEY, mode); } catch (e) { /* best-effort */ }
             };
+            // Ref mirror so the registry subscription below (mount-once)
+            // always reads the CURRENT mode without re-subscribing.
+            const geomModeRef = React.useRef(geomMode);
+            geomModeRef.current = geomMode;
+            // Imported custom model geometry (js/mtlx-engine.js registry):
+            // a COPY of { epoch, name }, never the live registry object,
+            // which mutates in place on every load/clear.
+            const [customGeom, setCustomGeom] = React.useState(() => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                return c ? { epoch: c.epoch, name: c.name } : null;
+            });
+            // Registry changes broadcast here regardless of which app/tool
+            // triggered them. Falls the CURRENT mode back to the default
+            // when 'custom' empties out from under it.
+            React.useEffect(() => {
+                const onCustomGeom = () => {
+                    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                    setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+                    if (!c && geomModeRef.current === 'custom') setGeomMode('shaderball-scene');
+                };
+                window.addEventListener('mtlx-custom-geom', onCustomGeom);
+                return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            const hasCustom = !!customGeom;
+            // Imported model's file-picker error, shown as its own chip:
+            // distinct from `error`, which is reserved for build failures.
+            const [modelError, setModelError] = React.useState(null);
+            const modelInputRef = React.useRef(null);
+            const onPickModelFile = async (e) => {
+                const f = e.target.files && e.target.files[0];
+                e.target.value = '';
+                if (!f) return;
+                try {
+                    await window.loadCustomPreviewGeomFromFile(f);
+                    setModelError(null);
+                    setGeomMode('custom');
+                } catch (e2) {
+                    setModelError(errMsg(e2));
+                }
+            };
+            // Also clear the import-error chip on any later geometry pick.
+            React.useEffect(() => { setModelError(null); }, [geomMode]);
+            // Gates the build effect on a model REPLACEMENT while already
+            // on 'custom' (epoch bumps); 0 for every other mode, so no
+            // other tool's import ever reruns this effect.
+            const customGeomEpochKey = geomMode === 'custom' && customGeom ? customGeom.epoch : 0;
             // The EFFECTIVE geometry a renderable was built with, resolved
             // per target in 'pernode' mode; null while there is nothing to
             // render. Used by later controls to gate on the real geometry.
@@ -608,11 +660,21 @@
                         // Mode resolution: the per-node tags computed by buildPreviewRenderable
                         // are only consulted in 'pernode' mode; the two fixed modes apply to
                         // every target uniformly.
-                        const wantGeom = geomMode === 'pernode'
+                        let wantGeom = geomMode === 'pernode'
                             ? (built.defaultGeom || 'shaderball-scene')
                             : geomMode;
+                        // The registry can empty out from under an
+                        // already-selected 'custom' before this effect
+                        // runs; fall back rather than resolving to nothing.
+                        if (wantGeom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) {
+                            wantGeom = 'shaderball-scene';
+                        }
                         setResolvedGeom(wantGeom);
-                        if (liveViewRef.current && liveGeomRef.current !== wantGeom) {
+                        // IDENTITY KEY: unlike other modes, 'custom' needs
+                        // its epoch folded in to tell a model REPLACEMENT
+                        // apart from the same model staying selected.
+                        const wantGeomKey = wantGeom === 'custom' ? 'custom:' + (customGeom ? customGeom.epoch : 0) : wantGeom;
+                        if (liveViewRef.current && liveGeomRef.current !== wantGeomKey) {
                             try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             liveViewRef.current = null;
                             liveGeomRef.current = null;
@@ -760,7 +822,7 @@
                         if (!view) return;
                         if (!mounted) { view.dispose(); return; }
                         liveViewRef.current = view;
-                        liveGeomRef.current = wantGeom;
+                        liveGeomRef.current = wantGeomKey;
                         if (viewRef) viewRef.current = view;
                         setViewEpoch((n) => n + 1);
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
@@ -791,18 +853,23 @@
                 return () => {
                     mounted = false;
                 };
-            }, [parsed, target, docRev, fileMap, geomMode]);
+            }, [parsed, target, docRev, fileMap, geomMode, customGeomEpochKey]);
 
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
             // built-in slot) so it's the single geometry control for the
-            // graph preview.
+            // graph preview ('custom' shows once the registry holds a model).
             const graphGeomSlot = (
                 <MtlxSelect
                     key="graphGeom"
                     value={geomMode}
-                    options={GRAPH_GEOM_MODES}
+                    options={GRAPH_GEOM_MODES.concat(hasCustom ? ['custom'] : [])}
                     labels={GRAPH_GEOM_LABELS}
                     badges={GRAPH_GEOM_BADGES}
+                    footerAction={{
+                        label: hasCustom ? 'Replace model...' : 'Import model...',
+                        icon: 'file-import',
+                        onSelect: () => { if (modelInputRef.current) modelInputRef.current.click(); },
+                    }}
                     defValue={null}
                     onChange={setGeomMode}
                     title="Preview geometry"
@@ -858,6 +925,22 @@
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
                     >
                         <canvas ref={canvasRef} className="block w-full h-full" />
+                        {/* Always rendered so the geometry dropdown's footer
+                            action (graphGeomSlot above) can open it by ref. */}
+                        <input
+                            ref={modelInputRef}
+                            type="file"
+                            accept=".obj,.glb,.gltf"
+                            className="hidden"
+                            onChange={onPickModelFile}
+                        />
+                        {modelError && (
+                            // top-8: clears the pin overlay button below
+                            // (top-1 left-1, ~28px tall), same left edge.
+                            <div className="absolute top-8 left-1 z-20 text-[11px] text-red-400 bg-gray-900/85 rounded px-2 py-1">
+                                {modelError}
+                            </div>
+                        )}
                         {updating && !loading && !notice && !error && (
                             // APPLY path in flight against the live view — old
                             // material keeps rendering underneath, so this is a
