@@ -23,7 +23,11 @@
         const TRANSPARENT_ROOM_GEOM = 'shaderball-scene';
 
         function resolveViewerGeom(requested, wantTransparent) {
-            const invalid = requested != null && VIEWER_GEOM_NAMES.indexOf(requested) === -1;
+            // 'custom' is only valid while the registry actually holds a
+            // model; every call site (mount, embed prop sync, Send to
+            // Viewer) funnels through here so that check lives in one place.
+            const isCustom = requested === 'custom' && !!(window.getCustomPreviewGeom && window.getCustomPreviewGeom());
+            const invalid = requested != null && !isCustom && VIEWER_GEOM_NAMES.indexOf(requested) === -1;
             const base = (!invalid && requested) ? requested : 'shaderball-scene';
             const fellBackForTransparency = !!wantTransparent && base === TRANSPARENT_ROOM_GEOM;
             return { geom: fellBackForTransparency ? 'shaderball' : base, invalid, fellBackForTransparency };
@@ -204,6 +208,26 @@
                     setGeom('shaderball');
                 }
             }, [transparent]);
+            // Imported custom model geometry (js/mtlx-engine.js registry):
+            // a COPY of { epoch, name }, never the live registry object,
+            // which mutates in place on every load/clear.
+            const [customGeom, setCustomGeom] = React.useState(() => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                return c ? { epoch: c.epoch, name: c.name } : null;
+            });
+            // Registry changes broadcast here regardless of which app
+            // triggered them. Falls the CURRENT geom (geomRef, kept fresh
+            // above) back to the default when 'custom' empties out.
+            React.useEffect(() => {
+                const onCustomGeom = () => {
+                    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                    setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+                    if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+                };
+                window.addEventListener('mtlx-custom-geom', onCustomGeom);
+                return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            const hasCustom = !!customGeom;
             const [status, setStatus] = React.useState('Loading the default material…');
             const [error, setError] = React.useState(null);
             // Reports a failure both to the local error banner (unchanged
@@ -748,10 +772,22 @@
                 }
             };
 
+            // A re-import while 'custom' is on screen should rebuild; one
+            // made while some OTHER geom is selected must not, so this
+            // stays 0 unless geom is actually 'custom'.
+            const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
+
             // (Re)render whenever the chosen material or geometry changes.
             React.useEffect(() => {
                 const loaded = loadedRef.current;
                 if (!loaded || !loaded.renderables.length) return undefined;
+                // The registry can empty out from under an already-selected
+                // 'custom' before this effect runs; bail instead of letting
+                // the engine silently fall back to a sphere.
+                if (geom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) {
+                    setGeom('shaderball-scene');
+                    return undefined;
+                }
                 let mounted = true;
                 const run = async () => {
                     if (viewRef.current) {
@@ -826,7 +862,7 @@
                         if (onViewRef.current) onViewRef.current(null);
                     }
                 };
-            }, [renderables, chosenMat, geom]);
+            }, [renderables, chosenMat, geom, customKey]);
 
             // Backs the Scene card's transparency-forcing toggle (browser
             // only): local mirror of the engine's persisted value, replacing
@@ -834,6 +870,45 @@
             const [forceTransparency, setForceTransparency] = React.useState(
                 () => !!(window.getForceTransparency && window.getForceTransparency())
             );
+
+            // Scene card's custom-model import row (browser only) plus the
+            // hidden HUD input below (VS Code, no sidebar). Mirrors the
+            // Environment card's own import error state further down.
+            const [modelError, setModelError] = React.useState(null);
+            const modelInputRef = React.useRef(null);
+            // Imports into the shared engine registry (js/mtlx-engine.js);
+            // the 'mtlx-custom-geom' event it fires is what flips hasCustom,
+            // here and in every other view subscribed to it.
+            const importModel = async (f) => {
+                setModelError(null);
+                try {
+                    await window.loadCustomPreviewGeomFromFile(f);
+                    setGeom('custom');
+                } catch (e) {
+                    setModelError(errMsg(e));
+                }
+            };
+            // Does not reset geom itself: the registry-change subscription
+            // above already falls 'custom' back to shaderball-scene once
+            // the registry actually empties.
+            const clearModel = () => {
+                setModelError(null);
+                window.clearCustomPreviewGeom();
+            };
+            // HUD path for VS Code's geomFooterAction (hidden input below,
+            // by ref): same import as importModel, but there is no sidebar
+            // error line here, so a failure reports through notify() instead.
+            const onPickModelFile = async (e) => {
+                const f = e.target.files && e.target.files[0];
+                e.target.value = '';
+                if (!f) return;
+                try {
+                    await window.loadCustomPreviewGeomFromFile(f);
+                    setGeom('custom');
+                } catch (e2) {
+                    notify(errMsg(e2));
+                }
+            };
 
             // Environment card state (browser only): the backdrop mode stays
             // the existing hook state above; rotation/exposure live here since
@@ -935,6 +1010,10 @@
             // REQUESTED control just stays hidden while that geometry is
             // active; it's the default, so reporting it would be noisy.
             const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
+            // Shared with both HUD flavors below (EmbedControls, then
+            // ViewportControls) so an import can be picked back after a
+            // geometryUrl embed load switched away from it.
+            const viewerGeomList = VIEWER_GEOM_NAMES.concat(hasCustom ? ['custom'] : []);
             // Per-control effective visibility, computed once so the mount
             // gate and each EmbedControls prop agree (a control can be
             // requested but still suppressed, e.g. rotate on the room geom).
@@ -1115,7 +1194,28 @@
                                     badge={g === 'shaderball-scene' ? 'Default' : undefined}
                                 />
                             ))}
+                            <GeometryTile
+                                label={GEOM_LABELS['custom']}
+                                icon={GEOM_ICONS['custom']}
+                                selected={geom === 'custom'}
+                                disabled={!hasCustom}
+                                title={!hasCustom ? 'Import a model file below first' : undefined}
+                                onClick={() => setGeom('custom')}
+                            />
                         </div>
+                        <FieldLabel label="Custom model" />
+                        <FilePickerField
+                            value={customGeom ? customGeom.name : ''}
+                            placeholder="No model loaded"
+                            accept=".obj,.glb,.gltf"
+                            icon="file"
+                            onFiles={(files) => {
+                                const f = files && files[0];
+                                if (f) importModel(f);
+                            }}
+                            onClear={clearModel}
+                        />
+                        {modelError && <div className="text-xs text-red-400">{modelError}</div>}
                     </SectionCard>
 
                     <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
@@ -1261,7 +1361,7 @@
                                         // shaderball-scene is excluded while transparent is on:
                                         // picking it back would just re-trigger the fallback
                                         // above, so don't offer it in the first place.
-                                        geomList={transparent ? VIEWER_GEOM_NAMES.filter((g) => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES}
+                                        geomList={transparent ? viewerGeomList.filter((g) => g !== TRANSPARENT_ROOM_GEOM) : viewerGeomList}
                                         onGeomChange={setGeom}
                                         showGeom={ctlFlags.geometry}
                                         materialList={renderables.map((r) => r.name)}
@@ -1301,10 +1401,19 @@
                                         buttonClassName={hudChipClass}
                                         geom={geom}
                                         onGeomChange={setGeom}
+                                        geomList={viewerGeomList}
                                         geomBadges={{ 'shaderball-scene': 'Default' }}
                                         // Geometry now lives in the sidebar's Scene card in the
                                         // browser; VS Code has no sidebar, so it keeps the select.
                                         showGeomSelect={IN_VSCODE}
+                                        // No sidebar to import a model from under VS Code, so
+                                        // the geometry dropdown's own footer row opens the
+                                        // hidden input above by ref instead.
+                                        geomFooterAction={{
+                                            label: hasCustom ? 'Replace model...' : 'Import model...',
+                                            icon: 'file-import',
+                                            onSelect: () => { if (modelInputRef.current) modelInputRef.current.click(); },
+                                        }}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Engine no-ops auto-rotate for the full scene, and
@@ -1463,6 +1572,16 @@
                 // full-bleed flex row (docked sidebar + stage column), via
                 // js/shell.jsx's now-empty viewer wrapClass.
                 <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`}>
+                    {/* Always mounted (unlike the sidebar's own model
+                        FilePickerField, which unmounts with it) so the HUD's
+                        geomFooterAction (VS Code) can click it by ref. */}
+                    <input
+                        ref={modelInputRef}
+                        type="file"
+                        accept=".obj,.glb,.gltf"
+                        className="hidden"
+                        onChange={onPickModelFile}
+                    />
                     {/* Full-page drop indicator, below the sticky header
                         (top-14) — except in embed mode, which has no header
                         to clear (top-0). z-40 matches the graph z-convention
