@@ -29,7 +29,9 @@ const HOME_FEATURED = [
     { card: 'builder', kicker: 'Embed anywhere' },
 ];
 const FEATURED_MS = 10000;
-// Hero whitelist: untextured single-material presets from MTLX_PRESETS (js/shared/mtlx-ui.jsx).
+// Hero whitelist: untextured single-material presets, MaterialX ones by
+// `path` and this repo's own by `src` (see MTLX_PRESETS in
+// js/shared/mtlx-ui.jsx).
 const HERO_PRESETS = [
     { label: 'Marble (solid)', path: 'StandardSurface/standard_surface_marble_solid.mtlx' },
     { label: 'Jade', path: 'StandardSurface/standard_surface_jade.mtlx' },
@@ -44,6 +46,7 @@ const HERO_PRESETS = [
     { label: 'OpenPBR honey', path: 'OpenPbr/open_pbr_honey.mtlx' },
     { label: 'OpenPBR velvet', path: 'OpenPbr/open_pbr_velvet.mtlx' },
     { label: 'OpenPBR pearl', path: 'OpenPbr/open_pbr_pearl.mtlx' },
+    { label: 'Animated noise', src: 'examples/animated_noise.mtlx' },
 ];
 const HERO_PRESET = HERO_PRESETS[Math.floor(Math.random() * HERO_PRESETS.length)]; // one pick per page load
 const HERO_CAMERA = '0,0.35,2.5,0,0,0'; // px,py,pz,tx,ty,tz, see docs/EMBEDDING.md
@@ -285,7 +288,10 @@ function HeroStage({ active, busy, onOpen }) {
             // so the shaderball fills the stage without clipping while turning.
             el.camera = HERO_CAMERA;
             el.poster = TRANSPARENT_PIXEL;
-            el.src = window.MtlxAssets.repoUrl('resources/Materials/Examples/' + HERO_PRESET.path);
+            // Absolute on purpose: the embed iframe resolves src against /embed/.
+            el.src = HERO_PRESET.src
+                ? new URL(HERO_PRESET.src, document.baseURI).href
+                : window.MtlxAssets.repoUrl('resources/Materials/Examples/' + HERO_PRESET.path);
             el.style.width = '100%';
             el.style.height = '100%';
             el.addEventListener('mtlx-renderables', (e) => {
@@ -313,7 +319,7 @@ function HeroStage({ active, busy, onOpen }) {
         if (failed && elRef.current) elRef.current.remove();
     }, [failed]);
 
-    const basename = HERO_PRESET.path.split('/').pop();
+    const basename = (HERO_PRESET.src || HERO_PRESET.path).split('/').pop();
 
     return (
         <div className="relative group h-[320px] lg:h-[400px] w-full">

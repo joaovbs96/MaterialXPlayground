@@ -1347,12 +1347,12 @@ function BuilderApp({ active } = {}) {
                 />
                 <p className="text-[11px] text-gray-500 mt-1">Applies on Enter or when the field loses focus.</p>
             </div>
-            {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
+            {window.MTLX_PRESETS && window.presetDocUrl && (
                 <div>
                     <FieldLabel label="Or pick a curated example" />
                     <MtlxSelect
                         value={presetPick}
-                        options={window.MTLX_PRESETS.map((p) => ({ value: window.MTLX_PRESETS_BASE + p.path, label: p.label }))}
+                        options={window.MTLX_PRESETS.map((p) => ({ value: window.presetDocUrl(p), label: p.label }))}
                         placeholder="Choose a curated example"
                         onChange={handlePresetPick}
                         defValue={null}

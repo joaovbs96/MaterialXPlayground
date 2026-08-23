@@ -34,9 +34,10 @@ Load and inspect MaterialX materials in 3D.
 
 - **Image-based lighting** from a built-in HDR environment, with automatic key-light extraction (a strong sun in the image becomes a sharp analytic directional light, toggleable) and a three-way backdrop choice: a white studio room (the default), the environment itself, or none (the environment's lighting stays on in all three).
 - **Drag-and-drop loading.** Drop a `.mtlx` document anywhere on the page, alone or with loose textures, a folder of textures, or a `.zip`. Textures are matched by relative path, with a UV-checker fallback for anything unresolved.
-- **Curated examples.** Load official MaterialX example materials, textures included, from a built-in presets list.
+- **Curated examples.** Load official MaterialX example materials, textures included, plus the Playground's own examples (currently an animated, time-driven noise material), from a built-in presets list.
 - **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, a cube, or a draped cloth mesh), a material picker when a document defines several, save-as-PNG, and fullscreen.
 - **Send to Graph Editor** to keep working on the current material in the Node Graph Editor.
+- **Animated materials.** `time` and `frame` nodes are driven the way MaterialXView drives them: seconds since the page loaded and a per-frame counter, shared by every view so the Compare panes stay in lockstep. Both reach the shader as 32-bit floats, so after a couple of days with the same page open the animation timing gets coarser; reloading the page resets it.
 
 ### 🔀 Material Compare
 

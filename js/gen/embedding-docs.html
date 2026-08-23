@@ -851,5 +851,9 @@ denies the Fullscreen API and the engine falls back to a non-native CSS &quot;ma
 <code>&lt;materialx-viewer&gt;</code> element sets this (and <code>allow=&quot;fullscreen&quot;</code>) on its iframe
 automatically; a hand-written <code>&lt;iframe&gt;</code> must add both attributes itself, as in every
 example above.</li>
+<li><strong>Animated materials.</strong> <code>time</code> and <code>frame</code> nodes run on a clock that matches MaterialXView:
+seconds since the page loaded and a per-frame counter, sent to the shader as 32-bit
+floats. After a couple of days with the same page open (kiosk-style embeds), the animation
+timing gets coarser; reloading the page resets it.</li>
 </ul>
 </div>

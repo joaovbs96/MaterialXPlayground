@@ -337,6 +337,18 @@ const compileFilteringDriverNoise = (renderer, scene, camera) => {
     }
 };
 
+// Shared u_time/u_frame clock, MaterialXView semantics: wall seconds since
+// first frame, per-frame counter (uint32 wrap). float32 in the shader, so
+// timing gets coarser after ~2 days with the same page open (reload resets).
+const MTLX_CLOCK = { time: 0, frame: 0, lastTs: undefined, epoch: undefined };
+const clockTick = (ts) => {
+    if (typeof ts !== 'number' || ts === MTLX_CLOCK.lastTs) return;
+    if (MTLX_CLOCK.epoch === undefined) MTLX_CLOCK.epoch = ts;
+    MTLX_CLOCK.lastTs = ts;
+    MTLX_CLOCK.time = (ts - MTLX_CLOCK.epoch) / 1000;
+    MTLX_CLOCK.frame = (MTLX_CLOCK.frame + 1) >>> 0;
+};
+
 // Scrapes `uniform <type> u_<name>;` declarations from generated source
 // so bindings use the shader's real names. Returns [{ type, name }, ...].
 const parseUniforms = (src) => {
@@ -3997,6 +4009,8 @@ const createMtlxRenderView = async ({
                     uniforms.u_worldInverseTransposeMatrix.value
                         .copy(mesh.matrixWorld).invert().transpose();
                     camera.getWorldPosition(uniforms.u_viewPosition.value);
+                    if (uniforms.u_time) uniforms.u_time.value = MTLX_CLOCK.time;
+                    if (uniforms.u_frame) uniforms.u_frame.value = MTLX_CLOCK.frame;
                 };
 
                 // ------------------------------------------------------
@@ -4059,6 +4073,10 @@ const createMtlxRenderView = async ({
                     const declared = parseUniforms(fs).concat(parseUniforms(vs));
                     const declaredNames = new Set(declared.map((u) => u.name));
                     const has = (n) => declaredNames.has(n);
+                    // MaterialX gives u_time/u_frame no default value, so the
+                    // introspected-defaults pass above never binds them.
+                    if (has('u_time')) newUniforms.u_time = { value: MTLX_CLOCK.time };
+                    if (has('u_frame')) newUniforms.u_frame = { value: MTLX_CLOCK.frame };
                     // Finds a declared sampler by pattern, ALWAYS anchored
                     // to /env/i first — without it, a material sampler
                     // named e.g. "specular" could false-match (a real past bug).
@@ -4723,9 +4741,13 @@ const createMtlxRenderView = async ({
                     }
                 };
 
-                const animate = () => {
+                const animate = (ts) => {
                     if (stopped || !aliveFn()) return;
                     reqId = requestAnimationFrame(animate);
+                    // Idempotent per rAF timestamp: every view ticking this
+                    // frame reads the same MTLX_CLOCK value. Runs before
+                    // controls.update() (syncs a peer) and the paused return.
+                    clockTick(ts);
                     if (controls) {
                         // Before update(): OrbitControls clamps phi in there,
                         // so a zoom-out this frame is corrected in the same one.
@@ -5061,8 +5083,12 @@ const createMtlxRenderView = async ({
                 return __snapshotCtx.getImageData(0, 0, w, h);
             },
             // Cheap same-frame render (no readback) — used by camera sync
-            // to remove one-frame lag between two mirrored views.
-            renderNow: () => { setUniforms(); renderFrame(); },
+            // to remove one-frame lag between two mirrored views. Optional
+            // ts: pass the driving rAF timestamp so several views read one tick.
+            renderNow: (ts) => { clockTick(ts); setUniforms(); renderFrame(); },
+            // Reads the live `uniforms` closure binding (same one setUniforms
+            // uses), so a material swap is reflected without a stale copy.
+            isAnimated: () => !!(uniforms && (uniforms.u_time || uniforms.u_frame)),
             // Wrapped (not disposePartial directly) so dispose() also
             // deregisters the handle from LIVE_VIEWS — otherwise
             // setEnvOverride's broadcast could touch a torn-down view.

@@ -346,7 +346,7 @@
             // graph-app.jsx's loadPreset: the viewer has no unsaved edits.
             const loadPreset = async (preset) => {
                 setPresetsBusy(true);
-                setPresetsBusyPath(preset.path);
+                setPresetsBusyPath(presetKey(preset));
                 setError(null);
                 try {
                     const { map, rootKey } = await fetchPresetFiles(preset);
@@ -1066,18 +1066,18 @@
                             </div>
                         )}
 
-                        {window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && (
+                        {window.MTLX_PRESETS && window.presetKey && (
                             <div>
                                 <FieldLabel label="Or pick a curated example" />
                                 <MtlxSelect
                                     value={presetPick}
-                                    options={window.MTLX_PRESETS.map((p) => ({ value: p.path, label: p.label }))}
+                                    options={window.MTLX_PRESETS.map((p) => ({ value: presetKey(p), label: p.label }))}
                                     placeholder="Choose a curated example"
                                     disabled={presetsBusy || busy}
                                     onChange={(path) => {
                                         setPresetPick(path);
                                         if (!path) return;
-                                        const preset = window.MTLX_PRESETS.find((p) => p.path === path);
+                                        const preset = window.MTLX_PRESETS.find((p) => presetKey(p) === path);
                                         if (preset) loadPreset(preset);
                                     }}
                                     defValue={null}

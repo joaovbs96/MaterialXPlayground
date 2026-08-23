@@ -2051,7 +2051,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 confirmReplace(true, () => {
                     (async () => {
                         setPresetsBusy(true);
-                        setPresetsBusyPath(preset.path);
+                        setPresetsBusyPath(presetKey(preset));
                         setError(null);
                         try {
                             const { map, rootKey } = await fetchPresetFiles(preset);

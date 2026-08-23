@@ -390,7 +390,7 @@ function MaterialViewerApp({
   // graph-app.jsx's loadPreset: the viewer has no unsaved edits.
   const loadPreset = async preset => {
     setPresetsBusy(true);
-    setPresetsBusyPath(preset.path);
+    setPresetsBusyPath(presetKey(preset));
     setError(null);
     try {
       const {
@@ -1111,12 +1111,12 @@ function MaterialViewerApp({
     block: true
   }), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-amber-300/90 mt-1.5"
-  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), window.MTLX_PRESETS && window.MTLX_PRESETS_BASE && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), window.MTLX_PRESETS && window.presetKey && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
     label: "Or pick a curated example"
   }), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: presetPick,
     options: window.MTLX_PRESETS.map(p => ({
-      value: p.path,
+      value: presetKey(p),
       label: p.label
     })),
     placeholder: "Choose a curated example",
@@ -1124,7 +1124,7 @@ function MaterialViewerApp({
     onChange: path => {
       setPresetPick(path);
       if (!path) return;
-      const preset = window.MTLX_PRESETS.find(p => p.path === path);
+      const preset = window.MTLX_PRESETS.find(p => presetKey(p) === path);
       if (preset) loadPreset(preset);
     },
     defValue: null,
