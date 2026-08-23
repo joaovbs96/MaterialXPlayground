@@ -139,6 +139,8 @@ function HomeCard({ card }) {
 // whole band stays in one file.
 const FEATURED_STYLE = '@keyframes mtlxFeatureIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}'
     + '.mtlx-feature-in{animation:mtlxFeatureIn 320ms ease-out}'
+    + '@keyframes mtlxFeatureProgress{from{transform:scaleX(0)}to{transform:scaleX(1)}}'
+    + '.mtlx-feature-progress{transform-origin:left;animation:mtlxFeatureProgress ' + FEATURED_MS + 'ms linear forwards}'
     + '@media (prefers-reduced-motion: reduce){.mtlx-feature-in{animation:none}}';
 
 // Featured band, cycling through HOME_FEATURED every FEATURED_MS. The dots
@@ -179,7 +181,7 @@ function FeaturedGallery({ items, active, fadeRef }) {
             <style>{FEATURED_STYLE}</style>
             <a
                 href={card.href}
-                className="block rounded-2xl border border-blue-500/35 bg-gray-800 ring-4 ring-blue-500/[0.06] p-6 sm:p-8 hover:border-blue-500/60 transition-colors"
+                className="relative block overflow-hidden rounded-2xl border border-blue-500/35 bg-gray-800 ring-4 ring-blue-500/[0.06] p-6 sm:p-8 hover:border-blue-500/60 transition-colors"
             >
                 <div key={card.id} className="mtlx-feature-in flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-8">
                     <div className="flex-1 min-w-0 space-y-2.5">
@@ -210,6 +212,18 @@ function FeaturedGallery({ items, active, fadeRef }) {
                         </div>
                     )}
                 </div>
+                {/* Countdown to the next auto-advance, pinned inside the card's
+                    bottom edge. Keyed on the run state too: the advance timer
+                    re-arms from zero after a hold, so the bar restarts with it. */}
+                {count > 1 && !reduce && (
+                    <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gray-700/40">
+                        <div
+                            key={at + ((active && !held) ? '-run' : '-hold')}
+                            className="h-full bg-blue-500 mtlx-feature-progress"
+                            style={{ animationPlayState: (active && !held) ? 'running' : 'paused' }}
+                        />
+                    </div>
+                )}
             </a>
             {count > 1 && (
                 <div className="mt-2 flex justify-center gap-1">

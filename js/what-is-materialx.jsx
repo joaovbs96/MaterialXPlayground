@@ -27,7 +27,7 @@ const WHAT_NOT = [
     { title: 'Not a renderer', desc: 'MaterialX does not render anything itself. It describes a look; a renderer or engine turns that description into pixels.' },
     { title: 'Not a DCC or authoring app', desc: 'There is no MaterialX modeling or animation tool. Artists build looks inside a DCC, or a tool like this Playground, then save the result as .mtlx.' },
     { title: 'Not a single fixed shading model', desc: (<><code className={CODE_CLASS}>standard_surface</code>, OpenPBR Surface, glTF PBR and the others are all node graphs built from the standard library, not hardcoded modes.</>) },
-    { title: 'No promise of identical pixels', desc: 'A look transfers without being rebuilt and should render closely everywhere; two engines still are not guaranteed to produce identical pixels.' },
+    { title: 'No promise of identical pixels', desc: 'A look transfers without being rebuilt and should render closely everywhere; two engines are not guaranteed to produce identical pixels.' },
 ];
 
 // Glossary cards: an artist-readable line first, a precise one second.
@@ -87,10 +87,7 @@ const HISTORY = [
     {
         year: '2012',
         title: 'Originated at Lucasfilm',
-        // Plain underlined link, not the inline-flex icon idiom: an atomic
-        // inline-flex anchor this long cannot wrap and shatters the narrow
-        // timeline column into ragged fragments.
-        desc: (<>MaterialX launched at <a href="https://materialx.org/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40">Industrial Light and Magic (ILM)</a> in 2012.</>),
+        desc: (<>MaterialX launched at <a href="https://materialx.org/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">Industrial Light and Magic (ILM)<MtlxIcon name="external-link" className="w-3 h-3" /></a> in 2012.</>),
     },
     {
         year: '2015',
