@@ -260,6 +260,12 @@
       "bytes": 1081
     },
     {
+      "path": "three/OBJLoader.js",
+      "source": "three@0.128.0",
+      "sha256": "e3c4cf3a6b061b6956e8e8d5cc360cf95da456dcced32961f859c8be6849a579",
+      "bytes": 21560
+    },
+    {
       "path": "three/OrbitControls.js",
       "source": "three@0.128.0",
       "sha256": "02bb4ade710f3e607329e37a21f098bc3ac70eb6e33daf8a65e79f4db785e7b2",

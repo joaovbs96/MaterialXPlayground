@@ -1322,6 +1322,240 @@ const normalizeGeometry = (geometry) => {
     return geometry;
 };
 
+// ---- Custom preview geometry (experimental) ----
+// Session-wide registry shared by the docs previewer and graph preview, in-memory only.
+// The graph editor's DocsDialog iframe has its own separate registry; callers guard for this.
+const CUSTOM_GEOM = { geometry: null, name: '', epoch: 0 };
+// Latest loadCustomPreviewGeomFromFile/Url call wins; bumped by both and by clearCustomPreviewGeom.
+let customGeomLoadSeq = 0;
+const getCustomPreviewGeom = () => (CUSTOM_GEOM.geometry ? CUSTOM_GEOM : null);
+
+// Merges every mesh under `root` into one normalized BufferGeometry.
+// Extraction must use the accessor API only, never attribute.array.slice
+// or toNonIndexed: r128's toNonIndexed corrupts InterleavedBufferAttributes from GLTFLoader.
+const buildCustomGeometryFromRoot = (root, fileName) => {
+    root.updateMatrixWorld(true);
+    const meshes = [];
+    root.traverse((o) => {
+        if (o.isMesh && o.geometry && o.geometry.getAttribute('position')) meshes.push(o);
+    });
+    if (!meshes.length) {
+        throw new Error('No mesh geometry found in "' + fileName + '".');
+    }
+    const single = meshes.length === 1;
+    const parts = meshes.map((mesh) => {
+        const src = mesh.geometry;
+        const posAttr = src.getAttribute('position');
+        const normAttr = src.getAttribute('normal');
+        const uvAttr = src.getAttribute('uv');
+        const hasNormal = !!normAttr;
+        const hasUv = !!uvAttr;
+        const index = src.getIndex();
+        // keepIndex only when single, indexed, and has uv: prepGeometry zero-fills
+        // a missing uv before its tangent precheck, so an indexed mesh with an
+        // all-zero uv would reach computeTangents and divide by zero, NaN tangents.
+        const keepIndex = single && !!index && hasUv;
+
+        const g = new THREE.BufferGeometry();
+        if (keepIndex) {
+            const vcount = posAttr.count;
+            const position = new Float32Array(vcount * 3);
+            const normal = hasNormal ? new Float32Array(vcount * 3) : null;
+            const uv = new Float32Array(vcount * 2);
+            for (let i = 0; i < vcount; i++) {
+                position[i * 3] = posAttr.getX(i); position[i * 3 + 1] = posAttr.getY(i); position[i * 3 + 2] = posAttr.getZ(i);
+                if (normal) { normal[i * 3] = normAttr.getX(i); normal[i * 3 + 1] = normAttr.getY(i); normal[i * 3 + 2] = normAttr.getZ(i); }
+                uv[i * 2] = uvAttr.getX(i); uv[i * 2 + 1] = uvAttr.getY(i);
+            }
+            g.setAttribute('position', new THREE.BufferAttribute(position, 3));
+            if (normal) g.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+            g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+            g.setIndex(index.clone());
+        } else {
+            const vcount = index ? index.count : posAttr.count;
+            const position = new Float32Array(vcount * 3);
+            const normal = hasNormal ? new Float32Array(vcount * 3) : null;
+            const uv = new Float32Array(vcount * 2); // zero-filled when the source has no uv
+            for (let k = 0; k < vcount; k++) {
+                const i = index ? index.getX(k) : k;
+                position[k * 3] = posAttr.getX(i); position[k * 3 + 1] = posAttr.getY(i); position[k * 3 + 2] = posAttr.getZ(i);
+                if (normal) { normal[k * 3] = normAttr.getX(i); normal[k * 3 + 1] = normAttr.getY(i); normal[k * 3 + 2] = normAttr.getZ(i); }
+                if (hasUv) { uv[k * 2] = uvAttr.getX(i); uv[k * 2 + 1] = uvAttr.getY(i); }
+            }
+            g.setAttribute('position', new THREE.BufferAttribute(position, 3));
+            if (normal) g.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+            g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        }
+
+        // r128 BufferGeometry.applyMatrix4 derives the normal matrix from
+        // this transform internally, so non-uniform scale on `normal` is
+        // handled correctly without a manual inverse-transpose here.
+        g.applyMatrix4(mesh.matrixWorld);
+
+        if (mesh.matrixWorld.determinant() < 0) {
+            // Winding flip when matrixWorld.determinant() < 0: mirrored transforms
+            // invert triangle winding, and computeVertexNormals is winding-derived,
+            // so reverse each triangle here (rendering itself stays DoubleSide).
+            if (keepIndex) {
+                const idx = g.getIndex().array;
+                for (let t = 0; t < idx.length; t += 3) {
+                    const tmp = idx[t + 1]; idx[t + 1] = idx[t + 2]; idx[t + 2] = tmp;
+                }
+                g.getIndex().needsUpdate = true;
+            } else {
+                const swapTriples = (attr) => {
+                    const arr = attr.array;
+                    const n = attr.itemSize;
+                    for (let t = 0; t + 2 < attr.count; t += 3) {
+                        for (let c = 0; c < n; c++) {
+                            const a = (t + 1) * n + c, b = (t + 2) * n + c;
+                            const tmp = arr[a]; arr[a] = arr[b]; arr[b] = tmp;
+                        }
+                    }
+                    attr.needsUpdate = true;
+                };
+                swapTriples(g.getAttribute('position'));
+                if (g.getAttribute('normal')) swapTriples(g.getAttribute('normal'));
+                swapTriples(g.getAttribute('uv'));
+            }
+        }
+
+        if (!hasNormal) g.computeVertexNormals();
+
+        return g;
+    });
+
+    let merged;
+    if (single) {
+        merged = parts[0];
+    } else {
+        // Concatenate the per-mesh non-indexed position/normal/uv arrays
+        // into one non-indexed BufferGeometry (multi-mesh never keeps an
+        // index: keepIndex above requires a lone mesh).
+        let totalVerts = 0;
+        parts.forEach((g) => { totalVerts += g.getAttribute('position').count; });
+        const position = new Float32Array(totalVerts * 3);
+        const normal = new Float32Array(totalVerts * 3);
+        const uv = new Float32Array(totalVerts * 2);
+        let vOff = 0;
+        parts.forEach((g) => {
+            const p = g.getAttribute('position');
+            position.set(p.array, vOff * 3);
+            normal.set(g.getAttribute('normal').array, vOff * 3);
+            uv.set(g.getAttribute('uv').array, vOff * 2);
+            vOff += p.count;
+        });
+        merged = new THREE.BufferGeometry();
+        merged.setAttribute('position', new THREE.BufferAttribute(position, 3));
+        merged.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+        merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    }
+
+    return normalizeGeometry(merged);
+};
+
+// Parses model bytes (string for obj, ArrayBuffer for glb/gltf) into a root
+// Object3D via the extension-matched loader. Shared by the file and URL
+// entry points; `label` is only used for error messages.
+const parseModelRoot = async (ext, data, label) => {
+    if (ext === 'obj') {
+        if (typeof THREE.OBJLoader === 'undefined') {
+            throw new Error('OBJLoader unavailable (script blocked/offline). Cannot load .obj models.');
+        }
+        try {
+            return new THREE.OBJLoader().parse(data);
+        } catch (e) {
+            throw new Error('Could not parse "' + label + '": ' + e.message);
+        }
+    }
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        throw new Error('GLTFLoader unavailable (script blocked/offline). Cannot load .glb/.gltf models.');
+    }
+    try {
+        const gltf = await new Promise((resolve, reject) => {
+            try { new THREE.GLTFLoader().parse(data, '', resolve, reject); } catch (e) { reject(e); }
+        });
+        return gltf.scene || (gltf.scenes && gltf.scenes[0]);
+    } catch (e) {
+        const msg = (e && e.message) || String(e);
+        if (/DRACOLoader/i.test(msg)) {
+            throw new Error('"' + label + '" uses Draco mesh compression, which is not supported here: re-export without Draco.');
+        }
+        if (/KTX2|basisu/i.test(msg)) {
+            throw new Error('"' + label + '" uses KTX2/Basis texture compression, which is not supported here: re-export without KTX2/Basis textures.');
+        }
+        if (ext === 'gltf') {
+            throw new Error('Could not load "' + label + '": ' + msg + '. .gltf files that reference external .bin or texture files cannot be imported this way; export a single-file .glb instead.');
+        }
+        throw new Error('Could not load "' + label + '": ' + msg);
+    }
+};
+
+// Builds `root` into a geometry and, if this call is still the latest
+// (seqId === customGeomLoadSeq), swaps it into CUSTOM_GEOM and dispatches
+// mtlx-custom-geom. A stale winner's geometry is disposed instead.
+const commitCustomGeom = (root, label, seqId) => {
+    const built = buildCustomGeometryFromRoot(root, label);
+    if (seqId !== customGeomLoadSeq) {
+        try { built.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ }
+        return null;
+    }
+    const prev = CUSTOM_GEOM.geometry;
+    CUSTOM_GEOM.geometry = built;
+    CUSTOM_GEOM.name = String(label || 'custom');
+    CUSTOM_GEOM.epoch += 1;
+    if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
+    // Keep-alive hidden preview tools subscribe to this event to mirror the
+    // registry into their own local state, since their views never unmount
+    // and so never get a natural remount hook to re-read CUSTOM_GEOM from.
+    window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
+    return CUSTOM_GEOM;
+};
+
+// Loads a user-dropped model file into the custom-geometry registry.
+// The latest call wins across both file and URL loads (customGeomLoadSeq).
+const loadCustomPreviewGeomFromFile = async (file) => {
+    const id = ++customGeomLoadSeq;
+    const name = ((file && file.name) || '').toLowerCase();
+    const ext = name.slice(name.lastIndexOf('.') + 1);
+    if (ext !== 'obj' && ext !== 'glb' && ext !== 'gltf') {
+        throw new Error('Unsupported model file "' + (file && file.name) + '": expected .obj, .glb, or .gltf.');
+    }
+    const data = ext === 'obj' ? await file.text() : await file.arrayBuffer();
+    const root = await parseModelRoot(ext, data, file.name);
+    return commitCustomGeom(root, file.name, id);
+};
+
+// Fetches and loads a model from a URL, same parse/commit pipeline as the
+// file picker. Extension is sniffed after stripping query/fragment,
+// mirroring the view handle's setEnvMap URL handling.
+const loadCustomPreviewGeomFromUrl = async (url) => {
+    const id = ++customGeomLoadSeq;
+    const clean = String(url || '').split('?')[0].split('#')[0];
+    const ext = clean.slice(clean.lastIndexOf('.') + 1).toLowerCase();
+    if (ext !== 'obj' && ext !== 'glb' && ext !== 'gltf') {
+        throw new Error('Unsupported model URL "' + url + '": expected .obj, .glb, or .gltf.');
+    }
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('Failed to fetch model "' + url + '" (HTTP ' + r.status + ').');
+    const data = ext === 'obj' ? await r.text() : await r.arrayBuffer();
+    const base = clean.slice(clean.lastIndexOf('/') + 1) || 'custom';
+    const root = await parseModelRoot(ext, data, base);
+    return commitCustomGeom(root, base, id);
+};
+
+// Clears the custom-geometry registry. Bumps customGeomLoadSeq FIRST so an
+// in-flight load that resolves after this is discarded, not installed.
+const clearCustomPreviewGeom = () => {
+    ++customGeomLoadSeq;
+    const prev = CUSTOM_GEOM.geometry;
+    CUSTOM_GEOM.geometry = null;
+    CUSTOM_GEOM.name = '';
+    CUSTOM_GEOM.epoch += 1;
+    window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
+    if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
+};
+
 // Shaderball: two GLB exports of the ASWF/USD-WG Standard Shader Ball
 // under models/ (see models/LICENSE_shaderball.txt). glbSceneCache holds the raw
 // GLTFLoader result per URL; consumers clone() rather than mutate/dispose it.
@@ -1537,6 +1771,11 @@ const buildPreviewGeometry = async (which) => {
         // the camera; positions and UVs get refit to the canvas aspect
         // by fitQuadToAspect (screen-proportional Shadertoy convention).
         return new THREE.PlaneGeometry(2, 2);
+    }
+    if (which === 'custom' && CUSTOM_GEOM.geometry) {
+        // Per-view clone: prepGeometry mutates and disposePartial() disposes the
+        // view's geometry at teardown; the registry copy must survive both.
+        return CUSTOM_GEOM.geometry.clone();
     }
     return new THREE.SphereGeometry(1, 64, 64);
 };
@@ -5341,6 +5580,8 @@ Object.assign(window, {
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
     getFilenameDefaultTexture, rebindFilenameDefault, configureLoadedTexture,
     prepGeometry, normalizeGeometry, buildPreviewGeometry,
+    loadCustomPreviewGeomFromFile, loadCustomPreviewGeomFromUrl,
+    getCustomPreviewGeom, clearCustomPreviewGeom,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,

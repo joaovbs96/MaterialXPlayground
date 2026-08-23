@@ -1260,7 +1260,8 @@ const GEOM_LABELS = {
   // 'default' = the experimental per-node-type auto pick (see
   // defaultGeomFor). Only used by callers whose geomList includes
   // 'default' (the docs previewer) — the viewer's never does.
-  'default': 'Auto (by node type)'
+  'default': 'Auto (by node type)',
+  'custom': 'Custom Model'
 };
 
 // Icons for the preview-geometry options (GeometryTile rows).
@@ -1270,7 +1271,8 @@ const GEOM_ICONS = {
   'shaderball-mtlx': 'inner-shadow-bottom-right',
   sphere: 'circle',
   cube: 'cube',
-  cloth: 'wave'
+  cloth: 'wave',
+  custom: 'file'
 };
 
 // Per-node-type default preview geometry (docs previewer + graph

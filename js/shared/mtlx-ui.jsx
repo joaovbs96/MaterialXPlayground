@@ -1134,6 +1134,7 @@ const GEOM_LABELS = {
     // defaultGeomFor). Only used by callers whose geomList includes
     // 'default' (the docs previewer) — the viewer's never does.
     'default': 'Auto (by node type)',
+    'custom': 'Custom Model',
 };
 
 // Icons for the preview-geometry options (GeometryTile rows).
@@ -1144,6 +1145,7 @@ const GEOM_ICONS = {
     sphere: 'circle',
     cube: 'cube',
     cloth: 'wave',
+    custom: 'file',
 };
 
 // Per-node-type default preview geometry (docs previewer + graph

@@ -58,6 +58,7 @@ const COPIES = [
   { pkg: "three", src: "build/three.min.js", dest: "three/three.min.js" },
   { pkg: "three", src: "examples/js/loaders/RGBELoader.js", dest: "three/RGBELoader.js" },
   { pkg: "three", src: "examples/js/loaders/GLTFLoader.js", dest: "three/GLTFLoader.js" },
+  { pkg: "three", src: "examples/js/loaders/OBJLoader.js", dest: "three/OBJLoader.js" },
   { pkg: "three", src: "examples/js/controls/OrbitControls.js", dest: "three/OrbitControls.js" },
   // "three-147" is an npm alias (three-147: npm:three@0.147.0) — only this
   // version's examples/js/libs/fflate.min.js is vendored; the rest of the
