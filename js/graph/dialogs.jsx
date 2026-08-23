@@ -16,6 +16,7 @@
             { keys: 'Shift/Ctrl/Cmd + Click', desc: 'Toggle a node into/out of the current multi-selection', group: 'mouse' },
             { keys: 'Click an edge', desc: 'Select it (Delete then disconnects it)', group: 'mouse' },
             { keys: 'Click empty canvas', desc: 'Clear the selection', group: 'mouse' },
+            { keys: 'Right-click', desc: 'Context menu for the node, selection, edge or empty canvas under the cursor', group: 'mouse' },
             { keys: 'Drag (empty canvas)', desc: 'Box-select every node inside the marquee', group: 'mouse' },
             { keys: 'Middle-drag', desc: 'Pan the canvas', group: 'mouse' },
             { keys: 'Drag a node', desc: 'Move it', group: 'mouse' },
@@ -150,7 +151,7 @@
                             className="text-gray-400 hover:text-gray-200 leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
                     )}
                 >
-                    <div className="relative flex-1 min-h-0 overflow-y-auto">
+                    <div className="relative flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                         {loadError ? (
                             <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 px-6 text-center">
                                 {'Failed to load documentation — close and reopen this dialog to retry.'}

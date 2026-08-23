@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '195cd7505c1f44a4';</script>
+    <script>window.__MTLX_BUILD = '9edecfa713cf391e';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -251,7 +251,11 @@
             .katex-display .katex { font-size: 1em; }
         }
 
-        /* Custom scrollbar to match the dark theme */
+        /* Custom scrollbar to match the dark theme. scrollbar-gutter keeps
+           the track's width reserved whether or not the bar is showing: a
+           container whose content height depends on its own width would
+           otherwise flip the scrollbar on and off forever. */
+        .custom-scrollbar { scrollbar-gutter: stable; }
         .custom-scrollbar::-webkit-scrollbar {
             width: 8px;
             height: 8px;

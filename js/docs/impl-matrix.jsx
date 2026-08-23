@@ -48,12 +48,12 @@
             }
 
             const targets = allTargets || [];
-            const badgeBase = 'px-2 py-0.5 rounded border font-mono text-[11px]';
+            const badgeBase = 'px-2 py-0.5 rounded-md border font-mono text-[11px]';
 
             return (
-                <div className="mt-3 mb-2 text-xs">
+                <div className="mt-3 mb-6 text-xs">
                     <div className="flex items-start gap-2 flex-wrap">
-                        <span className="text-gray-500 uppercase tracking-wider font-semibold pt-0.5">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 pt-0.5">
                             Implementations:
                         </span>
                         <div className="flex flex-col gap-1.5">

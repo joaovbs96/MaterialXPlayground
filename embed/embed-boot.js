@@ -13,8 +13,9 @@
 // instead of accidentally reacting to a foreign message shaped like ours.
 //
 // Inbound (host -> iframe): load, setGeometry, setEnvRotation,
-// setEnvExposure, setEnvBackground, setEnvMap, setTransparent, setTheme,
-// resetCamera, snapshot, setMaterial, setCamera, getCamera.
+// setEnvExposure, setEnvBackground, setBackdrop, setEnvMap, setTransparent,
+// setForceTransparency, setTheme, resetCamera, snapshot, setMaterial,
+// setCamera, getCamera.
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
 (function () {
     'use strict';
@@ -191,6 +192,36 @@
         return v;
     }
 
+    // `backdrop` -> props.backdrop, replacing the old boolean `background`
+    // toggle. Undefined when absent (the legacy alias below decides then);
+    // otherwise the parsed mode, or `'studio'` (reported) if unrecognized.
+    var BACKDROP_MODES = ['studio', 'studio-dark', 'environment', 'none'];
+    function parseBackdrop(v) {
+        if (v == null || v === '') return undefined;
+        var lower = String(v).trim().toLowerCase();
+        if (BACKDROP_MODES.indexOf(lower) !== -1) return lower;
+        post('error', { message: 'Unknown `backdrop` value "' + v + '". Valid values: ' + BACKDROP_MODES.join(', ') + '.' });
+        return 'studio';
+    }
+
+    // Legacy alias: `backdrop` wins whenever present (valid or not, see
+    // parseBackdrop above); only when absent does `background` still
+    // decide anything, and with neither present the default is `studio`.
+    function resolveBackdrop() {
+        var explicit = parseBackdrop(qs.get('backdrop'));
+        if (explicit !== undefined) return explicit;
+        var legacy = qs.get('background');
+        if (legacy == null || legacy === '') return 'studio';
+        return parseBool(legacy, false) ? 'environment' : 'none';
+    }
+    // `transparent` makes the whole frame see-through, so no backdrop can
+    // show behind the geometry. js/viewer-app.jsx applies the same rule, and
+    // resolving it here keeps onView()'s reapply from putting the room back.
+    // Resolved unconditionally so an unrecognized value is still reported.
+    var transparentOn = parseBool(qs.get('transparent'), false);
+    var requestedBackdrop = resolveBackdrop();
+    var backdropMode = transparentOn ? 'none' : requestedBackdrop;
+
     // `camera` -> an initial pose, "px,py,pz,tx,ty,tz" (six comma-separated
     // finite numbers). Not a prop: applied to the view handle directly in
     // onView(), once, since js/viewer-app.jsx has no controlled prop for it.
@@ -214,10 +245,14 @@
         material: qs.get('material') || undefined,
         envRotation: parseNumber(qs.get('env')),
         envExposure: parseNumber(qs.get('exposure')),
-        envBackground: parseBool(qs.get('background'), false),
+        backdrop: backdropMode,
+        // Kept alongside `backdrop` for the env-map-as-backdrop toggle's own
+        // imperative handle API (envState/onView below) - true only for the
+        // `environment` mode, i.e. exactly the old `background=1` meaning.
+        envBackground: backdropMode === 'environment',
         autoRotate: parseBool(qs.get('autorotate'), false),
         controls: parseControls(qs.get('controls')),
-        transparent: parseBool(qs.get('transparent'), false),
+        transparent: transparentOn,
         wheelMode: parseWheelMode(qs.get('wheel')),
         mtlxVersion: parseVersion(qs.get('version')),
     };
@@ -239,6 +274,25 @@
     }
     applyPageBackground(props.transparent);
 
+    // `forcetransparency` drives the shared engine "Force Transparency" flag
+    // (js/mtlx-engine.js) directly, not a viewer-app.jsx prop. Absent leaves
+    // the visitor's persisted localStorage default untouched (docs/EMBEDDING.md).
+    function parseForceTransparency(v) {
+        if (v == null || v === '') return undefined;
+        var s = String(v).trim().toLowerCase();
+        if (TRUE_WORDS.indexOf(s) !== -1) return true;
+        if (FALSE_WORDS.indexOf(s) !== -1) return false;
+        post('error', { message: 'Unknown `forcetransparency` value "' + v + '". Valid values: 1, true, yes, on, 0, false, no, off.' });
+        return undefined;
+    }
+    // window.setForceTransparency is guaranteed defined here: viewer.html
+    // fetches-and-runs embed/gen/mtlx-engine.js inline (unwrapped, shares
+    // globals via window) before this script loads.
+    var initialForceTransparency = parseForceTransparency(qs.get('forcetransparency'));
+    if (initialForceTransparency !== undefined && typeof window.setForceTransparency === 'function') {
+        window.setForceTransparency(initialForceTransparency);
+    }
+
     // Live env state, tracked here (not just handed to the engine once) so
     // it survives a view REBUILD (a geometry/material change disposes the
     // old handle and creates a new one — see js/viewer-app.jsx's render
@@ -251,6 +305,7 @@
         rotationDeg: props.envRotation,
         exposure: props.envExposure,
         background: props.envBackground,
+        backdrop: props.backdrop,
         envMapUrl: qs.get('envmap') || undefined,
     };
 
@@ -273,6 +328,12 @@
         }
         if (typeof envState.background === 'boolean' && handle.setEnvBackground) {
             handle.setEnvBackground(envState.background);
+        }
+        // Reapplies AFTER the legacy call above, so it's the one that
+        // actually wins when both are available (the engine handle exposes
+        // `setBackdrop` as the three-way superset of `setEnvBackground`).
+        if (typeof envState.backdrop === 'string' && handle.setBackdrop) {
+            handle.setBackdrop(envState.backdrop);
         }
         // `envmap` reapplication, same rebuild story as above; per-handle
         // state, so a geometry/material switch loses it otherwise.
@@ -426,6 +487,30 @@
         }
     }
 
+    // Live `backdrop` update (LIVE_ATTRS): re-validates against the same
+    // three names parseBackdrop accepts at load time, updates envState (so
+    // it survives a later rebuild, see onView()), then drives the handle.
+    function handleSetBackdrop(msg) {
+        var mode = String(msg.mode || '').trim().toLowerCase();
+        if (BACKDROP_MODES.indexOf(mode) === -1) {
+            post('error', withId({ message: 'Unknown `backdrop` value "' + msg.mode + '". Valid values: ' + BACKDROP_MODES.join(', ') + '.' }, msg));
+            return;
+        }
+        // Transparency outranks any backdrop, matching the load-time rule
+        // above and js/viewer-app.jsx's own guard.
+        if (props.transparent) mode = 'none';
+        props.backdrop = mode;
+        props.envBackground = mode === 'environment';
+        envState.backdrop = mode;
+        envState.background = props.envBackground;
+        if (currentHandle && currentHandle.setBackdrop) {
+            currentHandle.setBackdrop(mode);
+        } else if (currentHandle && currentHandle.setEnvBackground) {
+            currentHandle.setEnvBackground(props.envBackground);
+        }
+        render();
+    }
+
     // Live `envmap` update: a falsy `url` clears envState (restoring the
     // default environment); rejection is reported, never thrown, and
     // never replied to on success (see the header's outbound list).
@@ -444,8 +529,24 @@
     function handleSetTransparent(msg) {
         var on = !!msg.on;
         props.transparent = on;
+        // Keep the tracked backdrop in step, or a later view rebuild's
+        // onView() reapply would restore an opaque room behind a frame
+        // the host asked to see through.
+        if (on) {
+            props.backdrop = 'none';
+            props.envBackground = false;
+            envState.backdrop = 'none';
+            envState.background = false;
+        }
         applyPageBackground(on);
         render();
+    }
+
+    // Live `forceTransparency` update (LIVE_ATTRS): drives the shared
+    // engine flag directly (js/mtlx-engine.js), which refreshes every
+    // live view itself, so no render() call is needed here.
+    function handleSetForceTransparency(msg) {
+        if (typeof window.setForceTransparency === 'function') window.setForceTransparency(!!msg.on);
     }
 
     // Live theme update (LIVE_ATTRS): re-validates before applying, same
@@ -523,8 +624,10 @@
         setEnvRotation: handleSetEnvRotation,
         setEnvExposure: handleSetEnvExposure,
         setEnvBackground: handleSetEnvBackground,
+        setBackdrop: handleSetBackdrop,
         setEnvMap: handleSetEnvMap,
         setTransparent: handleSetTransparent,
+        setForceTransparency: handleSetForceTransparency,
         setTheme: handleSetTheme,
         resetCamera: handleResetCamera,
         snapshot: handleSnapshot,

@@ -298,6 +298,10 @@
             const isSpinEvent = (e) => !(e && e.nativeEvent && e.nativeEvent.inputType);
             React.useEffect(() => flush, []); // unmount: don't drop a pending edit
             const commit = () => { flush(); if (draft !== (inp.value || '')) onCommit(draft); };
+            // FilePickerField keeps its own edit draft and hands back the
+            // committed string directly, so this mirrors commit() against
+            // that fresh value instead of the (unrelated) outer `draft`.
+            const commitFilename = (v) => { flush(); setDraft(v); if (v !== (inp.value || '')) onCommit(v); };
 
             const vecN = VEC_SIZE[inp.type] || 0;
             const isColor = inp.type === 'color3' || inp.type === 'color4';
@@ -305,26 +309,31 @@
             const enumValues = splitList(inp.enumValues);
             const boxCls = 'bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none';
 
-            // Colorspace is rarely touched, so the picker starts collapsed
-            // and only auto-expands when the instance (or a signature/
-            // version swap) already authors one.
-            const [csOpen, setCsOpen] = React.useState(!!inp.colorspace);
-            React.useEffect(() => { setCsOpen(!!inp.colorspace); }, [nodeId, inp.name, inp.colorspace]);
+            // Hidden file input the FilePickerField's Choose button
+            // clicks (the graph owns its own picker flow, rather than
+            // FilePickerField's own internal-input fallback).
+            const fileInputRef = React.useRef(null);
 
-            // Shared colorspace <select> row — used by the filename branch
-            // (always) and the color3/color4 branch (behind the collapse
-            // toggle) so the two don't drift apart.
+            // Shared colorspace row: always visible for the filename
+            // branch and the color3/color4 branch alike, mirroring
+            // node-preview's MtlxSelect presentation exactly.
             const colorspaceRow = () => (
                 <div className="flex items-center gap-1.5">
-                    <span className="flex-none text-[9px] text-gray-500" title="Color space of the image — baked into the generated shader">colorspace</span>
-                    <select
-                        className={'flex-1 min-w-0 px-1 py-0.5 ' + boxCls}
+                    <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                    <MtlxSelect
                         value={inp.colorspace || ''}
-                        onChange={(e) => { if (onSetColorspace) onSetColorspace(e.target.value); }}
-                    >
-                        <option value="">{'(default' + (inp.defColorspace ? ': ' + inp.defColorspace : '') + ')'}</option>
-                        {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                    </select>
+                        options={COLORSPACES}
+                        emptyOption={'(nodedef default' + (inp.defColorspace ? ': ' + inp.defColorspace : '') + ')'}
+                        onChange={(v) => { if (onSetColorspace) onSetColorspace(v); }}
+                        defValue={null}
+                        size="sm"
+                        variant="field"
+                        icon="palette"
+                        font="mono"
+                        align="left"
+                        block
+                        className="flex-1 min-w-0"
+                    />
                 </div>
             );
 
@@ -354,18 +363,33 @@
                     for (let i = 0; i < enumNames.length; i++) {
                         if (isNum ? parseFloat(valOf(i)) === parseFloat(draft) : valOf(i) === draft) { sel = i; break; }
                     }
+                    // Nodedef-default option (when it's one of the enum's
+                    // own values) gets a "default" badge.
+                    let defIdx = -1;
+                    if (inp.defValue !== undefined && inp.defValue !== '') {
+                        for (let i = 0; i < enumNames.length; i++) {
+                            if (isNum ? parseFloat(valOf(i)) === parseFloat(inp.defValue) : valOf(i) === inp.defValue) { defIdx = i; break; }
+                        }
+                    }
+                    const enumOptions = enumNames.map((nm, i) => ({ value: String(i), label: nm }));
+                    // Current value doesn't match any enum entry (stale or
+                    // authored-only value): show it verbatim as an extra row.
+                    if (sel === -1) enumOptions.unshift({ value: '', label: '(' + (draft === '' ? 'unset' : draft) + ')' });
                     return (
-                        <select
-                            className={'w-full px-1.5 py-0.5 ' + boxCls}
+                        <MtlxSelect
                             value={sel === -1 ? '' : String(sel)}
-                            onChange={(e) => {
-                                const i = parseInt(e.target.value, 10);
+                            options={enumOptions}
+                            defValue={defIdx !== -1 ? String(defIdx) : null}
+                            onChange={(v) => {
+                                const i = parseInt(v, 10);
                                 if (!isNaN(i)) commitNow(valOf(i));
                             }}
-                        >
-                            {sel === -1 && <option value="">({draft === '' ? 'unset' : draft})</option>}
-                            {enumNames.map((nm, i) => <option key={i} value={String(i)}>{nm}</option>)}
-                        </select>
+                            size="sm"
+                            variant="field"
+                            font="mono"
+                            align="left"
+                            block
+                        />
                     );
                 }
                 if (inp.type === 'boolean') {
@@ -415,14 +439,6 @@
                         <div>
                             <div className="flex items-center gap-1">
                                 {isColor && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setCsOpen((v) => !v)}
-                                        title="Colorspace…"
-                                        className="flex-none flex items-center text-gray-400 hover:text-gray-200 px-0.5 self-stretch"
-                                    ><MtlxIcon name={csOpen ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5" /></button>
-                                )}
-                                {isColor && (
                                     <ColorSwatch
                                         rgb={comps.slice(0, 3)}
                                         className="flex-none w-6 h-6 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
@@ -453,7 +469,7 @@
                                     />
                                 ))}
                             </div>
-                            {isColor && csOpen && (
+                            {isColor && (
                                 <div className="mt-1">{colorspaceRow()}</div>
                             )}
                         </div>
@@ -501,32 +517,35 @@
                         </div>
                     );
                 }
-                // Filename → image picker (joins session files, binds by
-                // name) + editable name field; the colorspace select
-                // underneath recompiles the shader (a codegen decision).
+                // Filename → the shared FilePickerField (joins session
+                // files, binds by name); the colorspace select underneath
+                // recompiles the shader (a codegen decision).
                 if (inp.type === 'filename') {
                     return (
                         <div className="space-y-1">
-                            <div className="flex items-center gap-1.5">
-                                <label
-                                    className="flex-none text-[10px] px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer"
-                                    title="Load an image file — it joins the session files and binds by name"
-                                >
-                                    Choose{'\u2026'}
-                                    <input
-                                        type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-                                        className="hidden"
-                                        onChange={(e) => {
-                                            const f = e.target.files && e.target.files[0];
-                                            if (f && onPickFile) onPickFile(f);
-                                            // Clear so re-picking the SAME file
-                                            // still fires a change event.
-                                            e.target.value = '';
-                                        }}
-                                    />
-                                </label>
-                                {textField()}
-                            </div>
+                            <FilePickerField
+                                value={draft}
+                                editable
+                                mono
+                                onCommit={commitFilename}
+                                onClear={() => commitFilename('')}
+                                icon="file"
+                                disabled={readOnly}
+                                accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                onChoose={() => { if (fileInputRef.current) fileInputRef.current.click(); }}
+                            />
+                            <input
+                                ref={fileInputRef}
+                                type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const f = e.target.files && e.target.files[0];
+                                    if (f && onPickFile) onPickFile(f);
+                                    // Clear so re-picking the SAME file
+                                    // still fires a change event.
+                                    e.target.value = '';
+                                }}
+                            />
                             {/* Colorspace matters only for color3/4 output,
                                 but stays visible if the instance already
                                 authors one (e.g. after a signature swap). */}
@@ -542,8 +561,8 @@
                 <div className="py-1.5 border-b border-gray-700/60 last:border-b-0">
                     <div className="flex items-center gap-1.5 text-[11px] font-mono">
                         <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(inp.type) }} />
-                        <span className="text-gray-300 truncate">{inp.name}</span>
-                        <span className="ml-auto flex-none text-[9px]" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
+                        <span className="text-gray-300 truncate text-[11px] font-mono" title={inp.uiname ? inp.name : undefined}>{inp.uiname || inp.name}</span>
+                        <span className="ml-auto flex-none text-[9px] font-mono" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
                     </div>
                     {inp.connected ? (
                         sourceId ? (

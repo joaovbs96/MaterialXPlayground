@@ -168,19 +168,30 @@
         const nodeAndUpstreamAllBuffer2d = (nodeEl, scope, doc) =>
             closureAllBuffer2d(doc, [{ node: nodeEl, scope }]);
 
-        // Global graph-preview geometry mode (Settings popup, experimental):
-        // 'shaderball-scene' (the default — every preview uses the full scene,
-        // pre-experiment behavior), 'buffer2d' (everything flat), or 'pernode'
-        // (flat only when the target AND its whole upstream closure are
-        // flat-class — the experimental system).
+        // Global graph-preview geometry mode (Settings popup): any engine
+        // geometry (shaderball-scene, shaderball, shaderball-mtlx, sphere,
+        // cube, cloth, buffer2d), plus 'pernode' (experimental), which
+        // resolves per target via defaultGeomForNode's flat/scene split.
         const GRAPH_GEOM_KEY = 'mtlx_graph_preview_geom';
-        const GRAPH_GEOM_MODES = ['shaderball-scene', 'buffer2d', 'pernode'];
+        const GRAPH_GEOM_MODES = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'pernode'];
         const readGraphGeomMode = () => {
             try {
                 const v = localStorage.getItem(GRAPH_GEOM_KEY);
                 return GRAPH_GEOM_MODES.indexOf(v) !== -1 ? v : 'shaderball-scene';
             } catch (e) { return 'shaderball-scene'; }
         };
+        const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
+        const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default' };
+        // Row layout for the docked/fullscreen viewport strip: docked splits
+        // send/colorspace/collapse from the geometry/screenshot/env/settings
+        // group; fullscreen folds everything into one row, same order.
+        const GRAPH_PREVIEW_CLUSTERS_DOCKED = [
+            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse'],
+            ['graphGeom', 'env', 'settings'],
+        ];
+        const GRAPH_PREVIEW_CLUSTERS_FULLSCREEN = [
+            ['screenshot', 'sendToViewer', 'docColorspace', 'collapse', 'graphGeom', 'env', 'settings'],
+        ];
 
         // Resolves WHAT the preview renders, building transient '__pv_*'
         // wrapper nodes as needed — callers MUST call cleanup() when done.
@@ -448,7 +459,7 @@
         // Shaderball preview of the current target (selection, else doc
         // default). Only the first mount pays for a full render-view init;
         // later docRev changes reuse the shell (fast refresh or APPLY swap).
-        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay, trailingChildren }) {
+        function NodePreview({ parsed, target, docRev, fileMap, viewRef, active = true, overlay, controlSlots }) {
             const canvasRef = React.useRef(null);
             // The viewport CONTAINER (not the canvas) goes fullscreen, so
             // the overlaid ViewportControls stay visible — same contract as
@@ -474,16 +485,20 @@
                 setGeomModeState(mode);
                 try { localStorage.setItem(GRAPH_GEOM_KEY, mode); } catch (e) { /* best-effort */ }
             };
+            // The EFFECTIVE geometry a renderable was built with, resolved
+            // per target in 'pernode' mode; null while there is nothing to
+            // render. Used by later controls to gate on the real geometry.
+            const [resolvedGeom, setResolvedGeom] = React.useState(null);
             // Liveness flag for the PERSISTENT render-view shell (distinct
             // from this run's `mounted`), passed as createMtlxRenderView's
             // `isAlive` so its rAF loop survives reuse via applyMaterial().
             const shellAliveRef = React.useRef(true);
 
-            // ---- Viewport controls (item F2.1) — mirrors node-preview.jsx,
-            // minus geometry selection (own detached camera, nothing to
-            // pick/persist); controls apply live via the shared viewRef handle.
+            // ---- Viewport controls (item F2.1), mirrors node-preview.jsx.
+            // Geometry is selectable via the Settings popover's MtlxSelect
+            // (persisted), not this strip; controls apply live via viewRef.
             const {
-                envBg, toggleEnvBg,
+                backdrop, setBackdrop,
                 envAvail, setEnvAvail,
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
@@ -568,6 +583,7 @@
                             setNotice(built.notice || 'This document has nothing to preview.');
                             setLoading(false);
                             setUpdating(false);
+                            setResolvedGeom(null);
                             if (liveViewRef.current) {
                                 try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             }
@@ -595,6 +611,7 @@
                         const wantGeom = geomMode === 'pernode'
                             ? (built.defaultGeom || 'shaderball-scene')
                             : geomMode;
+                        setResolvedGeom(wantGeom);
                         if (liveViewRef.current && liveGeomRef.current !== wantGeom) {
                             try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
                             liveViewRef.current = null;
@@ -631,7 +648,7 @@
                             if (res.refreshed) {
                                 // Bind any dropped texture files onto the shader's
                                 // filename uniforms (same pass as the viewer/apply
-                                // path); missing refs keep the checker texture.
+                                // path); missing refs keep the node default color.
                                 const rep = bindDroppedTextures(live, fileMap || {});
                                 if (rep.missing.length) {
                                     mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
@@ -720,13 +737,12 @@
                                 label: built.label || parsed.label,
                                 needsLighting: true,
                                 geomName: wantGeom,
-                                // The full shaderball SCENE carries its own authored,
-                                // detached camera and isn't orbit/mouse-interactive, so
-                                // auto-rotation stays off; other geometries (plain
-                                // shaderball, buffer2d, ...) share that same fixed,
-                                // non-interactive preview camera here too.
+                                // 3D geometries orbit by default; the full scene opts
+                                // in via sceneOrbit (mirrors viewer-app.jsx). The 2D
+                                // buffer stays fixed via the engine's flat2d gate.
+                                sceneOrbit: wantGeom === 'shaderball-scene',
                                 autoRotate: false,
-                                envBackground: envBg,
+                                backdrop,
                                 isMounted: () => mounted,
                                 isActive: () => activeRef.current,
                                 // The shell this builds can outlive THIS run's
@@ -750,7 +766,7 @@
                         setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
                         // Bind any dropped texture files onto the shader's
                         // filename uniforms (same pass as the viewer). Missing
-                        // references keep the built-in checker texture.
+                        // references keep the node default color.
                         const rep = bindDroppedTextures(view, fileMap || {});
                         if (rep.missing.length) {
                             mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
@@ -777,67 +793,66 @@
                 };
             }, [parsed, target, docRev, fileMap, geomMode]);
 
+            // Row-1 geometry dropdown, built HERE (not a ViewportControls
+            // built-in slot) so it's the single geometry control for the
+            // graph preview.
+            const graphGeomSlot = (
+                <MtlxSelect
+                    key="graphGeom"
+                    value={geomMode}
+                    options={GRAPH_GEOM_MODES}
+                    labels={GRAPH_GEOM_LABELS}
+                    badges={GRAPH_GEOM_BADGES}
+                    defValue={null}
+                    onChange={setGeomMode}
+                    title="Preview geometry"
+                    size="sm" block icon="cube" className="flex-1 min-w-0"
+                />
+            );
+            // Merge the caller's row-2 controls (render-prop, same shape as
+            // the old trailingChildren) with the geometry slot above.
+            const slotNodes = Object.assign(
+                { graphGeom: graphGeomSlot },
+                typeof controlSlots === 'function' ? controlSlots(isFullscreen) : controlSlots
+            );
+
             return (
                 <div
                     ref={viewportRef}
                     className="flex flex-col flex-none w-full border-b border-gray-700"
                     style={isFullscreen ? { height: '100%' } : undefined}
                 >
-                    {/* Viewport controls (F2.1): env toggle, screenshot,
-                        fullscreen \u2014 geometry/rotate hidden (fixed camera);
-                        trailingChildren carries the "send to Viewer" button. */}
+                    {/* Viewport controls (F2.1/F2.2): two rows when docked
+                        (send/colorspace/collapse, then geometry/screenshot/
+                        env/settings), one row in fullscreen; see clusters. */}
                     <ViewportControls
-                        showGeomSelect={false}
-                        showRotate={false}
-                        envBg={envBg}
-                        onToggleEnvBg={toggleEnvBg}
+                        backdrop={backdrop}
+                        onBackdropChange={setBackdrop}
                         envAvail={envAvail}
-                        // The GLB scene's backdrop box fully occludes the
-                        // env-background sky sphere, so the Background
-                        // On/Off toggle in the Environment popover is a no-op here.
-                        showBackgroundToggle={false}
+                        // The GLB scene is an authored room that ignores the
+                        // backdrop entirely, and the flat buffer has no backdrop
+                        // mesh either, so hide the picker for both.
+                        showBackdropPicker={resolvedGeom !== 'shaderball-scene' && resolvedGeom !== 'buffer2d'}
                         viewRef={viewRef}
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
-                        isFullscreen={isFullscreen}
-                        onToggleFullscreen={toggleFullscreenView}
-                        trailingChildren={trailingChildren}
+                        slots={slotNodes}
+                        clusters={isFullscreen ? GRAPH_PREVIEW_CLUSTERS_FULLSCREEN : GRAPH_PREVIEW_CLUSTERS_DOCKED}
+                        // flex-wrap is a deliberate escape hatch: a width miss
+                        // degrades to a wrapped line instead of clipping.
+                        clusterClassName="flex items-center gap-1 flex-wrap min-w-0"
                         // Docked: open the env dialog toward the canvas (left) so
                         // it doesn't cover the preview. Fullscreen: open in the
                         // default spot under the Environment button instead.
                         envDialogPlacement={isFullscreen ? undefined : "left"}
-                        containerClassName="flex items-center justify-center gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
-                        // Show button labels only in fullscreen (icon-only when
-                        // docked); labelsClass keeps the strip centered (its own
-                        // justify-center) while allowing wrap — no right-align.
+                        containerClassName={isFullscreen
+                            ? "flex items-center justify-center gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
+                            // font-sans: the panel wrapper is font-mono and its
+                            // wider glyphs eat the 304px strip's width budget.
+                            : "flex flex-col gap-1 px-2 py-1.5 border-b border-gray-700 bg-gray-900/70 flex-none font-sans"}
+                        // Show button labels only in fullscreen, matching the
+                        // render's own camera-reset/fullscreen buttons.
                         showLabels={isFullscreen}
-                        labelsClass="flex-wrap"
-                        settingsChildren={
-                            <div>
-                                {/* Dropdown on its OWN line: label + trigger
-                                    can't share the popup's 288px row without
-                                    overflowing its edge. The Experimental
-                                    badge sits on the Auto ROW (via badges) —
-                                    picking a geometry isn't the experiment,
-                                    the Auto mode is. */}
-                                <div className="text-gray-200">Preview Geometry</div>
-                                <GeomSelect
-                                    value={geomMode}
-                                    options={['shaderball-scene', 'buffer2d', 'pernode']}
-                                    labels={Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' })}
-                                    badges={{ pernode: 'Experimental', 'shaderball-scene': 'Default' }}
-                                    onChange={setGeomMode}
-                                    title="Global graph-preview geometry"
-                                    className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                                />
-                                <div className="mt-1 text-[11px] text-gray-400">
-                                    Applies to every preview in the graph editor. "Auto (by node
-                                    type)" previews an element flat only when it and everything
-                                    upstream of it are flat (patterns/math); anything touching
-                                    geometry or shading keeps the 3D scene.
-                                </div>
-                            </div>
-                        }
                     />
                     <div
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
@@ -847,7 +862,7 @@
                             // APPLY path in flight against the live view — old
                             // material keeps rendering underneath, so this is a
                             // small corner badge rather than a full overlay/flash.
-                            <div className="absolute top-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
+                            <div className="absolute bottom-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
                         )}
                         <LoadingOverlay
                             show={loading && !notice && !error}
@@ -866,13 +881,37 @@
                                 {error}
                             </div>
                         )}
-                        {/* Rendered last so it stacks above the loading/notice/
-                            error overlays regardless of z-index ties (item 10's
-                            pin toggle, passed in by the caller). */}
+                        {/* Rendered last so they stack above the loading/notice/
+                            error overlays: item 10's pin (top-left) and the
+                            camera-reset/fullscreen cluster (top-right) below. */}
                         {!isFullscreen && overlay}
+                        <div className="absolute top-1 right-1 z-20 flex items-center gap-1">
+                            {resolvedGeom !== 'buffer2d' && (
+                                <button
+                                    onClick={() => {
+                                        const v = viewRef.current;
+                                        if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
+                                    }}
+                                    title="Reset camera"
+                                    className="w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                                >
+                                    <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
+                                </button>
+                            )}
+                            <button
+                                onClick={toggleFullscreenView}
+                                title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                className={'w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
+                                    + (isFullscreen
+                                        ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
+                                        : 'bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                            >
+                                <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
         }
 
-Object.assign(window, { nodeDocsUrl, findDocRenderable, buildPreviewRenderable, GraphNodePreview: NodePreview });
+Object.assign(window, { nodeDocsUrl, findDocRenderable, buildPreviewRenderable, GraphNodePreview: NodePreview, readGraphGeomMode });

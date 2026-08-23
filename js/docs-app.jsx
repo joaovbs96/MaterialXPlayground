@@ -114,6 +114,13 @@
             // applied to the Signature dropdown once nodeVersionGroups loads.
             // A ref, not state: it must not itself trigger a render.
             const pendingSigRef = React.useRef(null);
+            // Companion to pendingSigRef for `?ver=`: the nodedef version to
+            // land on once the signature's version list is known. Only ever
+            // SET from a hash, never cleared there — selecting a node
+            // rewrites the URL without the query, so a second pass over the
+            // hash would wipe a hint it can no longer see. Consumption
+            // clears it, and matching is guarded by node name.
+            const pendingVerRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
             // Which signature (port table) of the selected node is shown —
@@ -203,6 +210,7 @@
                     // doc-links.jsx's parseSigHint) is set right before
                     // setSelectedNode, so the sigIndex-reset effect above sees it.
                     pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
+                    if (fromHash.verHint) pendingVerRef.current = { name: fromHash.name, version: fromHash.verHint };
                     setSelectedNode(fromHash);
                     return;
                 }
@@ -271,6 +279,7 @@
                         // Same pending-hint queuing as applyData's
                         // fromHash branch above — see its comment.
                         pendingSigRef.current = sel.sigHint ? { name: sel.name, hint: sel.sigHint } : null;
+                        if (sel.verHint) pendingVerRef.current = { name: sel.name, version: sel.verHint };
                         setSelectedNode(sel);
                     }
                 };
@@ -355,7 +364,26 @@
             // group — reset on selection/signature change, since a
             // different signature may resolve to a different default.
             const [versionIndex, setVersionIndex] = React.useState(0);
-            React.useEffect(() => { setVersionIndex(0); }, [selectedNode, sigIndex]);
+            // Two effects, ordered: the reset stands aside while a hint is
+            // pending for THIS node, and the applier consumes it. Folding
+            // them into one meant every later run re-reset to 0 once the
+            // hint had been consumed.
+            React.useEffect(() => {
+                const p = pendingVerRef.current;
+                if (p && selectedNode && p.name === selectedNode.name) return; // the hint owns this selection
+                setVersionIndex(0);
+            }, [selectedNode, sigIndex]);
+            React.useEffect(() => {
+                const pending = pendingVerRef.current;
+                if (!pending || !selectedNode || pending.name !== selectedNode.name) return;
+                const groups = nodeVersionGroups;
+                if (!groups || !groups.length) return; // version list not loaded yet
+                const group = groups[Math.min(sigIndex, groups.length - 1)];
+                if (!group || !group.versions) return;
+                const idx = group.versions.findIndex((v) => v.version === pending.version);
+                pendingVerRef.current = null; // applies at most once
+                setVersionIndex(idx > 0 ? idx : 0);
+            }, [selectedNode, sigIndex, nodeVersionGroups]);
 
             // (Manual upload removed: the page auto-loads the live spec only.)
 
@@ -512,6 +540,13 @@
             const sigCount = sigGroups.length;
             const sig = Math.min(sigIndex, Math.max(sigCount - 1, 0));
             const selectedGroup = sigGroups[sig] || null;
+            // Signature select dots: one color per option index, off the
+            // same output type the option's label already shows.
+            const sigDots = React.useMemo(() => {
+                const map = {};
+                sigGroups.forEach((g, i) => { map[i] = typeColor(g.type); });
+                return map;
+            }, [sigGroups]);
             // Which table(s) to render — see resolveDisplayTables above
             // for the full selection rules.
             const displayTables = React.useMemo(
@@ -530,6 +565,9 @@
             const versionIdx = selectedGroup
                 ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
             const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
+            // Index of the nodedef's own default version, for the version
+            // picker's automatic 'default' badge (MtlxSelect's defValue).
+            const defaultVersionIdx = selectedGroup ? selectedGroup.versions.findIndex((v) => v.isDefaultVersion) : -1;
             // Markdown tables carry only ONE signature's port rows, so once
             // several exist, the selected version's live type/default data
             // must be projected onto them, or a picked signature shows stale data.
@@ -558,6 +596,7 @@
             // Keyed on selectedNode, not references: a missing
             // info.references falls back to a fresh `[]` every render,
             // which would defeat the memo even though data hasn't changed.
+            const docsRootRef = React.useRef(null);
             const refs = React.useMemo(() => {
                 const map = {};
                 references.forEach((r, i) => { map[r.key] = { n: i + 1, url: r.url, text: r.text }; });
@@ -565,15 +604,28 @@
             }, [selectedNode]);
 
             return (
-                <div className="space-y-4 sm:space-y-6 md:h-full md:flex md:flex-col md:min-h-0">
+                // The grid needs a `relative` host whose first child it can be,
+                // but the content column carries space-y-*, which would push
+                // that column's own first child down. Hence the extra shell.
+                <div ref={docsRootRef} className="relative md:h-full md:flex md:flex-col md:min-h-0">
+                    {/* Page decoration only. Inside the graph editor's docs
+                        dialog (inline) and in embed mode there is no page to
+                        decorate, and HeroGrid would measure against the HOST
+                        view's wrapper, overflowing the dialog sideways. */}
+                    {!chromeless && <HeroGrid rootRef={docsRootRef} fadeRef={docsRootRef} fadeFrom="top" />}
+                {/* relative, like every other HeroGrid host: the grid is an
+                    absolute sibling, and CSS paints positioned elements above
+                    the backgrounds of static ones, so without this the grid
+                    would sit ON TOP of the panels instead of behind them. */}
+                <div className="relative space-y-4 sm:space-y-6 md:flex-1 md:min-h-0 md:flex md:flex-col">
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
-                        <div className="bg-gray-800 p-4 rounded-lg shadow border border-gray-700 text-sm text-gray-400">
+                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-800 text-sm text-gray-400">
                             Loading the node library…
                         </div>
                     )}
                     {autoLoad === 'failed' && (
-                        <div className="bg-gray-800 p-4 rounded-lg shadow border border-amber-700/60 text-sm text-gray-300">
+                        <div className="bg-gray-800 p-4 rounded-xl border border-amber-700/60 text-sm text-gray-300">
                             Could not load the pregenerated node library data
                             (js/gen/nodelib.json, js/gen/nodelib-index.json). Reload the
                             page, or if you're building from source, run
@@ -651,31 +703,49 @@
 
                             {/* Right Content Area: Node Details */}
                             <div className={(chromeless || sidebarCollapsed ? '' : 'md:col-span-3 ')
-                                + 'bg-gray-800 p-4 sm:p-6 rounded-lg shadow border border-gray-700 md:min-h-0 md:overflow-y-auto custom-scrollbar'
-                                /* Collapsed (md+) docs pane loses its card chrome — rounded
-                                   corners, border, shadow — so it reads as edge-to-edge
-                                   content against the now-flush (md:-m-6) shell background. */
-                                + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0 md:shadow-none' : '')}>
+                                + 'bg-gray-800 p-4 sm:p-6'
+                                /* Inline (the graph editor's docs dialog): the DialogFrame
+                                   panel is the edge and its scroller already reserves a
+                                   gutter, so card chrome would box a box and a second
+                                   overflow-y-auto would reserve a second gutter. ?embed=1
+                                   keeps the shell's page padding, so it keeps the card. */
+                                + (inline ? ''
+                                    : ' rounded-xl border border-gray-800 md:min-h-0 md:overflow-y-auto custom-scrollbar'
+                                    /* Collapsed (md+) docs pane loses its card chrome, rounded
+                                       corners and border, so it reads as edge-to-edge content
+                                       against the now-flush (md:-m-6) shell background. */
+                                    + (!chromeless && sidebarCollapsed ? ' md:rounded-none md:border-0' : ''))}>
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
-                                            <h2 className="text-xl sm:text-3xl font-bold text-white font-mono break-words min-w-0">{selectedNode.name}</h2>
-                                            <div className="flex items-center gap-2 flex-wrap mt-2">
-                                                <span className="bg-gray-700 text-gray-300 text-xs px-2 py-1 rounded border border-gray-600">
-                                                    {selectedNode.lib} / {selectedNode.group}
+                                            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300 mb-1">
+                                                {selectedNode.lib}<span className="text-gray-600">/</span><span className="text-gray-400">{selectedNode.group}</span>
+                                            </div>
+                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-white font-mono tracking-[-0.01em] min-w-0">
+                                                <span
+                                                    className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 rounded-full shrink-0"
+                                                    style={{ backgroundColor: typeColor(previewType) }}
+                                                />
+                                                <span className="break-words min-w-0">
+                                                    {selectedNode.name}
+                                                    {previewType && (
+                                                        <span className="text-base sm:text-xl font-normal text-gray-400"> ({previewType})</span>
+                                                    )}
                                                 </span>
+                                            </h2>
+                                            <div className="flex items-center gap-2 flex-wrap mt-2">
                                                 {selectedNode.info.section && (
-                                                    <span className="bg-gray-700 text-gray-400 text-xs px-2 py-1 rounded border border-gray-600">
+                                                    <span className="inline-flex items-center h-6 px-2 rounded-md border border-gray-700 bg-gray-800/60 text-[11px] font-medium text-gray-400">
                                                         spec: {selectedNode.info.section}
                                                     </span>
                                                 )}
                                                 {isUndocumented(selectedNode.info) ? (
-                                                    // No spec entry exists — a link would
-                                                    // land nowhere useful, so show it
-                                                    // disabled instead.
+                                                    // No spec entry exists, so a link would
+                                                    // land nowhere useful; show it disabled
+                                                    // instead.
                                                     <span
                                                         title="This node has no entry in the official specification documents"
-                                                        className="inline-flex items-center gap-1 bg-gray-800 text-gray-600 text-xs px-2 py-1 rounded border border-gray-700 cursor-not-allowed select-none"
+                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-700 bg-gray-800/50 text-[11px] font-medium text-gray-600 cursor-not-allowed select-none"
                                                     >
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </span>
@@ -684,7 +754,7 @@
                                                         href={specUrlForNode(selectedNode)}
                                                         target="_blank" rel="noopener noreferrer"
                                                         title="Open this node in the official MaterialX specification on GitHub"
-                                                        className="inline-flex items-center gap-1 bg-gray-700 text-blue-300 hover:text-blue-200 text-xs px-2 py-1 rounded border border-gray-600 hover:border-blue-500/60 transition-colors"
+                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-blue-300 hover:text-blue-200 hover:border-blue-500/60 transition-colors"
                                                     >
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </a>
@@ -696,20 +766,20 @@
                                                 <button
                                                     onClick={copyPermalink}
                                                     title="Copy a direct link to this node"
-                                                    className={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
+                                                    className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         copied
                                                             ? 'bg-green-700/30 border-green-600/60 text-green-300'
-                                                            : 'bg-gray-700 border-gray-600 text-gray-300 hover:text-white hover:border-blue-500/60'
-                                                    }`}
+                                                            : 'border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100'
+                                                    )}
                                                 >
                                                     {copied ? (
                                                         <React.Fragment>
-                                                            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-7.5 7.5a1 1 0 01-1.4 0L3.3 9.7a1 1 0 011.4-1.4l3.3 3.29 6.8-6.79a1 1 0 011.4 0z" clipRule="evenodd"/></svg>
+                                                            <MtlxIcon name="copy-check" className="w-3.5 h-3.5" />
                                                             Copied
                                                         </React.Fragment>
                                                     ) : (
                                                         <React.Fragment>
-                                                            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="currentColor" aria-hidden="true"><path d="M8.5 3A3.5 3.5 0 005 6.5v1a1 1 0 002 0v-1A1.5 1.5 0 018.5 5h5A1.5 1.5 0 0115 6.5v5A1.5 1.5 0 0113.5 13h-1a1 1 0 000 2h1a3.5 3.5 0 003.5-3.5v-5A3.5 3.5 0 0013.5 3h-5z"/><path d="M6.5 7A3.5 3.5 0 003 10.5v5A3.5 3.5 0 006.5 19h5a3.5 3.5 0 003.5-3.5v-1a1 1 0 00-2 0v1a1.5 1.5 0 01-1.5 1.5h-5A1.5 1.5 0 015 15.5v-5A1.5 1.5 0 016.5 9h1a1 1 0 000-2h-1z"/></svg>
+                                                            <MtlxIcon name="copy" className="w-3.5 h-3.5" />
                                                             Copy link
                                                         </React.Fragment>
                                                     )}
@@ -730,45 +800,47 @@
                                                     <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
                                                         {sigCount > 1 && (
                                                             <React.Fragment>
-                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="sig-select">
+                                                                <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
                                                                     Signature
                                                                 </label>
-                                                                <select
-                                                                    id="sig-select"
+                                                                <MtlxSelect
                                                                     value={sig}
-                                                                    onChange={(e) => setSigIndex(Number(e.target.value))}
-                                                                    title="This node has several signatures — pick which one to document and preview"
-                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
-                                                                >
-                                                                    {sigGroups.map((g, i) => {
+                                                                    options={sigGroups.map((g, i) => {
                                                                         const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
-                                                                        return (
-                                                                            <option key={g.key || i} value={i}>
-                                                                                {(i + 1) + ' / ' + sigCount + (l ? ' — ' + l : '')}
-                                                                            </option>
-                                                                        );
+                                                                        return { value: i, label: (i + 1) + ' / ' + sigCount + (l ? ' - ' + l : '') };
                                                                     })}
-                                                                </select>
+                                                                    dots={sigDots}
+                                                                    onChange={setSigIndex}
+                                                                    defValue={null}
+                                                                    title="This node has several signatures - pick which one to document and preview"
+                                                                    ariaLabel="Signature"
+                                                                    font="mono"
+                                                                    size="sm"
+                                                                    variant="field"
+                                                                    className="max-w-full"
+                                                                />
                                                             </React.Fragment>
                                                         )}
                                                         {showVersionPicker && (
                                                             <React.Fragment>
-                                                                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider" htmlFor="version-select">
+                                                                <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
                                                                     Version
                                                                 </label>
-                                                                <select
-                                                                    id="version-select"
+                                                                <MtlxSelect
                                                                     value={versionIdx}
-                                                                    onChange={(e) => setVersionIndex(Number(e.target.value))}
-                                                                    title="This node has several nodedef versions — same ports, different defaults"
-                                                                    className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-gray-200 max-w-full"
-                                                                >
-                                                                    {selectedGroup.versions.map((v, i) => (
-                                                                        <option key={v.name || i} value={i}>
-                                                                            {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
+                                                                    options={selectedGroup.versions.map((v, i) => ({
+                                                                        value: i,
+                                                                        label: v.version || '?',
+                                                                    }))}
+                                                                    onChange={setVersionIndex}
+                                                                    defValue={defaultVersionIdx !== -1 ? defaultVersionIdx : null}
+                                                                    title="This node has several nodedef versions - same ports, different defaults"
+                                                                    ariaLabel="Version"
+                                                                    font="mono"
+                                                                    size="sm"
+                                                                    variant="field"
+                                                                    className="max-w-full"
+                                                                />
                                                             </React.Fragment>
                                                         )}
                                                     </div>
@@ -806,37 +878,42 @@
                                             allTargets={genData ? genData.allTargets : []}
                                         />
 
-                                        {/* Description: paragraphs before the first table */}
-                                        <RichBlocks
-                                            text={selectedNode.info.description}
-                                            refs={refs}
-                                            className="text-gray-300 leading-relaxed mb-8 text-base sm:text-lg"
-                                        />
+                                        {/* Description: paragraphs before the first table, or a
+                                            styled placeholder when the spec has no entry at all. */}
+                                        {isUndocumented(selectedNode.info) ? (
+                                            <div className="flex items-start gap-3 mt-4 mb-4">
+                                                <div className="w-9 h-9 rounded-[9px] bg-blue-500/10 border border-blue-500/25 flex items-center justify-center text-blue-400 shrink-0">
+                                                    <MtlxIcon name="info-circle" className="w-[18px] h-[18px]" />
+                                                </div>
+                                                <div className="min-w-0 text-sm leading-5 text-gray-400 pt-0.5">
+                                                    <div className="text-gray-200 font-medium">No specification entry for this node.</div>
+                                                    <div className="mt-0.5">Ports, types and defaults below are read from its MaterialX nodedef; descriptions are unavailable.</div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <RichBlocks
+                                                text={selectedNode.info.description}
+                                                refs={refs}
+                                                className="mb-8"
+                                            />
+                                        )}
 
-                                        {/* Port tables: from the spec, or — for
-                                            undocumented nodes — synthesized from
-                                            the MaterialX nodedef with a disclaimer. */}
+                                        {/* Port tables: from the spec, or, for undocumented
+                                            nodes, synthesized from the MaterialX nodedef with
+                                            a disclaimer (suppressed above when already shown). */}
                                         {effectiveTables.length > 0 ? (
                                             <div className="space-y-6">
-                                                {isAutoTable && (
-                                                    <div className="bg-blue-950/40 border border-blue-800/60 text-blue-200/90 text-sm rounded-lg px-4 py-3 flex items-start gap-2">
-                                                        <MtlxIcon name="info-circle" className="w-4 h-4 shrink-0 mt-0.5" />
-                                                        <span>
-                                                            <span className="font-semibold text-blue-200">Auto-generated from the nodedef.</span>{' '}
-                                                            This node has no specification documentation, so its ports,
-                                                            types, and defaults were read directly from the MaterialX
-                                                            node definition. Descriptions are unavailable and the
-                                                            details may differ from an official write-up.
-                                                        </span>
-                                                    </div>
-                                                )}
+                                                {isAutoTable && !isUndocumented(selectedNode.info) && <AutoDocNotice />}
                                                 {displayTables.map((table, i) => (
                                                     <PortTable key={sigCount > 1 ? (sig + ':' + i) : i} table={table} columns={columns} refs={refs}
                                                         defaultsOverride={defaultsOverride} typesOverride={typesOverride} />
                                                 ))}
                                             </div>
                                         ) : (
-                                            <NodeDefPortsTable rows={(genData && selectedNode && genData.nodes[selectedNode.name] && genData.nodes[selectedNode.name].defPorts) || []} />
+                                            <NodeDefPortsTable
+                                                rows={(genData && selectedNode && genData.nodes[selectedNode.name] && genData.nodes[selectedNode.name].defPorts) || []}
+                                                showNotice={!isUndocumented(selectedNode.info)}
+                                            />
                                         )}
 
                                         {/* Notes: prose after/between tables (sub-headings, equations, ...) */}
@@ -844,14 +921,14 @@
                                             <RichBlocks
                                                 text={selectedNode.info.notes}
                                                 refs={refs}
-                                                className="text-gray-300 leading-relaxed mt-8 pt-6 border-t border-gray-700"
+                                                className="mt-8 pt-6 border-t border-gray-700"
                                             />
                                         )}
 
                                         {/* References: footnotes cited by this node */}
                                         {references.length > 0 && (
                                             <div className="mt-8 pt-6 border-t border-gray-700">
-                                                <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">References</h4>
+                                                <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-3">References</h4>
                                                 <ol className="space-y-2 text-sm text-gray-400">
                                                     {references.map((r, i) => (
                                                         <li key={r.key} className="flex gap-2">
@@ -872,13 +949,17 @@
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="text-gray-500 flex items-center justify-center h-full">
-                                        Select a node from the tree to view its details.
+                                    <div className="flex flex-col items-center justify-center gap-3 h-full">
+                                        <div className="w-9 h-9 rounded-[9px] bg-blue-500/10 border border-blue-500/25 flex items-center justify-center text-blue-400">
+                                            <MtlxIcon name="file-code" className="w-[18px] h-[18px]" />
+                                        </div>
+                                        <div className="text-sm text-gray-500">Select a node from the tree to view its details.</div>
                                     </div>
                                 )}
                             </div>
                         </div>
                     )}
+                </div>
                 </div>
             );
         }

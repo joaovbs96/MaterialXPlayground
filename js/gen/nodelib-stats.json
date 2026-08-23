@@ -1,0 +1,17 @@
+{
+ "nodedefs": 807,
+ "documented": 225,
+ "targets": 6,
+ "libraryVersion": "1.39.5",
+ "shadingModels": [
+  "standard_surface",
+  "open_pbr_surface",
+  "gltf_pbr",
+  "disney_principled",
+  "UsdPreviewSurface"
+ ],
+ "convertNodedefs": 47,
+ "lamaNodes": 13,
+ "translationGraphs": 4,
+ "translationExample": "standard_surface_to_gltf_pbr"
+}

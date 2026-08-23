@@ -231,6 +231,24 @@
                     : defInputEl(portName);
                 return p ? mxElType(p) : '';
             };
+            // A 'multioutput' instance never authors its own <output>
+            // children, so its real ports are the resolved nodedef's
+            // declared outputs, deduped by name (active version first).
+            const defOutputPorts = () => {
+                const def = nodeDef();
+                if (!def) return [];
+                const defOuts = vecToArray(mxSafe(() => def.getActiveOutputs(), []))
+                    .concat(vecToArray(mxSafe(() => def.getOutputs(), [])));
+                const seen = new Set();
+                const ports = [];
+                for (const o of defOuts) {
+                    const nm = mxElName(o);
+                    if (!nm || seen.has(nm)) continue;
+                    seen.add(nm);
+                    ports.push({ name: nm, type: mxElType(o) });
+                }
+                return ports;
+            };
             // Slider ranges + enum choices + colorspace come from the
             // nodedef input; the authored colorspace from the instance.
             const uiMeta = (dIn) => !dIn ? {} : {
@@ -239,6 +257,7 @@
                 enumNames: mxElAttr(dIn, 'enum'), enumValues: mxElAttr(dIn, 'enumvalues'),
                 defColorspace: mxElAttr(dIn, 'colorspace'),
                 uifolder: mxElAttr(dIn, 'uifolder'),
+                uiname: mxElAttr(dIn, 'uiname'),
             };
             // Output type(s) resolved before inputs so each input can be
             // flagged colorManaged — colorspace only applies to color3/4
@@ -322,18 +341,23 @@
                     }, uiMeta(dIn)));
                 }
             }
-            // Reuse the elOutputs local from the outTypes computation above
-            // instead of a second el.getOutputs() WASM round trip.
-            const outputs = elOutputs.map((o) => ({
-                name: mxElName(o), type: mxElType(o) || defPortType(mxElName(o), true),
-            }));
+            // Reuse elOutputs from the outTypes computation above. A
+            // 'multioutput' instance has no <output> children of its own,
+            // so fall back to the nodedef's real outputs, never the type attribute.
+            const outputs = elOutputs.length
+                ? elOutputs.map((o) => ({ name: mxElName(o), type: mxElType(o) || defPortType(mxElName(o), true) }))
+                : (mxElType(el) === 'multioutput' ? defOutputPorts() : []);
 
             // Extract the library/group for conflict-free doc links.
             let lib = '', group = '';
             if (def) {
                 group = mxSafe(() => def.getNodeGroup(), '');
                 const uri = mxSafe(() => def.getSourceUri(), '');
-                const m = uri.match(/libraries\/([^/]+)/);
+                // The whole directory path under libraries/, not just its
+                // first segment: nodelib.json keys nested libraries by path
+                // ('bxdf/translation', 'bxdf/lama', 'stdlib/genosl'), so
+                // capturing only 'bxdf' built a link that resolves to nothing.
+                const m = uri.match(/libraries\/(.+)\/[^/]+$/);
                 if (m) lib = m[1];
             }
 
@@ -347,6 +371,14 @@
             const x = parseFloat(mxElAttr(el, 'xpos'));
             const y = parseFloat(mxElAttr(el, 'ypos'));
             return (isFinite(x) && isFinite(y)) ? { x, y } : null;
+        };
+
+        // Fallback when collectPorts found no outputs (no nodedef
+        // resolved). 'multioutput' is the type ATTRIBUTE, never a port,
+        // so such a node gets zero output ports instead of a fake one.
+        const defaultOutputPorts = (n) => {
+            const t = mxElType(n);
+            return t === 'multioutput' ? [] : [{ name: 'out', type: t }];
         };
 
         // Builds descriptor + edge lists for one scope: '' = document root
@@ -366,7 +398,7 @@
                 for (const n of vecToArray(mxSafe(() => doc.getNodes(), []))) {
                     if (/^__pv_/.test(mxElName(n))) continue; // transient preview wrapper
                     const ports = collectPorts(n);
-                    if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: mxElType(n) }];
+                    if (!ports.outputs.length) ports.outputs = defaultOutputPorts(n);
                     push({ id: 'n:' + mxElName(n), kind: kindOfNode(n), name: mxElName(n),
                            category: mxElCat(n), type: mxElType(n),
                            inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n) });
@@ -407,7 +439,7 @@
                 }
                 for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) {
                     const ports = collectPorts(n);
-                    if (!ports.outputs.length) ports.outputs = [{ name: 'out', type: mxElType(n) }];
+                    if (!ports.outputs.length) ports.outputs = defaultOutputPorts(n);
                     push({ id: 'n:' + mxElName(n), kind: kindOfNode(n), name: mxElName(n),
                            category: mxElCat(n), type: mxElType(n),
                            lib: ports.lib, group: ports.group,

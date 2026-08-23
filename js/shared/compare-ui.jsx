@@ -72,7 +72,7 @@ const CompareLabel = ({ side, children, version, className, style }) => (
         style={style}
     >
         {children}
-        {version && <span className="ml-1.5 text-white/50">{version}</span>}
+        {version && <span className="ml-1.5 font-mono text-white/50">{version}</span>}
     </div>
 );
 
@@ -128,7 +128,7 @@ const useCameraSync = (getHandles, epoch) => {
 
 // Methods that must fan out to every compare view instead of just the
 // primary — camera/env/rotate state that all stacked canvases should share.
-const FANOUT_METHODS = ['setAutoRotate', 'setEnvBackground', 'setEnvRotation', 'setEnvExposure', 'resetCamera', 'refreshRenderMode'];
+const FANOUT_METHODS = ['setAutoRotate', 'setBackdrop', 'setEnvBackground', 'setEnvRotation', 'setEnvExposure', 'resetCamera', 'refreshRenderMode'];
 
 // Ref-like object for code that calls `viewRef.current.someMethod(...)`
 // without knowing it's driving N stacked canvases. FANOUT_METHODS run on

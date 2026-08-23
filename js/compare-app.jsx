@@ -5,12 +5,35 @@
 // shared primitives from js/shared/compare-ui.jsx (divider, labels, camera
 // sync) and js/shared/image-metrics.js (metrics, heatmap).
 
-const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
 const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
 
 // Sidebar width when open (w-80), used to inset the stage content wrapper
 // so the panel and the renders never overlap. Flush panel, so no gap.
 const COMPARE_SIDEBAR_INSET = 320;
+
+// Slot identity colors (blue for A, amber for B), used for the small dot
+// markers on document labels/pills across the stage and sidebar cards.
+const SLOT_COLORS = { A: '#60a5fa', B: '#fbbf24' };
+
+// Mirrors mtlx-ui.jsx's private SectionCard-only CARD_SURFACE (not
+// exported to window) so the pinned Statistics panel matches the same
+// card background family without editing that shared file.
+const STATS_PANEL_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
+
+// Example pair: the Standard Surface carpaint preset vs a repo-local doc
+// that feeds the same values through the stdlib translation graph into
+// open_pbr_surface (see materials/standard_surface_carpaint_to_openpbr.mtlx).
+const EXAMPLE_PAIR_A_PATH = 'StandardSurface/standard_surface_carpaint.mtlx';
+const EXAMPLE_PAIR_B_URL = 'materials/standard_surface_carpaint_to_openpbr.mtlx';
+
+// Empty-stage grid backdrop: same 40px/gray-500 tokens as the builder's
+// HeroGrid, but masked with a radial fade (the pane is a bounded box, not
+// a page edge) so it dissolves before the pane borders instead of cutting off.
+const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
+const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
+const SlotDot = ({ color, className }) => (
+    <span className={'inline-block w-1.5 h-1.5 rounded-full shrink-0 ' + (className || '')} style={{ background: color }} />
+);
 
 // Same recipe as viewer-app.jsx's loadMtlxDocument: parse + attach stdlib
 // + list renderables. Duplicated locally (each lazy view script is its
@@ -167,13 +190,16 @@ const useCompareSlot = () => {
         }
     };
 
-    const onPickFiles = (e) => {
+    const onPickFileList = (fileList) => {
         const map = {};
-        for (const f of Array.from(e.target.files || [])) {
+        for (const f of Array.from(fileList || [])) {
             map[f.webkitRelativePath || f.name] = f;
         }
-        e.target.value = '';
         ingest(map);
+    };
+    const onPickFiles = (e) => {
+        onPickFileList(e.target.files);
+        e.target.value = '';
     };
 
     return {
@@ -183,7 +209,7 @@ const useCompareSlot = () => {
         busy, setBusy, status, setStatus, error, setError,
         texReport, setTexReport,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
-        ingest, onPickFiles, loadDocument,
+        ingest, onPickFiles, onPickFileList, loadDocument,
     };
 };
 
@@ -215,7 +241,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     // No auto-rotate on this page — two independent rAF
                     // loops would drift the two cameras apart.
                     autoRotate: false,
-                    envBackground: envUIRef.current.bg,
+                    backdrop: envUIRef.current.backdrop,
                     maxPixelRatio: 1.5,
                     isMounted: () => mounted,
                     // Idle the rAF loop while the heatmap covers the stage —
@@ -237,6 +263,9 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                 // never flashes the default rotation/exposure for a frame.
                 if (view.setEnvRotation) view.setEnvRotation(envUIRef.current.rotation * Math.PI / 180);
                 if (view.setEnvExposure) view.setEnvExposure(envUIRef.current.exposure);
+                // Backdrop too: a switch made while this build was in
+                // flight landed on the disposed predecessor, not on us.
+                if (view.setBackdrop) view.setBackdrop(envUIRef.current.backdrop);
                 slot.viewRef.current = view;
                 // Adopt the surviving peer's camera framing, never the
                 // reverse — the fresh view matches whatever's on screen.
@@ -425,14 +454,33 @@ function MaterialCompareApp({ active = true } = {}) {
     const swipeDiffPosRef = React.useRef(swipeDiffPos);
     swipeDiffPosRef.current = swipeDiffPos;
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
+    const [statsHelpOpen, setStatsHelpOpen] = React.useState(false); // pinned Statistics panel's help popover
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     const [geom, setGeom] = React.useState('shaderball-scene');
-    const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, bg: true });
+    // 'studio' matches the sitewide default (js/viewer-app.jsx and
+    // EnvDialog); the room geometry above disables the picker anyway.
+    const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'studio' });
     const [envImportError, setEnvImportError] = React.useState(null);
+    const [envFileName, setEnvFileName] = React.useState('');
+    // Backs the Rendering card's transparency-forcing toggle: local mirror
+    // of the engine's persisted value, same as viewer-app.jsx's own state.
+    const [forceTransparency, setForceTransparency] = React.useState(
+        () => !!(window.getForceTransparency && window.getForceTransparency())
+    );
+    // Extract key light toggle: local mirror of the engine-wide
+    // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js), one
+    // setting shared by both slots. Degrades to disabled like EnvDialog's
+    // own copy (js/shared/mtlx-ui.jsx) when the engine hasn't loaded it.
+    const keyLightAvail = typeof window.getKeyLightEnabled === 'function'
+        && typeof window.setKeyLightEnabled === 'function';
+    const [keyLightOn, setKeyLightOn] = React.useState(() => (
+        keyLightAvail ? window.getKeyLightEnabled() : true
+    ));
     const envUIRef = React.useRef(envUI);
     envUIRef.current = envUI;
-    const envFileInputRef = React.useRef(null);
     const heatmapCanvasRef = React.useRef(null);
+    const statsHelpBtnRef = React.useRef(null);
+    const statsHelpPopRef = React.useRef(null);
     const gpuDiffCanvasRef = React.useRef(null);
     const gpuDiffViewRef = React.useRef(null);
     const diffOverlayRef = React.useRef(null);
@@ -443,6 +491,10 @@ function MaterialCompareApp({ active = true } = {}) {
     const effShowDiffRef = React.useRef(effShowDiff);
     effShowDiffRef.current = effShowDiff;
     const stageRef = React.useRef(null);
+    // Fullscreen target: the stage's own content, not stageRef (spans the
+    // sidebar too) and not the sidebar-inset div (its inline styles would
+    // fight the engine's CSS-maximize fallback). className only.
+    const stageContentRef = React.useRef(null);
     // True whenever the on-screen views may no longer match the last
     // computed stats — cleared by the ticker effect after it recomputes.
     const statsDirtyRef = React.useRef(true);
@@ -453,9 +505,81 @@ function MaterialCompareApp({ active = true } = {}) {
     const slotB = useCompareSlot();
     useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef);
     useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef);
+
+    // Curated-preset pick per slot (mirrors viewer-app.jsx's presetPick),
+    // plus a busy flag covering the fetch phase only: ingest()/loadDocument
+    // own slot.busy from there, same split as loadLocalIntoSlot below.
+    const [presetPick, setPresetPick] = React.useState({ A: '', B: '' });
+    const [presetBusy, setPresetBusy] = React.useState({ A: false, B: false });
+
+    // Fetches a curated example (js/shared/mtlx-ui.jsx's fetchPresetFiles)
+    // and hands it to the slot like a drag-drop, same recipe as
+    // viewer-app.jsx's loadPreset.
+    const loadPresetIntoSlot = async (slot, slotKey, preset) => {
+        setPresetBusy((s) => ({ ...s, [slotKey]: true }));
+        slot.setError(null);
+        slot.setBusy(true);
+        slot.setStatus('Fetching ' + preset.label + '...');
+        try {
+            const { map, rootKey } = await fetchPresetFiles(preset);
+            slot.setStatus(null);
+            await slot.ingest(map, rootKey); // ingest reaches loadDocument, which owns busy from there
+            setPresetPick((s) => ({ ...s, [slotKey]: preset.path }));
+        } catch (e) {
+            slot.setStatus(null);
+            slot.setBusy(false);
+            slot.setError('Could not load preset: ' + errMsg(e));
+        } finally {
+            setPresetBusy((s) => ({ ...s, [slotKey]: false }));
+        }
+    };
+
+    // Fetches a repo-local .mtlx (not a curated preset, no manifest crawl)
+    // and hands it to the slot the same way a single-file drop would.
+    const loadLocalIntoSlot = async (slot, url) => {
+        slot.setError(null);
+        slot.setBusy(true);
+        slot.setStatus('Fetching example...');
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            const name = url.split('/').pop();
+            slot.setStatus(null);
+            await slot.ingest({ [name]: blob }, name);
+        } catch (e) {
+            slot.setStatus(null);
+            slot.setBusy(false);
+            slot.setError('Could not load the example: ' + errMsg(e));
+        }
+    };
+
+    // Empty-stage "Load an example pair" button: Document A gets the
+    // curated carpaint preset, Document B gets the repo-local translation
+    // doc. Fired concurrently, not awaited here, so each slot's own
+    // busy/error state tracks its own fetch independently.
+    const loadExamplePair = () => {
+        const preset = window.MTLX_PRESETS && window.MTLX_PRESETS.find((p) => p.path === EXAMPLE_PAIR_A_PATH);
+        if (preset) loadPresetIntoSlot(slotA, 'A', preset);
+        loadLocalIntoSlot(slotB, EXAMPLE_PAIR_B_URL);
+    };
+
     useCameraSync(() => [slotA.viewRef.current, slotB.viewRef.current], slotA.viewEpoch + slotB.viewEpoch);
+    const [isFullscreen, toggleFullscreen] = useFullscreen(stageContentRef);
 
     const [dragOver, setDragOver] = useSplitFileDrop(activeRef);
+
+    // Resets BOTH cameras explicitly rather than driving one handle through
+    // useCameraSync's fanout: that fanout bails below two live handles, so a
+    // single-document session would otherwise silently not reset.
+    const resetCompareCameras = () => {
+        [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => {
+            if (!v || !v.resetCamera) return;
+            try { v.resetCamera(); } catch (e) { /* no-op: geometry has no controls */ }
+        });
+        statsDirtyRef.current = true;
+        diffDirtyRef.current = true;
+    };
 
     // ---- Per-pane MaterialX version registry + availability probe --------
     // MtlxAssets.ready (awaited by shell.jsx before any view mounts) has
@@ -463,8 +587,10 @@ function MaterialCompareApp({ active = true } = {}) {
     const mtlxVersions = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
     const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
     const versionLabels = {};
-    mtlxVersions.forEach((v) => { versionLabels[v] = 'MaterialX ' + v; });
-    const versionBadges = { [mtlxDefaultVersion]: 'Default' };
+    mtlxVersions.forEach((v) => { versionLabels[v] = v; });
+    // Narrow popover: rows are just a version string + Default badge,
+    // nowhere near MtlxSelect's default badge width (long geo labels).
+    const VERSION_POP_W = 144;
 
     // Non-default versions are gitignored and may simply be absent from a
     // plain clone — probe once per version so the dropdown never offers a
@@ -491,13 +617,18 @@ function MaterialCompareApp({ active = true } = {}) {
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    // GeomSelect has no notion of a disabled option, and extending it is
-    // out of scope here (js/shared/mtlx-ui.jsx isn't one of this pass's
-    // two touchable files) — so unavailable versions are filtered out of
-    // `options` instead, with a one-line hint standing in for the "not in
-    // this build" note a disabled row would otherwise carry.
-    const availableVersionOptions = mtlxVersions.filter((v) => v === mtlxDefaultVersion || versionAvailable[v] === true);
-    const unavailableVersions = mtlxVersions.filter((v) => v !== mtlxDefaultVersion && versionAvailable[v] === false);
+    // Every known version is listed now; disabledOptions/titles carry
+    // the probe result instead of filtering rows out of the list.
+    // A still-probing version stays disabled with no title yet.
+    const versionDisabledOptions = {};
+    const versionTitles = {};
+    mtlxVersions.forEach((v) => {
+        if (v === mtlxDefaultVersion || versionAvailable[v] === true) return;
+        versionDisabledOptions[v] = true;
+        if (versionAvailable[v] === false) {
+            versionTitles[v] = 'MaterialX ' + v + ' is not available in this build.';
+        }
+    });
 
     // Whole-feature signal for Task 4's labels: only worth surfacing the
     // version at all once the two panes actually diverge. Compares
@@ -508,21 +639,33 @@ function MaterialCompareApp({ active = true } = {}) {
     const versionTag = (v) => 'v' + v;
 
     // Re-apply the current env sliders to a freshly (re)built view — a
-    // rebuild starts from envUI.bg only (see useCompareRenderEffect);
+    // rebuild starts from envUI.backdrop only (see useCompareRenderEffect);
     // rotation/exposure need this separate pass.
     React.useEffect(() => {
         [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => {
             if (!v) return;
-            if (v.setEnvBackground) v.setEnvBackground(envUIRef.current.bg);
+            if (v.setBackdrop) v.setBackdrop(envUIRef.current.backdrop);
             if (v.setEnvRotation) v.setEnvRotation(envUIRef.current.rotation * Math.PI / 180);
             if (v.setEnvExposure) v.setEnvExposure(envUIRef.current.exposure);
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slotA.viewEpoch, slotB.viewEpoch]);
 
-    const setEnvBg = (on) => {
-        setEnvUI((s) => ({ ...s, bg: on }));
-        [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => v && v.setEnvBackground && v.setEnvBackground(on));
+    // Re-read the key light global whenever either slot's view is rebuilt,
+    // mirroring EnvDialog's re-read on open since this row has no open event.
+    React.useEffect(() => {
+        setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [slotA.viewEpoch, slotB.viewEpoch]);
+
+    const handleToggleKeyLight = (next) => {
+        setKeyLightOn(next);
+        if (keyLightAvail) window.setKeyLightEnabled(next);
+    };
+
+    const setBackdrop = (mode) => {
+        setEnvUI((s) => ({ ...s, backdrop: mode }));
+        [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => v && v.setBackdrop && v.setBackdrop(mode));
         statsDirtyRef.current = true; diffDirtyRef.current = true;
     };
     const setEnvRotationDeg = (deg) => {
@@ -541,20 +684,37 @@ function MaterialCompareApp({ active = true } = {}) {
             const env = await loadEnvironmentFromFile(file);
             // Broadcasts to both live views via the engine's LIVE_VIEWS registry.
             setEnvOverride(env);
+            setEnvFileName(file.name);
             statsDirtyRef.current = true; diffDirtyRef.current = true;
         } catch (e) {
             setEnvImportError(errMsg(e));
         }
     };
+    // Clears an imported environment back to the default WITHOUT touching
+    // rotation/exposure: that stays the Reset button's job.
+    const clearEnvOverride = () => {
+        setEnvOverride(null);
+        setEnvImportError(null);
+        setEnvFileName('');
+        statsDirtyRef.current = true; diffDirtyRef.current = true;
+    };
     const resetEnv = () => {
         setEnvOverride(null);
         setEnvImportError(null);
-        setEnvUI({ rotation: 0, exposure: 1, bg: true });
+        setEnvFileName('');
+        // Back to the sitewide 'studio' default. Goes through setBackdrop
+        // so the live views follow the dropdown.
+        setBackdrop('studio');
+        setEnvUI((s) => ({ ...s, rotation: 0, exposure: 1 }));
         [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => {
             if (!v) return;
             if (v.setEnvRotation) v.setEnvRotation(0);
             if (v.setEnvExposure) v.setEnvExposure(1.0);
         });
+        // Key light back to the engine default (on). Guarded: the setter
+        // rebuilds the active environment, so only call it when off.
+        if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+        setKeyLightOn(true);
         statsDirtyRef.current = true; diffDirtyRef.current = true;
     };
 
@@ -612,6 +772,20 @@ function MaterialCompareApp({ active = true } = {}) {
         return () => handles.forEach((h) => h.controls.removeEventListener('change', onChange));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slotA.viewEpoch, slotB.viewEpoch]);
+
+    // Force Transparency swaps each view's render pipeline in place (no
+    // viewEpoch bump), so nothing above sees it. mtlx-engine.js dispatches
+    // this event from setForceTransparency; the 200ms ticker below already
+    // gives both views time to repaint before it recomputes.
+    React.useEffect(() => {
+        const onSettingsChanged = (e) => {
+            if (!e.detail || e.detail.key !== 'forceTransparency') return;
+            statsDirtyRef.current = true;
+            diffDirtyRef.current = true;
+        };
+        window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+        return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+    }, []);
 
     // Stage resizes also invalidate the last computed stats.
     React.useEffect(() => {
@@ -747,6 +921,20 @@ function MaterialCompareApp({ active = true } = {}) {
 
     const bothLive = slotA.viewEpoch > 0 && slotB.viewEpoch > 0 && !!slotA.viewRef.current && !!slotB.viewRef.current;
 
+    // Statistics panel's help popover: Escape + outside-pointerdown close,
+    // same pattern as mtlx-ui.jsx's anchored popovers (EnvDialog etc.).
+    useEscapeToClose(() => setStatsHelpOpen(false), statsHelpOpen);
+    React.useEffect(() => {
+        if (!statsHelpOpen) return undefined;
+        const onDown = (e) => {
+            if (statsHelpPopRef.current && statsHelpPopRef.current.contains(e.target)) return;
+            if (statsHelpBtnRef.current && statsHelpBtnRef.current.contains(e.target)) return;
+            setStatsHelpOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [statsHelpOpen]);
+
     // "Switch Views": toggles the diff-pane position for whichever mode is
     // currently active. Style-only — never touches the always-mounted
     // canvas structure, so nothing remounts. Marks the GPU diff canvas
@@ -763,6 +951,15 @@ function MaterialCompareApp({ active = true } = {}) {
         : 'Swap which side the difference replaces';
 
     // ---- Layout helpers ---------------------------------------------------
+    const modeLabel = { side: 'Side by side', slider: 'Swipe', diff: 'Difference' }[displayMode];
+    const envSummary = (envUI.rotation === 0 && envUI.exposure === 1)
+        ? 'Default'
+        : Math.round(envUI.rotation) + '°, ' + formatEv(linearToEv(envUI.exposure));
+
+    // 28px HUD chip classes for the stage's ViewportControls (camera reset,
+    // fullscreen), matching viewer-app.jsx's own hudChipClass.
+    const hudChipClass = (active) => active ? HUD_PILL_ACTIVE : HUD_PILL;
+
     const docName = (slot, fallback) => {
         if (slot.renderables.length) {
             const r = slot.renderables[Math.min(slot.chosenMat, slot.renderables.length - 1)];
@@ -857,98 +1054,133 @@ function MaterialCompareApp({ active = true } = {}) {
                 </div>
             )}
             {!slot.chosenMtlx && !slot.busy && !slot.error && (
-                <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
-                    {'Drop a .mtlx / .zip here or use the sidebar'}
-                </div>
+                <React.Fragment>
+                    <div
+                        aria-hidden="true"
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                            backgroundImage: EMPTY_STAGE_GRID_IMAGE,
+                            backgroundSize: '40px 40px',
+                            maskImage: EMPTY_STAGE_GRID_MASK,
+                            WebkitMaskImage: EMPTY_STAGE_GRID_MASK,
+                        }}
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
+                        {'Drop a .mtlx / .zip here or use the sidebar'}
+                    </div>
+                </React.Fragment>
             )}
         </React.Fragment>
     );
 
-    const renderSlotSection = (slot, title) => {
-        const fileCount = Object.keys(slot.fileMap).length;
-        const texCount = Object.keys(slot.fileMap).filter((k) => IMG_EXT.test(k)).length;
+    const renderSlotSection = (slot, slotKey, title, dropHint) => {
+        const docBasename = slot.chosenMtlx ? slot.chosenMtlx.split('/').pop() : 'No document';
         return (
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2.5">
-                <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</div>
-                <div className="text-[11px] text-gray-500">
-                    {'Drop a .mtlx document — alone, with textures, or as a .zip — onto this side of the stage, or:'}
+            <SectionCard
+                icon="file-text"
+                title={title}
+                pill={<SlotDot color={SLOT_COLORS[slotKey]} />}
+                summary={docBasename}
+                defaultOpen
+            >
+                <div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-400">MaterialX version</span>
+                        <MtlxSelect
+                            value={slot.version}
+                            options={mtlxVersions}
+                            labels={versionLabels}
+                            defValue={mtlxDefaultVersion}
+                            disabledOptions={versionDisabledOptions}
+                            titles={versionTitles}
+                            popWidth={VERSION_POP_W}
+                            onChange={(v) => {
+                                slot.setVersion(v);
+                                // A Document belongs to the mx instance that parsed it, so
+                                // switching versions re-parses the already-chosen file with
+                                // the new engine. Nothing to reload if none is loaded yet.
+                                if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
+                            }}
+                            size="sm"
+                            disabled={slot.busy}
+                        />
+                    </div>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                    <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
-                        Choose files
-                        <input type="file" multiple className="hidden" onChange={slot.onPickFiles} />
-                    </label>
-                    <label className="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors">
-                        Choose folder
-                        <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={slot.onPickFiles} />
+                <div className="flex items-center gap-1">
+                    <div className="flex-1 min-w-0">
+                        <FilePickerField
+                            value={slot.chosenMtlx ? docBasename : ''}
+                            placeholder="No document loaded"
+                            multiple
+                            icon="files"
+                            accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                            onFiles={(files) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFileList(files); }}
+                        />
+                    </div>
+                    <label
+                        title="Choose a folder"
+                        className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+                    >
+                        <MtlxIcon name="folder" className="w-3.5 h-3.5" />
+                        <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFiles(e); }} />
                     </label>
                 </div>
-                <div className="space-y-1">
-                    <div className="text-[11px] text-gray-500">MaterialX version</div>
-                    <GeomSelect
-                        value={slot.version}
-                        options={availableVersionOptions}
-                        labels={versionLabels}
-                        badges={versionBadges}
-                        onChange={(v) => {
-                            slot.setVersion(v);
-                            // A Document belongs to the mx instance that
-                            // parsed it, so switching versions re-parses
-                            // the already-chosen file with the new engine.
-                            // Nothing to reload if no document is loaded yet.
-                            if (slot.chosenMtlx) slot.loadDocument(slot.chosenMtlx, undefined, v);
-                        }}
-                        className={'w-full justify-between bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200'
-                            + (slot.busy ? ' opacity-50 pointer-events-none' : '')}
+                <div className="text-xs text-gray-500">{dropHint}</div>
+                {slot.mtlxPaths.length > 1 && (
+                    <MtlxSelect
+                        value={slot.chosenMtlx || ''}
+                        options={slot.mtlxPaths}
+                        placeholder={'Pick a .mtlx…'}
+                        onChange={(v) => { slot.setChosenMtlx(v); slot.loadDocument(v); }}
+                        defValue={null}
+                        size="lg"
+                        variant="field"
+                        block
                     />
-                    {unavailableVersions.length > 0 && (
-                        <div className="text-[10px] text-gray-500">
-                            {unavailableVersions.map((v) => 'MaterialX ' + v).join(', ')}
-                            {unavailableVersions.length === 1 ? ' is' : ' are'} not available in this build.
-                        </div>
-                    )}
-                </div>
-                {fileCount > 0 && (
-                    <div className="text-[11px] text-gray-500">
-                        <span className="text-gray-300 font-semibold">{fileCount}</span> file{fileCount === 1 ? '' : 's'}
-                        {' '}({slot.mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'})
+                )}
+                {window.MTLX_PRESETS && window.presetKey && (
+                    <div>
+                        <FieldLabel label="Or pick a curated example" />
+                        <MtlxSelect
+                            value={presetPick[slotKey]}
+                            options={window.MTLX_PRESETS.map((p) => ({ value: presetKey(p), label: p.label }))}
+                            placeholder="Choose a curated example"
+                            disabled={presetBusy[slotKey] || slot.busy}
+                            onChange={(path) => {
+                                setPresetPick((s) => ({ ...s, [slotKey]: path }));
+                                if (!path) return;
+                                const preset = window.MTLX_PRESETS.find((p) => presetKey(p) === path);
+                                if (preset) loadPresetIntoSlot(slot, slotKey, preset);
+                            }}
+                            defValue={null}
+                            size="lg"
+                            variant="field"
+                            block
+                        />
                     </div>
                 )}
-                {slot.mtlxPaths.length > 1 && (
-                    <select
-                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
-                        value={slot.chosenMtlx || ''}
-                        onChange={(e) => { slot.setChosenMtlx(e.target.value); slot.loadDocument(e.target.value); }}
-                    >
-                        {!slot.chosenMtlx && <option value="">{'Pick a .mtlx…'}</option>}
-                        {slot.mtlxPaths.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                )}
                 {slot.renderables.length > 1 && (
-                    <select
-                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
+                    <MtlxSelect
                         value={slot.chosenMat}
-                        onChange={(e) => slot.setChosenMat(Number(e.target.value))}
-                    >
-                        {slot.renderables.map((r, i) => <option key={i} value={i}>{r.name}</option>)}
-                    </select>
+                        options={slot.renderables.map((r, i) => ({ value: i, label: r.name }))}
+                        onChange={slot.setChosenMat}
+                        defValue={null}
+                        size="lg"
+                        variant="field"
+                        block
+                    />
                 )}
                 {slot.texReport && slot.texReport.missing.length > 0 && (
-                    <div className="text-[11px] space-y-1">
-                        {slot.texReport.bound.map((b, i) => (
-                            <div key={'b' + i} className="flex items-start gap-1 text-green-300/90 font-mono break-all">
-                                <MtlxIcon name="check" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{b}</span>
-                            </div>
-                        ))}
+                    <div className="space-y-2">
                         {slot.texReport.missing.map((m, i) => (
-                            <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">
+                            <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files, so the image node's default color is shown instead.">
                                 <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
                             </div>
                         ))}
+                        <div className="text-xs text-gray-500">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
                     </div>
                 )}
-                {slot.error && <div className="text-red-300 text-[11px] break-words">{slot.error}</div>}
-            </div>
+            </SectionCard>
         );
     };
 
@@ -959,6 +1191,10 @@ function MaterialCompareApp({ active = true } = {}) {
                 below (styleFor, diffCanvasStyle, dividers) resolve against
                 this box, not the full stage. */}
             <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: sidebarOpen ? COMPARE_SIDEBAR_INSET : 0 }}>
+              {/* Inner stage content wrapper: className-only (no inline
+                  styles), so it stays a safe fullscreen target and never
+                  fights the engine's CSS-maximize fallback. */}
+              <div ref={stageContentRef} className="absolute inset-0">
                 {/* Full-stage split drop indicator (z-40, above the sidebar). */}
                 {dragOver && (
                     <div className="absolute inset-0 z-40 p-2 sm:p-4 flex gap-2">
@@ -1000,9 +1236,10 @@ function MaterialCompareApp({ active = true } = {}) {
                     {renderSlotOverlays(slotA)}
                     {displayMode === 'side' && (
                         <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
-                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                                <SlotDot color={SLOT_COLORS.A} />
                                 {docName(slotA, 'Document A')}
-                                {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotA.renderedVersion)}</span>}
+                                {versionsDiffer && <span className="ml-1.5 font-mono text-white/50">{versionTag(slotA.renderedVersion)}</span>}
                             </span>
                         </div>
                     )}
@@ -1012,13 +1249,28 @@ function MaterialCompareApp({ active = true } = {}) {
                     {renderSlotOverlays(slotB)}
                     {displayMode === 'side' && (
                         <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
-                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
+                                <SlotDot color={SLOT_COLORS.B} />
                                 {docName(slotB, 'Document B')}
-                                {versionsDiffer && <span className="ml-1.5 text-white/50">{versionTag(slotB.renderedVersion)}</span>}
+                                {versionsDiffer && <span className="ml-1.5 font-mono text-white/50">{versionTag(slotB.renderedVersion)}</span>}
                             </span>
                         </div>
                     )}
                 </div>
+
+                {!slotA.chosenMtlx && !slotB.chosenMtlx && !slotA.busy && !slotB.busy && (
+                    <div className="absolute inset-x-0 z-20 flex justify-center" style={{ top: 'calc(50% + 2.5rem)' }}>
+                        <button
+                            type="button"
+                            onClick={loadExamplePair}
+                            title="Carpaint (Standard Surface) vs the same values translated to OpenPBR"
+                            className={PILL_ACTION + ' pointer-events-auto'}
+                        >
+                            <MtlxIcon name="inner-shadow-bottom-right" className="w-3.5 h-3.5" />
+                            Load an example pair
+                        </button>
+                    </div>
+                )}
 
                 {displayMode === 'side' && (
                     effShowDiff ? (
@@ -1066,17 +1318,31 @@ function MaterialCompareApp({ active = true } = {}) {
                 {displayMode === 'slider' && (
                     <React.Fragment>
                         <CompareDivider pos={sliderPos} onPos={setSliderPos} />
+                        {/* Lifted above the status chip, which also sits at
+                            bottom-0 left-0 m-2 in this corner (style prop,
+                            not a class, so it wins regardless of sheet order). */}
                         <CompareLabel
                             side="left"
+                            style={{ bottom: '1.75rem' }}
                             version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'left') ? versionTag(slotA.renderedVersion) : null}
                         >
-                            {effShowDiff && swipeDiffPos === 'left' ? 'Difference' : docName(slotA, 'Document A')}
+                            {effShowDiff && swipeDiffPos === 'left' ? 'Difference' : (
+                                <React.Fragment>
+                                    <SlotDot color={SLOT_COLORS.A} className="mr-1.5 align-middle" />
+                                    {docName(slotA, 'Document A')}
+                                </React.Fragment>
+                            )}
                         </CompareLabel>
                         <CompareLabel
                             side="right"
                             version={versionsDiffer && !(effShowDiff && swipeDiffPos === 'right') ? versionTag(slotB.renderedVersion) : null}
                         >
-                            {effShowDiff && swipeDiffPos === 'right' ? 'Difference' : docName(slotB, 'Document B')}
+                            {effShowDiff && swipeDiffPos === 'right' ? 'Difference' : (
+                                <React.Fragment>
+                                    <SlotDot color={SLOT_COLORS.B} className="mr-1.5 align-middle" />
+                                    {docName(slotB, 'Document B')}
+                                </React.Fragment>
+                            )}
                         </CompareLabel>
                     </React.Fragment>
                 )}
@@ -1096,37 +1362,51 @@ function MaterialCompareApp({ active = true } = {}) {
                         {'Load both documents to see the difference'}
                     </div>
                 )}
+
+                <ViewportControls
+                    showGeomSelect={false}
+                    showRotate={false}
+                    envAvail={false}
+                    showScreenshot={false}
+                    showSettings={false}
+                    showLabels={true}
+                    onCameraReset={resetCompareCameras}
+                    isFullscreen={isFullscreen}
+                    onToggleFullscreen={toggleFullscreen}
+                    containerClassName="absolute top-2 right-2 z-20 flex items-center gap-1"
+                    buttonClassName={hudChipClass}
+                />
+                <div className="absolute bottom-2 left-2 z-20 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
+                    <span>{modeLabel}</span>
+                    <span className="text-white/40">/</span>
+                    <span>{GEOM_LABELS[geom] || geom}</span>
+                </div>
+              </div>
             </div>
 
             {/* Floating left sidebar, mirroring viewer-app.jsx's Files panel. */}
             {sidebarOpen ? (
-                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-gray-800 border-r border-gray-700 overflow-hidden">
+                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
                     <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
-                        <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Compare</span>
+                        <span className="text-[13px] font-semibold text-gray-200">Compare</span>
                         <button
                             onClick={() => setSidebarOpen(false)}
                             title="Collapse the panel"
                             className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
                         ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                     </div>
-                    <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
-                        <div className="text-xs text-gray-500">
-                            This page renders two MaterialX documents with identical camera and lighting for visual
-                            comparison.
-                        </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
+                        {renderSlotSection(slotA, 'A', 'Document A', 'or drag-and-drop on the left half')}
+                        {renderSlotSection(slotB, 'B', 'Document B', 'or drag-and-drop on the right half')}
 
-                        {renderSlotSection(slotA, 'Document A')}
-                        {renderSlotSection(slotB, 'Document B')}
-
-                        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2.5">
-                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Display</div>
-                            <div className="flex rounded border border-gray-600 overflow-hidden text-[11px]">
+                        <SectionCard icon="layout-columns" title="Display" summary={modeLabel} defaultOpen>
+                            <div className="flex rounded-lg border border-gray-700 overflow-hidden text-[11px]">
                                 {[['side', 'Side by side'], ['slider', 'Swipe'], ['diff', 'Difference']].map(([id, label]) => (
                                     <button
                                         key={id}
                                         onClick={() => setDisplayMode(id)}
                                         className={'flex-1 px-2 py-1.5 transition-colors ' + (displayMode === id
-                                            ? 'bg-blue-600/80 text-white'
+                                            ? 'bg-blue-500/[0.12] text-blue-300'
                                             : 'bg-gray-800/80 text-gray-300 hover:bg-gray-700/80')}
                                     >
                                         {label}
@@ -1138,16 +1418,13 @@ function MaterialCompareApp({ active = true } = {}) {
                                     className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-gray-500' : 'text-gray-300 cursor-pointer')}
                                     title={gpuDiffOk === false ? 'Difference rendering unavailable (WebGL)' : undefined}
                                 >
-                                    <input
-                                        type="checkbox"
+                                    <Toggle
                                         checked={displayMode === 'diff' || effShowDiff}
                                         disabled={displayMode === 'diff' || gpuDiffOk === false}
-                                        onChange={(e) => {
-                                            const on = e.target.checked;
+                                        onChange={(on) => {
                                             setShowDiff(on);
                                             if (on) diffDirtyRef.current = true;
                                         }}
-                                        className="accent-blue-500"
                                     />
                                     Show difference
                                 </label>
@@ -1155,127 +1432,176 @@ function MaterialCompareApp({ active = true } = {}) {
                                     onClick={switchViews}
                                     disabled={switchViewsDisabled}
                                     title={switchViewsDisabled ? undefined : switchViewsTitle}
-                                    className={'flex-none inline-flex items-center gap-1 h-6 px-2 rounded border text-[11px] transition-colors ' + (switchViewsDisabled
-                                        ? 'bg-gray-800/50 border-gray-700 text-gray-600 cursor-not-allowed pointer-events-none'
-                                        : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 cursor-pointer')}
+                                    className={'flex-none inline-flex items-center gap-1 ' + (switchViewsDisabled
+                                        ? 'h-7 px-2.5 rounded-md border text-[11px] transition-colors bg-gray-800/50 border-gray-700 text-gray-600 cursor-not-allowed pointer-events-none'
+                                        : BTN_SECONDARY + ' cursor-pointer')}
                                 >
                                     <MtlxIcon name="switch-horizontal" className="w-3.5 h-3.5" />
                                     Switch Views
                                 </button>
                             </div>
-                        </div>
+                        </SectionCard>
 
-                        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2.5">
-                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Geometry</div>
-                            <GeomSelect
-                                value={geom}
-                                options={GEOM_OPTIONS}
-                                badges={{ 'shaderball-scene': 'Default' }}
-                                onChange={setGeom}
-                                className="w-full justify-between bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
+                        <SectionCard icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom} defaultOpen>
+                            <div className="grid grid-cols-2 gap-2">
+                                {GEOM_OPTIONS.map((g) => (
+                                    <GeometryTile
+                                        key={g}
+                                        label={GEOM_LABELS[g] || g}
+                                        icon={GEOM_ICONS[g]}
+                                        selected={geom === g}
+                                        onClick={() => setGeom(g)}
+                                        badge={g === 'shaderball-scene' ? 'Default' : undefined}
+                                    />
+                                ))}
+                            </div>
+                        </SectionCard>
+
+                        <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
+                            <FilePickerField
+                                value={envFileName}
+                                placeholder="Default environment"
+                                accept=".hdr,.exr"
+                                icon="file"
+                                onFiles={(files) => {
+                                    const f = files && files[0];
+                                    if (f) importEnv(f);
+                                }}
+                                onClear={clearEnvOverride}
                             />
-                        </div>
+                            {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                            <SliderField
+                                label="Environment rotation" unit="deg"
+                                value={envUI.rotation} min={0} max={360} step={1}
+                                onSlider={(v) => setEnvRotationDeg(Number(v))}
+                                onNumber={(v) => setEnvRotationDeg(Number(v))}
+                            />
+                            <SliderField
+                                label="Exposure" unit="EV"
+                                value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                                onSlider={(v) => setEnvExposureVal(evToLinear(v))}
+                                onNumber={(v) => setEnvExposureVal(evToLinear(v))}
+                            />
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                                <MtlxSelect
+                                    value={envUI.backdrop}
+                                    options={['studio', 'studio-dark', 'environment', 'none']}
+                                    labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
+                                    onChange={setBackdrop}
+                                    defValue="studio"
+                                    disabled={geom === 'shaderball-scene'}
+                                    title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined}
+                                    size="sm"
+                                />
+                            </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'}
+                            >
+                                <span className="text-xs font-medium text-gray-400">Extract key light</span>
+                                <Toggle
+                                    checked={keyLightOn}
+                                    onChange={handleToggleKeyLight}
+                                    disabled={!keyLightAvail}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Pull a sun-like light out of the HDRI for crisp highlights.
+                            </div>
+                            <button
+                                onClick={resetEnv}
+                                title="Also clears an imported .hdr/.exr and restores the default environment"
+                                className={BTN_SECONDARY + ' w-full'}
+                            >
+                                Reset
+                            </button>
+                        </SectionCard>
 
-                        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2.5 text-[11px] text-gray-300">
-                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Environment</div>
-                            <div className="flex items-center justify-between">
-                                <span>Background</span>
-                                <button
-                                    onClick={() => setEnvBg(!envUI.bg)}
-                                    className={`h-5 px-2 rounded border transition-colors ${
-                                        envUI.bg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
-                                    }`}
-                                >
-                                    {envUI.bg ? 'On' : 'Off'}
-                                </button>
-                            </div>
-                            <div>
-                                <div className="flex items-center justify-between mb-0.5">
-                                    <span>Rotation</span><span className="font-mono text-gray-400">{Math.round(envUI.rotation)}°</span>
-                                </div>
-                                <input
-                                    type="range" min="0" max="360" step="1"
-                                    value={envUI.rotation}
-                                    onChange={(e) => setEnvRotationDeg(Number(e.target.value))}
-                                    className="w-full accent-blue-500"
-                                />
-                            </div>
-                            <div>
-                                <div className="flex items-center justify-between mb-0.5">
-                                    <span>Exposure</span><span className="font-mono text-gray-400">{envUI.exposure.toFixed(2)}</span>
-                                </div>
-                                <input
-                                    type="range" min="0" max="4" step="0.05"
-                                    value={envUI.exposure}
-                                    onChange={(e) => setEnvExposureVal(Number(e.target.value))}
-                                    className="w-full accent-blue-500"
-                                />
-                            </div>
-                            <div className="flex items-center gap-1.5 pt-1 border-t border-gray-700">
-                                <button
-                                    onClick={() => envFileInputRef.current && envFileInputRef.current.click()}
-                                    className="flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                >
-                                    {'Import…'}
-                                </button>
-                                <button
-                                    onClick={resetEnv}
-                                    className="flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                                >
-                                    Reset
-                                </button>
-                                <input
-                                    ref={envFileInputRef}
-                                    type="file"
-                                    accept=".hdr,.exr"
-                                    className="hidden"
-                                    onChange={(e) => {
-                                        const f = e.target.files && e.target.files[0];
-                                        e.target.value = '';
-                                        if (f) importEnv(f);
+                        <SectionCard icon="settings-cog" title="Rendering" summary={forceTransparency ? 'Transparency forced' : 'Default'} defaultOpen>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Force Transparency
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={forceTransparency}
+                                    onChange={(next) => {
+                                        setForceTransparency(next);
+                                        window.setForceTransparency && window.setForceTransparency(next);
                                     }}
                                 />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                             </div>
-                            {envImportError && <div className="text-red-400">{envImportError}</div>}
-                        </div>
+                        </SectionCard>
+                    </div>
 
-                        <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2 text-[11px] text-gray-300">
-                            <div className="flex items-center justify-between">
-                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Statistics</span>
-                                {bothLive && <span className="text-gray-500">live</span>}
+                    {/* Pinned Statistics panel: always expanded and non-scrolling,
+                        a sibling BELOW the scrollable cards column above (not one
+                        more card inside it). */}
+                    <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-2.5" style={{ background: STATS_PANEL_SURFACE }}>
+                        <div className="flex items-center gap-2">
+                            <MtlxIcon name="compare" className="w-4 h-4 text-gray-400 shrink-0" />
+                            <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
+                            {bothLive && <span className="shrink-0 text-[10px] text-gray-600">·</span>}
+                            {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">live</span>}
+                            {bothLive && stats && <span className="shrink-0 text-[10px] text-gray-600">·</span>}
+                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</span>}
+                            <div className="flex-1" />
+                            <div className="relative shrink-0">
+                                <button
+                                    ref={statsHelpBtnRef}
+                                    type="button"
+                                    onClick={() => setStatsHelpOpen((o) => !o)}
+                                    title="About these statistics"
+                                    className="w-5 h-5 inline-flex items-center justify-center rounded-full border border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                                >
+                                    <MtlxIcon name="help" className="w-3.5 h-3.5" />
+                                </button>
+                                {statsHelpOpen && (
+                                    <div
+                                        ref={statsHelpPopRef}
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        className="absolute bottom-full right-0 mb-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg p-3 space-y-1.5 text-[11px] text-gray-300 z-10"
+                                    >
+                                        <div>
+                                            The difference heatmap shows the per-pixel absolute color difference of the
+                                            two renders, log-scaled through a false-color ramp (black → blue → cyan → yellow → red)
+                                            so subtle differences stay visible.
+                                        </div>
+                                        <div>
+                                            Note: antialiasing can produce small spurious
+                                            differences, especially along geometry edges, the backdrop, and the environment background.
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                            <div className="space-y-1">
-                                <div className="flex justify-between"><span>SSIM</span><span className="font-mono">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
-                                <div className="flex justify-between"><span>RMSE</span><span className="font-mono">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
-                                <div className="flex justify-between">
-                                    <span>PSNR</span>
-                                    <span className="font-mono">{stats ? (stats.metrics.psnr === Infinity ? '∞ dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '—'}</span>
-                                </div>
-                                <div className="flex justify-between"><span>Mean abs diff</span><span className="font-mono">{stats ? stats.metrics.meanAbsDiff.toFixed(2) : '—'}</span></div>
-                                {stats && <div className="text-gray-500 text-[10px] pt-1">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</div>}
+                        </div>
+                        <div className="space-y-1 text-[11px] text-gray-300">
+                            <div className="flex justify-between"><span>SSIM</span><span className="font-mono tabular-nums">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
+                            <div className="flex justify-between"><span>RMSE</span><span className="font-mono tabular-nums">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
+                            <div className="flex justify-between">
+                                <span>PSNR</span>
+                                <span className="font-mono tabular-nums">{stats ? (stats.metrics.psnr === Infinity ? '∞ dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '—'}</span>
                             </div>
-                            <div className="space-y-1.5 text-xs text-gray-500">
-                                <div>
-                                    The difference heatmap shows the per-pixel absolute color difference of the
-                                    two renders, log-scaled through a false-color ramp (black → blue → cyan → yellow → red)
-                                    so subtle differences stay visible.
-                                </div>
-                                <div>
-                                    Note: antialiasing can produce small spurious
-                                    differences, especially along geometry edges, the backdrop, and the environment background.
-                                </div>
-                            </div>
+                            <div className="flex justify-between"><span>Mean abs diff</span><span className="font-mono tabular-nums">{stats ? stats.metrics.meanAbsDiff.toFixed(2) : '—'}</span></div>
                         </div>
                     </div>
+
                     <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
-                        Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.
+                        Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                     </div>
                 </div>
             ) : (
                 <button
                     onClick={() => setSidebarOpen(true)}
                     title="Expand the panel"
-                    className="absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    className={'absolute top-2 left-2 z-30 ' + HUD_PILL}
                 >
                     <MtlxIcon name="chevrons-right" className="w-4 h-4" />
                     <span className="max-w-[6rem] truncate">Compare</span>

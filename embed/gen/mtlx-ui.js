@@ -11,12 +11,22 @@
 // Recurring Tailwind button strings, pulled out because the exact same
 // string (verbatim) repeats across files. Near-twin variants elsewhere
 // (different opacity/sizing) are NOT this — leave those inline.
-const BTN_SECONDARY = 'h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
-const BTN_PRIMARY = 'h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
 const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0';
+// Menu-bar variant: no resting edge or fill, both revealed on hover (the
+// VS Code menu bar idiom). The border stays declared but transparent so
+// the button never changes size between states. No backdrop-blur: the
+// menu bar it sits on is opaque, so there is nothing to blur.
+const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border border-transparent bg-transparent text-gray-300 hover:bg-gray-700/80 hover:border-gray-600 transition-colors whitespace-nowrap shrink-0';
+// Labeled overlay pills for the tool HUDs (viewer/compare) and the
+// collapsed-sidebar pills: deliberately 11px normal weight, not the
+// bolder PILL_ACTION, to match the sidebar's own labeled pills.
+const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-gray-600/50 bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors whitespace-nowrap';
+const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-blue-500 bg-blue-600/80 backdrop-blur text-white transition-colors whitespace-nowrap';
 
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
@@ -474,7 +484,7 @@ function SettingsDialog({
   // Right-align to the cog and clamp both axes to the viewport, flipping
   // above if it would overflow the bottom — identical math to EnvDialog's
   // default branch. No placement="left" variant needed here.
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!open) return undefined;
     const rect = anchorRef && anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
     if (rect) {
@@ -695,23 +705,33 @@ function ShaderExportDialog({
     className: "px-4 py-2.5 flex items-center gap-2 flex-wrap"
   }, /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 text-[11px] text-gray-400"
-  }, /*#__PURE__*/React.createElement("span", null, "Target"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("span", null, "Target"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: targetKey,
-    onChange: e => setTargetKey(e.target.value),
-    className: "h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-  }, EXPORT_TARGETS.map(t => /*#__PURE__*/React.createElement("option", {
-    key: t.key,
-    value: t.key
-  }, t.label)))), renderables.length > 1 && /*#__PURE__*/React.createElement("label", {
+    options: EXPORT_TARGETS.map(t => ({
+      value: t.key,
+      label: t.label
+    })),
+    onChange: setTargetKey,
+    defValue: null,
+    size: "md",
+    variant: "toolbar",
+    font: "mono",
+    className: "max-w-full truncate"
+  })), renderables.length > 1 && /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 text-[11px] text-gray-400"
-  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: matIndex,
-    onChange: e => setMatIndex(Number(e.target.value)),
-    className: "h-7 text-[11px] px-2 py-0 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 font-mono max-w-full truncate"
-  }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-    key: i,
-    value: i
-  }, r.name))))), stages && stages.length > 1 && /*#__PURE__*/React.createElement("div", {
+    options: renderables.map((r, i) => ({
+      value: i,
+      label: r.name
+    })),
+    onChange: setMatIndex,
+    defValue: null,
+    size: "md",
+    variant: "toolbar",
+    font: "mono",
+    className: "max-w-full truncate"
+  }))), stages && stages.length > 1 && /*#__PURE__*/React.createElement("div", {
     className: "px-4 pb-2 flex items-center gap-1.5"
   }, stages.map((st, i) => /*#__PURE__*/React.createElement("button", {
     key: st.id,
@@ -753,6 +773,18 @@ const useViewToggle = (viewRef, method, initial) => {
   return [value, toggle];
 };
 
+// String-valued sibling of useViewToggle (backdrop picker, etc.): same
+// idea, but the value is any string the caller hands it instead of a
+// flipped boolean, so the setter takes the next value directly.
+const useViewEnum = (viewRef, method, initial) => {
+  const [value, setValue] = React.useState(initial);
+  const set = next => {
+    setValue(next);
+    if (viewRef.current && viewRef.current[method]) viewRef.current[method](next);
+  };
+  return [value, set];
+};
+
 // PNG snapshot of the given render view's frame, downloaded as
 // `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
 // view.snapshot() returns a plain data: URL, so there's no URL to revoke.
@@ -783,6 +815,52 @@ const downloadXml = (xml, filename) => {
   }), filename);
 };
 
+// Attribution stamped onto every document this site exports. A comment,
+// not an attribute, so it round-trips through any MaterialX reader
+// without touching the document model.
+// The version is the release tag the header already resolves; where that
+// is unavailable (VS Code webview, embed mode, offline, rate-limited) the
+// line carries no version rather than a wrong one, and the 1.5s race
+// keeps a slow or never-settling lookup from blocking an export.
+const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
+const exportAttributionLine = async () => {
+  const NL = String.fromCharCode(10);
+  let version = '';
+  try {
+    const facts = await Promise.race([Promise.resolve(window.mtlxSourceFacts), new Promise(r => setTimeout(() => r(null), 1500))]);
+    const tag = facts && facts.version ? String(facts.version).trim() : '';
+    if (tag) version = ' ' + (/^v/i.test(tag) ? tag : 'v' + tag);
+  } catch (e) {/* no facts available: attribute without a version */}
+  // The page's own canonical declaration wins; the literal only covers
+  // hosts that ship no canonical link (the VS Code webview).
+  let site = MTLX_SITE_URL;
+  try {
+    const link = document.querySelector('link[rel="canonical"]');
+    if (link && link.href) site = link.href;
+  } catch (e) {/* keep the literal */}
+  // Both export callers go through getMxEnv() with no argument, so the
+  // default engine version is the one that actually wrote this document.
+  let engine = '';
+  try {
+    const v = window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION;
+    if (v) engine = String(v).replace(/^v/i, '');
+  } catch (e) {/* omit rather than state a version we cannot confirm */}
+  const lines = ['<!--', '  Exported by MaterialX Playground' + version, '  ' + site];
+  if (engine) lines.push('  MaterialX v' + engine);
+  lines.push('-->');
+  return lines.join(NL);
+};
+
+// Slots the attribution between the XML declaration and the root element:
+// a comment may not precede the declaration.
+const withExportAttribution = (xml, line) => {
+  const text = xml == null ? '' : String(xml);
+  const NL = String.fromCharCode(10);
+  const m = /^\s*<\?xml[^>]*\?>\s*/.exec(text);
+  return m ? text.slice(0, m[0].length) + line + NL + text.slice(m[0].length) : line + NL + text;
+};
+const attributeExportedXml = async xml => withExportAttribution(xml, await exportAttributionLine());
+
 // Bundles the viewport-control state cluster shared by the three preview
 // surfaces: rotate/env toggles, env-availability, fullscreen, screenshot.
 // `getSnapshotBase` supplies the PNG base name; no try/catch here by design.
@@ -791,9 +869,12 @@ const downloadXml = (xml, filename) => {
 // js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
 // every existing caller omits these, and `!!undefined` is `false`, so
 // today's default (both off) is unchanged.
-const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg) => {
+// `initialBackdrop`: seed for the four-way backdrop picker (studio /
+// studio-dark / environment / none). Defaults to 'studio', the engine's new default.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg, initialBackdrop = 'studio') => {
   const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
   const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
+  const [backdrop, setBackdrop] = useViewEnum(viewRef, 'setBackdrop', initialBackdrop);
   const [envAvail, setEnvAvail] = React.useState(false);
   const [viewEpoch, setViewEpoch] = React.useState(0);
   const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
@@ -809,6 +890,8 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
     toggleRotating,
     envBg,
     toggleEnvBg,
+    backdrop,
+    setBackdrop,
     envAvail,
     setEnvAvail,
     viewEpoch,
@@ -825,16 +908,21 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
 const openInGraphEditor = ({
   xml,
   name,
-  files
+  files,
+  select
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
   // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
   if (fullscreenElement()) toggleFullscreen();
+  // `select`: optional node NAME to land on once the document settles,
+  // for handoffs where the editor's own default would pick a different
+  // node than the one the sender was showing.
   window.__mtlxPendingImport = {
     xml,
     name,
-    files: files || null
+    files: files || null,
+    select: select || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-load-document', {
     detail: window.__mtlxPendingImport
@@ -859,16 +947,20 @@ const looseFilesFrom = fileMap => {
 const openInViewer = ({
   xml,
   name,
-  files
+  files,
+  geometry
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
   // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
   if (fullscreenElement()) toggleFullscreen();
+  // `geometry`: optional, so a sender can hand over the geometry it was
+  // showing. The viewer re-validates it and ignores anything it cannot render.
   window.__mtlxPendingViewerImport = {
     xml,
     name,
-    files: files || null
+    files: files || null,
+    geometry: geometry || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-view-document', {
     detail: window.__mtlxPendingViewerImport
@@ -965,26 +1057,45 @@ const LoadingOverlay = ({
 const ENV_DIALOG_W = 224,
   ENV_DIALOG_H = 240; // approx footprint, used for edge clamping/flip below
 
+// EV stops <-> the engine's linear exposure multiplier.
+// 0 EV = 1.0x, +1 = double, -1 = half.
+const EV_MIN = -3,
+  EV_MAX = 3,
+  EV_STEP = 0.1;
+const evToLinear = ev => {
+  const n = Number(ev);
+  return Number.isFinite(n) ? Math.pow(2, n) : 1;
+};
+const linearToEv = x => {
+  const n = Number(x);
+  return Number.isFinite(n) && n > 0 ? Math.log2(n) : 0;
+};
+const formatEv = ev => (ev >= 0 ? '+' : '') + (Math.round(ev * 10) / 10).toFixed(1) + ' EV';
 const EnvDialog = ({
   anchorRef,
   open,
   onClose,
-  envBg,
-  onToggleEnvBg,
-  showBackgroundToggle = true,
+  backdrop,
+  onBackdropChange,
+  showBackdropPicker = true,
+  // True while the active geometry is an authored room (e.g.
+  // shaderball-scene) that ignores the backdrop entirely. ViewportControls
+  // computes this from its own `geom` prop, since this dialog has none.
+  backdropDisabled = false,
   rotation,
   onRotationChange,
   exposure,
   onExposureChange,
   onImportFile,
   onReset,
+  envFileName,
+  onClearEnv,
   importError,
   placement,
   edgeRef
 }) => {
   const popRef = React.useRef(null);
   const [pos, setPos] = React.useState(null);
-  const fileInputRef = React.useRef(null);
   // Key-light extraction toggle: window.getKeyLightEnabled/setKeyLightEnabled
   // live in js/mtlx-engine.js and may be absent (standalone/older builds),
   // so the control degrades to disabled rather than throwing.
@@ -1004,10 +1115,19 @@ const EnvDialog = ({
     if (keyLightAvail) window.setKeyLightEnabled(next);
   };
 
+  // Reset also puts the key light back on (the engine default), guarded
+  // since the setter rebuilds the active environment; the rest of the
+  // reset (override/rotation/exposure/backdrop) is the caller's onReset.
+  const handleResetClick = () => {
+    if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+    setKeyLightOn(true);
+    onReset();
+  };
+
   // Right-align to the anchor and clamp both axes, flipping above if it
   // would overflow the bottom. `placement="left"` (graph preview only)
   // anchors to the panel's left edge instead of dropping on the canvas.
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!open) return undefined;
     const rect = anchorRef.current ? anchorRef.current.getBoundingClientRect() : null;
     if (rect) {
@@ -1057,13 +1177,36 @@ const EnvDialog = ({
       width: ENV_DIALOG_W
     }, pos || {}),
     className: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
-  }, showBackgroundToggle && /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between"
-  }, /*#__PURE__*/React.createElement("span", null, "Background"), /*#__PURE__*/React.createElement("button", {
-    onClick: onToggleEnvBg,
-    title: envBg ? 'Hide the environment map background' : 'Show the environment map as background',
-    className: `h-5 px-2 rounded border transition-colors ${envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'}`
-  }, envBg ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: envFileName,
+    placeholder: "Default environment",
+    accept: ".hdr,.exr",
+    icon: "file",
+    onFiles: files => {
+      const f = files && files[0];
+      if (f) onImportFile(f);
+    },
+    onClear: onClearEnv
+  })), importError && /*#__PURE__*/React.createElement("div", {
+    className: "text-red-400"
+  }, importError), showBackdropPicker && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-0.5"
+  }, /*#__PURE__*/React.createElement("span", null, "Backdrop")), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: backdrop,
+    options: ['studio', 'studio-dark', 'environment', 'none'],
+    labels: {
+      studio: 'Studio',
+      'studio-dark': 'Studio (Dark)',
+      environment: 'Environment',
+      none: 'None'
+    },
+    onChange: onBackdropChange,
+    defValue: "studio",
+    disabled: backdropDisabled,
+    title: backdropDisabled ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : 'Studio: a white room. Environment: the HDRI as background. None: a dark void.',
+    size: "sm",
+    block: true
+  })), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("span", null, "Extract key light"), /*#__PURE__*/React.createElement("button", {
     onClick: handleToggleKeyLight,
@@ -1086,38 +1229,21 @@ const EnvDialog = ({
     className: "flex items-center justify-between mb-0.5"
   }, /*#__PURE__*/React.createElement("span", null, "Exposure"), /*#__PURE__*/React.createElement("span", {
     className: "font-mono text-gray-400"
-  }, exposure.toFixed(2))), /*#__PURE__*/React.createElement("input", {
+  }, formatEv(linearToEv(exposure)))), /*#__PURE__*/React.createElement("input", {
     type: "range",
-    min: "0",
-    max: "4",
-    step: "0.05",
-    value: exposure,
-    onChange: e => onExposureChange(Number(e.target.value)),
+    min: EV_MIN,
+    max: EV_MAX,
+    step: EV_STEP,
+    value: linearToEv(exposure),
+    onChange: e => onExposureChange(evToLinear(e.target.value)),
     className: "w-full accent-blue-500"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-1.5 pt-1 border-t border-gray-700"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => fileInputRef.current && fileInputRef.current.click(),
-    className: "flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-  }, "Import\u2026"), /*#__PURE__*/React.createElement("button", {
-    onClick: onReset,
-    className: "flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-  }, "Reset"), /*#__PURE__*/React.createElement("input", {
-    ref: fileInputRef,
-    type: "file",
-    accept: ".hdr,.exr",
-    className: "hidden",
-    onChange: e => {
-      const f = e.target.files && e.target.files[0];
-      e.target.value = '';
-      if (f) onImportFile(f);
-    }
-  })), importError && /*#__PURE__*/React.createElement("div", {
-    className: "text-red-400"
-  }, importError)), fullscreenPortalRoot());
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: handleResetClick,
+    className: "w-full h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+  }, "Reset")), fullscreenPortalRoot());
 };
 
-// Friendly labels for the preview-geometry <select>'s raw values (which
+// Friendly labels for the preview-geometry dropdown's raw values (which
 // double as engine geomName / persisted-storage values, never changed —
 // only how they're displayed). Falls back to the raw value if unlisted.
 const GEOM_LABELS = {
@@ -1137,6 +1263,16 @@ const GEOM_LABELS = {
   'default': 'Auto (by node type)'
 };
 
+// Icons for the preview-geometry options (GeometryTile rows).
+const GEOM_ICONS = {
+  'shaderball-scene': 'inner-shadow-bottom-right',
+  'shaderball': 'inner-shadow-bottom-right',
+  'shaderball-mtlx': 'inner-shadow-bottom-right',
+  sphere: 'circle',
+  cube: 'cube',
+  cloth: 'wave'
+};
+
 // Per-node-type default preview geometry (docs previewer + graph
 // editor's preview). Groups whose output depends on geometry/lighting
 // (BXDF closures, materials, shaders, lights), view-dependent npr
@@ -1147,12 +1283,294 @@ const GEOM_LABELS = {
 // values (the same strings as js/gen/nodelib.json's group keys).
 const SHADERBALL_GROUPS = ['pbr', 'translation', 'material', 'shader', 'light', 'npr', 'geometric', 'texture3d'];
 const defaultGeomFor = nodegroup => SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d';
+const TEXT_INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500';
+
+// Fixed-height (20px) field label row shared by every field on the page,
+// so a label with a ReloadsPill lines up exactly with one that has none
+// (a bare text label used to be a few px shorter, misaligning neighbours).
+function FieldLabel({
+  label,
+  pill,
+  hint
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "h-5 flex items-center justify-between mb-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, label), (hint || pill) && /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-1.5 shrink-0"
+  }, hint && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-gray-500"
+  }, hint), pill));
+}
+
+// 34x20 pill switch for boolean fields (Show environment as background,
+// Auto-rotate, Transparent, Eager, ...).
+function Toggle({
+  checked,
+  onChange,
+  disabled
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    role: "switch",
+    "aria-checked": checked,
+    disabled: disabled,
+    onClick: () => onChange(!checked),
+    className: 'relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border transition-colors ' + (disabled ? 'opacity-40 cursor-not-allowed ' : 'cursor-pointer ') + (checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')
+  }, /*#__PURE__*/React.createElement("span", {
+    className: 'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ' + (checked ? 'translate-x-[15px]' : 'translate-x-[2px]')
+  }));
+}
+
+// A range input paired with a small right-aligned number box, both driving
+// the same value. `onSlider`/`onNumber` are separate so a caller can, e.g.,
+// collapse a slider-at-default back to '' without doing that mid-typing.
+function SliderField({
+  label,
+  unit,
+  value,
+  min,
+  max,
+  step,
+  onSlider,
+  onNumber,
+  placeholder
+}) {
+  // Normalized to a string up front so a caller may pass either a string
+  // (builder's existing ''-sentinel fields) or a bare number.
+  const raw = value == null ? '' : String(value);
+  // A blank value (the field at its default sentinel) reflects the
+  // handle at `placeholder`'s position, not 0 - exposure's default is
+  // 1.0, not the bottom of its 0..4 range.
+  const sliderVal = raw.trim() !== '' ? Number(raw) || 0 : Number(placeholder) || 0;
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+    label: label,
+    hint: unit
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2.5"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: min,
+    max: max,
+    step: step,
+    value: sliderVal,
+    onChange: e => onSlider(e.target.value),
+    className: "flex-1 accent-blue-500 h-1.5"
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: min,
+    max: max,
+    step: step,
+    value: raw,
+    placeholder: placeholder,
+    onChange: e => onNumber(e.target.value),
+    className: TEXT_INPUT_CLS + ' w-[58px] text-right px-1.5 shrink-0'
+  })));
+}
+
+// Generic pill toggle/button (HUD control chips, aspect presets). `dashed`
+// pairs with `disabled` for the "unlocks with 2+ materials" locked look.
+function Chip({
+  active,
+  disabled,
+  dashed,
+  onClick,
+  icon,
+  title,
+  children
+}) {
+  const base = 'h-[30px] inline-flex items-center gap-1.5 px-3 rounded-full border text-[11px] transition-colors whitespace-nowrap';
+  const cls = disabled ? base + ' opacity-40 cursor-not-allowed text-gray-500 border-gray-700' + (dashed ? ' border-dashed' : '') : active ? base + ' border-blue-500/70 bg-blue-500/10 text-blue-200' : base + ' border-gray-600 text-gray-300 hover:border-gray-500 cursor-pointer';
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: title,
+    disabled: disabled,
+    onClick: onClick,
+    className: cls
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5"
+  }), children);
+}
+
+// Collapsible settings card shell shared by all seven fields cards. Open
+// state is local (per brief) so it survives re-renders but always starts
+// from `defaultOpen`, which the caller sets from the current column count.
+// Opaque twin of the old bg-gray-800/35: the same colour once composited
+// over the page ground, but solid. These cards sit over the hero grid on
+// builder and docs, and a translucent fill lets that grid show through.
+const CARD_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
+function SectionCard({
+  icon,
+  title,
+  pill,
+  summary,
+  defaultOpen,
+  dense,
+  children
+}) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-lg border border-gray-700",
+    style: {
+      background: CARD_SURFACE
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setOpen(o => !o),
+    className: "w-full h-[42px] flex items-center gap-2 px-3.5 text-left"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-4 h-4 text-gray-400 shrink-0"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold text-gray-200 shrink-0"
+  }, title), pill, /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 min-w-0 text-right text-xs text-gray-500 truncate",
+    title: typeof summary === 'string' ? summary : undefined
+  }, summary), /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: open ? 'chevron-down' : 'chevron-right',
+    className: "w-3.5 h-3.5 text-gray-500 shrink-0"
+  })), open && /*#__PURE__*/React.createElement("div", {
+    className: (dense ? 'px-3.5 pb-3 pt-3 space-y-2.5' : 'px-3.5 pb-3.5 pt-3.5 space-y-3.5') + ' border-t border-gray-700/60'
+  }, children));
+}
+
+// One geometry option in the Scene card's 3-column grid. Icon row sits at
+// a fixed top offset so icons line up whether the label wraps to 1 or 2 lines.
+// `badge` is optional (a small neutral pill in the top-right corner); every
+// builder call site omits it today, which renders nothing.
+function GeometryTile({
+  label,
+  icon,
+  selected,
+  disabled,
+  title,
+  onClick,
+  badge
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    disabled: disabled,
+    title: title,
+    onClick: onClick,
+    className: 'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors ' + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700 text-gray-500' : selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')
+  }, badge && /*#__PURE__*/React.createElement("span", {
+    className: "absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300"
+  }, badge), /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-5 h-5 shrink-0"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] leading-tight text-center min-h-[26px] flex items-center"
+  }, label));
+}
+
+// Joined file-picker row (read-only path display + a Choose button), one
+// field-height (~26px) control matching the graph sidebar's field rows.
+// `onChoose` drives a caller's own file dialog; else a hidden file input.
+// `editable`/`onCommit` swap the path area for a real text input; `onClear`
+// adds an x button inside the field when `value` is non-empty.
+function FilePickerField({
+  value,
+  placeholder = 'No file selected',
+  accept,
+  multiple,
+  onFiles,
+  onChoose,
+  editable,
+  onCommit,
+  onClear,
+  disabled,
+  buttonLabel = 'Choose...',
+  icon,
+  // Mono typography is opt-in: only the graph editor's and node specs'
+  // parameter-editing rows want it. Everyone else gets the app's sans.
+  mono = false
+}) {
+  const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-gray-700 rounded-r-md bg-gray-800 hover:bg-gray-700 text-[11px] px-2 text-gray-300 whitespace-nowrap' + (mono ? ' font-mono' : '');
+  const [draft, setDraft] = React.useState(value || '');
+  // A ref (not state) so blurring alone never re-triggers the seed
+  // effect below -- only an actual `value` change should re-seed.
+  const focusedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!focusedRef.current) setDraft(value || '');
+  }, [value]);
+  const commit = () => {
+    if (draft !== (value || '') && onCommit) onCommit(draft);
+  };
+  const showClear = !!onClear && !!value;
+  const fieldBase = 'bg-gray-900 border border-gray-700 rounded-l-md px-2 text-[11px] text-gray-300 h-full w-full' + (mono ? ' font-mono' : '') + (showClear ? ' pr-6' : '');
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex h-[26px]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "relative min-w-0 flex-1"
+  }, editable ? /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: draft,
+    placeholder: placeholder,
+    disabled: disabled,
+    onFocus: () => {
+      focusedRef.current = true;
+    },
+    onChange: e => setDraft(e.target.value),
+    onBlur: () => {
+      focusedRef.current = false;
+      commit();
+    },
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.currentTarget.blur();
+      }
+    },
+    className: fieldBase + ' placeholder-gray-500 focus:outline-none'
+  }) : /*#__PURE__*/React.createElement("div", {
+    title: value,
+    className: fieldBase + ' flex items-center'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "truncate"
+  }, value || /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-500"
+  }, placeholder))), showClear && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "Clear",
+    disabled: disabled,
+    onClick: onClear,
+    className: "absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "x",
+    className: "w-3 h-3"
+  }))), onChoose ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onChoose,
+    disabled: disabled,
+    className: buttonCls + (disabled ? ' opacity-50 cursor-not-allowed' : '')
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5"
+  }), buttonLabel) : /*#__PURE__*/React.createElement("label", {
+    className: buttonCls + ' cursor-pointer' + (disabled ? ' opacity-50 pointer-events-none' : '')
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5"
+  }), buttonLabel, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: accept,
+    multiple: multiple,
+    className: "hidden",
+    disabled: disabled,
+    onChange: e => {
+      if (onFiles) onFiles(e.target.files);
+      // Clear so re-picking the SAME file still fires a change event.
+      e.target.value = '';
+    }
+  })));
+}
 const ViewportControls = ({
   geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'],
   geom,
   onGeomChange,
   // Optional { value: badge text } for the geometry dropdown's rows
-  // (see GeomSelect) — e.g. marking the docs previewer's Auto entry
+  // (see MtlxSelect) — e.g. marking the docs previewer's Auto entry
   // as experimental.
   geomBadges,
   showGeomSelect = true,
@@ -1165,7 +1583,9 @@ const ViewportControls = ({
   envBg,
   onToggleEnvBg,
   envAvail = true,
-  showBackgroundToggle = true,
+  backdrop,
+  onBackdropChange,
+  showBackdropPicker = true,
   viewRef,
   viewEpoch,
   onScreenshot,
@@ -1186,10 +1606,20 @@ const ViewportControls = ({
   showSettings = true,
   envDialogPlacement,
   containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
-  selectClassName = 'h-6 text-[11px] px-2 py-0 rounded border bg-gray-800/80 border-gray-600 text-gray-300',
-  buttonClassName = active => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${active ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'}`
+  selectSize = 'sm',
+  buttonClassName = active => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${active ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'}`,
+  // Optional grouped layout. `clusters` is an array of arrays of slot ids;
+  // each inner array becomes one <div className={clusterClassName}>.
+  // Absent (every existing caller) => today's flat strip, same order.
+  clusters = null,
+  slots = null,
+  clusterClassName = 'flex items-center gap-1'
 }) => {
   const envBtnRef = React.useRef(null);
+  // Std. Shader Ball w/ Backdrop is an authored room that ignores the
+  // backdrop setting. EnvDialog has no geom of its own, so this is
+  // derived here (from the geom prop this strip already receives).
+  const backdropDisabled = geom === 'shaderball-scene';
   // Spans the full strip width (which spans the panel in the graph
   // preview's docked layout), approximating the PANEL's left edge — used
   // by EnvDialog's placement="left" to clear the whole panel.
@@ -1199,6 +1629,8 @@ const ViewportControls = ({
   const [envRotation, setEnvRotation] = React.useState(0); // degrees, 0-360
   const [envExposure, setEnvExposure] = React.useState(1.0);
   const [envImportError, setEnvImportError] = React.useState(null);
+  // Imported environment's filename, shown by EnvDialog's FilePickerField.
+  const [envFileName, setEnvFileName] = React.useState('');
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   // Re-apply rotation/exposure to the current view on every (re)build
@@ -1222,9 +1654,19 @@ const ViewportControls = ({
       // one) via the engine's LIVE_VIEWS registry — no need to also
       // call viewRef.current.setEnvironment here.
       window.setEnvOverride(env);
+      setEnvFileName(file.name);
     } catch (e) {
       setEnvImportError(errMsg(e));
     }
+  };
+
+  // FilePickerField's own x button: clears the imported environment back
+  // to the default WITHOUT touching rotation/exposure -- that stays the
+  // Reset button's job below.
+  const handleClearEnv = () => {
+    window.setEnvOverride(null);
+    setEnvImportError(null);
+    setEnvFileName('');
   };
   const handleReset = () => {
     // setEnvOverride(null) broadcasts the default environment to every
@@ -1232,113 +1674,166 @@ const ViewportControls = ({
     // needed here.
     window.setEnvOverride(null);
     setEnvImportError(null);
+    setEnvFileName('');
     setEnvRotation(0);
     setEnvExposure(1.0);
+    // Backdrop back to the sitewide 'studio' default, when this
+    // caller wired a controlled backdrop (graph editor / node previews).
+    if (onBackdropChange) onBackdropChange('studio');
     if (viewRef && viewRef.current) {
       if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
       if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
     }
-    // Background show/hide toggle deliberately left as-is (Reset only
-    // touches rotation/exposure/override, per spec).
+    // Background show/hide toggle deliberately left as-is; Reset now
+    // also covers backdrop and key light, in addition to
+    // rotation/exposure/override.
   };
 
   // When labels are shown the strip is wider, so let it wrap to a second
   // line (right-aligned) and cap its width. Other consumers don't pass
-  // showLabels, so they keep containerClassName unchanged.
-  const stripClassName = showLabels ? `${containerClassName} ${labelsClass}` : containerClassName;
+  // showLabels, so they keep containerClassName unchanged. The hack only
+  // applies to the flat strip - a clustered layout wraps per cluster.
+  const stripClassName = showLabels && !clusters ? `${containerClassName} ${labelsClass}` : containerClassName;
+
+  // Returns the JSX for one control slot by id, or null when its own
+  // visibility flag says to hide it (same flags the flat strip always
+  // checked). Used to build both the flat order below and any `clusters`.
+  const renderSlot = id => {
+    switch (id) {
+      case 'geom':
+        return showGeomSelect ? /*#__PURE__*/React.createElement(MtlxSelect, {
+          key: "geom",
+          value: geom,
+          options: geomList,
+          labels: GEOM_LABELS,
+          badges: geomBadges,
+          defValue: null,
+          onChange: onGeomChange,
+          title: "Preview geometry",
+          size: selectSize
+        }) : null;
+      case 'rotate':
+        return showRotate ? /*#__PURE__*/React.createElement("button", {
+          key: "rotate",
+          onClick: onToggleRotating,
+          title: rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)',
+          className: buttonClassName(rotating)
+        }, /*#__PURE__*/React.createElement(MtlxIcon, {
+          name: "rotate",
+          className: "w-3.5 h-3.5"
+        }), showLabels && /*#__PURE__*/React.createElement("span", {
+          className: "ml-1.5 whitespace-nowrap"
+        }, "Rotate")) : null;
+      case 'cameraReset':
+        return onCameraReset ? /*#__PURE__*/React.createElement("button", {
+          key: "cameraReset",
+          onClick: onCameraReset,
+          title: "Reset camera",
+          className: buttonClassName(false)
+        }, /*#__PURE__*/React.createElement(MtlxIcon, {
+          name: "camera-reset",
+          className: "w-3.5 h-3.5"
+        }), showLabels && /*#__PURE__*/React.createElement("span", {
+          className: "ml-1.5 whitespace-nowrap"
+        }, "Reset Camera")) : null;
+      case 'env':
+        return envAvail ? /*#__PURE__*/React.createElement(React.Fragment, {
+          key: "env"
+        }, /*#__PURE__*/React.createElement("button", {
+          ref: envBtnRef,
+          onClick: () => viewRef ? setEnvOpen(o => !o) : onToggleEnvBg(),
+          title: "Environment\u2026",
+          className: buttonClassName(envOpen)
+        }, /*#__PURE__*/React.createElement(MtlxIcon, {
+          name: "environment",
+          className: "w-3.5 h-3.5"
+        }), showLabels && /*#__PURE__*/React.createElement("span", {
+          className: "ml-1.5 whitespace-nowrap"
+        }, "Environment")), viewRef && /*#__PURE__*/React.createElement(EnvDialog, {
+          anchorRef: envBtnRef,
+          edgeRef: panelEdgeRef,
+          open: envOpen,
+          onClose: () => setEnvOpen(false),
+          placement: envDialogPlacement,
+          backdrop: backdrop,
+          onBackdropChange: onBackdropChange,
+          showBackdropPicker: showBackdropPicker,
+          backdropDisabled: backdropDisabled,
+          rotation: envRotation,
+          onRotationChange: deg => {
+            setEnvRotation(deg);
+            if (viewRef.current && viewRef.current.setEnvRotation) {
+              viewRef.current.setEnvRotation(deg * Math.PI / 180);
+            }
+          },
+          exposure: envExposure,
+          onExposureChange: v => {
+            setEnvExposure(v);
+            if (viewRef.current && viewRef.current.setEnvExposure) {
+              viewRef.current.setEnvExposure(v);
+            }
+          },
+          onImportFile: handleImportFile,
+          onReset: handleReset,
+          envFileName: envFileName,
+          onClearEnv: handleClearEnv,
+          importError: envImportError
+        })) : null;
+      case 'screenshot':
+        return showScreenshot ? /*#__PURE__*/React.createElement("button", {
+          key: "screenshot",
+          onClick: onScreenshot,
+          title: "Save a PNG preview of the current view",
+          className: buttonClassName(false)
+        }, /*#__PURE__*/React.createElement(MtlxIcon, {
+          name: "camera",
+          className: "w-3.5 h-3.5"
+        }), showLabels && /*#__PURE__*/React.createElement("span", {
+          className: "ml-1.5 whitespace-nowrap"
+        }, "Screenshot")) : null;
+      case 'settings':
+        return showSettings ? /*#__PURE__*/React.createElement("button", {
+          key: "settings",
+          ref: settingsBtnRef,
+          onClick: () => setSettingsOpen(o => !o),
+          title: "Settings",
+          className: buttonClassName(settingsOpen)
+        }, /*#__PURE__*/React.createElement(MtlxIcon, {
+          name: "settings-cog",
+          className: "w-3.5 h-3.5"
+        }), showLabels && /*#__PURE__*/React.createElement("span", {
+          className: "ml-1.5 whitespace-nowrap"
+        }, "Settings")) : null;
+      case 'fullscreen':
+        return onToggleFullscreen ? /*#__PURE__*/React.createElement("button", {
+          key: "fullscreen",
+          onClick: onToggleFullscreen,
+          title: isFullscreen ? 'Exit full screen (Esc)' : 'View full screen',
+          className: buttonClassName(false)
+        }, /*#__PURE__*/React.createElement(MtlxIcon, {
+          name: "maximize",
+          className: "w-3.5 h-3.5"
+        }), showLabels && /*#__PURE__*/React.createElement("span", {
+          className: "ml-1.5 whitespace-nowrap"
+        }, isFullscreen ? 'Exit' : 'Fullscreen')) : null;
+      default:
+        return slots && slots[id] != null ? slots[id] : null;
+    }
+  };
+  const FLAT_ORDER = ['geom', 'rotate', 'cameraReset', 'env', 'screenshot'];
+  const TAIL_ORDER = ['settings', 'fullscreen'];
+  const tail = typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren;
+  const body = clusters ? [children, ...clusters.map((ids, i) => {
+    const nodes = ids.map(renderSlot).filter(Boolean);
+    return nodes.length ? /*#__PURE__*/React.createElement("div", {
+      key: 'c' + i,
+      className: clusterClassName
+    }, nodes) : null;
+  }), tail] : [children, ...FLAT_ORDER.map(renderSlot), tail, ...TAIL_ORDER.map(renderSlot)];
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     ref: panelEdgeRef,
     className: stripClassName
-  }, children, showGeomSelect && /*#__PURE__*/React.createElement(GeomSelect, {
-    value: geom,
-    options: geomList,
-    badges: geomBadges,
-    onChange: onGeomChange,
-    title: "Preview geometry",
-    className: selectClassName
-  }), showRotate && /*#__PURE__*/React.createElement("button", {
-    onClick: onToggleRotating,
-    title: rotating ? 'Stop the turntable rotation' : 'Start turntable rotation (drag to orbit, wheel to zoom)',
-    className: buttonClassName(rotating)
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "rotate",
-    className: "w-3.5 h-3.5"
-  }), showLabels && /*#__PURE__*/React.createElement("span", {
-    className: "ml-1.5 whitespace-nowrap"
-  }, "Rotate")), onCameraReset && /*#__PURE__*/React.createElement("button", {
-    onClick: onCameraReset,
-    title: "Reset camera",
-    className: buttonClassName(false)
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "camera-reset",
-    className: "w-3.5 h-3.5"
-  }), showLabels && /*#__PURE__*/React.createElement("span", {
-    className: "ml-1.5 whitespace-nowrap"
-  }, "Reset Camera")), envAvail && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-    ref: envBtnRef,
-    onClick: () => viewRef ? setEnvOpen(o => !o) : onToggleEnvBg(),
-    title: "Environment\u2026",
-    className: buttonClassName(envBg || envOpen)
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "environment",
-    className: "w-3.5 h-3.5"
-  }), showLabels && /*#__PURE__*/React.createElement("span", {
-    className: "ml-1.5 whitespace-nowrap"
-  }, "Environment")), viewRef && /*#__PURE__*/React.createElement(EnvDialog, {
-    anchorRef: envBtnRef,
-    edgeRef: panelEdgeRef,
-    open: envOpen,
-    onClose: () => setEnvOpen(false),
-    placement: envDialogPlacement,
-    envBg: envBg,
-    onToggleEnvBg: onToggleEnvBg,
-    showBackgroundToggle: showBackgroundToggle,
-    rotation: envRotation,
-    onRotationChange: deg => {
-      setEnvRotation(deg);
-      if (viewRef.current && viewRef.current.setEnvRotation) {
-        viewRef.current.setEnvRotation(deg * Math.PI / 180);
-      }
-    },
-    exposure: envExposure,
-    onExposureChange: v => {
-      setEnvExposure(v);
-      if (viewRef.current && viewRef.current.setEnvExposure) {
-        viewRef.current.setEnvExposure(v);
-      }
-    },
-    onImportFile: handleImportFile,
-    onReset: handleReset,
-    importError: envImportError
-  })), showScreenshot && /*#__PURE__*/React.createElement("button", {
-    onClick: onScreenshot,
-    title: "Save a PNG preview of the current view",
-    className: buttonClassName(false)
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "camera",
-    className: "w-3.5 h-3.5"
-  }), showLabels && /*#__PURE__*/React.createElement("span", {
-    className: "ml-1.5 whitespace-nowrap"
-  }, "Screenshot")), typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren, showSettings && /*#__PURE__*/React.createElement("button", {
-    ref: settingsBtnRef,
-    onClick: () => setSettingsOpen(o => !o),
-    title: "Settings",
-    className: buttonClassName(settingsOpen)
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "settings-cog",
-    className: "w-3.5 h-3.5"
-  }), showLabels && /*#__PURE__*/React.createElement("span", {
-    className: "ml-1.5 whitespace-nowrap"
-  }, "Settings")), onToggleFullscreen && /*#__PURE__*/React.createElement("button", {
-    onClick: onToggleFullscreen,
-    title: isFullscreen ? 'Exit full screen (Esc)' : 'View full screen',
-    className: buttonClassName(false)
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "maximize",
-    className: "w-3.5 h-3.5"
-  }), showLabels && /*#__PURE__*/React.createElement("span", {
-    className: "ml-1.5 whitespace-nowrap"
-  }, isFullscreen ? 'Exit' : 'Fullscreen'))), /*#__PURE__*/React.createElement(SettingsDialog, {
+  }, body), /*#__PURE__*/React.createElement(SettingsDialog, {
     anchorRef: settingsBtnRef,
     open: settingsOpen,
     onClose: () => setSettingsOpen(false)
@@ -1679,51 +2174,333 @@ const ColorSwatch = ({
   }), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
 };
 
-// Custom dropdown replacing the native geometry <select>: macOS draws
-// the native menu checkmark at system size, which misaligns against
-// 11px option text (option CSS can't reach the native menu). Portaled
-// to fullscreenPortalRoot() — required both for native fullscreen and
-// because ancestor backdrop-blur creates a containing block that
-// silently mispositions position:fixed (see ColorSwatch).
-const GEOM_POP_W = 190,
-  GEOM_POP_ROW_H = 26;
-// `badges`: optional { value: text } — renders a small amber pill after
-// that option's ROW label (popover only, never the trigger), for calling
-// out e.g. an experimental entry without branding the whole control.
-const GeomSelect = ({
+// Shared dropdown used across the site (documents, materials, versions,
+// colorspaces, geometry, and more). Portaled to fullscreenPortalRoot():
+// native fullscreen, and ancestor backdrop-blur mispositions position:fixed.
+const SELECT_POP_W = 190,
+  SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
+
+// The height a popover needs in order NOT to scroll. max-height resolves
+// against the box-sizing box while scrollHeight is always content+padding,
+// so under Tailwind's border-box preflight a max-height set straight from
+// scrollHeight lands exactly one border short and grows a scrollbar.
+// Default height cap, proportional to the window rather than a fixed pixel
+// count, so a list scrolls only when it genuinely would not fit. Callers
+// can still pin an explicit popMaxHeight.
+const POPOVER_VH_CAP = 0.6,
+  POPOVER_MIN_CAP = 220;
+const popoverHeightCap = explicit => explicit != null ? explicit : Math.max(POPOVER_MIN_CAP, Math.round(window.innerHeight * POPOVER_VH_CAP));
+const popoverNaturalHeight = (el, fallback) => {
+  if (!el) return fallback;
+  const cs = window.getComputedStyle(el);
+  const px = v => parseFloat(v) || 0;
+  const delta = cs.boxSizing === 'border-box' ? px(cs.borderTopWidth) + px(cs.borderBottomWidth) : -(px(cs.paddingTop) + px(cs.paddingBottom));
+  return Math.ceil(el.scrollHeight + delta);
+};
+
+// --mx-select-* theming hook. Each falls back through the matching
+// js/site-tokens.css token to a literal, so the embed bundle (no
+// Tailwind, no site-tokens.css there) still renders correctly.
+const MXS_FONT = 'var(--mx-select-font, var(--site-font-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif))';
+const MXS_FONT_SIZE = 'var(--mx-select-font-size, 11px)';
+const MXS_ACCENT = 'var(--mx-select-accent, var(--site-blue-600, #2563eb))';
+const MXS_ACCENT_TEXT = 'var(--mx-select-accent-text, var(--site-gray-100, #f3f4f6))';
+const MXS_SURFACE = 'var(--mx-select-surface, var(--site-gray-800, #1f2937))';
+const MXS_SURFACE_HOVER = 'var(--mx-select-surface-hover, var(--site-gray-700, #374151))';
+const MXS_TEXT = 'var(--mx-select-text, var(--site-gray-300, #d1d5db))';
+const MXS_TEXT_STRONG = 'var(--mx-select-text-strong, var(--site-gray-100, #f3f4f6))';
+const MXS_MUTED = 'var(--mx-select-muted, var(--site-gray-500, #6b7280))';
+const MXS_BORDER = 'var(--mx-select-border, var(--site-gray-600, #4b5563))';
+const MXS_RADIUS = 'var(--mx-select-radius, 8px)';
+const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, var(--site-amber-300, #fcd34d))';
+// Translucent derivations so the highlight reads as a tint over the
+// popover ground, not a solid slab. color-mix is already a baseline here
+// (embed/embed-controls.css, js/builder-app.jsx).
+const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
+const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
+// Toolbar triggers sit alongside BTN_TOOLBAR buttons, which fill at
+// gray-800/80 over backdrop-blur. Matching that 80% is what stops a
+// select reading as a darker slab than the icon buttons beside it.
+const MXS_SURFACE_BAR = 'color-mix(in srgb, ' + MXS_SURFACE + ' 80%, transparent)';
+const MXS_SURFACE_BAR_HOVER = 'color-mix(in srgb, ' + MXS_SURFACE_HOVER + ' 80%, transparent)';
+
+// theme prop keys -> the custom property each one feeds. Used to stamp
+// theme overrides as inline custom properties, and to know which
+// property names to look for when capturing ambient values (openPopover).
+const SELECT_THEME_VAR_NAMES = {
+  font: '--mx-select-font',
+  fontSize: '--mx-select-font-size',
+  accent: '--mx-select-accent',
+  accentText: '--mx-select-accent-text',
+  surface: '--mx-select-surface',
+  surfaceHover: '--mx-select-surface-hover',
+  text: '--mx-select-text',
+  textStrong: '--mx-select-text-strong',
+  muted: '--mx-select-muted',
+  border: '--mx-select-border',
+  radius: '--mx-select-radius',
+  badgeWarn: '--mx-select-badge-warn'
+};
+
+// Builds inline custom-property declarations from a theme prop, one
+// entry per key the caller actually set (React allows custom-property
+// keys directly in a style object).
+const selectThemeStyle = theme => {
+  if (!theme) return undefined;
+  const out = {};
+  Object.keys(SELECT_THEME_VAR_NAMES).forEach(k => {
+    if (theme[k] != null) out[SELECT_THEME_VAR_NAMES[k]] = theme[k];
+  });
+  return out;
+};
+
+// `dots`: optional { value: CSS color string }, rendered as a small
+// round swatch before that option's label, on both the ROW and the
+// closed trigger (once it's the selected value).
+// `badges`: optional { value: text | { text, tone } }, rendered as a
+// small pill after that option's ROW label. Tone comes from this map
+// (warn = amber, else neutral gray) unless the badge itself overrides it.
+const SELECT_BADGE_TONES = {
+  Experimental: 'warn'
+};
+// warn's text color is the MXS_BADGE_WARN var (applied inline per row);
+// the tint/border stay literal, there's no separate themed var for them.
+const SELECT_BADGE_TONE_CLS = {
+  warn: 'bg-amber-600/30 border-amber-500/50',
+  neutral: 'bg-gray-700/60 border-gray-500/50 text-gray-300'
+};
+const resolveSelectBadge = badge => {
+  if (badge == null) return null;
+  const isObj = typeof badge === 'object';
+  const text = isObj ? badge.text : badge;
+  if (!text) return null;
+  const tone = isObj && badge.tone || SELECT_BADGE_TONES[text] || 'neutral';
+  return {
+    text,
+    tone
+  };
+};
+
+// Layout only: color/border/radius/font-size for this default chrome
+// (used only when a caller omits className) come from MXS_* inline
+// style below, so they stay themeable via the theme prop.
+const SELECT_SIZE_CLS = {
+  sm: 'h-6 px-2',
+  md: 'h-7 px-2',
+  lg: 'w-full px-2.5 py-1.5'
+};
+const SELECT_VARIANT_CLS = {
+  // backdrop-blur matches BTN_TOOLBAR: a toolbar select shares a strip
+  // with those buttons, and over a bright render an opaque fill reads
+  // as a much darker slab than its neighbours.
+  toolbar: 'border backdrop-blur',
+  field: 'border',
+  plain: 'border-0'
+};
+
+// Normalizes `options` (string[], unchanged, or object-form entries)
+// into one shape. Top-level icons/titles/disabledOptions/badges/dots
+// maps fill in per-value data when an entry doesn't already carry its own.
+// `defValue` auto-badges its matching option 'default'; an explicit
+// per-option badge or `badges` map entry for that value wins over it.
+const normalizeSelectOptions = (options, labels, extras) => {
+  const {
+    icons,
+    titles,
+    disabledOptions,
+    badges,
+    dots,
+    defValue
+  } = extras || {};
+  const disabledSet = Array.isArray(disabledOptions) ? new Set(disabledOptions) : disabledOptions;
+  const isDisabledValue = v => !!(disabledSet && (disabledSet instanceof Set ? disabledSet.has(v) : disabledSet[v]));
+  return (options || []).map(o => {
+    const isObj = o !== null && typeof o === 'object';
+    const value = isObj ? o.value : o;
+    const explicitBadge = isObj && o.badge != null ? o.badge : badges && badges[value];
+    const autoBadge = explicitBadge == null && defValue != null && value === defValue ? 'default' : undefined;
+    return {
+      value,
+      label: isObj && o.label != null ? o.label : labels[value] || value,
+      icon: isObj && o.icon || icons && icons[value] || undefined,
+      badge: resolveSelectBadge(explicitBadge != null ? explicitBadge : autoBadge),
+      dot: (isObj && o.dot != null ? o.dot : dots && dots[value]) || undefined,
+      title: isObj && o.title || titles && titles[value] || undefined,
+      disabled: !!(isObj && o.disabled || isDisabledValue(value))
+    };
+  });
+};
+const MtlxSelect = ({
   value,
   options,
-  labels = GEOM_LABELS,
+  labels = {},
   badges,
+  dots,
+  defValue,
   onChange,
   title,
-  className
+  className,
+  popWidth,
+  icon,
+  icons,
+  titles,
+  disabledOptions,
+  disabled,
+  placeholder,
+  emptyOption,
+  size = 'sm',
+  variant = 'toolbar',
+  block,
+  font,
+  popMaxHeight,
+  theme,
+  commitFocus = 'trigger',
+  ariaLabel,
+  align
 }) => {
+  // `defValue`: the value that's this select's real default, badged
+  // automatically; pass `null` to declare no default exists. Omitting
+  // the prop is treated as a bug, so it warns once per mount instead.
+  React.useEffect(() => {
+    if (defValue === undefined) {
+      const vals = (options || []).map(o => o !== null && typeof o === 'object' ? o.value : o);
+      console.warn('MtlxSelect: defValue omitted for options [' + vals.join(', ') + ']. Pass a real defValue or defValue={null} when there is no default.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState(null);
   const [hi, setHi] = React.useState(0);
+  // Trigger's resolved font-family + any ambient --mx-select-* custom
+  // properties, snapshotted on open (see openPopover) so the portaled
+  // popover can mirror context it doesn't actually inherit from here.
+  const [ambient, setAmbient] = React.useState(null);
+  // Hover can't be expressed inline; this mirrors the row-highlight
+  // idiom (state-driven, only visible on the default chrome below).
+  const [triggerHover, setTriggerHover] = React.useState(false);
   const btnRef = React.useRef(null);
   const popRef = React.useRef(null);
-  // Wider popover when badge pills share the rows with the labels.
-  const popW = badges ? 240 : GEOM_POP_W;
+  const rowRefs = React.useRef([]);
+  const typeAheadRef = React.useRef({
+    buf: '',
+    t: 0
+  });
+  const listboxId = React.useId();
+  const normalized = React.useMemo(() => {
+    const base = normalizeSelectOptions(options, labels, {
+      icons,
+      titles,
+      disabledOptions,
+      badges,
+      dots,
+      defValue
+    });
+    if (!emptyOption) return base;
+    // A real, selectable "back to default" row (value ''), distinct
+    // from `placeholder` which only affects the trigger's own text.
+    const emptyLabel = typeof emptyOption === 'string' ? emptyOption : placeholder || '';
+    return [{
+      value: '',
+      label: emptyLabel,
+      icon: undefined,
+      badge: null,
+      dot: undefined,
+      title: undefined,
+      disabled: false
+    }].concat(base);
+  }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder]);
+
+  // Wider popover when badge pills share the rows with the labels,
+  // unless the caller knows its content is narrower and overrides it.
+  const popW = popWidth || (badges ? 240 : SELECT_POP_W);
+
+  // Next/previous ENABLED row from `from`, walking in `dir` (+1/-1),
+  // clamped at the array ends without wrapping. Returns null when every
+  // remaining row that way is disabled, so the caller can leave hi put.
+  const findEnabled = (from, dir) => {
+    let i = from;
+    for (;;) {
+      i += dir;
+      if (i < 0 || i > normalized.length - 1) return null;
+      if (!normalized[i].disabled) return i;
+    }
+  };
+
+  // Recomputes placement from the trigger's CURRENT rect: called once,
+  // right after a hidden probe render gives a real measured height,
+  // then again on every scroll/resize so a sidebar trigger stays tracked.
+  const reposition = () => {
+    const btn = btnRef.current;
+    if (!btn) {
+      setOpen(false);
+      return;
+    }
+    const rect = btn.getBoundingClientRect();
+    // The trigger scrolled fully out of view: close rather than let
+    // the popover float disconnected over unrelated content.
+    if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+      setOpen(false);
+      return;
+    }
+    const measured = popoverNaturalHeight(popRef.current, normalized.length * SELECT_POP_ROW_H + 8);
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const spaceAbove = rect.top - 8;
+    const desired = Math.min(measured, popoverHeightCap(popMaxHeight));
+    // Prefer below; flip above only when it doesn't fit below AND
+    // there's more room above, otherwise stay below and clamp.
+    const flip = desired > spaceBelow && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+    setPos(flip ? {
+      left,
+      bottom: window.innerHeight - rect.top + 4,
+      maxHeight
+    } : {
+      left,
+      top: rect.bottom + 4,
+      maxHeight
+    });
+  };
+  // A ref mirror so the scroll/resize effect (subscribed once per open,
+  // not per render) always calls the LATEST reposition closure.
+  const repositionRef = React.useRef(reposition);
+  repositionRef.current = reposition;
   const openPopover = () => {
-    setHi(Math.max(0, options.indexOf(value)));
-    const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;
-    if (rect) {
-      // Left-aligned to the trigger (ColorSwatch precedent),
-      // clamped to the viewport and flipped above when it would
-      // overflow the bottom (SettingsDialog math).
-      const h = options.length * GEOM_POP_ROW_H + 8;
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
-      setPos(rect.bottom + h > window.innerHeight ? {
-        left,
-        bottom: window.innerHeight - rect.top + 4
-      } : {
-        left,
-        top: rect.bottom + 4
+    if (disabled) return;
+    const idx = normalized.findIndex(o => o.value === value);
+    let start = Math.max(0, idx);
+    if (normalized[start] && normalized[start].disabled) {
+      const fwd = findEnabled(start, 1);
+      const back = fwd == null ? findEnabled(start, -1) : null;
+      start = fwd != null ? fwd : back != null ? back : start;
+    }
+    setHi(start);
+    // Unmeasured: the popover renders hidden until the layout effect
+    // below measures its real height and commits a placement.
+    setPos(null);
+    if (btnRef.current) {
+      const cs = window.getComputedStyle(btnRef.current);
+      const vars = {};
+      Object.keys(SELECT_THEME_VAR_NAMES).forEach(k => {
+        const name = SELECT_THEME_VAR_NAMES[k];
+        const v = cs.getPropertyValue(name);
+        if (v && v.trim()) vars[name] = v.trim();
+      });
+      setAmbient({
+        fontFamily: cs.fontFamily,
+        vars
       });
     }
     setOpen(true);
+  };
+
+  // Row click commit: a disabled row is not clickable, so this is a
+  // no-op for it (no onChange, popover stays open).
+  const commitRow = opt => {
+    if (opt.disabled) return;
+    onChange(opt.value);
+    setOpen(false);
+    if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
   };
 
   // Outside-pointerdown close (SettingsDialog pattern); the popover
@@ -1739,10 +2516,52 @@ const GeomSelect = ({
     return () => window.removeEventListener('pointerdown', onDown);
   }, [open]);
 
-  // Keyboard nav. CAPTURE phase on purpose: when hosted inside the
-  // SettingsDialog, Escape must close only THIS popover — stopping
-  // propagation here keeps the dialog's bubble-phase Escape listener
-  // (useEscapeToClose) from also firing.
+  // Measure-then-place: the first render after opening has pos=null,
+  // so the popover mounts hidden at its natural height; this fires
+  // right after that commit and reveals it already positioned.
+  React.useLayoutEffect(() => {
+    if (!open) return undefined;
+    repositionRef.current();
+    // Tailwind Play injects utility CSS asynchronously, so the first
+    // measurement of a never-before-seen row can predate its own
+    // height. One more pass after paint settles that.
+    const raf = window.requestAnimationFrame(() => repositionRef.current());
+    return () => window.cancelAnimationFrame(raf);
+  }, [open]);
+
+  // Track the trigger through ancestor scrolls and window resizes.
+  // CAPTURE is essential: these are element scrolls (a sidebar), and a
+  // bubble-phase listener on window never sees them.
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onScroll = () => repositionRef.current();
+    const onResize = () => repositionRef.current();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [open]);
+
+  // Keep the highlighted row in view as `hi` moves via keyboard.
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const el = rowRefs.current[hi];
+    if (el && el.scrollIntoView) el.scrollIntoView({
+      block: 'nearest'
+    });
+  }, [hi, open]);
+
+  // A container that greys itself out mid-interaction should close our
+  // popover the way a native select's would disappear with it.
+  React.useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled]);
+
+  // Keyboard nav. CAPTURE phase on purpose: inside SettingsDialog,
+  // Escape must close only THIS popover, so stopping propagation here
+  // keeps the dialog's bubble-phase Escape listener (useEscapeToClose) from firing.
   React.useEffect(() => {
     if (!open) return undefined;
     const onKey = e => {
@@ -1751,64 +2570,577 @@ const GeomSelect = ({
         setOpen(false);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setHi(h => Math.min(h + 1, options.length - 1));
+        setHi(h => {
+          const n = findEnabled(h, 1);
+          return n == null ? h : n;
+        });
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setHi(h => Math.max(h - 1, 0));
+        setHi(h => {
+          const n = findEnabled(h, -1);
+          return n == null ? h : n;
+        });
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        const n = normalized.findIndex(o => !o.disabled);
+        if (n !== -1) setHi(n);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        for (let i = normalized.length - 1; i >= 0; i--) {
+          if (!normalized[i].disabled) {
+            setHi(i);
+            break;
+          }
+        }
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (options[hi] != null) onChange(options[hi]);
+        const opt = normalized[hi];
+        if (opt != null && !opt.disabled) onChange(opt.value);
         setOpen(false);
+        if (commitFocus === 'none' && opt != null && !opt.disabled && btnRef.current) btnRef.current.blur();
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Type-ahead: a short timestamped buffer, prefix-matched
+        // against resolved labels, skipping disabled rows.
+        const now = Date.now();
+        const ta = typeAheadRef.current;
+        ta.buf = (now - ta.t < 800 ? ta.buf : '') + e.key.toLowerCase();
+        ta.t = now;
+        const match = normalized.findIndex(o => !o.disabled && String(o.label).toLowerCase().indexOf(ta.buf) === 0);
+        if (match !== -1) setHi(match);
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, hi, options]);
+  }, [open, hi, normalized]);
+  const fontCls = font === 'mono' ? 'font-mono' : '';
+  // Precedence: an explicit `font` prop (a literal string) wins; 'mono'
+  // is handled by the class above instead; otherwise theme.font; else
+  // ambient inheritance is left alone (ties into popFontFamily below).
+  const explicitFont = font === 'mono' ? undefined : font && font !== 'sans' ? font : theme && theme.font;
+  // No explicit font: point at the token with `inherit` as its fallback,
+  // so --mx-select-font themes the trigger while plain inheritance
+  // stays the default when nobody sets it.
+  const fontStyle = explicitFont ? {
+    fontFamily: explicitFont
+  } : font === 'mono' ? undefined : {
+    fontFamily: 'var(--mx-select-font, inherit)'
+  };
+
+  // className is additive and layout-only: the trigger always renders
+  // its own chrome from size/variant, and className is appended for
+  // positioning/flex sizing/margins on top of that.
+  const chrome = 'rounded ' + (SELECT_SIZE_CLS[size] || SELECT_SIZE_CLS.sm) + ' ' + (SELECT_VARIANT_CLS[variant] || SELECT_VARIANT_CLS.toolbar);
+  // Default (no `align`, i.e. today's every call site): `justify-between`
+  // across icon/label/chevron splits the free width into two roughly
+  // equal gaps, which visually centers the label once an icon is
+  // present -- that's the reported "centered" look. `align="left"`
+  // drops justify-between so icon+label pack flush left; the chevron
+  // gets ml-auto below to stay pinned at the right edge instead.
+  const alignLeft = align === 'left';
+  const triggerClassName = [chrome, 'inline-flex items-center gap-1', block && (alignLeft ? 'w-full' : 'justify-between'), fontCls, disabled && 'opacity-50 pointer-events-none', className].filter(Boolean).join(' ');
+
+  // Chrome color/background/border comes from theme custom properties,
+  // always applied now that className no longer replaces the trigger's
+  // chrome. `plain` only drops the border width (via SELECT_VARIANT_CLS);
+  // borderColor stays harmless since there's no border to paint it on.
+  const defaultChromeStyle = {
+    color: MXS_TEXT,
+    borderRadius: MXS_RADIUS,
+    fontSize: MXS_FONT_SIZE,
+    background: variant === 'toolbar' ? triggerHover ? MXS_SURFACE_BAR_HOVER : MXS_SURFACE_BAR : triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE,
+    borderColor: MXS_BORDER
+  };
+  const triggerStyle = Object.assign({}, defaultChromeStyle, selectThemeStyle(theme), fontStyle);
+  const selected = normalized.find(o => o.value === value);
+  const selectedLabel = selected ? selected.label : labels[value] || value;
+  const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
+  const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
+
+  // POPOVER font: explicit font prop or theme.font wins; else the
+  // ambient value captured off the trigger (fixes the portal losing
+  // normal font-family inheritance); 'mono' is left to the class.
+  const ambientFont = ambient && ambient.fontFamily || 'inherit';
+  const popFontFamily = font === 'mono' ? undefined : explicitFont || 'var(--mx-select-font, ' + ambientFont + ')';
+  const popStyle = Object.assign({
+    position: 'fixed',
+    zIndex: 9999,
+    width: popW,
+    visibility: pos ? 'visible' : 'hidden',
+    maxHeight: pos ? pos.maxHeight : 'none',
+    overflowY: 'auto',
+    background: MXS_SURFACE_SOFT,
+    border: '1px solid ' + MXS_BORDER,
+    borderRadius: MXS_RADIUS,
+    fontFamily: font === 'mono' ? undefined : MXS_FONT,
+    fontSize: MXS_FONT_SIZE
+  }, ambient && ambient.vars, selectThemeStyle(theme), popFontFamily ? {
+    fontFamily: popFontFamily
+  } : undefined, pos || {
+    top: 0,
+    left: 0
+  });
   const popover = open ? /*#__PURE__*/React.createElement("div", {
     ref: popRef,
+    id: listboxId,
+    role: "listbox",
     onPointerDown: e => e.stopPropagation(),
-    style: Object.assign({
-      position: 'fixed',
-      zIndex: 9999,
-      width: popW
-    }, pos || {}),
-    className: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden py-1"
-  }, options.map((g, i) => /*#__PURE__*/React.createElement("button", {
-    key: g,
-    type: "button",
-    onMouseEnter: () => setHi(i),
-    onClick: () => {
-      onChange(g);
-      setOpen(false);
-    },
-    className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors ' + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300')
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "w-3.5 flex-none"
-  }, g === value && /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "check",
-    className: "w-3.5 h-3.5"
-  })), /*#__PURE__*/React.createElement("span", {
-    className: "flex-1 truncate"
-  }, labels[g] || g), badges && badges[g] &&
-  /*#__PURE__*/
-  // Amber only for the warning-flavored Experimental
-  // tag; informational badges (e.g. Default) stay
-  // neutral so they don't read as a caution.
-  React.createElement("span", {
-    className: 'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + (badges[g] === 'Experimental' ? 'bg-amber-600/30 border-amber-500/50 text-amber-300' : 'bg-gray-700/60 border-gray-500/50 text-gray-300')
-  }, badges[g])))) : null;
+    onMouseDown: e => e.stopPropagation(),
+    style: popStyle,
+    className: 'backdrop-blur shadow-2xl overflow-y-auto custom-scrollbar py-1' + (fontCls ? ' ' + fontCls : '')
+  }, normalized.map((o, i) => {
+    const isHi = i === hi && !o.disabled;
+    const isSelected = o.value === value;
+    const rowStyle = {
+      color: o.disabled ? MXS_MUTED : isHi ? MXS_ACCENT_TEXT : isSelected ? MXS_TEXT_STRONG : MXS_TEXT,
+      background: isHi ? MXS_ACCENT_SOFT : undefined
+    };
+    return /*#__PURE__*/React.createElement("button", {
+      key: o.value,
+      ref: el => {
+        rowRefs.current[i] = el;
+      },
+      type: "button",
+      role: "option",
+      "aria-selected": o.value === value,
+      title: o.title,
+      "aria-disabled": o.disabled || undefined,
+      onMouseEnter: () => {
+        if (!o.disabled) setHi(i);
+      },
+      onClick: () => commitRow(o),
+      style: rowStyle,
+      className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' + (o.disabled ? 'cursor-default' : 'cursor-pointer')
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-3.5 flex-none"
+    }, o.value === value && /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: "check",
+      className: "w-3.5 h-3.5"
+    })), o.icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: o.icon,
+      className: "w-3.5 h-3.5 flex-none"
+    }), o.dot && /*#__PURE__*/React.createElement("span", {
+      className: "w-2 h-2 rounded-full inline-block shrink-0",
+      style: {
+        backgroundColor: o.dot
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 truncate"
+    }, o.label), o.badge && /*#__PURE__*/React.createElement("span", {
+      style: o.badge.tone === 'warn' ? {
+        color: MXS_BADGE_WARN
+      } : undefined,
+      className: 'flex-none font-sans text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]
+    }, o.badge.text));
+  })) : null;
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     type: "button",
     ref: btnRef,
+    role: "combobox",
+    "aria-haspopup": "listbox",
+    "aria-expanded": open,
+    "aria-controls": listboxId,
     title: title,
+    disabled: !!disabled,
+    "aria-disabled": disabled || undefined,
+    "aria-label": ariaLabel,
     onClick: () => open ? setOpen(false) : openPopover(),
-    className: (className || 'h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300') + ' inline-flex items-center gap-1'
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "truncate"
-  }, labels[value] || value), /*#__PURE__*/React.createElement(MtlxIcon, {
+    onMouseEnter: () => setTriggerHover(true),
+    onMouseLeave: () => setTriggerHover(false),
+    className: triggerClassName,
+    style: triggerStyle
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5 flex-none"
+  }), !showPlaceholder && selected && selected.dot && /*#__PURE__*/React.createElement("span", {
+    className: "w-2 h-2 rounded-full inline-block shrink-0",
+    style: {
+      backgroundColor: selected.dot
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "truncate",
+    style: {
+      color: showPlaceholder ? MXS_MUTED : undefined
+    }
+  }, triggerLabel), /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "chevron-down",
+    className: 'w-3 h-3 flex-none opacity-70' + (alignLeft ? ' ml-auto' : '')
+  })), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
+};
+
+// ---- Menu bar --------------------------------------------------------
+// MtlxMenu is MtlxSelect's command-list sibling: same portal, placement
+// and keyboard model, but its rows are commands, separators and
+// checkable toggles instead of values.
+const MtlxMenuBarContext = React.createContext(null);
+
+// Wraps sibling menus so only one is open at a time and hovering another
+// trigger switches to it, the way a desktop menu bar behaves.
+const MtlxMenuBar = ({
+  children,
+  className
+}) => {
+  const [openId, setOpenId] = React.useState(null);
+  const ctx = React.useMemo(() => ({
+    openId,
+    setOpenId
+  }), [openId]);
+  return /*#__PURE__*/React.createElement(MtlxMenuBarContext.Provider, {
+    value: ctx
+  }, /*#__PURE__*/React.createElement("div", {
+    role: "menubar",
+    className: 'flex items-center gap-1 ' + (className || '')
+  }, children));
+};
+const MTLX_MENU_MIN_W = 200,
+  MTLX_MENU_ROW_H = 28; // ROW_H: measurement fallback only, see reposition()
+
+// `items`: [{ label, icon, keys, onSelect, disabled, checked, title,
+// keepOpen } | { separator: true }]. `checked` makes a row a toggle;
+// `keys` renders a right-aligned shortcut hint.
+//
+// Two anchoring modes. By default it renders its own menu-bar trigger and
+// hangs the popover under it. Pass `anchorPoint` {x, y} in CLIENT coords
+// for the right-click context-menu mode: no trigger, popover at that
+// point, and the caller owns `open` / `onClose` (which fires for EVERY
+// dismissal). Re-key the element to re-target an already-open menu.
+const MtlxMenu = ({
+  label,
+  icon,
+  items,
+  title,
+  className,
+  ariaLabel,
+  theme,
+  minWidth = MTLX_MENU_MIN_W,
+  maxWidth = 360,
+  popMaxHeight,
+  anchorPoint = null,
+  open: openProp,
+  onClose
+}) => {
+  const bar = React.useContext(MtlxMenuBarContext);
+  const menuId = React.useId();
+  // Controlled mode: the caller owns `open`, and every internal close
+  // path funnels into one onClose. The bar context is ignored here on
+  // purpose, since a point-anchored menu is never a bar member.
+  const controlled = openProp !== undefined;
+  // Standalone fallback so a menu still works outside a MtlxMenuBar.
+  const [standalone, setStandalone] = React.useState(false);
+  const open = controlled ? !!openProp : bar ? bar.openId === menuId : standalone;
+  const setOpen = on => {
+    if (controlled) {
+      if (!on && onClose) onClose();
+      return;
+    }
+    if (bar) bar.setOpenId(on ? menuId : null);else setStandalone(!!on);
+  };
+  const [pos, setPos] = React.useState(null);
+  const [hi, setHi] = React.useState(-1);
+  const [ambient, setAmbient] = React.useState(null);
+  const [triggerHover, setTriggerHover] = React.useState(false);
+  const btnRef = React.useRef(null);
+  const popRef = React.useRef(null);
+  const rowRefs = React.useRef([]);
+
+  // Falsy entries are dropped so call sites can inline `cond && {...}`.
+  const rows = React.useMemo(() => (items || []).filter(Boolean), [items]);
+  // Gutters are decided per menu, not per row, so labels stay aligned
+  // in a menu that mixes checkable and plain commands.
+  const hasChecks = rows.some(r => r.checked != null);
+  const hasIcons = rows.some(r => r.icon);
+  const hasKeys = rows.some(r => r.keys);
+  const selectable = i => {
+    const r = rows[i];
+    return !!r && !r.separator && !r.disabled;
+  };
+  const findEnabled = (from, dir) => {
+    let i = from;
+    for (;;) {
+      i += dir;
+      if (i < 0 || i > rows.length - 1) return null;
+      if (selectable(i)) return i;
+    }
+  };
+
+  // Same measure-then-place contract as MtlxSelect: called once after a
+  // hidden probe render, then on every scroll/resize.
+  const reposition = () => {
+    const btn = btnRef.current;
+    // A point anchor is just a zero-size rect, so every flip, clamp
+    // and height-cap branch below is shared with the trigger case.
+    const rect = anchorPoint ? {
+      left: anchorPoint.x,
+      right: anchorPoint.x,
+      top: anchorPoint.y,
+      bottom: anchorPoint.y
+    } : btn ? btn.getBoundingClientRect() : null;
+    if (!rect) {
+      setOpen(false);
+      return;
+    }
+    if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+      setOpen(false);
+      return;
+    }
+    const pop = popRef.current;
+    const measured = popoverNaturalHeight(pop, rows.length * MTLX_MENU_ROW_H + 8);
+    const width = pop ? Math.max(pop.offsetWidth, minWidth) : minWidth;
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const spaceAbove = rect.top - 8;
+    const desired = Math.min(measured, popoverHeightCap(popMaxHeight));
+    const flip = desired > spaceBelow && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    setPos(flip ? {
+      left,
+      bottom: window.innerHeight - rect.top + 4,
+      maxHeight
+    } : {
+      left,
+      top: rect.bottom + 4,
+      maxHeight
+    });
+  };
+  const repositionRef = React.useRef(reposition);
+  repositionRef.current = reposition;
+  const openMenu = () => {
+    // Nothing highlighted until the pointer or a key picks a row, so
+    // opening a menu never pre-arms an Enter into a command.
+    setHi(-1);
+    setPos(null);
+    if (btnRef.current) {
+      const cs = window.getComputedStyle(btnRef.current);
+      const vars = {};
+      Object.keys(SELECT_THEME_VAR_NAMES).forEach(k => {
+        const name = SELECT_THEME_VAR_NAMES[k];
+        const v = cs.getPropertyValue(name);
+        if (v && v.trim()) vars[name] = v.trim();
+      });
+      setAmbient({
+        fontFamily: cs.fontFamily,
+        vars
+      });
+    }
+    setOpen(true);
+  };
+  const commitItem = row => {
+    if (!row || row.separator || row.disabled) return;
+    if (row.onSelect) row.onSelect();
+    if (!row.keepOpen) setOpen(false);
+  };
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDown = e => {
+      if (popRef.current && popRef.current.contains(e.target)) return;
+      if (btnRef.current && btnRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown);
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  React.useLayoutEffect(() => {
+    if (!open) return undefined;
+    repositionRef.current();
+    // Same late-CSS second pass as MtlxSelect above.
+    const raf = window.requestAnimationFrame(() => repositionRef.current());
+    return () => window.cancelAnimationFrame(raf);
+  }, [open]);
+
+  // CAPTURE: these are element scrolls, which never reach a bubble-phase
+  // window listener.
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onScroll = () => repositionRef.current();
+    const onResize = () => repositionRef.current();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [open]);
+  React.useEffect(() => {
+    if (!open || hi < 0) return undefined;
+    const el = rowRefs.current[hi];
+    if (el && el.scrollIntoView) el.scrollIntoView({
+      block: 'nearest'
+    });
+    return undefined;
+  }, [hi, open]);
+
+  // CAPTURE phase so Escape closes only this menu and never reaches the
+  // canvas keybinds or a surrounding dialog.
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onKey = e => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setOpen(false);
+        if (btnRef.current) btnRef.current.focus();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        setHi(h => {
+          const n = findEnabled(h < 0 ? -1 : h, 1);
+          return n == null ? h : n;
+        });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        setHi(h => {
+          const n = findEnabled(h < 0 ? rows.length : h, -1);
+          return n == null ? h : n;
+        });
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        e.stopPropagation();
+        const n = findEnabled(-1, 1);
+        if (n != null) setHi(n);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        e.stopPropagation();
+        const n = findEnabled(rows.length, -1);
+        if (n != null) setHi(n);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        commitItem(rows[hi]);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, hi, rows]);
+
+  // Menu-bar chrome: nothing at rest, edge and fill revealed on hover or
+  // while open. The border is always declared, only its colour changes,
+  // so the trigger never resizes between states.
+  const lit = open || triggerHover;
+  const triggerStyle = Object.assign({
+    color: lit ? MXS_TEXT_STRONG : MXS_TEXT,
+    // 4px, not MXS_RADIUS's 8px: a menu-bar trigger sits shoulder to
+    // shoulder with BTN_TOOLBAR buttons. An explicit theme still wins.
+    borderRadius: 'var(--mx-select-radius, 4px)',
+    fontSize: MXS_FONT_SIZE,
+    borderColor: lit ? MXS_BORDER : 'transparent',
+    background: lit ? MXS_SURFACE_HOVER : 'transparent',
+    fontFamily: 'var(--mx-select-font, inherit)'
+  }, selectThemeStyle(theme));
+  const ambientFont = ambient && ambient.fontFamily || 'inherit';
+  const popStyle = Object.assign({
+    position: 'fixed',
+    zIndex: 9999,
+    width: 'max-content',
+    minWidth,
+    maxWidth,
+    visibility: pos ? 'visible' : 'hidden',
+    maxHeight: pos ? pos.maxHeight : 'none',
+    overflowY: 'auto',
+    background: MXS_SURFACE_SOFT,
+    border: '1px solid ' + MXS_BORDER,
+    borderRadius: MXS_RADIUS,
+    fontFamily: 'var(--mx-select-font, ' + ambientFont + ')',
+    fontSize: MXS_FONT_SIZE
+  }, ambient && ambient.vars, selectThemeStyle(theme), pos || {
+    top: 0,
+    left: 0
+  });
+  const popover = open ? /*#__PURE__*/React.createElement("div", {
+    ref: popRef,
+    role: "menu",
+    "aria-label": ariaLabel || label,
+    onPointerDown: e => e.stopPropagation(),
+    onMouseDown: e => e.stopPropagation(),
+    style: popStyle,
+    className: "backdrop-blur shadow-2xl custom-scrollbar py-1"
+  }, rows.map((row, i) => {
+    if (row.separator) {
+      return /*#__PURE__*/React.createElement("div", {
+        key: 'sep:' + i,
+        role: "separator",
+        className: "my-1 border-t",
+        style: {
+          borderColor: MXS_BORDER
+        }
+      });
+    }
+    const isHi = i === hi && !row.disabled;
+    const rowStyle = {
+      color: row.disabled ? MXS_MUTED : isHi ? MXS_ACCENT_TEXT : MXS_TEXT,
+      background: isHi ? MXS_ACCENT_SOFT : undefined
+    };
+    return /*#__PURE__*/React.createElement("button", {
+      key: 'row:' + i,
+      ref: el => {
+        rowRefs.current[i] = el;
+      },
+      type: "button",
+      role: row.checked != null ? 'menuitemcheckbox' : 'menuitem',
+      "aria-checked": row.checked != null ? !!row.checked : undefined,
+      "aria-disabled": row.disabled || undefined,
+      title: row.title,
+      onMouseEnter: () => {
+        if (!row.disabled) setHi(i);
+      },
+      onClick: () => commitItem(row),
+      style: rowStyle,
+      className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' + (row.disabled ? 'cursor-default' : 'cursor-pointer')
+    }, hasIcons && /*#__PURE__*/React.createElement("span", {
+      className: "w-3.5 flex-none"
+    }, row.icon ? /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: row.icon,
+      className: "w-3.5 h-3.5"
+    }) : null), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 whitespace-nowrap"
+    }, row.label), (hasKeys || hasChecks) && (row.checked != null ?
+    /*#__PURE__*/
+    // A switch, not a tick: these rows flip a mode that
+    // stays on, which a checkmark reads as "chosen" and
+    // a switch reads as "on". Inert spans, since the row
+    // itself is the button and carries aria-checked.
+    React.createElement("span", {
+      className: "flex-none pl-6 inline-flex items-center",
+      "aria-hidden": "true"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: 'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors ' + (row.checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')
+    }, /*#__PURE__*/React.createElement("span", {
+      className: 'inline-block h-2.5 w-2.5 rounded-full bg-white transition-transform ' + (row.checked ? 'translate-x-[13px]' : 'translate-x-[2px]')
+    }))) : /*#__PURE__*/React.createElement("span", {
+      className: "flex-none pl-6 text-[10px]",
+      style: {
+        color: MXS_MUTED
+      }
+    }, row.keys || '')));
+  })) : null;
+
+  // A point-anchored menu has no trigger to render, and nothing to
+  // return focus to on Escape. btnRef stays null, which every read of
+  // it already guards.
+  const trigger = anchorPoint ? null : /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    ref: btnRef,
+    role: "menuitem",
+    "aria-haspopup": "menu",
+    "aria-expanded": open,
+    title: title,
+    "aria-label": ariaLabel,
+    onClick: () => open ? setOpen(false) : openMenu(),
+    onMouseEnter: () => {
+      setTriggerHover(true);
+      // Desktop menu-bar behaviour: with one menu already
+      // open, hovering a sibling trigger switches to it.
+      if (bar && bar.openId != null && bar.openId !== menuId) openMenu();
+    },
+    onMouseLeave: () => setTriggerHover(false),
+    style: triggerStyle,
+    className: 'h-7 px-2 border rounded inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ' + (className || '')
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5 flex-none"
+  }), /*#__PURE__*/React.createElement("span", null, label), /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "chevron-down",
     className: "w-3 h-3 flex-none opacity-70"
-  })), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
+  }));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, trigger, popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
 };
 
 // The site ships production React with no error boundaries — one render
@@ -1840,15 +3172,18 @@ Object.assign(window, {
   BTN_PRIMARY,
   BTN_TOOLBAR,
   GEOM_LABELS,
+  GEOM_ICONS,
   defaultGeomFor,
   errMsg,
   useEscapeToClose,
   useNarrowPane,
   useFullscreen,
   useViewToggle,
+  useViewEnum,
   downloadSnapshot,
   downloadBlob,
   downloadXml,
+  attributeExportedXml,
   useViewportControls,
   openInGraphEditor,
   openInViewer,
@@ -1857,8 +3192,14 @@ Object.assign(window, {
   LoadingOverlay,
   ViewportControls,
   ColorSwatch,
-  GeomSelect,
+  MtlxSelect,
+  MtlxMenu,
+  MtlxMenuBar,
   PreviewErrorBoundary,
+  fullscreenPortalRoot,
+  BTN_MENUBAR,
+  HUD_PILL,
+  HUD_PILL_ACTIVE,
   DialogFrame,
   PresetsDialog,
   SettingsDialog,
@@ -1869,6 +3210,20 @@ Object.assign(window, {
   fetchPresetFiles,
   fetchRemoteDocumentFiles,
   copyTextToClipboard,
-  ShaderExportDialog
+  ShaderExportDialog,
+  TEXT_INPUT_CLS,
+  FieldLabel,
+  Toggle,
+  SliderField,
+  Chip,
+  SectionCard,
+  GeometryTile,
+  FilePickerField,
+  EV_MIN,
+  EV_MAX,
+  EV_STEP,
+  evToLinear,
+  linearToEv,
+  formatEv
 });
 })();

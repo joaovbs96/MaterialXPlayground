@@ -1,0 +1,17 @@
+/* js/graph/graph-preview.css: scoped overrides for the read-only graph
+   preview (MtlxGraphPreview). index.html:275-305 sets GLOBAL React Flow
+   rules tuned for the interactive editor; those are wrong for a bare,
+   read-only canvas dropped into page flow, so every rule here is scoped
+   under .mtlx-graph-preview and touches nothing else on the site. */
+
+.mtlx-graph-preview .react-flow__handle { cursor: default; }
+.mtlx-graph-preview .react-flow__handle::after { inset: 0; }
+
+.mtlx-graph-preview .react-flow__attribution { background: transparent; font-size: 9px; }
+.mtlx-graph-preview .react-flow__attribution a { color: #6b7280; text-decoration: none; }
+.mtlx-graph-preview .react-flow__attribution a:hover { color: #9ca3af; }
+
+/* Only matters when interactive=false, where RF still sets pointer-events:
+   none on every node wrapper (elementsSelectable is false again then).
+   Re-enable just the drill-in chip, not the whole card. */
+.mtlx-graph-preview .mtlx-node-open { pointer-events: auto; }

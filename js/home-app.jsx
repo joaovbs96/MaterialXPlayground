@@ -15,13 +15,20 @@ const HOME_CARDS = [
     { id: 'viewer', group: 'tools', href: '#!viewer', icon: 'camera', title: 'Material Viewer', desc: 'Drop in a .mtlx (with textures, a folder, or a .zip) or pick a preset, and see it rendered in real time with image-based lighting.', img: 'images/preview-material.jpg', cta: 'Open Material Viewer' },
     { id: 'compare', group: 'tools', href: '#!compare', icon: 'compare', title: 'Material Comparison', desc: 'Render two MaterialX documents side by side, with a swipe slider or a difference heatmap and SSIM/RMSE stats.', img: 'images/preview-compare.jpg', cta: 'Open Material Comparison' },
     { id: 'graph', group: 'tools', href: '#!graph', icon: 'share', title: 'Node Graph Editor', desc: 'Build MaterialX graphs visually, with nested nodegraphs, a live 3D preview, validation, and .mtlx export.', img: 'images/preview-nodegraph.jpg', cta: 'Open Node Graph Editor' },
+    { id: 'whatIsMaterialx', group: 'learn', href: '#!what-is-materialx', icon: 'world', iconImg: 'images/materialx-logo.svg', title: 'What is MaterialX?', desc: 'A guided introduction to the MaterialX standard: what it is, why it exists, and how its node graphs describe a material.', img: 'images/preview-what.jpg', cta: 'Read the introduction' },
     { id: 'docs', group: 'learn', href: '#!docs', icon: 'file-code', title: 'Node Specs', desc: 'Every standard MaterialX node, with per-signature docs, port tables, live 3D previews, and shareable permalinks.', img: 'images/preview-docs.jpg', cta: 'Browse Node Specs' },
     { id: 'tutorials', group: 'learn', status: 'soon', icon: 'book', title: 'Tutorials', badge: 'In progress', desc: 'Guided, hands-on MaterialX tutorials, from what MaterialX is to your first node graph, served alongside the app.', cta: 'Coming soon' },
     { id: 'builder', group: 'integrate', href: '#!builder', icon: 'code', title: 'Embed Builder', badge: 'Experimental', desc: 'Configure an embeddable viewer, preview it live, and copy an <iframe> or custom-element snippet for any web page.', img: 'images/preview-builder.jpg', cta: 'Open Embed Builder' },
     { id: 'vscode', group: 'integrate', href: '#!vscode', icon: 'brand-vscode', title: 'VS Code extension', badge: 'Experimental', desc: 'Edit .mtlx files in VS Code with live preview, validation, and hover docs, built on the same engine as the web app.', img: 'images/preview-vscode.jpg', cta: 'Get the extension' },
 ];
-// Featured band: any card id + free-text kicker (e.g. 'New in v2026.9.0'); null hides the band.
-const HOME_FEATURED = { card: 'builder', kicker: 'New' };
+// Featured gallery: 3 to 5 card ids, each with a free-text kicker (e.g.
+// 'New in v2026.9.0'). Cycles every FEATURED_MS; an empty list hides the band.
+const HOME_FEATURED = [
+    { card: 'whatIsMaterialx', kicker: 'Start here' },
+    { card: 'graph', kicker: 'Build visually' },
+    { card: 'builder', kicker: 'Embed anywhere' },
+];
+const FEATURED_MS = 10000;
 // Hero whitelist: untextured single-material presets, MaterialX ones by
 // `path` and this repo's own by `src` (see MTLX_PRESETS in
 // js/shared/mtlx-ui.jsx).
@@ -68,6 +75,16 @@ function ComingSoonMedia() {
 
 // One grid card. Link cards (internal or external) get the hover
 // treatment; a card with no `href` renders as a static placeholder.
+// A wordmark with a baked-in fill cannot inherit currentColor as an <img>,
+// so it is masked and tinted instead. Same w-8 h-8 box as MtlxIcon, and
+// self-start keeps the flex column from stretching it out of alignment.
+const maskIconStyle = (url) => ({
+    WebkitMaskImage: 'url(' + url + ')', maskImage: 'url(' + url + ')',
+    WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
+    WebkitMaskPosition: 'center', maskPosition: 'center',
+    WebkitMaskSize: 'contain', maskSize: 'contain',
+});
+
 function HomeCard({ card }) {
     const isLink = !!card.href;
     const media = card.img ? (
@@ -77,7 +94,10 @@ function HomeCard({ card }) {
     );
     const body = (
         <div className="flex flex-col flex-1 p-5">
-            <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />
+            {card.iconImg
+                ? <span aria-hidden="true" className="w-8 h-8 self-start bg-current text-blue-400"
+                    style={maskIconStyle(card.iconImg)} />
+                : <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />}
             <div className="mt-3 flex items-center flex-wrap gap-2">
                 <span className="text-lg font-semibold text-gray-100">{card.title}</span>
                 {card.badge && <span className={badgeClassFor(card.badge)}>{card.badge}</span>}
@@ -118,6 +138,122 @@ function HomeCard({ card }) {
     );
 }
 
+// Crossfade for a swap. Injected here rather than in index.html so the
+// whole band stays in one file.
+const FEATURED_STYLE = '@keyframes mtlxFeatureIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}'
+    + '.mtlx-feature-in{animation:mtlxFeatureIn 320ms ease-out}'
+    + '@keyframes mtlxFeatureProgress{from{transform:scaleX(0)}to{transform:scaleX(1)}}'
+    + '.mtlx-feature-progress{transform-origin:left;animation:mtlxFeatureProgress ' + FEATURED_MS + 'ms linear forwards}'
+    + '@media (prefers-reduced-motion: reduce){.mtlx-feature-in{animation:none}}';
+
+// Featured band, cycling through HOME_FEATURED every FEATURED_MS. The dots
+// are siblings of the card anchor, not children: a button inside an anchor
+// is invalid HTML and would swallow the click.
+function FeaturedGallery({ items, active, fadeRef }) {
+    const [idx, setIdx] = React.useState(0);
+    const [held, setHeld] = React.useState(false);
+    const [reduce] = React.useState(() => {
+        try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+    });
+
+    const count = items.length;
+    const at = Math.min(idx, count - 1);
+    const entry = items[at];
+    const card = HOME_CARDS.find((c) => c.id === entry.card);
+
+    // Held while the view is hidden (the shell keeps every view mounted) and
+    // while a pointer or focus is inside, so the card cannot swap out from
+    // under a click. `at` in the deps gives a hand-picked card a full turn.
+    React.useEffect(() => {
+        if (!active || held || reduce || count < 2) return undefined;
+        const t = setTimeout(() => setIdx((i) => (i + 1) % count), FEATURED_MS);
+        return () => clearTimeout(t);
+    }, [active, held, reduce, count, at]);
+
+    if (!card) return null;
+
+    return (
+        <div
+            ref={fadeRef}
+            className="relative"
+            onMouseEnter={() => setHeld(true)}
+            onMouseLeave={() => setHeld(false)}
+            onFocus={() => setHeld(true)}
+            onBlur={() => setHeld(false)}
+        >
+            <style>{FEATURED_STYLE}</style>
+            <a
+                href={card.href}
+                className="relative block overflow-hidden rounded-2xl border border-blue-500/35 bg-gray-800 ring-4 ring-blue-500/[0.06] p-6 sm:p-8 hover:border-blue-500/60 transition-colors"
+            >
+                <div key={card.id} className="mtlx-feature-in flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-8">
+                    <div className="flex-1 min-w-0 space-y-2.5">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
+                            <MtlxIcon name="sparkles" className="w-3.5 h-3.5" />
+                            Featured
+                            <span className="text-gray-600">/</span>
+                            <span className="text-gray-400">{entry.kicker}</span>
+                        </div>
+                        <div className="flex items-center flex-wrap gap-2.5">
+                            <span className="text-2xl font-bold text-gray-100">{card.title}</span>
+                            {card.badge && <span className={badgeClassFor(card.badge)}>{card.badge}</span>}
+                        </div>
+                        <p className="text-[15px] leading-[22px] text-gray-400 max-w-[520px]">{card.desc}</p>
+                        <span className="inline-flex items-center gap-2 h-10 px-[18px] rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium mt-1.5">
+                            {card.cta} <MtlxIcon name="arrow-right" className="w-4 h-4" />
+                        </span>
+                    </div>
+                    {card.img ? (
+                        <img
+                            src={card.img}
+                            alt=""
+                            className="w-full lg:w-[440px] shrink-0 aspect-video object-cover rounded-[10px] border border-gray-700"
+                        />
+                    ) : (
+                        <div className="w-full lg:w-[440px] shrink-0 rounded-[10px] overflow-hidden border border-gray-700">
+                            <ComingSoonMedia />
+                        </div>
+                    )}
+                </div>
+                {/* Countdown to the next auto-advance, pinned inside the card's
+                    bottom edge. Keyed on the run state too: the advance timer
+                    re-arms from zero after a hold, so the bar restarts with it. */}
+                {count > 1 && !reduce && (
+                    <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gray-700/40">
+                        <div
+                            key={at + ((active && !held) ? '-run' : '-hold')}
+                            className="h-full bg-blue-500 mtlx-feature-progress"
+                            style={{ animationPlayState: (active && !held) ? 'running' : 'paused' }}
+                        />
+                    </div>
+                )}
+            </a>
+            {count > 1 && (
+                <div className="mt-2 flex justify-center gap-1">
+                    {items.map((it, i) => {
+                        const c = HOME_CARDS.find((x) => x.id === it.card);
+                        const on = i === at;
+                        return (
+                            <button
+                                key={it.card}
+                                type="button"
+                                aria-label={'Show ' + (c ? c.title : it.card)}
+                                aria-current={on ? 'true' : undefined}
+                                onClick={() => setIdx(i)}
+                                className={'p-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 '
+                                    + (on ? '' : '[&:hover>span]:bg-gray-400')}
+                            >
+                                <span className={'block h-1.5 rounded-full transition-all duration-200 '
+                                    + (on ? 'w-6 bg-blue-500' : 'w-1.5 bg-gray-600')} />
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // Hero's live <materialx-viewer>, built off-DOM like builder-app.jsx's
 // preview so eager/src/geometry are set before it connects. Falls back to
 // a static screenshot without WebGL2 or on an error before the first frame.
@@ -128,15 +264,15 @@ function HeroStage({ active, busy, onOpen }) {
     const [failed, setFailed] = React.useState(() => !(window.mtlxHasWebGL2 ? window.mtlxHasWebGL2() : true));
     const [loaded, setLoaded] = React.useState(false);
 
-    // Creates the element once and appends it while active; removes it
-    // (without destroying it) whenever this view goes inactive, so
-    // reactivating just re-appends the same instance and preset.
+    // Created lazily on first activation, then LEFT in the DOM for good.
+    // It used to be removed whenever the view went inactive, on the theory
+    // that re-appending reuses the instance — but this element is backed by
+    // an iframe, and re-appending an iframe reloads its document, so every
+    // return to the home view flashed the iframe's white ground before the
+    // first frame arrived. The shell hides this view with display:none,
+    // which already stops it rendering, so removal bought nothing.
     React.useEffect(() => {
-        if (failed) return;
-        if (!active) {
-            if (elRef.current) elRef.current.remove();
-            return;
-        }
+        if (failed || !active) return;
         if (!elRef.current) {
             if (!customElements.get('materialx-viewer')) {
                 setFailed(true);
@@ -169,8 +305,12 @@ function HeroStage({ active, busy, onOpen }) {
             });
             elRef.current = el;
         }
-        mountRef.current.appendChild(elRef.current);
-        return () => { if (elRef.current) elRef.current.remove(); };
+        // Append only when it isn't already parented here: an unconditional
+        // appendChild of an attached iframe still counts as a re-insertion,
+        // and reloads it.
+        if (elRef.current.parentElement !== mountRef.current) {
+            mountRef.current.appendChild(elRef.current);
+        }
     }, [active, failed]);
 
     // Belt-and-braces: an error reported mid-session also tears the
@@ -180,7 +320,6 @@ function HeroStage({ active, busy, onOpen }) {
     }, [failed]);
 
     const basename = (HERO_PRESET.src || HERO_PRESET.path).split('/').pop();
-    const pillClass = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-gray-600/50 bg-gray-900/70 text-xs font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-wait';
 
     return (
         <div className="relative group h-[320px] lg:h-[400px] w-full">
@@ -214,11 +353,11 @@ function HeroStage({ active, busy, onOpen }) {
                 </div>
             )}
             <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
-                <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={pillClass}>
+                <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={PILL_ACTION}>
                     <MtlxIcon name="camera" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
                     {busy === 'viewer' ? 'Loading' : 'Open in Viewer'}
                 </button>
-                <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={pillClass}>
+                <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={PILL_ACTION}>
                     <MtlxIcon name="share" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
                     {busy === 'graph' ? 'Loading' : 'Open in Graph Editor'}
                 </button>
@@ -256,7 +395,9 @@ function HomeApp({ active } = {}) {
         }
     };
 
-    const featuredCard = HOME_FEATURED ? HOME_CARDS.find((c) => c.id === HOME_FEATURED.card) : null;
+    // Linked cards only: the band is one big anchor, so a "coming soon" card
+    // with no href has nowhere to go.
+    const featured = HOME_FEATURED.filter((f) => HOME_CARDS.some((c) => c.id === f.card && c.href));
     const chips = [{ id: 'all', label: 'All' }, ...HOME_GROUPS];
 
     // Grid extent: spans the shell's scroll wrapper edge to edge (two
@@ -267,10 +408,10 @@ function HomeApp({ active } = {}) {
 
     return (
         <div ref={rootRef} className="relative">
-            <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom={featuredCard ? 'top' : 'middle'} />
+            <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom={featured.length ? 'top' : 'middle'} />
         <div className="relative max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-10 sm:space-y-14">
             {/* Hero */}
-            <div ref={featuredCard ? null : fadeRef} className="flex flex-col lg:flex-row lg:items-center gap-8">
+            <div ref={featured.length ? null : fadeRef} className="flex flex-col lg:flex-row lg:items-center gap-8">
                 <div className="flex-1 min-w-0 space-y-4">
                     <div className="flex items-center gap-3">
                         <svg
@@ -313,44 +454,8 @@ function HomeApp({ active } = {}) {
                 </div>
             </div>
 
-            {/* Featured band */}
-            {featuredCard && (
-                <a
-                    ref={fadeRef}
-                    href={featuredCard.href}
-                    className="block rounded-2xl border border-blue-500/35 bg-gray-800 ring-4 ring-blue-500/[0.06] p-6 sm:p-8 hover:border-blue-500/60 transition-colors"
-                >
-                    <div className="flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-8">
-                        <div className="flex-1 min-w-0 space-y-2.5">
-                            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
-                                <MtlxIcon name="sparkles" className="w-3.5 h-3.5" />
-                                Featured
-                                <span className="text-gray-600">/</span>
-                                <span className="text-gray-400">{HOME_FEATURED.kicker}</span>
-                            </div>
-                            <div className="flex items-center flex-wrap gap-2.5">
-                                <span className="text-2xl font-bold text-gray-100">{featuredCard.title}</span>
-                                {featuredCard.badge && <span className={badgeClassFor(featuredCard.badge)}>{featuredCard.badge}</span>}
-                            </div>
-                            <p className="text-[15px] leading-[22px] text-gray-400 max-w-[520px]">{featuredCard.desc}</p>
-                            <span className="inline-flex items-center gap-2 h-10 px-[18px] rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium mt-1.5">
-                                {featuredCard.cta} <MtlxIcon name="arrow-right" className="w-4 h-4" />
-                            </span>
-                        </div>
-                        {featuredCard.img ? (
-                            <img
-                                src={featuredCard.img}
-                                alt=""
-                                className="w-full lg:w-[440px] shrink-0 aspect-video object-cover rounded-[10px] border border-gray-700"
-                            />
-                        ) : (
-                            <div className="w-full lg:w-[440px] shrink-0 rounded-[10px] overflow-hidden border border-gray-700">
-                                <ComingSoonMedia />
-                            </div>
-                        )}
-                    </div>
-                </a>
-            )}
+            {/* Featured gallery */}
+            {featured.length > 0 && <FeaturedGallery items={featured} active={active} fadeRef={fadeRef} />}
 
             {/* Group filter */}
             <div className="flex justify-center gap-2 flex-wrap">

@@ -123,6 +123,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
             'js/shared/compare-ui.jsx',
             'js/docs/doc-links.jsx',
             'js/docs/rich-text.jsx',
@@ -163,6 +164,7 @@ const VIEW_DEPS = {
             'js/shared/mtlx-ui.jsx',
             'js/graph/model.jsx',
             'js/graph/style.jsx',
+            'js/graph/legend.jsx',
             'js/graph/node-component.jsx',
             'js/graph/preview.jsx',
             'js/graph/catalog.jsx',
@@ -171,6 +173,28 @@ const VIEW_DEPS = {
         ],
         app: 'js/graph-app.jsx',
         globalName: 'NodeGraphApp',
+    },
+    whatIsMaterialx: {
+        css: [
+            'vendor/reactflow/style.css',
+            'js/graph/graph-preview.css',
+        ],
+        scripts: [
+            'vendor/reactflow/index.js',
+            'vendor/dagre/dagre.min.js',
+            'embed/mtlx-viewer.js',
+        ],
+        babelScripts: [
+            'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
+            'js/graph/model.jsx',
+            'js/graph/style.jsx',
+            'js/graph/legend.jsx',
+            'js/graph/node-component.jsx',
+            'js/graph/graph-preview.jsx',
+        ],
+        app: 'js/what-is-materialx.jsx',
+        globalName: 'WhatIsMaterialXApp',
     },
     compare: {
         css: [],
@@ -184,7 +208,7 @@ const VIEW_DEPS = {
         // Dependency-free, self-registering custom element (docs/EMBEDDING.md)
         // that drives the live preview - a plain script, not a babelScript.
         scripts: ['embed/mtlx-viewer.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
         app: 'js/builder-app.jsx',
         globalName: 'BuilderApp',
     },
@@ -358,6 +382,7 @@ function Shell() {
         compare: { mounted: false, status: 'idle' },
         builder: { mounted: false, status: 'idle' },
         vscode: { mounted: false, status: 'idle' },
+        whatIsMaterialx: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -430,6 +455,7 @@ function Shell() {
             compare: 'MaterialX Playground — Material Compare',
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
+            whatIsMaterialx: 'MaterialX Playground - What is MaterialX?',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -451,8 +477,18 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
-            builder: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            // The builder means to fill the viewport and let only its
+            // sidebar scroll, but min-h-0 alone never enforced that: any
+            // overflow reached the document, and since the preview stage
+            // derives its height from its own width, the page scrollbar
+            // could appear, narrow the stage, stop being needed, and loop.
+            // md:pb-3: this view fills the viewport, so p-6's bottom 24px is
+            // mostly dead space. Trimming it to the grid's own gap-3 hands
+            // the difference to the 1fr row (the canvas) and leaves the
+            // sidebar and snippets the same breathing room they have between cards.
+            builder: 'p-2 sm:p-6 md:pb-3 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            whatIsMaterialx: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -533,9 +569,18 @@ function Shell() {
                 // inset-0` root positions directly against #root. VS
                 // Code: a height pass-through so its % chain resolves.
                 content = IN_VSCODE ? <div className="w-full h-full min-h-0">{rendered}</div> : rendered;
-            } else if (view === 'builder' || view === 'vscode') {
+            } else if (view === 'builder') {
+                // md:h-full (not scrollable, unlike home/vscode below):
+                // BuilderApp fills this and owns its own internal height
+                // chain so only its settings sidebar scrolls, not the page.
+                content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
+            } else if (view === 'vscode') {
                 // Same wrapper contract as home: a static, scrollable
-                // content page, not a full-bleed canvas (builder/vscode).
+                // content page, not a full-bleed canvas.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+            } else if (view === 'whatIsMaterialx') {
+                // Same wrapper contract as vscode/home: a static,
+                // scrollable content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
@@ -545,7 +590,9 @@ function Shell() {
         }
 
         return (
-            <div key={view} className={wrapClass}>
+            // data-mtlx-view-wrap: HeroGrid resolves its full-bleed extent
+            // against this element (js/shared/hero-grid.jsx).
+            <div key={view} data-mtlx-view-wrap="" className={wrapClass}>
                 {content}
             </div>
         );
@@ -563,6 +610,7 @@ function Shell() {
             {renderView('compare')}
             {renderView('builder')}
             {renderView('vscode')}
+            {renderView('whatIsMaterialx')}
         </div>
     );
 }

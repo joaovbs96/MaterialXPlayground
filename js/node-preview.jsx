@@ -49,6 +49,22 @@
                 try { h.delete(); } catch (e) { /* already deleted / not owned */ }
             }
         };
+        // Graph Editor's ParamRow header idiom (js/graph/panels.jsx ~543-546):
+        // type-color dot, truncated label, right-aligned colored type tag.
+        // Shared here so the ungrouped and foldered param lists can't drift.
+        const ParamLabel = ({ p }) => (
+            <label className="flex items-center gap-1.5 text-[11px] font-mono mb-1">
+                <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(p.type) }} />
+                <span className="text-gray-300 truncate">{p.label}</span>
+                <span className="ml-auto flex-none text-[9px]" style={{ color: typeColor(p.type) }}>{p.type}</span>
+            </label>
+        );
+        // Graph Editor's GROUP_HEADER_CLASS (js/graph-app.jsx ~109-111), scaled
+        // for this panel's p-3 container: -mx-3/w-[calc(100%+1.5rem)] replace
+        // its -mx-2.5/w-[calc(100%+1.25rem)] so the bar still reaches the edge.
+        const FOLDER_HEADER_CLASS = 'w-[calc(100%+1.5rem)] flex items-center gap-1.5 -mx-3 px-2.5 py-1.5 border-t border-b '
+            + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
+            + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
         const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable, active = true, embed = EMBED }) => {
             // Lets a future multi-view shell pause this preview's render loop
             // when backgrounded, without unmounting. Standalone index.html
@@ -156,7 +172,7 @@
             const controlsViewRef = React.useMemo(() => makeFanoutViewRef(viewRef, sourceViewRef), []);
             const {
                 rotating, toggleRotating,
-                envBg, toggleEnvBg,
+                backdrop, setBackdrop,
                 envAvail, setEnvAvail,
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
@@ -192,6 +208,9 @@
                     const n = Number(v);
                     if (!isNaN(n)) u.value = n;
                 }
+                // An image node's `default` is carried by its sampler, not
+                // by this uniform: the generated GLSL never reads it.
+                rebindFilenameDefault(store, uniformName, p.type, v);
             };
             const setUniformFromPlain = (p, v) => {
                 writeUniformPlain(uniformsRef.current, p.uniform, p, v);
@@ -216,9 +235,9 @@
                     setOverrides((prev) => Object.assign({}, prev, { [p.input]: { value: v, type: p.type } }));
                 }
             };
-            // Colorspace picker for a filename input → override + regen.
-            // '(nodedef default)' removes the override so the nodedef's own
-            // colorspace applies again.
+            // Colorspace picker for a filename/color3 input → override +
+            // regen. '(nodedef default)' clears the override. valueType is
+            // the input's REAL type, passed through to applyOverrides.
             const onColorspacePick = (p, cs) => {
                 if (loadingRef.current) return;
                 valuesRef.current = Object.assign({}, valuesRef.current, { ['cs::' + p.input]: cs || undefined });
@@ -226,7 +245,7 @@
                 overridesNodeRef.current = identKey;
                 setOverrides((prev) => {
                     const next = Object.assign({}, prev);
-                    if (cs) next[p.input] = { value: cs, type: 'colorspace' };
+                    if (cs) next[p.input] = { value: cs, type: 'colorspace', valueType: p.type };
                     else delete next[p.input];
                     return next;
                 });
@@ -253,13 +272,28 @@
                 valuesRef.current = Object.assign({}, valuesRef.current, { [p.uniform]: file.name });
                 setValues((prev) => Object.assign({}, prev, { [p.uniform]: file.name }));
             };
+            // Clears one filename param back to its nodedef default sampler
+            // (the same per-field bake onResetDefaults does for every
+            // param, scoped here to just this one).
+            const onClearFilename = (p) => {
+                if (loadingRef.current) return;
+                const rv = viewRef.current;
+                const store = uniformsRef.current;
+                const dtex = rv ? getFilenameDefaultTexture(rv.introspected, p.uniform) : null;
+                if (store && store[p.uniform]) store[p.uniform].value = dtex;
+                delete pickedTexRef.current[p.uniform];
+                valuesRef.current = Object.assign({}, valuesRef.current, { [p.uniform]: null });
+                setValues((prev) => Object.assign({}, prev, { [p.uniform]: null }));
+            };
             const onResetDefaults = () => {
                 const next = {};
                 const store = uniformsRef.current;
                 for (const p of params) {
                     if (p.readonly) continue;
                     if (p.type === 'filename') {
-                        if (store && store[p.uniform]) store[p.uniform].value = getDefaultTexture();
+                        const rv = viewRef.current;
+                        const dtex = rv ? getFilenameDefaultTexture(rv.introspected, p.uniform) : null;
+                        if (store && store[p.uniform]) store[p.uniform].value = dtex;
                         next[p.uniform] = null;
                         continue;
                     }
@@ -365,10 +399,10 @@
                 return { xml, meta };
             };
 
-            const onExportMtlx = () => {
+            const onExportMtlx = async () => {
                 const built = buildExportXml();
                 if (!built) return;
-                downloadXml(built.xml, built.meta.nodeName + '.mtlx');
+                downloadXml(await attributeExportedXml(built.xml), built.meta.nodeName + '.mtlx');
             };
 
             // Hand this preview graph to the node graph editor, same as the
@@ -378,7 +412,16 @@
                 const built = buildExportXml();
                 if (!built) return;
                 const name = (built.meta && built.meta.nodeName) || 'node';
-                openInGraphEditor({ xml: built.xml, name, files: null });
+                // Land on the node this page is ABOUT. The exported graph
+                // also carries the wrappers the preview needs (for a
+                // translation node, the target shader plus a material), and
+                // the editor's default picks the renderable one instead.
+                // Read off the live instance rather than assuming a name.
+                const ed = exportDocRef.current;
+                const subject = (ed && ed.instance)
+                    ? mxSafe(() => ed.instance.getName(), null)
+                    : null;
+                openInGraphEditor({ xml: built.xml, name, files: null, select: subject || null });
             };
 
             React.useEffect(() => {
@@ -558,7 +601,7 @@
                             if (overridesNodeRef.current && overridesNodeRef.current !== identKey) return;
                             const ov = overridesRef.current || {};
                             for (const inputName of Object.keys(ov)) {
-                                const { value, type } = ov[inputName];
+                                const { value, type, valueType } = ov[inputName];
                                 try {
                                     // embind addInput can drop the type arg,
                                     // leaving 'color3' and breaking nodedef
@@ -570,10 +613,10 @@
                                         } catch (e2) { /* best-effort */ }
                                     };
                                     if (type === 'colorspace') {
-                                        // Colorspace is an ATTRIBUTE on the
-                                        // filename input, not its value — the
-                                        // CMS bakes the transform at codegen.
-                                        const inp = ensureTypedInput(doc, nodeInst, inputName, 'filename');
+                                        // Colorspace is an ATTRIBUTE, not a
+                                        // value; valueType is the input's REAL
+                                        // type (filename, color3, ...).
+                                        const inp = ensureTypedInput(doc, nodeInst, inputName, valueType || 'filename');
                                         mxSetColorspace(inp, String(value));
                                         continue;
                                     }
@@ -798,6 +841,10 @@
                         });
                         if (!mounted) return;
                         setKindState(kind);
+                        // MaterialX spec: colorspace applies to "color3- or
+                        // color4-type inputs" and "color image files and
+                        // values" only, mirrors model.jsx's colorManaged.
+                        const isColorSignature = outType === 'color3' || outType === 'color4';
 
                         // Generation + rendering (shared pipeline): resolve
                         // the canvas first — a stale PREVIOUS-node message
@@ -872,7 +919,7 @@
                                         }
                                         if (type === 'filename') {
                                             return { uniform: 'in::' + inputName, input: inputName, label, type: 'filename', def: null,
-                                                colorspace: attrOf(inp, 'colorspace'), live: false, uifolder };
+                                                colorspace: attrOf(inp, 'colorspace'), colorManaged: isColorSignature, live: false, uifolder };
                                         }
                                         if (LIVE_TYPES.indexOf(type) === -1) {
                                             return { uniform: 'in::' + inputName, input: inputName, label, type,
@@ -946,7 +993,7 @@
                             // editor's preview. Ignored for other geoms.
                             sceneOrbit: false,
                             autoRotate: rotating,
-                            envBackground: envBg,
+                            backdrop,
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
                             debugKind: kind,
@@ -1045,7 +1092,7 @@
                                         geomName: geom,
                                         sceneOrbit: false,
                                         autoRotate: rotating,
-                                        envBackground: envBg,
+                                        backdrop,
                                         isMounted: () => mounted,
                                         isActive: () => activeRef.current,
                                         debugKind: kind,
@@ -1133,7 +1180,7 @@
                             if (type === 'filename') {
                                 if (!u || !uniforms[u.name]) return null;
                                 return { uniform: u.name, input: inputName, label, type: 'filename', def: null,
-                                    colorspace: attrOf(inp, 'colorspace'), live: true, uifolder };
+                                    colorspace: attrOf(inp, 'colorspace'), colorManaged: isColorSignature, live: true, uifolder };
                             }
 
                             // NUMERIC / VECTOR / COLOR / BOOLEAN.
@@ -1165,7 +1212,11 @@
                                     if (max <= min) max = min + 1;
                                 }
                                 return { uniform: u.name, input: inputName, label, type, def, min, max,
-                                    enumNames, enumValues, live: true, uifolder };
+                                    enumNames, enumValues, live: true, uifolder,
+                                    // Parity with the filename branch above:
+                                    // color3's colorspace select shows this
+                                    // as the nodedef-default fallback text.
+                                    colorspace: attrOf(inp, 'colorspace') };
                             }
 
                             // No uniform (e.g. a geometric default like
@@ -1389,23 +1440,30 @@
             // color picker, vector → per-component number fields.
             const renderControl = (p) => {
                 const cur = values[p.uniform] !== undefined ? values[p.uniform] : p.def;
-                const numCls = 'w-16 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-gray-200';
+                const numCls = 'w-16 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200';
                 // Read-only input (e.g. a geometric default like Vworld) —
                 // shown so the input isn't "missing", but not editable.
                 if (p.readonly) {
-                    return <span className="text-xs text-gray-500 italic font-mono">{String(cur)}</span>;
+                    return <span className="text-[11px] text-gray-500 italic font-mono">{String(cur)}</span>;
                 }
                 // String with a fixed set of accepted values → dropdown. The
                 // value IS the selected string (unlike numeric enums below).
                 if (p.type === 'string' && p.options && p.options.length) {
+                    // p.def is the NODEDEF default (read off the nodedef's
+                    // own input, never the live edit): badge it, not `cur`.
+                    const defOptVal = p.options.indexOf(p.def) !== -1 ? p.def : null;
                     return (
-                        <select
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-1 py-1 text-xs text-gray-200"
+                        <MtlxSelect
                             value={String(cur)}
-                            onChange={(e) => onParamChange(p, e.target.value)}
-                        >
-                            {p.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
+                            options={p.options}
+                            defValue={defOptVal}
+                            onChange={(v) => onParamChange(p, v)}
+                            disabled={loading}
+                            size="sm"
+                            variant="field"
+                            font="mono"
+                            block
+                        />
                     );
                 }
                 // Free-form string → text field (regenerates on change).
@@ -1413,7 +1471,7 @@
                     return (
                         <input
                             type="text"
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-gray-200"
+                            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-[11px] font-mono text-gray-200"
                             value={String(cur)}
                             onChange={(e) => onParamChange(p, e.target.value)}
                         />
@@ -1425,52 +1483,59 @@
                     for (let i = 0; i < p.enumNames.length; i++) {
                         if (valOf(i) === Number(cur)) { selIdx = i; break; }
                     }
+                    // Badge the NODEDEF-DEFAULT option (p.def), not selIdx's
+                    // current pick, same reset-to-defaults field as above.
+                    const defIdx = p.enumNames.findIndex((nm, i) => valOf(i) === Number(p.def));
                     return (
-                        <select
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-1 py-1 text-xs text-gray-200"
+                        <MtlxSelect
                             value={selIdx}
-                            onChange={(e) => onParamChange(p, valOf(parseInt(e.target.value, 10)))}
-                        >
-                            {p.enumNames.map((nm, i) => <option key={i} value={i}>{nm}</option>)}
-                        </select>
+                            options={p.enumNames.map((nm, i) => ({ value: i, label: nm }))}
+                            defValue={defIdx !== -1 ? defIdx : null}
+                            onChange={(i) => onParamChange(p, valOf(i))}
+                            disabled={loading}
+                            size="sm"
+                            variant="field"
+                            font="mono"
+                            block
+                        />
                     );
                 }
                 if (p.type === 'filename') {
                     const csVal = values['cs::' + p.input] || '';
                     return (
                         <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                                <label className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer flex-none">
-                                    Choose image…
-                                    <input
-                                        type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-                                        className="hidden"
-                                        onChange={(e) => {
-                                            onFilePick(p, e.target.files && e.target.files[0]);
-                                            // Clear so choosing the SAME file
-                                            // later still fires change (an
-                                            // unchanged value emits no event).
-                                            e.target.value = '';
-                                        }}
-                                    />
-                                </label>
-                                <span className="text-xs text-gray-400 truncate min-w-0">
-                                    {cur || 'default checker'}
-                                </span>
-                            </div>
+                            <FilePickerField
+                                value={cur}
+                                accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                icon="file"
+                                mono
+                                disabled={loading}
+                                onFiles={(files) => onFilePick(p, files && files[0])}
+                                onClear={() => onClearFilename(p)}
+                            />
                             {/* Colorspace: a codegen decision (CMS transform
-                                baked into the shader), so picking regenerates. */}
+                                baked into the shader), so picking regenerates.
+                                Gated to color3/4 signatures, see isColorSignature. */}
+                            {p.colorManaged && (
                             <div className="flex items-center gap-2">
-                                <span className="text-[10px] text-gray-500 flex-none">colorspace</span>
-                                <select
-                                    className="flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] text-gray-200"
+                                <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                                <MtlxSelect
                                     value={csVal}
-                                    onChange={(e) => onColorspacePick(p, e.target.value)}
-                                >
-                                    <option value="">{'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}</option>
-                                    {COLORSPACES.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
-                                </select>
+                                    options={COLORSPACES}
+                                    emptyOption={'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}
+                                    onChange={(v) => onColorspacePick(p, v)}
+                                    defValue={null}
+                                    disabled={loading}
+                                    size="sm"
+                                    variant="field"
+                                    icon="palette"
+                                    font="mono"
+                                    align="left"
+                                    block
+                                    className="flex-1 min-w-0"
+                                />
                             </div>
+                            )}
                         </div>
                     );
                 }
@@ -1522,26 +1587,53 @@
                     // steps (1/255 ~ 0.004).
                     const fmt = (n) => Math.round(Number(n) * 1000) / 1000;
                     const chan = p.type === 'color4' ? 'RGBA' : 'RGB';
+                    // color4 has no colorspace select: only color3 is wired
+                    // through the filename path's colorspace mechanism.
+                    const csVal = p.type === 'color3' ? (values['cs::' + p.input] || '') : '';
                     return (
-                        <div className="flex items-center gap-1">
-                            <ColorSwatch
-                                rgb={rgb}
-                                className="h-7 w-10 bg-transparent border border-gray-600 rounded cursor-pointer flex-none"
-                                title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
-                                onChange={(nv) => {
-                                    onParamChange(p, p.type === 'color4' ? nv.concat([cur[3]]) : nv);
-                                }}
-                            />
-                            {cur.map((c, i) => (
-                                <input
-                                    key={i} type="number" min="0" max="1" step="0.01"
-                                    title={chan[i] + ' (linear, 0-1)'}
-                                    className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-gray-200"
-                                    value={fmt(c)}
-                                    onChange={(e) => setComp(i, e.target.value)}
-                                    onBlur={(e) => { e.target.value = String(fmt(cur[i])); }}
+                        <div className="space-y-1">
+                            <div className="flex items-center gap-1">
+                                <ColorSwatch
+                                    rgb={rgb}
+                                    className="flex-none w-6 h-6 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
+                                    title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
+                                    onChange={(nv) => {
+                                        onParamChange(p, p.type === 'color4' ? nv.concat([cur[3]]) : nv);
+                                    }}
                                 />
-                            ))}
+                                {cur.map((c, i) => (
+                                    <input
+                                        key={i} type="number" min="0" max="1" step="0.01"
+                                        title={chan[i] + ' (linear, 0-1)'}
+                                        className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200"
+                                        value={fmt(c)}
+                                        onChange={(e) => setComp(i, e.target.value)}
+                                        onBlur={(e) => { e.target.value = String(fmt(cur[i])); }}
+                                    />
+                                ))}
+                            </div>
+                            {p.type === 'color3' && (
+                                // Colorspace: a codegen decision (CMS transform
+                                // baked into the shader), so picking regenerates.
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                                    <MtlxSelect
+                                        value={csVal}
+                                        options={COLORSPACES}
+                                        emptyOption={'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}
+                                        onChange={(v) => onColorspacePick(p, v)}
+                                        defValue={null}
+                                        disabled={loading}
+                                        size="sm"
+                                        variant="field"
+                                        icon="palette"
+                                        font="mono"
+                                        align="left"
+                                        block
+                                        className="flex-1 min-w-0"
+                                    />
+                                </div>
+                            )}
                         </div>
                     );
                 }
@@ -1551,7 +1643,7 @@
                         {cur.map((c, i) => (
                             <input
                                 key={i} type="number" step="0.01"
-                                className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-gray-200"
+                                className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200"
                                 value={c}
                                 onChange={(e) => {
                                     const n = parseFloat(e.target.value);
@@ -1598,7 +1690,7 @@
                     // the fixed 2D buffer (no bgMesh at all) —
                     // hide both controls while either is selected.
                     showRotate={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
-                    showBackgroundToggle={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
+                    showBackdropPicker={geom !== 'shaderball-scene' && geom !== 'buffer2d'}
                     // No reset button for the fixed cameras — the 2D
                     // buffer and the full scene (engine's resetCamera
                     // no-ops for both anyway).
@@ -1606,8 +1698,8 @@
                         const v = controlsViewRef.current;
                         if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
                     }}
-                    envBg={envBg}
-                    onToggleEnvBg={toggleEnvBg}
+                    backdrop={backdrop}
+                    onBackdropChange={setBackdrop}
                     envAvail={envAvail}
                     viewRef={controlsViewRef}
                     viewEpoch={viewEpoch}
@@ -1616,29 +1708,6 @@
                     onToggleFullscreen={toggleFullscreenView}
                     containerClassName={compact ? 'absolute top-2 right-2 z-20 flex items-center gap-1.5' : undefined}
                     buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')) : undefined}
-                    settingsChildren={
-                        <div>
-                            {/* Dropdown on its OWN line: label + trigger
-                                can't share the popup's 288px row without
-                                overflowing its edge. The Experimental
-                                badge sits on the Auto ROW (via badges) —
-                                picking a geometry isn't the experiment,
-                                the Auto mode is. */}
-                            <div className="text-gray-200">Preview Geometry</div>
-                            <GeomSelect
-                                value={geomChoice}
-                                options={['default'].concat(PREVIEW_GEOM_LIST)}
-                                badges={GEOM_BADGES}
-                                onChange={setGeomChoice}
-                                title="Global preview-geometry choice (all docs previews)"
-                                className="mt-1.5 w-full justify-between h-6 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-                            />
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Applies to all node docs previews. "Auto (by node type)"
-                                is experimental: it picks a geometry per node type.
-                            </div>
-                        </div>
-                    }
                 />
             );
             // Parameters panel header/body, shared between the normal
@@ -1653,36 +1722,42 @@
                             onClick={onExportMtlx}
                             disabled={loading}
                             title="Download this node with the current values as a .mtlx document"
-                            className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className={BTN_TOOLBAR + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
+                            <span>Download .mtlx</span>
                         </button>
                         {!IN_VSCODE && (
                         <button
                             onClick={sendToEditor}
                             disabled={loading}
                             title="Open this node in the node graph editor"
-                            className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className={BTN_TOOLBAR + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                            <span>Send to Editor</span>
                         </button>
                         )}
                         <button
                             onClick={onResetDefaults}
                             disabled={loading}
                             title="Reset to default"
-                            className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className={BTN_TOOLBAR + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="restore" className="w-3.5 h-3.5" />
+                            <span>Reset</span>
                         </button>
                         {kindState === 'translation' && (
                         <button
                             onClick={() => setCompareOn((v) => !v)}
                             disabled={loading}
                             title={compareOn ? 'Show only the translated shader' : 'Compare against the source shader (swipe)'}
-                            className={'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed ' + (compareOn ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')}
+                            className={(compareOn
+                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-blue-600/80 border-blue-500 text-white transition-colors whitespace-nowrap shrink-0'
+                                : BTN_TOOLBAR) + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="compare" className="w-3.5 h-3.5" />
+                            <span>Compare</span>
                         </button>
                         )}
                         {extraButtons}
@@ -1701,35 +1776,31 @@
                         // share input names (e.g. `file`), and a
                         // reused file input won't re-fire on repick
                         <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
-                            <label className="block text-xs text-gray-400 mb-1">
-                                {p.label} <span className="text-gray-600">({p.type})</span>
-                            </label>
+                            <ParamLabel p={p} />
                             {renderControl(p)}
                         </div>
                     ))}
                     {paramGroups.folders.map((f, fi) => {
                         const open = paramFoldersOpen[f.name] !== false;
-                        // A folder that opens the body (no ungrouped
-                        // params above it) gets no divider/top gap — the
-                        // border-t is a separator BETWEEN sections only.
+                        // A folder that opens the body (no ungrouped params
+                        // above it) uses -mt-3 to cancel the scroll body's
+                        // top padding, so the header bar sits flush with the panel header.
                         const firstItem = fi === 0 && paramGroups.ungrouped.length === 0;
                         return (
-                            <div key={'folder:' + f.name} className={(firstItem ? '' : 'border-t border-gray-700/70 mt-2 pt-2') + (wide ? ' col-span-full' : '')}>
+                            <div key={'folder:' + f.name} className={(firstItem ? '-mt-3' : 'mt-2') + (wide ? ' col-span-full' : '')}>
                                 <button
                                     type="button"
                                     onClick={() => setParamFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
-                                    className="w-full flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200"
+                                    className={FOLDER_HEADER_CLASS}
                                 >
-                                    <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5" />
+                                    <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
                                     <span className="truncate">{f.name}</span>
                                 </button>
                                 {open && (
                                     <div className={wide ? 'mt-2 grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-x-4 gap-y-3' : 'mt-2 space-y-3'}>
                                         {f.params.map((p) => (
                                             <div key={identKey + ':' + p.uniform + ':' + resetNonce}>
-                                                <label className="block text-xs text-gray-400 mb-1">
-                                                    {p.label} <span className="text-gray-600">({p.type})</span>
-                                                </label>
+                                                <ParamLabel p={p} />
                                                 {renderControl(p)}
                                             </div>
                                         ))}
@@ -1776,13 +1847,20 @@
                         {(isFullscreen || params.length === 0) ? renderViewportControls(false) : (
                             <React.Fragment>
                                 {renderViewportControls(true)}
-                                <GeomSelect
+                                <MtlxSelect
                                     value={geomChoice}
                                     options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                    labels={GEOM_LABELS}
                                     badges={GEOM_BADGES}
+                                    defValue={null}
                                     onChange={setGeomChoice}
                                     title="Preview geometry"
-                                    className="absolute top-2 left-2 z-20 h-7 text-[11px] px-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                    size="md" variant="plain" className="absolute top-2 left-2 z-20"
+                                    theme={{
+                                        surface: 'var(--site-gray-700, #374151)',
+                                        surfaceHover: 'var(--site-gray-600, #4b5563)',
+                                        text: 'var(--site-gray-200, #e5e7eb)',
+                                    }}
                                 />
                             </React.Fragment>
                         )}
@@ -1824,9 +1902,10 @@
                                     <button
                                         onClick={() => setFsParamsOpen(false)}
                                         title="Collapse the parameters sidebar"
-                                        className="w-7 h-7 flex-none flex items-center justify-center rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        className={BTN_TOOLBAR + ' font-sans'}
                                     >
                                         <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
+                                        <span>Collapse</span>
                                     </button>
                                 )}
                                 {renderParamsBody()}
@@ -1835,7 +1914,7 @@
                             <button
                                 onClick={() => setFsParamsOpen(true)}
                                 title="Show the parameters sidebar"
-                                className="absolute top-12 right-2 z-20 h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap"
+                                className="absolute top-12 right-2 z-20 h-7 inline-flex items-center gap-1 text-[11px] font-sans px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap"
                             >
                                 <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
                                 Parameters

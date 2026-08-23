@@ -1,6 +1,6 @@
 ;(function () {
 // js/embed-controls.jsx: compact, portal-free HUD strip for embed/viewer.html.
-// Replaces ViewportControls/GeomSelect/EnvDialog/SettingsDialog (js/shared/
+// Replaces ViewportControls/MtlxSelect/EnvDialog/SettingsDialog (js/shared/
 // mtlx-ui.jsx) in chromeless mode; same public `controls` names, own CSS.
 
 // Below EMBED_CTL_ICON_BELOW: icons only, no labels. Below
@@ -42,9 +42,9 @@ const EmbedControls = ({
   showRotate,
   onCameraReset,
   showReset,
-  envBg,
-  onToggleEnvBg,
-  showBackgroundToggle,
+  backdrop,
+  onBackdropChange,
+  showBackdropPicker,
   showEnv,
   initialEnvRotation,
   initialEnvExposure,
@@ -170,14 +170,20 @@ const EmbedControls = ({
     className: "mtlx-ec-icon"
   }), !compact && /*#__PURE__*/React.createElement("span", null, isFullscreen ? 'Exit' : 'Fullscreen'))), openPanel === 'env' && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel"
-  }, showBackgroundToggle && /*#__PURE__*/React.createElement("div", {
+  }, showBackdropPicker && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel-row"
-  }, /*#__PURE__*/React.createElement("span", null, "Background"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: 'mtlx-ec-toggle' + (envBg ? ' is-on' : ''),
-    onClick: onToggleEnvBg,
-    title: envBg ? 'Hide the environment map background' : 'Show the environment map as background'
-  }, envBg ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null, "Backdrop"), /*#__PURE__*/React.createElement("select", {
+    className: "mtlx-ec-select",
+    value: backdrop,
+    onChange: e => onBackdropChange(e.target.value),
+    title: "Studio: a white room. Environment: the HDRI as background. None: a dark void."
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "studio"
+  }, "Studio"), /*#__PURE__*/React.createElement("option", {
+    value: "environment"
+  }, "Environment"), /*#__PURE__*/React.createElement("option", {
+    value: "none"
+  }, "None"))), /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel-row mtlx-ec-panel-row--slider"
   }, /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-slider-label"
@@ -192,13 +198,13 @@ const EmbedControls = ({
     className: "mtlx-ec-panel-row mtlx-ec-panel-row--slider"
   }, /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-slider-label"
-  }, /*#__PURE__*/React.createElement("span", null, "Exposure"), /*#__PURE__*/React.createElement("span", null, envExposure.toFixed(2))), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("span", null, "Exposure"), /*#__PURE__*/React.createElement("span", null, formatEv(linearToEv(envExposure)))), /*#__PURE__*/React.createElement("input", {
     type: "range",
-    min: "0",
-    max: "4",
-    step: "0.05",
-    value: envExposure,
-    onChange: e => setEnvExposure(Number(e.target.value))
+    min: EV_MIN,
+    max: EV_MAX,
+    step: EV_STEP,
+    value: linearToEv(envExposure),
+    onChange: e => setEnvExposure(evToLinear(e.target.value))
   }))), openPanel === 'settings' && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel"
   }, /*#__PURE__*/React.createElement("div", {

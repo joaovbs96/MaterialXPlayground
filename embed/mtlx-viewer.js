@@ -49,24 +49,25 @@
     // anything else on the page holding a context.
     var LIVE = new Set();
 
-    // Picks the least-recently-visible OFF-SCREEN instance to evict,
-    // preferring off-screen candidates so we never tear down something the
-    // user is actively looking at just because it happened to activate
-    // first. Falls back to "least-recently-visible overall" only if every
-    // live instance is currently on-screen (cap set lower than the number
-    // simultaneously visible — a misconfiguration, but shouldn't wedge).
+    // True while the instance is actually laid out. False when an ancestor
+    // is display:none, which is how the shell hides a view the visitor has
+    // navigated away from.
+    function isRendered(inst) {
+        try { return inst.getClientRects().length > 0; } catch (e) { return true; }
+    }
+
+    // Eviction order: not rendered at all first, then rendered but scrolled
+    // off-screen, then anything. Least-recently-visible within each tier.
+    // Tier 0 stops a hidden view's viewer outranking the page you are on:
+    // it was visible seconds ago, so _lastVisibleAt alone reads it as fresh.
     function pickEvictionCandidate(excluding) {
-        var best = null;
-        LIVE.forEach(function (inst) {
-            if (inst === excluding || inst._visible) return;
-            if (!best || inst._lastVisibleAt < best._lastVisibleAt) best = inst;
-        });
-        if (best) return best;
+        var tiers = [null, null, null];
         LIVE.forEach(function (inst) {
             if (inst === excluding) return;
-            if (!best || inst._lastVisibleAt < best._lastVisibleAt) best = inst;
+            var t = !isRendered(inst) ? 0 : (!inst._visible ? 1 : 2);
+            if (!tiers[t] || inst._lastVisibleAt < tiers[t]._lastVisibleAt) tiers[t] = inst;
         });
-        return best;
+        return tiers[0] || tiers[1] || tiers[2];
     }
 
     // Attributes with a live postMessage handler in embed-boot.js's
@@ -77,9 +78,9 @@
     // navigation, with a fresh 'ready' handshake) — the only way to change
     // those short of a parallel protocol embed-boot.js doesn't speak.
     var LIVE_ATTRS = {
-        geometry: 1, env: 1, exposure: 1, background: 1, transparent: 1,
+        geometry: 1, env: 1, exposure: 1, background: 1, backdrop: 1, transparent: 1,
         accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
-        envmap: 1,
+        envmap: 1, forcetransparency: 1,
     };
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
@@ -91,8 +92,8 @@
     // "no build step": every current browser runs this syntax natively.)
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
-            return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'transparent', 'base', 'poster',
-                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap'];
+            return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'backdrop', 'transparent', 'base', 'poster',
+                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency'];
         }
 
         constructor() {
@@ -117,15 +118,17 @@
 
         connectedCallback() {
             if (!this._shadowBuilt) this._buildShadow();
-            if (this.eager) {
-                this._activate();
-            } else if (!this._observer) {
+            // Always observe, eager included: eviction can tear the iframe
+            // down later, and this is the only path a still-connected
+            // element has to notice it should come back (see _onIntersect).
+            if (!this._observer) {
                 this._observer = new IntersectionObserver(
                     (entries) => entries.forEach((e) => this._onIntersect(e)),
                     { root: null, rootMargin: MtlxViewerElement.rootMargin, threshold: 0 }
                 );
                 this._observer.observe(this);
             }
+            if (this.eager) this._activate(); // skip waiting for the observer's first tick.
         }
 
         disconnectedCallback() {
@@ -170,11 +173,23 @@
         get background() { return this.hasAttribute('background'); }
         set background(v) { this._reflectBool('background', v); }
 
+        // 'studio' (default), 'environment', or 'none'; live, see
+        // LIVE_ATTRS/_liveUpdate. `background` above is the legacy boolean
+        // alias for this - see docs/EMBEDDING.md for how the two resolve.
+        get backdrop() { return this.getAttribute('backdrop') || ''; }
+        set backdrop(v) { this._reflect('backdrop', v); }
+
         // Page transparency, not the environment skybox toggle above (see
         // docs/EMBEDDING.md). Only meaningful with a compatible geometry;
         // an incompatible one falls back inside the iframe and reports.
         get transparent() { return this.hasAttribute('transparent'); }
         set transparent(v) { this._reflectBool('transparent', v); }
+
+        // Material rendering mode (depth-peeled OIT for opacity/transmission),
+        // NOT the page transparency above: works with every geometry,
+        // including shaderball-scene. See docs/EMBEDDING.md.
+        get forceTransparency() { return this.hasAttribute('forcetransparency'); }
+        set forceTransparency(v) { this._reflectBool('forcetransparency', v); }
 
         get controls() { return this.getAttribute('controls') || ''; }
         set controls(v) { this._reflect('controls', Array.isArray(v) ? v.join(',') : v); }
@@ -401,8 +416,10 @@
             if (this.exposure !== undefined) qp.set('exposure', String(this.exposure));
             if (this.autorotate) qp.set('autorotate', '1');
             if (this.controls) qp.set('controls', this.controls);
+            if (this.backdrop) qp.set('backdrop', this.backdrop);
             if (this.background) qp.set('background', '1');
             if (this.transparent) qp.set('transparent', '1');
+            if (this.forceTransparency) qp.set('forcetransparency', '1');
             if (this.material) qp.set('material', this.material);
             if (this.camera) qp.set('camera', this.camera);
             if (this.wheel) qp.set('wheel', this.wheel);
@@ -424,19 +441,29 @@
                 this._send('setGeometry', { geometry: this.geometry });
             } else if (name === 'env') {
                 var deg = this._num('env');
-                if (deg !== undefined) this._send('setEnvRotation', { degrees: deg });
+                // Absent/cleared: send the engine default, not nothing, so
+                // resetting to default actually moves the live preview back.
+                this._send('setEnvRotation', { degrees: deg !== undefined ? deg : 0 });
             } else if (name === 'exposure') {
                 var v = this._num('exposure');
-                if (v !== undefined) this._send('setEnvExposure', { value: v });
+                this._send('setEnvExposure', { value: v !== undefined ? v : 1 });
             } else if (name === 'background') {
                 this._send('setEnvBackground', { on: this.background });
+            } else if (name === 'backdrop') {
+                // Absent/cleared: send the default explicitly, same reasoning
+                // as `env`/`exposure` above - so clearing the attribute
+                // actually moves the live preview back to the studio room.
+                this._send('setBackdrop', { mode: this.backdrop || 'studio' });
             } else if (name === 'transparent') {
                 this._send('setTransparent', { on: this.transparent });
+            } else if (name === 'forcetransparency') {
+                this._send('setForceTransparency', { on: this.forceTransparency });
             } else if (name === 'material') {
                 this._send('setMaterial', { material: this.material });
             } else if (name === 'envmap') {
                 this._send('setEnvMap', { url: this.envmap });
             } else if (name === 'camera') {
+                if (!this.camera) return; // cleared/absent: nothing to apply, nothing to report
                 var pose = this._parseCameraAttr(this.camera);
                 if (pose) this._send('setCamera', pose);
                 else this._reportError(new Error('materialx-viewer: invalid `camera` attribute "' + this.camera + '"; expected 6 comma-separated finite numbers: px,py,pz,tx,ty,tz.'));

@@ -7,14 +7,18 @@
 const HERO_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
 
 // Render as the FIRST child of a `relative` rootRef element. Measures
-// against the shell's scroll wrapper two levels up (see shell.jsx's
-// view wrappers) and fades across fadeRef from its top or middle.
+// against the shell's tagged view wrapper (data-mtlx-view-wrap) and
+// fades across fadeRef from its top or middle.
 function HeroGrid({ rootRef, fadeRef, fadeFrom }) {
     const [grid, setGrid] = React.useState(null);
     React.useEffect(() => {
         const root = rootRef.current;
         const el = fadeRef.current;
-        const wrap = root && root.parentElement && root.parentElement.parentElement;
+        // The shell tags its view wrappers, so nesting depth no longer has
+        // to be guessed: docs sits a level deeper than home. Falls back to
+        // the old two-levels-up hop for any host without the marker.
+        const wrap = root && (root.closest('[data-mtlx-view-wrap]')
+            || (root.parentElement && root.parentElement.parentElement));
         if (!root || !el || !wrap) return undefined;
         const measure = () => {
             const rr = root.getBoundingClientRect();
@@ -24,7 +28,10 @@ function HeroGrid({ rootRef, fadeRef, fadeFrom }) {
             const fadeStart = (fadeFrom === 'middle' ? fr.top + fr.height * 0.5 : fr.top) - rr.top - top;
             setGrid({
                 top: Math.round(top),
-                left: Math.round(wr.left - rr.left),
+                // floor, not round: rounding a fractional offset up shifts the
+                // grid half a pixel past the wrapper edge, and Chrome renders a
+                // horizontal scrollbar for that half pixel (1px scrollWidth overflow).
+                left: Math.floor(wr.left - rr.left),
                 width: wrap.clientWidth,
                 height: Math.round(fr.bottom - rr.top - top),
                 fadeStart: Math.round(fadeStart),

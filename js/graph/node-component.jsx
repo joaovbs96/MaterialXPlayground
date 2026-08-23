@@ -36,6 +36,58 @@
         // Node card: header + one 22px port row each (row height must
         // match nodeHeight() above). Interface input/output GRAPH BOUNDARY
         // pseudo-nodes use a dashed border, darker body, and diamond dot.
+        // In-place name editor on the card. Same semantics as the sidebar's
+        // field: Enter commits when valid, Escape reverts, blur commits.
+        // `nodrag` keeps a click in the field from dragging the node.
+        function InlineRename({ data, isIface }) {
+            const [draft, setDraft] = React.useState(data.name);
+            React.useEffect(() => { setDraft(data.name); }, [data.name]);
+            const issue = data.renameIssueFor ? data.renameIssueFor(draft) : null;
+            const commit = () => { if (data.onRenameCommit) data.onRenameCommit(draft); };
+            return (
+                <div className="relative flex-1 min-w-0">
+                    <input
+                        autoFocus
+                        spellCheck={false}
+                        onFocus={(e) => e.target.select()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={commit}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                // Invalid: swallow the Enter and stay in edit
+                                // mode, the balloon below says why.
+                                if (!issue) commit();
+                            } else if (e.key === 'Escape') {
+                                setDraft(data.name);
+                                if (data.onRenameCancel) data.onRenameCancel();
+                            }
+                        }}
+                        className={'nodrag w-full bg-gray-900 border rounded py-0 px-1 focus:outline-none '
+                            + (isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
+                            + (issue ? ' border-red-500' : ' border-gray-600')}
+                    />
+                    {issue && (
+                        // Same palette as the panel's own rename message, but
+                        // floated with a pointer since there is no room under
+                        // the field on a card. pointer-events-none so it can
+                        // never swallow a click meant for the canvas.
+                        <div className="absolute left-0 top-full mt-1.5 z-50 w-max max-w-[15rem] pointer-events-none
+                            rounded border border-red-800/60 bg-red-950/95 backdrop-blur shadow-lg
+                            px-2 py-1 text-[10px] leading-snug font-normal text-red-300
+                            flex items-start gap-1.5">
+                            <span className="absolute -top-1 left-3 w-2 h-2 rotate-45 border-l border-t border-red-800/60 bg-red-950/95" />
+                            <MtlxIcon name="alert-triangle" className="w-3 h-3 flex-none mt-px" />
+                            <span>{issue}</span>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
         function MtlxGraphNode({ data, selected }) {
             if (MTLX_PERF_LOG) {
                 const now = performance.now();
@@ -59,7 +111,7 @@
             const expanded = data.portMode === 'all';
             return (
                 <div
-                    title={data.kind === 'nodegraph' ? 'Double-click to open this nodegraph' : undefined}
+                    title={data.kind === 'nodegraph' && data.onOpen ? 'Double-click to open this nodegraph' : undefined}
                     className={'relative rounded-lg border font-mono text-[11px] '
                         + (isIface ? 'border-dashed bg-gray-900/70 ' : 'bg-gray-800 shadow-md ')
                         + (selected ? 'border-blue-500 ring-1 ring-blue-500/50'
@@ -88,20 +140,39 @@
                                 <span className="w-2 h-2 rounded-full flex-none"
                                     style={{ background: getNodeColor(data) }} />
                             )}
-                            <span className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100') + ' truncate'}>
-                                {data.name}
-                            </span>
+                            {data.renaming ? (
+                                <InlineRename data={data} isIface={isIface} />
+                            ) : (
+                                <span
+                                    className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
+                                        + ' mtlx-node-name truncate'
+                                        + (data.onRenameStart ? ' cursor-text' : '')}
+                                    title={data.onRenameStart ? 'Double-click to rename' : undefined}
+                                    onDoubleClick={(e) => {
+                                        // Stops React Flow's own node dblclick
+                                        // (open nodegraph); the native listener
+                                        // is handled by .mtlx-node-name.
+                                        e.stopPropagation();
+                                        if (data.onRenameStart) data.onRenameStart();
+                                    }}
+                                >
+                                    {data.name}
+                                </span>
+                            )}
                             {isIface && (
                                 <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">
                                     {data.kind === 'input' ? 'interface' : 'output'}
                                 </span>
                             )}
-                            {data.kind === 'nodegraph' && (
+                            {/* data.onOpen is what makes a read-only render inert (no
+                                callback, no chip). mtlx-node-open is a CSS hook so a
+                                pointer-events:none preview can re-enable just this chip. */}
+                            {data.kind === 'nodegraph' && data.onOpen && (
                                 <button
                                     onClick={openScope}
                                     onDoubleClick={openScope}
                                     title="Open this nodegraph"
-                                    className="ml-auto flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
+                                    className="mtlx-node-open ml-auto flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
                                 >open <MtlxIcon name="corner-down-left" className="w-2.5 h-2.5" /></button>
                             )}
                         </div>

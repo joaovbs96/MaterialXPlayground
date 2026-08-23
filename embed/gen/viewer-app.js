@@ -33,6 +33,13 @@ function resolveViewerGeom(requested, wantTransparent) {
   };
 }
 
+// A studio backdrop is just as opaque as the shaderball-scene room
+// above, so transparent forces it to 'none' too. Unlike
+// resolveViewerGeom this never touches the geometry, only the backdrop.
+function resolveViewerBackdrop(requested, wantTransparent) {
+  return wantTransparent ? 'none' : requested || 'studio';
+}
+
 // Resolves the `material` controlled prop against the current
 // renderables list: exact name, then case-insensitive name, then
 // a non-negative integer index ("2"). -1 when unresolved.
@@ -88,8 +95,9 @@ const loadMtlxDocument = async (xmlText, path, version) => {
   // bare surfaceshader nodes as a fallback (see listDocRenderables
   // in js/mtlx-engine.js for the caveat this works around).
   const renderables = listDocRenderables(doc);
-  // `path` rides along so the render effect can stamp what
-  // actually got rendered (renderedMtlx) once a view builds.
+  // `path`/`version` ride along so the render effect can stamp what
+  // actually got rendered (renderedMtlx/renderedVersion) once a
+  // view builds.
   return {
     mx,
     gen,
@@ -97,7 +105,8 @@ const loadMtlxDocument = async (xmlText, path, version) => {
     lightData,
     doc,
     renderables,
-    path
+    path,
+    version: version || window.MtlxAssets.MTLX_DEFAULT_VERSION
   };
 };
 
@@ -122,6 +131,7 @@ function MaterialViewerApp({
   envBackground,
   autoRotate,
   wheelMode,
+  backdrop = 'studio',
   transparent = false,
   documentUrl,
   mtlxVersion,
@@ -188,6 +198,14 @@ function MaterialViewerApp({
   // one), which flips immediately on picker change. Stamped by
   // the render effect once a view builds from it.
   const [renderedMtlx, setRenderedMtlx] = React.useState(null);
+  // MaterialX engine version: local UI state, seeded from the
+  // mtlxVersion controlled prop (embed) or the stamped default.
+  // Reconciled with the prop below, like the geometry sync above.
+  const [version, setVersion] = React.useState(() => mtlxVersion || window.MtlxAssets.MTLX_DEFAULT_VERSION);
+  // Version that actually finished rendering (vs `version`, the
+  // requested one). Stamped alongside renderedMtlx in the render
+  // effect; the status chip reads this, not the global badge.
+  const [renderedVersion, setRenderedVersion] = React.useState(null);
   const [renderables, setRenderables] = React.useState([]);
   const [chosenMat, setChosenMat] = React.useState(0);
   // Initial geometry: the `geometry` controlled prop when it names
@@ -248,6 +266,10 @@ function MaterialViewerApp({
   const [presetsOpen, setPresetsOpen] = React.useState(false);
   const [presetsBusy, setPresetsBusy] = React.useState(false);
   const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+  // Selected MTLX_PRESETS path for the Document card's curated
+  // select, mirrored with PresetsDialog's picks via loadPreset
+  // (cleared at the three non-preset ingest entry points only).
+  const [presetPick, setPresetPick] = React.useState('');
   // Shader export dialog ("Export Shader Code" overlay button).
   const [shaderExportOpen, setShaderExportOpen] = React.useState(false);
   // True from "parsing a document" until the render view is live (or
@@ -274,8 +296,8 @@ function MaterialViewerApp({
   const {
     rotating,
     toggleRotating,
-    envBg,
-    toggleEnvBg,
+    backdrop: backdropMode,
+    setBackdrop: setBackdropMode,
     viewEpoch,
     setViewEpoch,
     isFullscreen,
@@ -284,8 +306,31 @@ function MaterialViewerApp({
     // autoRotate/envBackground: controlled props seed the hook's
     // initial toggle state (`!!undefined` -> false for every
     // existing, uncontrolled caller — see useViewportControls'
-    // header comment in js/shared/mtlx-ui.jsx).
-  } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground);
+    // header comment in js/shared/mtlx-ui.jsx). The `backdrop` prop
+    // is resolved against `transparent` first (resolveViewerBackdrop
+    // above), same as the geometry resolution at mount.
+  } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground, resolveViewerBackdrop(backdrop, transparent));
+  // Read fresh after async view builds: a backdrop switch made
+  // mid-build would otherwise land on the disposed predecessor.
+  const backdropModeRef = React.useRef(backdropMode);
+  backdropModeRef.current = backdropMode;
+  // Live transparent toggle for the backdrop: mirrors the geometry
+  // effect above, but only ever forces the backdrop to 'none' -
+  // it never touches geom.
+  React.useEffect(() => {
+    if (transparent && backdropMode !== 'none') setBackdropMode('none');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transparent]);
+  // `backdrop` controlled-prop sync, mirroring the geometry prop
+  // sync effect further below: a host changing `backdrop` after
+  // mount (e.g. an embed re-render) updates the local state too.
+  const backdropPropRef = React.useRef(backdrop);
+  React.useEffect(() => {
+    if (backdrop === backdropPropRef.current) return;
+    backdropPropRef.current = backdrop;
+    setBackdropMode(resolveViewerBackdrop(backdrop, transparent));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backdrop]);
   // The hook's takeScreenshot has no internal try/catch (the
   // previewers swallow failures silently); here it surfaces as
   // an error banner instead, so the wrapping stays local.
@@ -354,6 +399,7 @@ function MaterialViewerApp({
       } = await fetchPresetFiles(preset);
       await ingestRef.current(map, rootKey);
       setPresetsOpen(false);
+      setPresetPick(preset.path);
     } catch (e) {
       setError('Could not load preset: ' + errMsg(e));
     } finally {
@@ -423,7 +469,10 @@ function MaterialViewerApp({
   // dropped file's result. Could be made opt-in later.
   useWindowFileDrop({
     activeRef,
-    onFiles: map => ingestRef.current(map),
+    onFiles: map => {
+      setPresetPick('');
+      ingestRef.current(map);
+    },
     onDragState: setDragOver,
     disabled: IN_VSCODE || chromeless
   });
@@ -446,6 +495,18 @@ function MaterialViewerApp({
         type: 'application/xml'
       })
     });
+    setPresetPick('');
+    // A sender's geometry, re-validated here rather than trusted:
+    // resolveViewerGeom drops anything unrenderable and handles
+    // the transparent-vs-room fallback.
+    if (payload.geometry) {
+      const r = resolveViewerGeom(payload.geometry, transparent);
+      if (!r.invalid) setGeom(r.geom);
+    }
+    // Same guard as the geometry one above, kept consistent
+    // across an inbound import (Send to Viewer, or the embed's
+    // own `load` message, both funnel through here).
+    setBackdropMode(resolveViewerBackdrop(backdropMode, transparent));
     ingestRef.current(map);
   };
   React.useEffect(() => {
@@ -514,7 +575,7 @@ function MaterialViewerApp({
   // postMessage handler re-rendering with a new value) updates
   // `geom` here. Guarded so: (a) an uncontrolled caller (geometry
   // always undefined) never fires this, and (b) the HUD's own
-  // GeomSelect (when `controls` opts it in) isn't fought — this
+  // MtlxSelect (when `controls` opts it in) isn't fought — this
   // only reacts to the PROP actually changing, not to `geom`
   // drifting away from it via the user's own selection.
   const geometryPropRef = React.useRef(geometry);
@@ -551,6 +612,77 @@ function MaterialViewerApp({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material, renderables]);
+
+  // mtlxVersion controlled-prop sync: keeps local `version` state
+  // (and any already-loaded document) in sync with a later prop
+  // change, mirroring the geometry sync above; no-ops when unset.
+  const mtlxVersionPropRef = React.useRef(mtlxVersion);
+  React.useEffect(() => {
+    if (mtlxVersion === mtlxVersionPropRef.current) return;
+    mtlxVersionPropRef.current = mtlxVersion;
+    if (!mtlxVersion) return;
+    setVersion(mtlxVersion);
+    if (chosenMtlx) loadDocument(chosenMtlx, undefined, mtlxVersion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mtlxVersion]);
+
+  // ---- MaterialX version registry + availability probe ----------
+  // MtlxAssets.ready (awaited by shell.jsx before any view mounts)
+  // has already populated these by the time this component exists.
+  const mtlxVersions = window.MtlxAssets.MTLX_VERSIONS || [window.MtlxAssets.MTLX_DEFAULT_VERSION];
+  const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
+  const versionLabels = {};
+  mtlxVersions.forEach(v => {
+    versionLabels[v] = v;
+  });
+  // Narrow popover: rows are just a version string + Default badge,
+  // nowhere near MtlxSelect's default badge width (long geo labels).
+  const VERSION_POP_W = 144;
+
+  // Non-default versions are gitignored and may be absent from a
+  // plain clone, so probe once per version (js/compare-app.jsx's
+  // recipe): undecided counts as unavailable until confirmed.
+  const [versionAvailable, setVersionAvailable] = React.useState({});
+  React.useEffect(() => {
+    // Chromeless renders no version picker, so this probe would be
+    // pure waste there — and its 404 is a console error wherever
+    // the gitignored build is absent, which fails the embed smoke
+    // test in CI. Nothing reads versionAvailable while chromeless.
+    if (chromeless) return undefined;
+    let cancelled = false;
+    mtlxVersions.filter(v => v !== mtlxDefaultVersion).forEach(v => {
+      fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', {
+        method: 'HEAD',
+        cache: 'no-store'
+      }).then(res => {
+        if (cancelled) return;
+        setVersionAvailable(prev => Object.assign({}, prev, {
+          [v]: !!(res && res.ok)
+        }));
+      }).catch(() => {
+        if (cancelled) return;
+        setVersionAvailable(prev => Object.assign({}, prev, {
+          [v]: false
+        }));
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Every known version is listed now; disabledOptions/titles carry
+  // the probe result instead of filtering rows out of the list.
+  // A still-probing version stays disabled with no title yet.
+  const versionDisabledOptions = {};
+  const versionTitles = {};
+  mtlxVersions.forEach(v => {
+    if (v === mtlxDefaultVersion || versionAvailable[v] === true) return;
+    versionDisabledOptions[v] = true;
+    if (versionAvailable[v] === false) {
+      versionTitles[v] = 'MaterialX ' + v + ' is not available in this build.';
+    }
+  });
 
   // Default material: open_pbr_default.mtlx via ingest(), or
   // documentUrl when supplied, crawled for includes/textures
@@ -613,22 +745,30 @@ function MaterialViewerApp({
       setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
     });
   }, []);
-  const onPickFiles = e => {
+  const onPickFileList = fileList => {
     const map = {};
-    for (const f of Array.from(e.target.files || [])) {
+    for (const f of Array.from(fileList || [])) {
       // webkitdirectory inputs carry relative paths
       map[f.webkitRelativePath || f.name] = f;
     }
-    e.target.value = '';
+    setPresetPick('');
     ingest(map);
   };
-  const loadDocument = async (path, mapArg) => {
+  const onPickFiles = e => {
+    onPickFileList(e.target.files);
+    e.target.value = '';
+  };
+  const loadDocument = async (path, mapArg, versionArg) => {
     const map = mapArg || fileMapRef.current;
+    // versionArg forces the FRESH version into this tick (the
+    // `version` state closure hasn't re-rendered yet), same
+    // reason ingest() passes `merged` instead of the fileMap closure.
+    const ver = versionArg || version;
     const id = ++runRef.current;
     setError(null);
     setTexReport(null);
     setBusy(true); // stays on through the render effect below
-    setStatus('Parsing ' + path + ' \u2026');
+    setStatus('Parsing ' + path + ' …');
     try {
       // readMtlxText resolves xi:includes; only the resolved
       // text is used here (the raw half is for callers needing
@@ -636,7 +776,7 @@ function MaterialViewerApp({
       const {
         resolved: xml
       } = await readMtlxText(map[path], path, map);
-      const loaded = await loadMtlxDocument(xml, path, mtlxVersionRef.current);
+      const loaded = await loadMtlxDocument(xml, path, ver);
       if (runRef.current !== id) return; // superseded by a newer load
       if (!loaded.renderables.length) {
         setStatus(null);
@@ -678,7 +818,7 @@ function MaterialViewerApp({
       setError(null);
       setTexReport(null);
       setBusy(true);
-      setStatus('Generating shader\u2026');
+      setStatus('Generating shader…');
       try {
         const target = loaded.renderables[Math.min(chosenMat, loaded.renderables.length - 1)];
         const view = await createMtlxRenderView({
@@ -695,7 +835,7 @@ function MaterialViewerApp({
           sceneOrbit: geom === 'shaderball-scene',
           autoRotate: rotating,
           wheelMode,
-          envBackground: envBg,
+          backdrop: backdropMode,
           isMounted: () => mounted,
           isActive: () => activeRef.current,
           debugKind: 'material'
@@ -706,6 +846,7 @@ function MaterialViewerApp({
           return;
         }
         viewRef.current = view;
+        if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
         // Initial env rotation/exposure controlled props —
         // applied once per (re)build, same as autoRotate/
         // envBackground above. Live updates after this point
@@ -719,9 +860,11 @@ function MaterialViewerApp({
         }
         setViewEpoch(n => n + 1);
         // What's on screen just changed; stamp the document
-        // that produced it so sendToEditor and the sidebar
-        // note never claim pixels that were never rendered.
+        // (and version) that produced it so sendToEditor, the
+        // sidebar note and the status chip never claim pixels
+        // that were never rendered.
         setRenderedMtlx(loaded.path);
+        setRenderedVersion(loaded.version);
         const report = bindDroppedTextures(view, fileMapRef.current);
         setTexReport(report);
         setStatus(null);
@@ -745,6 +888,103 @@ function MaterialViewerApp({
       }
     };
   }, [renderables, chosenMat, geom]);
+
+  // Backs the Scene card's transparency-forcing toggle (browser
+  // only): local mirror of the engine's persisted value, replacing
+  // the old HUD settings popover's only built-in block.
+  const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+
+  // Environment card state (browser only): the backdrop mode stays
+  // the existing hook state above; rotation/exposure live here since
+  // the HUD's env cluster is gone in the browser.
+  const [envUI, setEnvUI] = React.useState({
+    rotation: 0,
+    exposure: 1
+  });
+  const [envImportError, setEnvImportError] = React.useState(null);
+  const [envFileName, setEnvFileName] = React.useState('');
+
+  // Extract key light toggle: local mirror of the engine-wide
+  // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js),
+  // same degrade-to-disabled contract as EnvDialog's own copy
+  // (js/shared/mtlx-ui.jsx).
+  const keyLightAvail = typeof window.getKeyLightEnabled === 'function' && typeof window.setKeyLightEnabled === 'function';
+  const [keyLightOn, setKeyLightOn] = React.useState(() => keyLightAvail ? window.getKeyLightEnabled() : true);
+  // Re-read the global whenever the view is rebuilt, mirroring
+  // EnvDialog's re-read on open since this row has no open event.
+  React.useEffect(() => {
+    setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewEpoch]);
+  const handleToggleKeyLight = next => {
+    setKeyLightOn(next);
+    if (keyLightAvail) window.setKeyLightEnabled(next);
+  };
+  const setEnvRotationDeg = v => {
+    setEnvUI(s => ({
+      ...s,
+      rotation: v
+    }));
+    if (viewRef.current && viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(v * Math.PI / 180);
+  };
+  const setEnvExposureVal = v => {
+    setEnvUI(s => ({
+      ...s,
+      exposure: v
+    }));
+    if (viewRef.current && viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(v);
+  };
+  const importEnv = async file => {
+    setEnvImportError(null);
+    try {
+      const env = await loadEnvironmentFromFile(file);
+      setEnvOverride(env);
+      setEnvFileName(file.name);
+    } catch (e) {
+      setEnvImportError(errMsg(e));
+    }
+  };
+  // Clears an imported environment back to the default WITHOUT
+  // touching rotation/exposure: that stays the Reset button's job.
+  const clearEnvOverride = () => {
+    setEnvOverride(null);
+    setEnvImportError(null);
+    setEnvFileName('');
+  };
+  const resetEnv = () => {
+    setEnvOverride(null);
+    setEnvImportError(null);
+    setEnvFileName('');
+    setEnvUI({
+      rotation: 0,
+      exposure: 1
+    });
+    // Backdrop back to the sitewide default too, still resolved
+    // against `transparent` so a transparent page keeps 'none'.
+    setBackdropMode(resolveViewerBackdrop('studio', transparent));
+    // Key light back to the engine default (on). Guarded: the
+    // setter rebuilds the active environment, so only call it
+    // when the light is actually off.
+    if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+    setKeyLightOn(true);
+    if (viewRef.current) {
+      if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
+      if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
+    }
+  };
+  const envSummary = envUI.rotation === 0 && envUI.exposure === 1 ? 'Default' : Math.round(envUI.rotation) + '°, ' + formatEv(linearToEv(envUI.exposure));
+
+  // Re-applies the sidebar's env sliders to a freshly (re)built
+  // view; chromeless has no sidebar, so this no-ops there and the
+  // render effect's own controlled-prop application stands alone.
+  React.useEffect(() => {
+    if (chromeless) return;
+    const v = viewRef.current;
+    if (!v) return;
+    if (v.setEnvRotation) v.setEnvRotation(envUI.rotation * Math.PI / 180);
+    if (v.setEnvExposure) v.setEnvExposure(envUI.exposure);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewEpoch]);
   const fileCount = Object.keys(fileMap).length;
   const texCount = Object.keys(fileMap).filter(k => IMG_EXT.test(k)).length;
 
@@ -775,18 +1015,470 @@ function MaterialViewerApp({
   // hidden when there's nothing to switch between.
   const showMaterial = showCtl('material') && renderables.length > 1;
   const anyCtlVisible = Object.values(ctlFlags).some(Boolean) || showMaterial;
+  // Non-chromeless HUD cluster layout: geometry/env/settings moved
+  // into the sidebar's Scene/Environment cards in the browser, so
+  // only IN_VSCODE (no sidebar there) keeps those in its clusters.
+  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen']] : [['rotate', 'cameraReset'], ['screenshot', 'shaderCode', 'sendToGraph'], ['presets', 'fullscreen']];
   // Page-transparency CSS: requested AND resolved away from the
   // room. Belt-and-suspenders alongside resolveViewerGeom's own
   // guard above, in case geom ever drifts back to the room.
   const transparentActive = chromeless && !!transparent && !roomGeomActive;
   const bgClass = transparentActive ? 'bg-transparent' : 'bg-gray-900';
+
+  // Document/Materials card summaries and the HUD status chip
+  // all read the same "what's currently on screen" values.
+  const currentMtlxPath = chosenMtlx || renderedMtlx;
+  const docBasename = currentMtlxPath ? currentMtlxPath.split('/').pop() : 'No document';
+  const currentMaterialName = renderables[chosenMat] && renderables[chosenMat].name || '';
+
+  // 28px HUD chip classes, shared by ViewportControls' built-in
+  // slots (via buttonClassName) and the custom sendToGraph/
+  // presets/shaderCode buttons below. VS Code stays icon-only and
+  // square; the browser HUD grows labels via HUD_PILL/HUD_PILL_ACTIVE.
+  const hudChipClass = active => IN_VSCODE ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${active ? 'bg-blue-600/80 border-blue-500 text-white' : 'border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100'}` : active ? HUD_PILL_ACTIVE : HUD_PILL;
+
+  // Files sidebar body: Document/Materials/Textures cards, split
+  // out so the docked panel's own JSX (below) stays flat.
+  const filesPanelBody = /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4"
+  }, /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "file-text",
+    title: "Document",
+    summary: docBasename,
+    defaultOpen: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: currentMtlxPath ? docBasename : '',
+    placeholder: "No document loaded",
+    multiple: true,
+    icon: "files",
+    accept: ".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff",
+    onFiles: onPickFileList
+  })), /*#__PURE__*/React.createElement("label", {
+    title: "Choose a folder",
+    className: "h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "folder",
+    className: "w-3.5 h-3.5"
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    webkitdirectory: "",
+    directory: "",
+    multiple: true,
+    className: "hidden",
+    onChange: onPickFiles
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500"
+  }, "or drag-and-drop anywhere on the page"), chosenMtlx && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500"
+  }, mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's'), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "MaterialX version"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: version,
+    options: mtlxVersions,
+    labels: versionLabels,
+    defValue: mtlxDefaultVersion,
+    disabledOptions: versionDisabledOptions,
+    titles: versionTitles,
+    popWidth: VERSION_POP_W,
+    onChange: v => {
+      setVersion(v);
+      // A Document belongs to the mx instance that parsed
+      // it, so switching versions re-parses the already
+      // chosen file. Nothing to reload if none is chosen yet.
+      if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
+    },
+    size: "sm",
+    disabled: busy
+  }))), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+    label: "Pick a document"
+  }), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: chosenMtlx || '',
+    options: mtlxPaths,
+    placeholder: 'Pick a .mtlx…',
+    onChange: v => {
+      setChosenMtlx(v);
+      loadDocument(v);
+    },
+    defValue: null,
+    size: "lg",
+    variant: "field",
+    block: true
+  }), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-amber-300/90 mt-1.5"
+  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), window.MTLX_PRESETS && window.presetKey && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+    label: "Or pick a curated example"
+  }), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: presetPick,
+    options: window.MTLX_PRESETS.map(p => ({
+      value: presetKey(p),
+      label: p.label
+    })),
+    placeholder: "Choose a curated example",
+    disabled: presetsBusy || busy,
+    onChange: path => {
+      setPresetPick(path);
+      if (!path) return;
+      const preset = window.MTLX_PRESETS.find(p => presetKey(p) === path);
+      if (preset) loadPreset(preset);
+    },
+    defValue: null,
+    size: "lg",
+    variant: "field",
+    block: true
+  }))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "color-swatch",
+    title: "Materials",
+    summary: currentMaterialName,
+    defaultOpen: true
+  }, /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: chosenMat,
+    options: renderables.map((r, i) => ({
+      value: i,
+      label: r.name
+    })),
+    onChange: setChosenMat,
+    defValue: null,
+    size: "lg",
+    variant: "field",
+    block: true
+  })), /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "cube",
+    title: "Scene",
+    summary: GEOM_LABELS[geom] || geom,
+    defaultOpen: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2"
+  }, VIEWER_GEOM_NAMES.map(g => /*#__PURE__*/React.createElement(GeometryTile, {
+    key: g,
+    label: GEOM_LABELS[g] || g,
+    icon: GEOM_ICONS[g],
+    selected: geom === g,
+    onClick: () => setGeom(g),
+    badge: g === 'shaderball-scene' ? 'Default' : undefined
+  })))), /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "sun",
+    title: "Environment",
+    summary: envSummary,
+    defaultOpen: true,
+    dense: true
+  }, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: envFileName,
+    placeholder: "Default environment",
+    accept: ".hdr,.exr",
+    icon: "file",
+    onFiles: files => {
+      const f = files && files[0];
+      if (f) importEnv(f);
+    },
+    onClear: clearEnvOverride
+  }), envImportError && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-red-400"
+  }, envImportError), /*#__PURE__*/React.createElement(SliderField, {
+    label: "Environment rotation",
+    unit: "deg",
+    value: envUI.rotation,
+    min: 0,
+    max: 360,
+    step: 1,
+    onSlider: v => setEnvRotationDeg(Number(v)),
+    onNumber: v => setEnvRotationDeg(Number(v))
+  }), /*#__PURE__*/React.createElement(SliderField, {
+    label: "Exposure",
+    unit: "EV",
+    value: linearToEv(envUI.exposure),
+    min: EV_MIN,
+    max: EV_MAX,
+    step: EV_STEP,
+    onSlider: v => setEnvExposureVal(evToLinear(v)),
+    onNumber: v => setEnvExposureVal(evToLinear(v))
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "Backdrop"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: backdropMode,
+    options: ['studio', 'studio-dark', 'environment', 'none'],
+    labels: {
+      studio: 'Studio',
+      'studio-dark': 'Studio (Dark)',
+      environment: 'Environment',
+      none: 'None'
+    },
+    onChange: setBackdropMode,
+    defValue: "studio",
+    disabled: roomGeomActive,
+    title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined,
+    size: "sm"
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center justify-between cursor-pointer",
+    title: keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "Extract key light"), /*#__PURE__*/React.createElement(Toggle, {
+    checked: keyLightOn,
+    onChange: handleToggleKeyLight,
+    disabled: !keyLightAvail
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-1 text-[11px] text-gray-400"
+  }, "Pull a sun-like light out of the HDRI for crisp highlights."), /*#__PURE__*/React.createElement("button", {
+    onClick: resetEnv,
+    title: "Also clears an imported .hdr/.exr and restores the default environment",
+    className: BTN_SECONDARY + ' w-full'
+  }, "Reset")), /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "settings-cog",
+    title: "Rendering",
+    summary: forceTransparency ? 'Transparency forced' : 'Default',
+    defaultOpen: true
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center justify-between cursor-pointer",
+    title: forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-1.5 text-xs font-medium text-gray-400"
+  }, "Force Transparency", /*#__PURE__*/React.createElement("span", {
+    className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
+  }, "Experimental")), /*#__PURE__*/React.createElement(Toggle, {
+    checked: forceTransparency,
+    onChange: next => {
+      setForceTransparency(next);
+      window.setForceTransparency && window.setForceTransparency(next);
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-1 text-[11px] text-gray-400"
+  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.")), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+    icon: "alert-triangle",
+    title: "Textures",
+    summary: texReport.missing.length + ' unresolved',
+    defaultOpen: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, texReport.missing.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: 'm' + i,
+    className: "flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all",
+    title: "Referenced by the document but not found among the dropped files, so the image node's default color is shown instead."
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "alert-triangle",
+    className: "w-3.5 h-3.5 shrink-0 mt-0.5"
+  }), /*#__PURE__*/React.createElement("span", null, m))), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500"
+  }, "Only textures that failed to resolve are listed. This card disappears when everything loads."))));
+
+  // Stage: canvas + HUD + collapsed-sidebar pill + status/error
+  // banners. IN_VSCODE renders this fragment directly (unchanged
+  // layout); the browser arm wraps it in a positioned column below.
+  const stage = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'
+  }, /*#__PURE__*/React.createElement("div", {
+    className: IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'
+  }, IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-gray-400 mb-3"
+  }, status), IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
+    className: "bg-red-950/40 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-3 mb-3 break-words"
+  }, error), /*#__PURE__*/React.createElement("div", {
+    ref: viewportRef,
+    className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
+  }, /*#__PURE__*/React.createElement(LoadingOverlay, {
+    show: busy,
+    label: status,
+    className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
+    labelClassName: "text-sm text-gray-300 animate-pulse",
+    barWidthClass: "w-56"
+  }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
+  /*#__PURE__*/
+  // Purpose-built compact strip (js/embed-controls.jsx):
+  // no portals, own CSS, degrades with width. See that
+  // file's header for why this isn't ViewportControls.
+  React.createElement(EmbedControls, {
+    containerRef: viewportRef,
+    geom: geom
+    // shaderball-scene is excluded while transparent is on:
+    // picking it back would just re-trigger the fallback
+    // above, so don't offer it in the first place.
+    ,
+    geomList: transparent ? VIEWER_GEOM_NAMES.filter(g => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES,
+    onGeomChange: setGeom,
+    showGeom: ctlFlags.geometry,
+    materialList: renderables.map(r => r.name),
+    chosenMat: chosenMat,
+    onMaterialChange: setChosenMat,
+    showMaterial: showMaterial,
+    rotating: rotating,
+    onToggleRotating: toggleRotating
+    // Hidden while shaderball-scene is active
+    // (roomGeomActive above), same for the
+    // backdrop picker below; not reported.
+    ,
+    showRotate: ctlFlags.rotate,
+    onCameraReset: handleCameraReset,
+    showReset: ctlFlags.reset,
+    backdrop: backdropMode,
+    onBackdropChange: setBackdropMode,
+    showBackdropPicker: !roomGeomActive,
+    showEnv: ctlFlags.env,
+    initialEnvRotation: envRotation,
+    initialEnvExposure: envExposure,
+    viewRef: viewRef,
+    viewEpoch: viewEpoch,
+    onScreenshot: takeScreenshot,
+    showScreenshot: ctlFlags.screenshot,
+    showSettings: ctlFlags.settings,
+    isFullscreen: isFullscreen,
+    onToggleFullscreen: onToggleFullscreen,
+    showFullscreen: ctlFlags.fullscreen
+  }) : /*#__PURE__*/React.createElement(ViewportControls, {
+    containerClassName: IN_VSCODE ? 'absolute top-2 right-2 z-10 flex items-center gap-2.5' : 'absolute top-2 right-2 z-10 flex items-center gap-2.5 flex-wrap justify-end max-w-[calc(100%-5rem)]',
+    clusterClassName: "flex items-center gap-1",
+    selectSize: "md",
+    buttonClassName: hudChipClass,
+    geom: geom,
+    onGeomChange: setGeom,
+    geomBadges: {
+      'shaderball-scene': 'Default'
+    }
+    // Geometry now lives in the sidebar's Scene card in the
+    // browser; VS Code has no sidebar, so it keeps the select.
+    ,
+    showGeomSelect: IN_VSCODE,
+    rotating: rotating,
+    onToggleRotating: toggleRotating
+    // Engine no-ops auto-rotate for the full scene, and
+    // shaderball-scene is an authored room that ignores
+    // the backdrop entirely - hide both while it's selected.
+    ,
+    showRotate: showCtl('rotate') && geom !== 'shaderball-scene',
+    showBackdropPicker: geom !== 'shaderball-scene',
+    onCameraReset: showCtl('reset') ? handleCameraReset : undefined
+    // Env cluster moved into the sidebar's Environment card in
+    // the browser; VS Code keeps the HUD's own env popover.
+    ,
+    envAvail: IN_VSCODE,
+    backdrop: backdropMode,
+    onBackdropChange: setBackdropMode,
+    viewRef: viewRef,
+    viewEpoch: viewEpoch,
+    onScreenshot: takeScreenshot,
+    showScreenshot: showCtl('screenshot')
+    // Settings cog's only content (the transparency
+    // toggle) moved into the sidebar's Scene card.
+    ,
+    showSettings: IN_VSCODE,
+    isFullscreen: isFullscreen,
+    onToggleFullscreen: showCtl('fullscreen') ? onToggleFullscreen : undefined,
+    showLabels: !IN_VSCODE,
+    clusters: hudClusters,
+    slots: {
+      // Graph and viewer are always in sync in the
+      // extension (one opened .mtlx file), so this
+      // handoff doesn't apply under VS Code.
+      sendToGraph: !IN_VSCODE ? /*#__PURE__*/React.createElement("button", {
+        key: "sendToGraph",
+        onClick: sendToEditor,
+        title: "Open this material in the Node Graph Editor",
+        disabled: !renderables.length,
+        className: hudChipClass(false)
+      }, /*#__PURE__*/React.createElement(MtlxIcon, {
+        name: "transfer",
+        className: "w-3.5 h-3.5"
+      }), !IN_VSCODE && /*#__PURE__*/React.createElement("span", {
+        className: "ml-1.5 whitespace-nowrap"
+      }, "Send to Editor")) : null,
+      // Presets: browser-only (VS Code is bound to the open file).
+      presets: !IN_VSCODE ? /*#__PURE__*/React.createElement("button", {
+        key: "presets",
+        onClick: () => setPresetsOpen(true),
+        title: "Load a curated official MaterialX example",
+        className: hudChipClass(false)
+      }, /*#__PURE__*/React.createElement(MtlxIcon, {
+        name: "presets",
+        className: "w-3.5 h-3.5"
+      }), !IN_VSCODE && /*#__PURE__*/React.createElement("span", {
+        className: "ml-1.5 whitespace-nowrap"
+      }, "Presets")) : null,
+      // Not VS Code-gated: generating shader source
+      // applies to the single opened file too.
+      shaderCode: /*#__PURE__*/React.createElement("button", {
+        key: "shaderCode",
+        onClick: () => setShaderExportOpen(true),
+        title: "Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)",
+        disabled: !renderables.length,
+        className: hudChipClass(false)
+      }, /*#__PURE__*/React.createElement(MtlxIcon, {
+        name: "file-code",
+        className: "w-3.5 h-3.5"
+      }), !IN_VSCODE && /*#__PURE__*/React.createElement("span", {
+        className: "ml-1.5 whitespace-nowrap"
+      }, "Shader Code"))
+    }
+  }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: chosenMat,
+    options: renderables.map((r, i) => ({
+      value: i,
+      label: r.name
+    })),
+    onChange: setChosenMat,
+    defValue: null,
+    title: "Material to display",
+    size: "sm",
+    variant: "toolbar"
+  }))), /*#__PURE__*/React.createElement("canvas", {
+    ref: canvasRef,
+    className: "w-full block cursor-grab active:cursor-grabbing"
+    // Always fills its container: VS Code, fullscreen, and
+    // the full-bleed browser default all resolve to 100% here.
+    // No focus ring: on a transparent embed it reads as a border.
+    ,
+    style: {
+      height: '100%',
+      outline: 'none'
+    },
+    tabIndex: -1
+  }), !IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
+    const segments = [renderables[chosenMat] && renderables[chosenMat].name, mxSafe(() => renderables[chosenMat].node.getCategory(), ''),
+    // renderedVersion reflects what actually rendered; window.__mtlxVersion
+    // is only ever stamped for the DEFAULT build (js/mtlx-engine.js), so it's
+    // just the fallback for "nothing has rendered under a version yet".
+    renderedVersion || window.__mtlxVersion ? 'v' + (renderedVersion || window.__mtlxVersion) : null].filter(Boolean);
+    if (!segments.length) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-1.5 rounded-full bg-green-400 shrink-0"
+    }), segments.map((seg, i) => {
+      const isVersion = i === segments.length - 1 && seg.charAt(0) === 'v';
+      return /*#__PURE__*/React.createElement(React.Fragment, {
+        key: i
+      }, i > 0 && /*#__PURE__*/React.createElement("span", {
+        className: "text-white/40"
+      }, "/"), /*#__PURE__*/React.createElement("span", {
+        className: isVersion ? 'font-mono' : undefined
+      }, seg));
+    }));
+  })()))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
+    className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg"
+  }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
+    className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
+  }, error), !IN_VSCODE && !chromeless && !sidebarOpen && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSidebarOpen(true),
+    title: "Expand the viewer panel",
+    className: 'absolute top-2 left-2 z-30 ' + HUD_PILL
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "chevrons-right",
+    className: "w-4 h-4"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "max-w-[5rem] md:max-w-[8rem] truncate"
+  }, "Viewer")));
   return (
     /*#__PURE__*/
-    // IN_VSCODE: height chain fills the webview. Browser:
-    // graph-editor-style full-bleed stage via `absolute inset-0`
-    // (js/shell.jsx's viewer wrapClass is now empty).
+    // IN_VSCODE: height chain fills the webview. Browser: a
+    // full-bleed flex row (docked sidebar + stage column), via
+    // js/shell.jsx's now-empty viewer wrapClass.
     React.createElement("div", {
-      className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden ${bgClass}`
+      className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
     }, dragOver && /*#__PURE__*/React.createElement("div", {
       className: `fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`
     }, /*#__PURE__*/React.createElement("div", {
@@ -796,260 +1488,24 @@ function MaterialViewerApp({
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "file-upload",
       className: "w-6 h-6"
-    }), " Drop to load"))), /*#__PURE__*/React.createElement("div", {
-      className: IN_VSCODE ? 'flex-1 min-h-0 flex' : 'absolute inset-0'
-    }, /*#__PURE__*/React.createElement("div", {
-      className: IN_VSCODE ? 'flex-1 min-h-0 flex flex-col bg-gray-800' : 'absolute inset-0'
-    }, IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
-      className: "text-sm text-gray-400 mb-3"
-    }, status), IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-      className: "bg-red-950/40 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-3 mb-3 break-words"
-    }, error), /*#__PURE__*/React.createElement("div", {
-      ref: viewportRef,
-      className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
-    }, /*#__PURE__*/React.createElement(LoadingOverlay, {
-      show: busy,
-      label: status,
-      className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
-      labelClassName: "text-sm text-gray-300 animate-pulse",
-      barWidthClass: "w-56"
-    }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
-    /*#__PURE__*/
-    // Purpose-built compact strip (js/embed-controls.jsx):
-    // no portals, own CSS, degrades with width. See that
-    // file's header for why this isn't ViewportControls.
-    React.createElement(EmbedControls, {
-      containerRef: viewportRef,
-      geom: geom
-      // shaderball-scene is excluded while transparent is on:
-      // picking it back would just re-trigger the fallback
-      // above, so don't offer it in the first place.
-      ,
-      geomList: transparent ? VIEWER_GEOM_NAMES.filter(g => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES,
-      onGeomChange: setGeom,
-      showGeom: ctlFlags.geometry,
-      materialList: renderables.map(r => r.name),
-      chosenMat: chosenMat,
-      onMaterialChange: setChosenMat,
-      showMaterial: showMaterial,
-      rotating: rotating,
-      onToggleRotating: toggleRotating
-      // Hidden while shaderball-scene is active
-      // (roomGeomActive above), same for the
-      // background toggle below; not reported.
-      ,
-      showRotate: ctlFlags.rotate,
-      onCameraReset: handleCameraReset,
-      showReset: ctlFlags.reset,
-      envBg: envBg,
-      onToggleEnvBg: toggleEnvBg,
-      showBackgroundToggle: !roomGeomActive,
-      showEnv: ctlFlags.env,
-      initialEnvRotation: envRotation,
-      initialEnvExposure: envExposure,
-      viewRef: viewRef,
-      viewEpoch: viewEpoch,
-      onScreenshot: takeScreenshot,
-      showScreenshot: ctlFlags.screenshot,
-      showSettings: ctlFlags.settings,
-      isFullscreen: isFullscreen,
-      onToggleFullscreen: onToggleFullscreen,
-      showFullscreen: ctlFlags.fullscreen
-    }) : /*#__PURE__*/React.createElement(ViewportControls, {
-      containerClassName: "absolute top-2 right-2 z-10 flex gap-1.5 flex-wrap justify-end",
-      selectClassName: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300",
-      buttonClassName: active => `inline-flex items-center text-[11px] px-2 py-1 rounded border transition-colors ${active ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'}`,
-      geom: geom,
-      onGeomChange: setGeom,
-      geomBadges: {
-        'shaderball-scene': 'Default'
-      },
-      showGeomSelect: showCtl('geometry'),
-      rotating: rotating,
-      onToggleRotating: toggleRotating
-      // Engine no-ops auto-rotate for the full scene, and the
-      // backdrop box fully occludes the env-background sky
-      // sphere - hide both controls while it's selected.
-      ,
-      showRotate: showCtl('rotate') && geom !== 'shaderball-scene',
-      showBackgroundToggle: geom !== 'shaderball-scene',
-      onCameraReset: showCtl('reset') ? handleCameraReset : undefined,
-      envAvail: showCtl('env'),
-      envBg: envBg,
-      onToggleEnvBg: toggleEnvBg,
-      viewRef: viewRef,
-      viewEpoch: viewEpoch,
-      onScreenshot: takeScreenshot,
-      showScreenshot: showCtl('screenshot'),
-      showSettings: showCtl('settings'),
-      isFullscreen: isFullscreen,
-      onToggleFullscreen: showCtl('fullscreen') ? onToggleFullscreen : undefined,
-      showLabels: !narrow,
-      labelsClass: !IN_VSCODE && sidebarOpen ? 'flex-wrap justify-end max-w-[calc(100%-19.5rem)]' : 'flex-wrap justify-end max-w-[calc(100%-1rem)]'
-      // Site-shell-coupled (hash-routes to another view, or
-      // opens a dialog that assumes it owns the window) —
-      // hidden entirely in embed mode, not opt-in via `controls`.
-      ,
-      trailingChildren: chromeless ? undefined : labels => /*#__PURE__*/React.createElement(React.Fragment, null, !IN_VSCODE && /*#__PURE__*/React.createElement("button", {
-        onClick: sendToEditor,
-        title: "Open this material in the Node Graph Editor",
-        disabled: !renderables.length,
-        className: "inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "transfer",
-        className: "w-3.5 h-3.5"
-      }), labels && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Send to Graph Editor")), !IN_VSCODE && /*#__PURE__*/React.createElement("button", {
-        onClick: () => setPresetsOpen(true),
-        title: "Load a curated official MaterialX example",
-        className: "inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "presets",
-        className: "w-3.5 h-3.5"
-      }), labels && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Presets")), /*#__PURE__*/React.createElement("button", {
-        onClick: () => setShaderExportOpen(true),
-        title: "Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)",
-        disabled: !renderables.length,
-        className: "inline-flex items-center text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-40"
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "file-code",
-        className: "w-3.5 h-3.5"
-      }), labels && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Shader Code")))
-    }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement("select", {
-      value: chosenMat,
-      onChange: e => setChosenMat(Number(e.target.value)),
-      title: "Material to display",
-      className: "text-[11px] px-2 py-1 rounded border bg-gray-800/80 border-gray-600 text-gray-300"
-    }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-      key: i,
-      value: i
-    }, r.name))))), /*#__PURE__*/React.createElement("canvas", {
-      ref: canvasRef,
-      className: "w-full block cursor-grab active:cursor-grabbing"
-      // Always fills its container: VS Code, fullscreen, and
-      // the full-bleed browser default all resolve to 100% here.
-      // No focus ring: on a transparent embed it reads as a border.
-      ,
-      style: {
-        height: '100%',
-        outline: 'none'
-      },
-      tabIndex: -1
-    })))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
-      className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg"
-    }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-      className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
-    }, error), !IN_VSCODE && !chromeless && (sidebarOpen ? /*#__PURE__*/React.createElement("div", {
-      className: "absolute top-2 bottom-2 left-2 z-30 w-72 max-w-[85%] flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-xl overflow-hidden"
+    }), " Drop to load"))), !IN_VSCODE && !chromeless && sidebarOpen && /*#__PURE__*/React.createElement("div", {
+      className: "flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex-none flex items-center px-3 py-2 border-b border-gray-700"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "text-xs font-semibold text-gray-300 uppercase tracking-wider"
-    }, "Files"), /*#__PURE__*/React.createElement("button", {
+      className: "text-[13px] font-semibold text-gray-200"
+    }, "Viewer"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setSidebarOpen(false),
-      title: "Collapse the files panel",
+      title: "Collapse the viewer panel",
       className: "flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "chevrons-left",
       className: "w-4 h-4"
-    }))), /*#__PURE__*/React.createElement("div", {
-      className: "flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs text-gray-500"
-    }, "Drag & drop a ", /*#__PURE__*/React.createElement("code", null, ".mtlx"), " document anywhere on this page \u2014 alone, with its textures (loose files or a subfolder), or as a ", /*#__PURE__*/React.createElement("code", null, ".zip"), " \u2014 and render it with the same engine as the node previews."), /*#__PURE__*/React.createElement("div", {
-      className: `rounded-lg border-2 border-dashed p-4 text-center transition-colors ${dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'}`
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "file-upload",
-      className: "w-10 h-10 block mx-auto mb-2 text-gray-400"
-    }), /*#__PURE__*/React.createElement("div", {
-      className: "text-sm text-gray-300 font-medium"
-    }, "Drop .mtlx / textures / folder / .zip anywhere on the page"), /*#__PURE__*/React.createElement("div", {
-      className: "text-xs text-gray-500 mt-2"
-    }, "or"), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-center gap-2 mt-2 flex-wrap"
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors"
-    }, "Choose files", /*#__PURE__*/React.createElement("input", {
-      type: "file",
-      multiple: true,
-      className: "hidden",
-      onChange: onPickFiles
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer transition-colors"
-    }, "Choose folder", /*#__PURE__*/React.createElement("input", {
-      type: "file",
-      webkitdirectory: "",
-      directory: "",
-      multiple: true,
-      className: "hidden",
-      onChange: onPickFiles
-    })))), fileCount > 0 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs text-gray-400"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "text-gray-200 font-semibold"
-    }, fileCount), " file", fileCount === 1 ? '' : 's', " loaded (", mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's', ")"), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2"
-    }, "Document"), /*#__PURE__*/React.createElement("select", {
-      className: "w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200",
-      value: chosenMtlx || '',
-      onChange: e => {
-        setChosenMtlx(e.target.value);
-        loadDocument(e.target.value);
-      }
-    }, !chosenMtlx && /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, 'Pick a .mtlx\u2026'), mtlxPaths.map(p => /*#__PURE__*/React.createElement("option", {
-      key: p,
-      value: p
-    }, p))), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
-      className: "text-[11px] text-amber-300/90 mt-1.5"
-    }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), renderables.length > 1 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-3"
-    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2"
-    }, "Material"), /*#__PURE__*/React.createElement("select", {
-      className: "w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200",
-      value: chosenMat,
-      onChange: e => setChosenMat(Number(e.target.value))
-    }, renderables.map((r, i) => /*#__PURE__*/React.createElement("option", {
-      key: i,
-      value: i
-    }, r.name))))), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement("div", {
-      className: "bg-gray-800 border border-gray-700 rounded-lg p-3 text-xs space-y-2"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "font-semibold text-gray-400 uppercase tracking-wider"
-    }, "Textures"), texReport.bound.map((b, i) => /*#__PURE__*/React.createElement("div", {
-      key: 'b' + i,
-      className: "flex items-start gap-1 text-green-300/90 font-mono break-all"
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "check",
-      className: "w-3.5 h-3.5 shrink-0 mt-0.5"
-    }), /*#__PURE__*/React.createElement("span", null, b))), texReport.missing.map((m, i) => /*#__PURE__*/React.createElement("div", {
-      key: 'm' + i,
-      className: "flex items-start gap-1 text-amber-300/90 font-mono break-all",
-      title: "Referenced by the document but not found among the dropped files \u2014 the checker texture is shown instead."
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "alert-triangle",
-      className: "w-3.5 h-3.5 shrink-0 mt-0.5"
-    }), /*#__PURE__*/React.createElement("span", null, m))))), /*#__PURE__*/React.createElement("div", {
+    }))), filesPanelBody, /*#__PURE__*/React.createElement("div", {
       className: "flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500"
-    }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.")) : /*#__PURE__*/React.createElement("button", {
-      onClick: () => setSidebarOpen(true),
-      title: "Expand the files panel",
-      className: "absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-    }, /*#__PURE__*/React.createElement(MtlxIcon, {
-      name: "chevrons-right",
-      className: "w-4 h-4"
-    }), /*#__PURE__*/React.createElement("span", {
-      className: "max-w-[5rem] md:max-w-[8rem] truncate"
-    }, "Files"))), !chromeless && /*#__PURE__*/React.createElement(PresetsDialog, {
+    }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.")), IN_VSCODE ? stage : /*#__PURE__*/React.createElement("div", {
+      className: "relative flex-1 min-w-0"
+    }, stage), !chromeless && /*#__PURE__*/React.createElement(PresetsDialog, {
       open: presetsOpen,
       onClose: () => setPresetsOpen(false),
       onPick: loadPreset,
