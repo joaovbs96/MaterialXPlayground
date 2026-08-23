@@ -25,13 +25,13 @@
                 // [scrollbar-gutter:stable]: this element is both the scroll
                 // container and (at md+) the min-content grid column; reserve
                 // the gutter so width stays constant as the scrollbar toggles.
-                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-lg shadow border border-gray-700 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
+                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-xl border border-gray-800 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
                     {/* Sticky header stays visible while the tree scrolls beneath it. The
                         scroll container is unpadded; the sticky block and tree wrapper
                         carry their own padding so the header sits flush at top with no overlap. */}
                     <div className="sticky top-0 z-10 bg-gray-800 px-4 pt-4 pb-1">
                         <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
-                            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">
                                 Node Library
                             </h3>
                             <div className="flex items-center gap-1">
@@ -39,7 +39,7 @@
                                     onClick={onShowHelp}
                                     title="How to use this page"
                                     aria-label="Help"
-                                    className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                    className="p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
                                 >
                                     <MtlxIcon name="help" className="w-4 h-4" />
                                 </button>
@@ -47,7 +47,7 @@
                                     onClick={onCollapse}
                                     title="Collapse the node library panel"
                                     aria-label="Collapse the node library panel"
-                                    className="hidden md:block p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                    className="hidden md:block p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
                                 >
                                     <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                                 </button>
@@ -57,17 +57,17 @@
                             Documentation browser and live previews for the MaterialX node libraries.
                         </p>
                         {stats && (
-                            <div className="flex w-full text-xs mb-2">
-                                <span className="flex-1 min-w-0 px-2 py-0.5 rounded-l border border-r-0 border-gray-700 bg-gray-900 text-gray-300 text-center whitespace-nowrap">
-                                    <span className="font-semibold text-white">{stats.total}</span> nodes total
-                                </span>
-                                <span className={`flex-1 min-w-0 px-2 py-0.5 rounded-r border text-center whitespace-nowrap ${
-                                    stats.undoc > 0
-                                        ? 'border-amber-700/60 bg-amber-900/20 text-amber-400'
-                                        : 'border-gray-700 bg-gray-900 text-gray-500'
-                                }`}>
-                                    <span className="font-semibold">{stats.undoc}</span> without docs
-                                </span>
+                            <div className="grid grid-cols-2 gap-1.5 mb-2 text-center">
+                                <div className="rounded-lg border border-blue-500 bg-blue-500/[0.12] px-2 py-1.5 flex flex-col gap-0.5">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-300">Nodes</span>
+                                    <span className="text-sm font-semibold text-blue-300">{stats.total}</span>
+                                </div>
+                                <div className="rounded-lg border border-amber-700/60 bg-amber-900/20 px-2 py-1.5 flex flex-col gap-0.5">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-400">
+                                        Without docs
+                                    </span>
+                                    <span className="text-sm font-semibold text-amber-300">{stats.undoc}</span>
+                                </div>
                             </div>
                         )}
                         {/* Both controls are intrinsically sized (invisible-sizer technique,
@@ -83,7 +83,7 @@
                                     const active = docFilter === mode;
                                     const activeCls = mode === 'undocumented'
                                         ? 'bg-amber-900/20 text-amber-400 ring-1 ring-inset ring-amber-700/60'
-                                        : 'bg-blue-600 text-white';
+                                        : 'bg-blue-500/[0.12] text-blue-300 ring-1 ring-inset ring-blue-500/60';
                                     return (
                                         <button
                                             key={mode}
@@ -91,7 +91,7 @@
                                             title={label}
                                             aria-label={label}
                                             aria-pressed={active}
-                                            className={`p-1.5 flex items-center gap-1 transition-colors ${i > 0 ? `border-l ${active && mode === 'undocumented' ? 'border-amber-700/60' : 'border-gray-700'}` : ''} ${
+                                            className={`p-1.5 flex items-center gap-1 transition-colors first:rounded-l-[7px] last:rounded-r-[7px] ${i > 0 ? `border-l ${active && mode === 'undocumented' ? 'border-amber-700/60' : 'border-gray-700'}` : ''} ${
                                                 active
                                                     ? activeCls
                                                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
@@ -120,7 +120,7 @@
                                     : '3D previews are off — click to enable the WebGL node previews'}
                                 className={`shrink-0 p-1.5 rounded-lg border flex items-center gap-1 transition-colors ${
                                     showPreviews
-                                        ? 'bg-blue-600/80 border-blue-500 text-white hover:bg-blue-500/80'
+                                        ? 'bg-blue-500/[0.12] border-blue-500 text-blue-300 hover:bg-blue-500/20'
                                         : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700'
                                 }`}
                             >
@@ -135,7 +135,7 @@
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                     placeholder="Search nodes..."
-                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                                 />
                                 {searchQuery && (
                                     <button
@@ -150,7 +150,7 @@
                             <button
                                 onClick={expandAll}
                                 title="Expand all"
-                                className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                className="shrink-0 p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
                             >
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />
@@ -159,7 +159,7 @@
                             <button
                                 onClick={collapseAll}
                                 title="Collapse all"
-                                className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                className="shrink-0 p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
                             >
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
@@ -219,7 +219,7 @@
                                                                 // isUndocumented (and rebuilding port tables) per keystroke.
                                                                 const undoc = stats && stats.undocKeys.has(`${lib}-${group}-${nodeName}`);
                                                                 const rowCls = isSelected
-                                                                    ? (undoc ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white')
+                                                                    ? 'bg-blue-600 text-white'
                                                                     : (undoc ? 'text-gray-400 hover:bg-amber-900/20 hover:text-amber-300' : 'text-gray-400 hover:bg-blue-900/20 hover:text-blue-300');
                                                                 return (
                                                                     <div
@@ -228,6 +228,7 @@
                                                                         className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${rowCls}`}
                                                                     >
                                                                         {nodeName}
+                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400/80 ml-1.5 align-middle" />}
                                                                     </div>
                                                                 )
                                                             })}
