@@ -111,7 +111,7 @@
             const expanded = data.portMode === 'all';
             return (
                 <div
-                    title={data.kind === 'nodegraph' ? 'Double-click to open this nodegraph' : undefined}
+                    title={data.kind === 'nodegraph' && data.onOpen ? 'Double-click to open this nodegraph' : undefined}
                     className={'relative rounded-lg border font-mono text-[11px] '
                         + (isIface ? 'border-dashed bg-gray-900/70 ' : 'bg-gray-800 shadow-md ')
                         + (selected ? 'border-blue-500 ring-1 ring-blue-500/50'
@@ -164,12 +164,15 @@
                                     {data.kind === 'input' ? 'interface' : 'output'}
                                 </span>
                             )}
-                            {data.kind === 'nodegraph' && (
+                            {/* data.onOpen is what makes a read-only render inert (no
+                                callback, no chip). mtlx-node-open is a CSS hook so a
+                                pointer-events:none preview can re-enable just this chip. */}
+                            {data.kind === 'nodegraph' && data.onOpen && (
                                 <button
                                     onClick={openScope}
                                     onDoubleClick={openScope}
                                     title="Open this nodegraph"
-                                    className="ml-auto flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
+                                    className="mtlx-node-open ml-auto flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
                                 >open <MtlxIcon name="corner-down-left" className="w-2.5 h-2.5" /></button>
                             )}
                         </div>

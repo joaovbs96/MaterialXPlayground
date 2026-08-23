@@ -100,36 +100,6 @@
             );
         }
 
-        // Types (legend) tristate control — minimize / default / show-all,
-        // each button jumping straight to its own target state. Rendered
-        // identically in the card header and the minimized pill.
-        function LegendTriState({ legendOpen, legendShowAll, setLegendOpen, setLegendShowAll }) {
-            const state = !legendOpen ? 'min' : (legendShowAll ? 'all' : 'default');
-            const SEGMENTS = [
-                { key: 'min', icon: 'minus', title: 'Minimize the legend', apply: () => setLegendOpen(false) },
-                { key: 'default', icon: 'color-filter', title: 'Show types used in the current graph', apply: () => { setLegendOpen(true); setLegendShowAll(false); } },
-                { key: 'all', icon: 'plus', title: 'Show all known type colors', apply: () => { setLegendOpen(true); setLegendShowAll(true); } },
-            ];
-            return (
-                <div className="flex items-center -mr-1">
-                    {SEGMENTS.map((seg) => {
-                        const active = state === seg.key;
-                        return (
-                            <button
-                                key={seg.key}
-                                onClick={(e) => { e.stopPropagation(); seg.apply(); }}
-                                title={seg.title}
-                                aria-pressed={active}
-                                className={'rounded px-1 leading-none transition-colors ' + (active
-                                    ? 'bg-blue-600/70 text-white'
-                                    : 'text-gray-400 hover:text-gray-200')}
-                            ><MtlxIcon name={seg.icon} className="w-3.5 h-3.5" /></button>
-                        );
-                    })}
-                </div>
-            );
-        }
-
         // Collapsible parameter-group header (folders + Downstream
         // Connections). Negative margins matching the panel's own px-2.5
         // pull the border edge-to-edge instead of sitting inset.
@@ -392,6 +362,15 @@
                     await nextFrame();
                     setScope(next);
                 })();
+            };
+            // Steps up one scope level via changeScope; shared by Backspace,
+            // the breadcrumb root, the context menu, and the leave-nodegraph
+            // pill so the pending-selection dance stays in one place.
+            const goUpScope = () => {
+                if (scopeRef.current) {
+                    pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                    changeScope('');
+                }
             };
             // { stack: [{xml, scope, tag}], index, savedIndex }. index === -1
             // means an empty stack (no document loaded yet).
@@ -833,10 +812,7 @@
                         // Backspace steps up one scope level (never
                         // deletes); always preventDefault to block browser
                         // back-navigation. Scope change waits behind changeScope's overlay.
-                        if (scopeRef.current) {
-                            pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                            changeScope('');
-                        }
+                        goUpScope();
                         e.preventDefault();
                         return;
                     }
@@ -883,6 +859,12 @@
                     p.label = path;
                     setParsed(p);
                     setScope('');
+                    // Same default-target reset as opening a document fresh:
+                    // a stale selection/pin from a PREVIOUS document (multi-
+                    // document dropdown switch) must not leak into this one.
+                    setSelectedId(null);
+                    setPreviewSel(null);
+                    setPinnedTarget(null);
                     setStatus(null);
                     if (snapshotTimerRef.current) { clearTimeout(snapshotTimerRef.current); snapshotTimerRef.current = null; }
                     try {
@@ -940,7 +922,10 @@
             // `rootKey` (optional): when the caller already knows which
             // .mtlx is the document (loadPreset's map may hold .mtlx-
             // suffixed includes too), skip the ambiguous-drop heuristic below.
-            const ingest = async (map, rootKey) => {
+            // `additive` (File > Import): never replaces the session, new
+            // .mtlx files join the mtlxPaths candidates list instead of
+            // loading; textures still merge and rebind live previews.
+            const ingest = async (map, rootKey, additive) => {
                 setError(null);
                 try {
                     await expandZips(map);
@@ -949,12 +934,12 @@
                     return;
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
-                // Same session semantics as the material viewer: a drop with
-                // a .mtlx replaces the session (unless none existed yet);
-                // other files merge in — they may be xi:include targets.
+                // Same session semantics as the material viewer: a .mtlx
+                // drop replaces the session (unless none existed yet, or
+                // additive); other files merge in as possible xi:includes.
                 const hadSession = Object.keys(fileMapRef.current).some((k) => /\.mtlx$/i.test(k));
                 let merged;
-                if (droppedMtlx.length && hadSession) {
+                if (droppedMtlx.length && hadSession && !additive) {
                     merged = Object.assign({}, map);
                     setParsed(null);
                     setScope('');
@@ -973,6 +958,13 @@
                     return;
                 }
                 if (droppedMtlx.length) {
+                    if (additive) {
+                        // Added, not loaded: the existing multi-document
+                        // dropdown (mtlxPaths) is how the user reaches them.
+                        setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
+                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
+                        return;
+                    }
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
@@ -1096,7 +1088,7 @@
             externalReloadRef.current = externalReload;
 
             // ---- Unsaved-changes protection for actions that REPLACE the
-            // current document (Import, drag-drop, switching documents).
+            // current document (Open, drag-drop, switching documents).
             // Tab/window close is separately guarded by beforeunload below.
             const [confirmCloseOpen, setConfirmCloseOpen] = React.useState(false);
             const pendingActionRef = React.useRef(null);
@@ -1244,13 +1236,15 @@
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
                         if (!hasSession && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Import, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
 
-            // File > Import drives this hidden input by ref: a menu row
-            // can't be the <label> the old toolbar button was.
+            // File > Open / File > Import each drive their own hidden
+            // input by ref: a menu row can't be the <label> the old
+            // toolbar button was.
+            const openInputRef = React.useRef(null);
             const importInputRef = React.useRef(null);
 
             const onPickFiles = (e) => {
@@ -1260,6 +1254,18 @@
                 }
                 e.target.value = '';
                 guardedIngest(map);
+            };
+
+            // Import is additive (textures merge, .mtlx documents join the
+            // candidates list) so it never discards anything: no
+            // confirmReplace guard, straight to ingest().
+            const onPickImportFiles = (e) => {
+                const map = {};
+                for (const f of Array.from(e.target.files || [])) {
+                    map[f.webkitRelativePath || f.name] = f;
+                }
+                e.target.value = '';
+                ingest(map, undefined, true);
             };
 
             // (Re)build the flow whenever the document or the scope changes.
@@ -4162,31 +4168,16 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // the drop zone is the whole stage now, so it explains itself.
             const emptyHint = !parsed && !busy;
 
-            // Legend: exactly the types present in the CURRENT scope —
-            // every port/edge on screen. Alphabetical; each type's color
-            // is intrinsic to its name (typeColor), never changes between sessions.
-            const legendTypes = React.useMemo(() => {
-                const s = new Set();
-                for (const n of flow.nodes) {
-                    const d = n.data || {};
+            // Legend: every type in the CURRENT scope, MaterialX data types
+            // plus nodegraph/generic node kinds (legendTypesFor). Alphabetical;
+            // each type's color is intrinsic to its name (typeColor).
+            const legendTypes = React.useMemo(() => legendTypesFor(flow.nodes), [flow]);
 
-                    // Scan every input/output port's type
-                    for (const p of (d.inputs || [])) if (p.type) s.add(p.type);
-                    for (const p of (d.outputs || [])) if (p.type) s.add(p.type);
-                }
-                return Array.from(s).sort((a, b) =>
-                    a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
-            }, [flow]);
-
-            // What the legend actually renders: just the in-scope types, or —
-            // when expanded via "+" — every type in TYPE_COLORS merged with
-            // any extra (hash-colored) types the current graph uses.
-            const legendDisplayTypes = React.useMemo(() => {
-                if (!legendShowAll) return legendTypes;
-                const s = new Set([...Object.keys(TYPE_COLORS), ...legendTypes]);
-                return Array.from(s).sort((a, b) =>
-                    a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
-            }, [legendTypes, legendShowAll]);
+            // What the legend actually renders: just the in-scope types, or
+            // (via "+") every type in TYPE_COLORS merged with any extra
+            // (hash-colored) types the current graph uses.
+            const legendDisplayTypes = React.useMemo(() =>
+                legendDisplayTypesFor(legendTypes, legendShowAll), [legendTypes, legendShowAll]);
 
             // MiniMap/legend collision, re-measured every render: Stage 1
             // hides the MiniMap for the pill on legend overlap; Stage 2
@@ -4278,8 +4269,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     // can't disagree with itself.
                     const legendOpenRightEdge = 8 + 320;
                     // Invariant: this 320 is the legend card's own w-80,
-                    // unrelated to the sidebar. The aside's width must
-                    // never be derived from anything this effect sets.
+                    // now defined in js/graph/legend.jsx's MtlxTypeLegend,
+                    // unrelated to the sidebar (never derived from this effect).
 
                     // Skip stage 2 entirely while the pill isn't mounted —
                     // there is nothing to measure, and treating a 0-width
@@ -4923,9 +4914,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     title: 'New material (empty document)',
                 },
                 !IN_VSCODE && {
-                    label: 'Import…', icon: 'file-upload',
+                    label: 'Open…', icon: 'file-upload',
+                    onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
+                    title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
+                },
+                !IN_VSCODE && {
+                    label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Import .mtlx / .zip / companion files (drag and drop works anywhere on the page)',
+                    title: 'Add textures or more .mtlx documents to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
@@ -5095,10 +5091,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 scope !== '' && { separator: true },
                 scope !== '' && {
                     label: 'Exit Nodegraph', icon: 'chevrons-left', keys: 'Backspace',
-                    onSelect: () => {
-                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                        changeScope('');
-                    } },
+                    onSelect: goUpScope },
                 { separator: true },
                 { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
                 { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
@@ -5125,16 +5118,27 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             the undo/redo pair that stays out of them, the
                             way Word keeps those on the toolbar too. */}
                         <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full min-w-0">
-                            {/* File > Import needs a real input: a menu row
-                                cannot be the <label> the old toolbar button
-                                was, so the row clicks this one by ref. */}
+                            {/* File > Open / File > Import need real inputs: a
+                                menu row cannot be the <label> the old toolbar
+                                button was, so each row clicks one by ref. */}
+                            {!IN_VSCODE && (
+                                <input
+                                    ref={openInputRef}
+                                    type="file"
+                                    multiple
+                                    accept=".mtlx,.zip"
+                                    className="hidden"
+                                    onChange={onPickFiles}
+                                />
+                            )}
                             {!IN_VSCODE && (
                                 <input
                                     ref={importInputRef}
                                     type="file"
                                     multiple
+                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
                                     className="hidden"
-                                    onChange={onPickFiles}
+                                    onChange={onPickImportFiles}
                                 />
                             )}
                             <MtlxMenuBar className="shrink-0">
@@ -5169,12 +5173,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         {parsed ? (
                             <div className="flex items-center h-7 min-w-0">
                                 <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
-                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
-                                        // Cheap ref write stays immediate; changeScope is a
-                                        // no-op (no overlay flash) when already at the root.
-                                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                                        changeScope('');
-                                    }}>
+                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
                                         {parsed.label}
                                     </button>
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
@@ -5190,7 +5189,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             the MiniMap, bottom-aligned with it, instead of
                             underneath it (kept, not hidden: see below). */}
                         <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; } '
-                            + '.react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
+                            + '.mtlx-graph-editor-canvas .react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
                             {mtlxPaths.length > 1 && (
                                 <MtlxSelect
@@ -5281,7 +5280,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             none of the four callbacks below fire on. The params
                             sidebar is a SIBLING, so its inputs keep the native
                             menu. */}
-                        <div ref={canvasHostRef} className="relative flex-1 min-w-0"
+                        <div ref={canvasHostRef} className="mtlx-graph-editor-canvas relative flex-1 min-w-0"
                             onContextMenu={(e) => e.preventDefault()}>
                             <div className="absolute inset-0">
                                 <ReactFlowComp
@@ -5430,6 +5429,20 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 </div>
                             )}
 
+                            {/* Leave-nodegraph pill: centered at the canvas
+                                host's top edge, only while scoped inside a
+                                nodegraph. Same go-up action as Backspace. */}
+                            {scope && (
+                                <button
+                                    onClick={goUpScope}
+                                    title={scope + ' (Backspace)'}
+                                    className={HUD_PILL + ' absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[16rem]'}
+                                >
+                                    <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="truncate">Leave {scope}</span>
+                                </button>
+                            )}
+
                             {/* Types window (bottom left): zoom/fit cluster docked
                                 above the type-color legend card (or its chip), in
                                 one flex column so it rides up/down with legendShowAll. */}
@@ -5455,75 +5468,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     measure legendBoxRef regardless of which branch
                                     (open card or chip) is currently rendered inside. */}
                                 <div ref={legendBoxRef}>
-                                {legendOpen ? (
-                                    // w-80 (not w-60): the longest type name (displacementshader,
-                                    // ~133px at this legend's text-[11px] font-mono) doesn't fit
-                                    // in a grid-cols-2 column at the old width.
-                                    <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80">
-                                        <div className="flex items-center justify-between mb-2">
-                                            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
-                                            <LegendTriState
-                                                legendOpen={legendOpen}
-                                                legendShowAll={legendShowAll}
-                                                setLegendOpen={setLegendOpen}
-                                                setLegendShowAll={setLegendShowAll}
-                                            />
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-48 overflow-y-auto custom-scrollbar">
-                                            {legendDisplayTypes.map((t) => {
-                                                const inGraph = legendTypes.indexOf(t) !== -1;
-                                                return (
-                                                    <div key={t}
-                                                        className={'flex items-center gap-1.5 text-[11px] font-mono min-w-0 '
-                                                            + (inGraph ? 'text-gray-400' : 'text-gray-600')}
-                                                        title={inGraph ? t : t + ' (not in current graph)'}
-                                                    >
-                                                        <span className={'w-2 h-2 rounded-full flex-none' + (inGraph ? '' : ' opacity-50')}
-                                                            style={{ background: typeColor(t) }} />
-                                                        <span className="truncate">{t}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                            {!legendDisplayTypes.length && (
-                                                <div className="col-span-2 text-[11px] text-gray-500">No typed ports in view.</div>
-                                            )}
-                                        </div>
-                                        {parsed && (
-                                            <div className="text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-700">
-                                                {flow.nodes.length} node{flow.nodes.length === 1 ? '' : 's'} {'\u00B7'}{' '}
-                                                {flow.edges.length} connection{flow.edges.length === 1 ? '' : 's'}
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : (
-                                    // Label first, dots after (item 5), same
-                                    // treatment as the open card's header. A <div
-                                    // role="button"> not a real <button> — it hosts the tristate's own nested buttons.
-                                    <div
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => { setLegendOpen(true); setLegendShowAll(false); }}
-                                        onKeyDown={(e) => {
-                                            if (e.key !== 'Enter' && e.key !== ' ') return;
-                                            e.preventDefault();
-                                            setLegendOpen(true);
-                                            setLegendShowAll(false);
-                                        }}
-                                        title="Show the type color legend"
-                                        className={BTN_TOOLBAR + ' cursor-pointer'}
-                                    >
-                                        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
-                                        {legendTypes.slice(0, 3).map((t) => (
-                                            <span key={t} className="w-2 h-2 rounded-full" style={{ background: typeColor(t) }} />
-                                        ))}
-                                        <LegendTriState
-                                            legendOpen={legendOpen}
-                                            legendShowAll={legendShowAll}
-                                            setLegendOpen={setLegendOpen}
-                                            setLegendShowAll={setLegendShowAll}
-                                        />
-                                    </div>
-                                )}
+                                    <MtlxTypeLegend
+                                        types={legendTypes}
+                                        displayTypes={legendDisplayTypes}
+                                        open={legendOpen}
+                                        showAll={legendShowAll}
+                                        setOpen={setLegendOpen}
+                                        setShowAll={setLegendShowAll}
+                                        nodeCount={flow.nodes.length}
+                                        connectionCount={flow.edges.length}
+                                        showCounts={!!parsed}
+                                    />
                                 </div>
                             </div>
 
@@ -5908,9 +5863,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         />
                     )}
 
-                    {/* Unsaved-changes dialog: gates Import / drag-drop of a
-                        new .mtlx / switching documents while dirty. See
-                        confirmReplace. */}
+                    {/* Unsaved-changes dialog: gates Open / drag-drop of a
+                        new .mtlx / switching documents while dirty (never
+                        the additive Import). See confirmReplace. */}
                     {confirmCloseOpen && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
                             onMouseDown={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}>
@@ -5994,12 +5949,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 <div className="text-sm text-gray-300 font-medium">
                                     {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
                                 </div>
-                                {/* Mentions the Import button and page-wide drag-drop,
+                                {/* Mentions the Open button and page-wide drag-drop,
                                     neither of which exist under VS Code (single opened
                                     .mtlx file). */}
                                 {!IN_VSCODE && (
                                 <div className="text-xs text-gray-500 mt-1.5">
-                                    Files can be dropped anywhere on the page — or use Import or Presets in the top left.
+                                    Files can be dropped anywhere on the page — or use Open or Presets in the top left.
                                 </div>
                                 )}
                             </div>

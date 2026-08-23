@@ -687,15 +687,18 @@
                     });
             }, []);
 
-            const onPickFiles = (e) => {
+            const onPickFileList = (fileList) => {
                 const map = {};
-                for (const f of Array.from(e.target.files || [])) {
+                for (const f of Array.from(fileList || [])) {
                     // webkitdirectory inputs carry relative paths
                     map[f.webkitRelativePath || f.name] = f;
                 }
-                e.target.value = '';
                 setPresetPick('');
                 ingest(map);
+            };
+            const onPickFiles = (e) => {
+                onPickFileList(e.target.files);
+                e.target.value = '';
             };
 
             const loadDocument = async (path, mapArg, versionArg) => {
@@ -821,6 +824,71 @@
                 };
             }, [renderables, chosenMat, geom]);
 
+            // Backs the Scene card's transparency-forcing toggle (browser
+            // only): local mirror of the engine's persisted value, replacing
+            // the old HUD settings popover's only built-in block.
+            const [forceTransparency, setForceTransparency] = React.useState(
+                () => !!(window.getForceTransparency && window.getForceTransparency())
+            );
+
+            // Environment card state (browser only): envBg stays the
+            // existing hook state above; rotation/exposure live here since
+            // the HUD's env cluster is gone in the browser.
+            const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1 });
+            const [envImportError, setEnvImportError] = React.useState(null);
+            const [envFileName, setEnvFileName] = React.useState('');
+
+            const setEnvRotationDeg = (v) => {
+                setEnvUI((s) => ({ ...s, rotation: v }));
+                if (viewRef.current && viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(v * Math.PI / 180);
+            };
+            const setEnvExposureVal = (v) => {
+                setEnvUI((s) => ({ ...s, exposure: v }));
+                if (viewRef.current && viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(v);
+            };
+            const importEnv = async (file) => {
+                setEnvImportError(null);
+                try {
+                    const env = await loadEnvironmentFromFile(file);
+                    setEnvOverride(env);
+                    setEnvFileName(file.name);
+                } catch (e) {
+                    setEnvImportError(errMsg(e));
+                }
+            };
+            // Clears an imported environment back to the default WITHOUT
+            // touching rotation/exposure: that stays the Reset button's job.
+            const clearEnvOverride = () => {
+                setEnvOverride(null);
+                setEnvImportError(null);
+                setEnvFileName('');
+            };
+            const resetEnv = () => {
+                setEnvOverride(null);
+                setEnvImportError(null);
+                setEnvFileName('');
+                setEnvUI({ rotation: 0, exposure: 1 });
+                if (viewRef.current) {
+                    if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
+                    if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
+                }
+            };
+            const envSummary = (envUI.rotation === 0 && envUI.exposure === 1)
+                ? 'Default'
+                : Math.round(envUI.rotation) + '°, ' + formatEv(linearToEv(envUI.exposure));
+
+            // Re-applies the sidebar's env sliders to a freshly (re)built
+            // view; chromeless has no sidebar, so this no-ops there and the
+            // render effect's own controlled-prop application stands alone.
+            React.useEffect(() => {
+                if (chromeless) return;
+                const v = viewRef.current;
+                if (!v) return;
+                if (v.setEnvRotation) v.setEnvRotation(envUI.rotation * Math.PI / 180);
+                if (v.setEnvExposure) v.setEnvExposure(envUI.exposure);
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [viewEpoch]);
+
             const fileCount = Object.keys(fileMap).length;
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
@@ -851,6 +919,20 @@
             // hidden when there's nothing to switch between.
             const showMaterial = showCtl('material') && renderables.length > 1;
             const anyCtlVisible = Object.values(ctlFlags).some(Boolean) || showMaterial;
+            // Non-chromeless HUD cluster layout: geometry/env/settings moved
+            // into the sidebar's Scene/Environment cards in the browser, so
+            // only IN_VSCODE (no sidebar there) keeps those in its clusters.
+            const hudClusters = IN_VSCODE
+                ? [
+                    ['geom', 'rotate', 'cameraReset', 'env'],
+                    ['screenshot', 'shaderCode', 'sendToGraph'],
+                    ['presets', 'settings', 'fullscreen'],
+                ]
+                : [
+                    ['rotate', 'cameraReset'],
+                    ['screenshot', 'shaderCode', 'sendToGraph'],
+                    ['presets', 'fullscreen'],
+                ];
             // Page-transparency CSS: requested AND resolved away from the
             // room. Belt-and-suspenders alongside resolveViewerGeom's own
             // guard above, in case geom ever drifts back to the room.
@@ -865,37 +947,41 @@
 
             // 28px HUD chip classes, shared by ViewportControls' built-in
             // slots (via buttonClassName) and the custom sendToGraph/
-            // presets/shaderCode buttons below.
-            const hudChipClass = (active) => `h-7 w-7 inline-flex items-center justify-center rounded border transition-colors ${
-                active
-                    ? 'bg-blue-600/80 border-blue-500 text-white'
-                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
-            }`;
+            // presets/shaderCode buttons below. VS Code stays icon-only and
+            // square; the browser HUD grows labels via HUD_PILL/HUD_PILL_ACTIVE.
+            const hudChipClass = (active) => IN_VSCODE
+                ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${
+                    active
+                        ? 'bg-blue-600/80 border-blue-500 text-white'
+                        : 'border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100'
+                }`
+                : (active ? HUD_PILL_ACTIVE : HUD_PILL);
 
             // Files sidebar body: Document/Materials/Textures cards, split
             // out so the docked panel's own JSX (below) stays flat.
             const filesPanelBody = (
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
                     <SectionCard icon="file-text" title="Document" summary={docBasename} defaultOpen>
-                        <div
-                            className={`rounded-lg border-2 border-dashed p-4 text-center transition-colors ${
-                                dragOver ? 'border-blue-500 bg-blue-950/30' : 'border-gray-600 bg-gray-800'
-                            }`}
-                        >
-                            <MtlxIcon name="file-upload" className="w-8 h-8 block mx-auto mb-2 text-gray-400" />
-                            <div className="text-sm text-gray-300 font-medium">Drop .mtlx, textures, a folder or a .zip</div>
-                            <div className="text-xs text-gray-500 mt-1">anywhere on the page, or</div>
-                            <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
-                                <label className={BTN_SECONDARY + ' cursor-pointer'}>
-                                    Choose files
-                                    <input type="file" multiple className="hidden" onChange={onPickFiles} />
-                                </label>
-                                <label className={BTN_SECONDARY + ' cursor-pointer'}>
-                                    Choose folder
-                                    <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
-                                </label>
+                        <div className="flex items-center gap-1">
+                            <div className="flex-1 min-w-0">
+                                <FilePickerField
+                                    value={currentMtlxPath ? docBasename : ''}
+                                    placeholder="No document loaded"
+                                    multiple
+                                    icon="files"
+                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    onFiles={onPickFileList}
+                                />
                             </div>
+                            <label
+                                title="Choose a folder"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+                            >
+                                <MtlxIcon name="folder" className="w-3.5 h-3.5" />
+                                <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
+                            </label>
                         </div>
+                        <div className="text-xs text-gray-500">or drag-and-drop anywhere on the page</div>
 
                         {chosenMtlx && (
                             <div className="text-xs text-gray-500">
@@ -970,7 +1056,7 @@
                     </SectionCard>
 
                     {renderables.length > 1 && (
-                        <SectionCard icon="color-swatch" title="Materials" summary={currentMaterialName}>
+                        <SectionCard icon="color-swatch" title="Materials" summary={currentMaterialName} defaultOpen>
                             <MtlxSelect
                                 value={chosenMat}
                                 options={renderables.map((r, i) => ({ value: i, label: r.name }))}
@@ -982,11 +1068,86 @@
                         </SectionCard>
                     )}
 
+                    <SectionCard icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom} defaultOpen>
+                        <div className="grid grid-cols-2 gap-2">
+                            {VIEWER_GEOM_NAMES.map((g) => (
+                                <GeometryTile
+                                    key={g}
+                                    label={GEOM_LABELS[g] || g}
+                                    icon={GEOM_ICONS[g]}
+                                    selected={geom === g}
+                                    onClick={() => setGeom(g)}
+                                    badge={g === 'shaderball-scene' ? 'Default' : undefined}
+                                />
+                            ))}
+                        </div>
+                    </SectionCard>
+
+                    <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
+                        <SliderField
+                            label="Environment rotation" unit="deg"
+                            value={envUI.rotation} min={0} max={360} step={1}
+                            onSlider={(v) => setEnvRotationDeg(Number(v))}
+                            onNumber={(v) => setEnvRotationDeg(Number(v))}
+                        />
+                        <SliderField
+                            label="Exposure" unit="EV"
+                            value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                            onSlider={(v) => setEnvExposureVal(evToLinear(v))}
+                            onNumber={(v) => setEnvExposureVal(evToLinear(v))}
+                        />
+                        <label className="flex items-center justify-between cursor-pointer">
+                            <span className="text-xs font-medium text-gray-400">Show environment as background</span>
+                            <Toggle checked={envBg} onChange={() => toggleEnvBg()} />
+                        </label>
+                        <FilePickerField
+                            value={envFileName}
+                            placeholder="Default environment"
+                            accept=".hdr,.exr"
+                            icon="file"
+                            onFiles={(files) => {
+                                const f = files && files[0];
+                                if (f) importEnv(f);
+                            }}
+                            onClear={clearEnvOverride}
+                        />
+                        {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                        <button
+                            onClick={resetEnv}
+                            title="Also clears an imported .hdr/.exr and restores the default environment"
+                            className={BTN_SECONDARY + ' w-full'}
+                        >
+                            Reset
+                        </button>
+                    </SectionCard>
+
+                    <SectionCard icon="settings-cog" title="Rendering" summary={forceTransparency ? 'Transparency forced' : 'Default'} defaultOpen>
+                        <label
+                            className="flex items-center justify-between cursor-pointer"
+                            title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
+                        >
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                Force Transparency
+                                <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                            </span>
+                            <Toggle
+                                checked={forceTransparency}
+                                onChange={(next) => {
+                                    setForceTransparency(next);
+                                    window.setForceTransparency && window.setForceTransparency(next);
+                                }}
+                            />
+                        </label>
+                        <div className="mt-1 text-[11px] text-gray-400">
+                            Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
+                        </div>
+                    </SectionCard>
+
                     {texReport && texReport.missing.length > 0 && (
-                        <SectionCard icon="alert-triangle" title="Textures" summary={texReport.missing.length + ' unresolved'}>
+                        <SectionCard icon="alert-triangle" title="Textures" summary={texReport.missing.length + ' unresolved'} defaultOpen>
                             <div className="space-y-2">
                                 {texReport.missing.map((m, i) => (
-                                    <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files — the checker texture is shown instead.">
+                                    <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files, so the image node's default color is shown instead.">
                                         <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
                                     </div>
                                 ))}
@@ -1074,14 +1235,18 @@
                                     />
                                     ) : (
                                     <ViewportControls
-                                        containerClassName="absolute top-2 right-2 z-10 flex items-center gap-2.5"
+                                        containerClassName={IN_VSCODE
+                                            ? 'absolute top-2 right-2 z-10 flex items-center gap-2.5'
+                                            : 'absolute top-2 right-2 z-10 flex items-center gap-2.5 flex-wrap justify-end max-w-[calc(100%-5rem)]'}
                                         clusterClassName="flex items-center gap-1"
                                         selectSize="md"
                                         buttonClassName={hudChipClass}
                                         geom={geom}
                                         onGeomChange={setGeom}
                                         geomBadges={{ 'shaderball-scene': 'Default' }}
-                                        showGeomSelect={showCtl('geometry')}
+                                        // Geometry now lives in the sidebar's Scene card in the
+                                        // browser; VS Code has no sidebar, so it keeps the select.
+                                        showGeomSelect={IN_VSCODE}
                                         rotating={rotating}
                                         onToggleRotating={toggleRotating}
                                         // Engine no-ops auto-rotate for the full scene, and
@@ -1090,22 +1255,24 @@
                                         showRotate={showCtl('rotate') && geom !== 'shaderball-scene'}
                                         showBackdropPicker={geom !== 'shaderball-scene'}
                                         onCameraReset={showCtl('reset') ? handleCameraReset : undefined}
-                                        envAvail={showCtl('env')}
+                                        // Env cluster moved into the sidebar's Environment card in
+                                        // the browser; VS Code keeps the HUD's own env popover.
+                                        envAvail={IN_VSCODE}
+                                        envBg={envBg}
+                                        onToggleEnvBg={toggleEnvBg}
                                         backdrop={backdropMode}
                                         onBackdropChange={setBackdropMode}
                                         viewRef={viewRef}
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
                                         showScreenshot={showCtl('screenshot')}
-                                        showSettings={showCtl('settings')}
+                                        // Settings cog's only content (the transparency
+                                        // toggle) moved into the sidebar's Scene card.
+                                        showSettings={IN_VSCODE}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={showCtl('fullscreen') ? onToggleFullscreen : undefined}
-                                        showLabels={false}
-                                        clusters={[
-                                            ['geom', 'rotate', 'cameraReset', 'env'],
-                                            ['screenshot', 'shaderCode', 'sendToGraph'],
-                                            ['presets', 'settings', 'fullscreen'],
-                                        ]}
+                                        showLabels={!IN_VSCODE}
+                                        clusters={hudClusters}
                                         slots={{
                                             // Graph and viewer are always in sync in the
                                             // extension (one opened .mtlx file), so this
@@ -1116,9 +1283,10 @@
                                                     onClick={sendToEditor}
                                                     title="Open this material in the Node Graph Editor"
                                                     disabled={!renderables.length}
-                                                    className={hudChipClass(false) + ' disabled:opacity-40'}
+                                                    className={hudChipClass(false)}
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                                                    {!IN_VSCODE && <span className="ml-1.5 whitespace-nowrap">Send to Editor</span>}
                                                 </button>
                                             ) : null,
                                             // Presets: browser-only (VS Code is bound to the open file).
@@ -1130,6 +1298,7 @@
                                                     className={hudChipClass(false)}
                                                 >
                                                     <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                                                    {!IN_VSCODE && <span className="ml-1.5 whitespace-nowrap">Presets</span>}
                                                 </button>
                                             ) : null,
                                             // Not VS Code-gated: generating shader source
@@ -1140,9 +1309,10 @@
                                                     onClick={() => setShaderExportOpen(true)}
                                                     title="Generate this material's shader source for a chosen target language (GLSL, OSL, MDL, ...)"
                                                     disabled={!renderables.length}
-                                                    className={hudChipClass(false) + ' disabled:opacity-40'}
+                                                    className={hudChipClass(false)}
                                                 >
                                                     <MtlxIcon name="file-code" className="w-3.5 h-3.5" />
+                                                    {!IN_VSCODE && <span className="ml-1.5 whitespace-nowrap">Shader Code</span>}
                                                 </button>
                                             ),
                                         }}
@@ -1190,7 +1360,15 @@
                                     return (
                                         <div className="absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
                                             <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
-                                            <span>{segments.join(' | ')}</span>
+                                            {segments.map((seg, i) => {
+                                                const isVersion = i === segments.length - 1 && seg.charAt(0) === 'v';
+                                                return (
+                                                    <React.Fragment key={i}>
+                                                        {i > 0 && <span className="text-white/40">/</span>}
+                                                        <span className={isVersion ? 'font-mono' : undefined}>{seg}</span>
+                                                    </React.Fragment>
+                                                );
+                                            })}
                                         </div>
                                     );
                                 })()}
@@ -1213,11 +1391,11 @@
                     {!IN_VSCODE && !chromeless && !sidebarOpen && (
                         <button
                             onClick={() => setSidebarOpen(true)}
-                            title="Expand the files panel"
-                            className="absolute top-2 left-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                            title="Expand the viewer panel"
+                            className={'absolute top-2 left-2 z-30 ' + HUD_PILL}
                         >
                             <MtlxIcon name="chevrons-right" className="w-4 h-4" />
-                            <span className="max-w-[5rem] md:max-w-[8rem] truncate">Files</span>
+                            <span className="max-w-[5rem] md:max-w-[8rem] truncate">Viewer</span>
                         </button>
                     )}
                 </React.Fragment>
@@ -1248,16 +1426,16 @@
                     {!IN_VSCODE && !chromeless && sidebarOpen && (
                         <div className="flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
                             <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
-                                <span className="text-[13px] font-semibold text-gray-200">Files</span>
+                                <span className="text-[13px] font-semibold text-gray-200">Viewer</span>
                                 <button
                                     onClick={() => setSidebarOpen(false)}
-                                    title="Collapse the files panel"
+                                    title="Collapse the viewer panel"
                                     className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
                                 ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                             </div>
                             {filesPanelBody}
                             <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
-                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to a UV checker.
+                                Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                             </div>
                         </div>
                     )}

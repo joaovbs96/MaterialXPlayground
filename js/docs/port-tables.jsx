@@ -52,10 +52,34 @@
         const DESCRIPTION_MIN_REM = 8;
         const EXTRA_COL_REM = 8;
         const CELL_STYLES = {
-            port: 'font-medium text-blue-400 font-mono whitespace-nowrap',
-            type: 'font-mono text-xs text-purple-400 break-words',
-            default: 'font-mono text-xs text-yellow-300 break-words',
-            accepted_values: 'font-mono text-xs text-green-400 break-words',
+            port: 'font-medium text-gray-100 font-mono whitespace-nowrap',
+            type: 'font-mono text-xs text-gray-200 break-words',
+            default: 'font-mono text-xs text-gray-300 break-words',
+            accepted_values: 'font-mono text-xs text-gray-400 break-words',
+        };
+
+        // Type column dot: an exact TYPE_COLORS key gets the legend's own
+        // dot + neutral label; family tokens (colorN) or prose ("Same as
+        // ...") fall back to an italic neutral label with no dot.
+        const TypeCell = ({ text }) => {
+            if (!text) return null;
+            const tokens = String(text).split(',').map(t => t.trim()).filter(Boolean);
+            return tokens.map((tok, i) => (
+                <React.Fragment key={tok + i}>
+                    {i > 0 ? ', ' : ''}
+                    {Object.prototype.hasOwnProperty.call(TYPE_COLORS, tok)
+                        ? (
+                            <span className="whitespace-nowrap">
+                                <span
+                                    className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
+                                    style={{ background: typeColor(tok) }}
+                                />
+                                {tok}
+                            </span>
+                        )
+                        : <span className="italic text-gray-400">{tok}</span>}
+                </React.Fragment>
+            ));
         };
 
         const unionColumns = (tables) => {
@@ -192,7 +216,7 @@
                 0
             );
             return (
-                <div className="overflow-x-auto rounded-lg border border-gray-700">
+                <div className="overflow-x-auto rounded-xl border border-gray-700">
                     <table
                         style={{ '--tbl-min': `${minRem}rem` }}
                         className="port-table w-full table-auto text-sm text-left text-gray-300"
@@ -202,16 +226,16 @@
                                 <col key={col} className={COL_WIDTHS[col] || ''} />
                             ))}
                         </colgroup>
-                        <thead className="text-xs text-gray-400 uppercase bg-gray-900 border-b border-gray-700">
+                        <thead className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 bg-gray-900 border-b border-gray-700">
                             <tr>
                                 {columns.map(col => (
-                                    <th key={col} scope="col" className={`px-4 py-3 ${col === 'port' ? 'whitespace-nowrap' : ''}`}>{headerLabel(col)}</th>
+                                    <th key={col} scope="col" className={`px-4 py-3 border-r border-gray-700/50 last:border-r-0 ${col === 'port' ? 'whitespace-nowrap' : ''}`}>{headerLabel(col)}</th>
                                 ))}
                             </tr>
                         </thead>
                         <tbody>
                             {Object.entries(table.ports).map(([portName, portData]) => (
-                                <tr className="border-b border-gray-700 last:border-b-0 hover:bg-gray-750" key={portName}>
+                                <tr className="border-b border-gray-700/50 last:border-b-0 hover:bg-gray-700/40" key={portName}>
                                     {columns.map(col => {
                                         const overridden = col === 'default' && defaultsOverride
                                             && Object.prototype.hasOwnProperty.call(defaultsOverride, portName);
@@ -221,9 +245,11 @@
                                             : typeOverridden ? typesOverride[portName]
                                             : (portData[col] || '');
                                         return (
-                                            <td key={col} className={`px-4 py-3 align-top ${CELL_STYLES[col] || ''}`}>
+                                            <td key={col} className={`px-4 py-3 align-top border-r border-gray-700/50 last:border-r-0 ${CELL_STYLES[col] || ''}`}>
                                                 {col === 'port'
                                                     ? portName
+                                                    : col === 'type'
+                                                    ? <TypeCell text={cellText} />
                                                     : <MathText text={cellText} refs={refs} />}
                                             </td>
                                         );
@@ -236,43 +262,52 @@
             );
         });
 
+        // Shared banner for auto-generated port data (spec-less nodes):
+        // used both here and by js/docs-app.jsx's isAutoTable case, so
+        // the two read as one consistent notice, not two similar ones.
+        function AutoDocNotice() {
+            return (
+                <div className="bg-blue-950/40 border border-blue-800/60 text-blue-200/90 text-sm rounded-xl px-4 py-3 flex items-start gap-2 mb-3">
+                    <MtlxIcon name="info-circle" className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><span className="font-semibold text-blue-200">Generated from the nodedef.</span> This node's ports, types and defaults were read directly from the MaterialX node definition, not from the specification documents.</span>
+                </div>
+            );
+        }
+
         // Rows: [{name, kind, types[], value, enums}], pregenerated
         // by scripts/lib/nodedef-extract.mjs from the union of every
-        // matching nodedef's ports — no live WASM read here.
-        const NodeDefPortsTable = ({ rows }) => {
+        // matching nodedef's ports, no live WASM read here.
+        const NodeDefPortsTable = ({ rows, showNotice = true }) => {
             rows = rows || [];
             if (!rows.length) {
                 return (
-                    <div className="bg-gray-900 border border-gray-700 rounded p-4 text-sm text-gray-500 italic">
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-sm text-gray-500 italic">
                         No specific ports defined or extracted for this node.
                     </div>
                 );
             }
             return (
                 <div>
-                    <div className="inline-flex items-start gap-1 text-xs text-amber-400/80 bg-amber-950/30 border border-amber-800/40 rounded px-3 py-2 mb-3">
-                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                        <span>This table was generated automatically from the node's nodedef in the standard library — it is not part of the official specification documents.</span>
-                    </div>
-                    <div className="overflow-x-auto bg-gray-900 border border-gray-700 rounded-lg">
+                    {showNotice && <AutoDocNotice />}
+                    <div className="overflow-x-auto bg-gray-900 border border-gray-700 rounded-xl">
                         <table className="w-full text-sm">
                             <thead>
-                                <tr className="text-left text-xs uppercase tracking-wider text-gray-400 border-b border-gray-700">
-                                    <th className="px-3 py-2">Port</th>
-                                    <th className="px-3 py-2">Kind</th>
-                                    <th className="px-3 py-2">Type(s)</th>
-                                    <th className="px-3 py-2">Default</th>
-                                    <th className="px-3 py-2">Accepted values</th>
+                                <tr className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 bg-gray-900 border-b border-gray-700">
+                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Port</th>
+                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Kind</th>
+                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Type(s)</th>
+                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Default</th>
+                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Accepted values</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {rows.map((r) => (
-                                    <tr key={r.kind + ':' + r.name} className="border-b border-gray-800 last:border-0 align-top">
-                                        <td className="px-3 py-2 font-mono text-blue-300">{r.name}</td>
-                                        <td className="px-3 py-2 text-gray-400">{r.kind}</td>
-                                        <td className="px-3 py-2 font-mono text-purple-300">{r.types.join(', ')}</td>
-                                        <td className="px-3 py-2 font-mono text-amber-300 break-all">{r.value}</td>
-                                        <td className="px-3 py-2 font-mono text-green-300 break-words">{r.enums}</td>
+                                    <tr key={r.kind + ':' + r.name} className="border-b border-gray-700/50 last:border-0 align-top">
+                                        <td className="px-3 py-2 font-mono text-gray-100 border-r border-gray-700/50 last:border-r-0">{r.name}</td>
+                                        <td className="px-3 py-2 text-gray-400 border-r border-gray-700/50 last:border-r-0">{r.kind}</td>
+                                        <td className="px-3 py-2 font-mono text-xs border-r border-gray-700/50 last:border-r-0"><TypeCell text={r.types.join(', ')} /></td>
+                                        <td className="px-3 py-2 font-mono text-gray-300 break-all border-r border-gray-700/50 last:border-r-0">{r.value}</td>
+                                        <td className="px-3 py-2 font-mono text-gray-400 break-words border-r border-gray-700/50 last:border-r-0">{r.enums}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -288,5 +323,5 @@
         Object.assign(window, {
             getPortTables, isUndocumented,
             unionColumns, signaturePreviewType, pickTableForType, PortTable,
-            NodeDefPortsTable,
+            NodeDefPortsTable, AutoDocNotice,
         });

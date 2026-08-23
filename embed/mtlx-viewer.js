@@ -49,24 +49,25 @@
     // anything else on the page holding a context.
     var LIVE = new Set();
 
-    // Picks the least-recently-visible OFF-SCREEN instance to evict,
-    // preferring off-screen candidates so we never tear down something the
-    // user is actively looking at just because it happened to activate
-    // first. Falls back to "least-recently-visible overall" only if every
-    // live instance is currently on-screen (cap set lower than the number
-    // simultaneously visible — a misconfiguration, but shouldn't wedge).
+    // True while the instance is actually laid out. False when an ancestor
+    // is display:none, which is how the shell hides a view the visitor has
+    // navigated away from.
+    function isRendered(inst) {
+        try { return inst.getClientRects().length > 0; } catch (e) { return true; }
+    }
+
+    // Eviction order: not rendered at all first, then rendered but scrolled
+    // off-screen, then anything. Least-recently-visible within each tier.
+    // Tier 0 stops a hidden view's viewer outranking the page you are on:
+    // it was visible seconds ago, so _lastVisibleAt alone reads it as fresh.
     function pickEvictionCandidate(excluding) {
-        var best = null;
-        LIVE.forEach(function (inst) {
-            if (inst === excluding || inst._visible) return;
-            if (!best || inst._lastVisibleAt < best._lastVisibleAt) best = inst;
-        });
-        if (best) return best;
+        var tiers = [null, null, null];
         LIVE.forEach(function (inst) {
             if (inst === excluding) return;
-            if (!best || inst._lastVisibleAt < best._lastVisibleAt) best = inst;
+            var t = !isRendered(inst) ? 0 : (!inst._visible ? 1 : 2);
+            if (!tiers[t] || inst._lastVisibleAt < tiers[t]._lastVisibleAt) tiers[t] = inst;
         });
-        return best;
+        return tiers[0] || tiers[1] || tiers[2];
     }
 
     // Attributes with a live postMessage handler in embed-boot.js's
@@ -79,7 +80,7 @@
     var LIVE_ATTRS = {
         geometry: 1, env: 1, exposure: 1, background: 1, backdrop: 1, transparent: 1,
         accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
-        envmap: 1,
+        envmap: 1, forcetransparency: 1,
     };
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
@@ -92,7 +93,7 @@
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
             return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'backdrop', 'transparent', 'base', 'poster',
-                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap'];
+                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency'];
         }
 
         constructor() {
@@ -117,15 +118,17 @@
 
         connectedCallback() {
             if (!this._shadowBuilt) this._buildShadow();
-            if (this.eager) {
-                this._activate();
-            } else if (!this._observer) {
+            // Always observe, eager included: eviction can tear the iframe
+            // down later, and this is the only path a still-connected
+            // element has to notice it should come back (see _onIntersect).
+            if (!this._observer) {
                 this._observer = new IntersectionObserver(
                     (entries) => entries.forEach((e) => this._onIntersect(e)),
                     { root: null, rootMargin: MtlxViewerElement.rootMargin, threshold: 0 }
                 );
                 this._observer.observe(this);
             }
+            if (this.eager) this._activate(); // skip waiting for the observer's first tick.
         }
 
         disconnectedCallback() {
@@ -181,6 +184,12 @@
         // an incompatible one falls back inside the iframe and reports.
         get transparent() { return this.hasAttribute('transparent'); }
         set transparent(v) { this._reflectBool('transparent', v); }
+
+        // Material rendering mode (depth-peeled OIT for opacity/transmission),
+        // NOT the page transparency above: works with every geometry,
+        // including shaderball-scene. See docs/EMBEDDING.md.
+        get forceTransparency() { return this.hasAttribute('forcetransparency'); }
+        set forceTransparency(v) { this._reflectBool('forcetransparency', v); }
 
         get controls() { return this.getAttribute('controls') || ''; }
         set controls(v) { this._reflect('controls', Array.isArray(v) ? v.join(',') : v); }
@@ -410,6 +419,7 @@
             if (this.backdrop) qp.set('backdrop', this.backdrop);
             if (this.background) qp.set('background', '1');
             if (this.transparent) qp.set('transparent', '1');
+            if (this.forceTransparency) qp.set('forcetransparency', '1');
             if (this.material) qp.set('material', this.material);
             if (this.camera) qp.set('camera', this.camera);
             if (this.wheel) qp.set('wheel', this.wheel);
@@ -446,6 +456,8 @@
                 this._send('setBackdrop', { mode: this.backdrop || 'studio' });
             } else if (name === 'transparent') {
                 this._send('setTransparent', { on: this.transparent });
+            } else if (name === 'forcetransparency') {
+                this._send('setForceTransparency', { on: this.forceTransparency });
             } else if (name === 'material') {
                 this._send('setMaterial', { material: this.material });
             } else if (name === 'envmap') {

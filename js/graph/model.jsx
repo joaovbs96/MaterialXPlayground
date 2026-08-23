@@ -239,6 +239,7 @@
                 enumNames: mxElAttr(dIn, 'enum'), enumValues: mxElAttr(dIn, 'enumvalues'),
                 defColorspace: mxElAttr(dIn, 'colorspace'),
                 uifolder: mxElAttr(dIn, 'uifolder'),
+                uiname: mxElAttr(dIn, 'uiname'),
             };
             // Output type(s) resolved before inputs so each input can be
             // flagged colorManaged — colorspace only applies to color3/4

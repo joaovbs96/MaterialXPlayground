@@ -381,6 +381,22 @@
     height: auto;
 }
 
+/* Same wordmark, used as the "What is MaterialX?" nav leaf's icon. Wider
+   than the 18px width-driven letterbox (~10px tall, reads too light next
+   to the line icons), so it's sized up a bit to match their visual weight. */
+/* The MaterialX wordmark has a hardcoded white fill, so an <img> could
+   never follow the nav's resting/hover/active colors. Drawn as a mask
+   tinted by currentColor it inherits them exactly like the line icons. */
+.mtlx-menu-logo {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: url("../images/materialx-logo.svg") no-repeat center / contain;
+    mask: url("../images/materialx-logo.svg") no-repeat center / contain;
+}
+
 /* GitHub repo widget (mkdocs-material style): octocat + repo slug, with
    an async facts row (latest release / stars / forks) filled in by
    js/site-header.js's initSourceFacts(). Replaces the old separate
