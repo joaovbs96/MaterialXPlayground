@@ -363,6 +363,15 @@
                     setScope(next);
                 })();
             };
+            // Steps up one scope level via changeScope; shared by Backspace,
+            // the breadcrumb root, the context menu, and the leave-nodegraph
+            // pill so the pending-selection dance stays in one place.
+            const goUpScope = () => {
+                if (scopeRef.current) {
+                    pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                    changeScope('');
+                }
+            };
             // { stack: [{xml, scope, tag}], index, savedIndex }. index === -1
             // means an empty stack (no document loaded yet).
             const undoStateRef = React.useRef({ stack: [], index: -1, savedIndex: -1 });
@@ -803,10 +812,7 @@
                         // Backspace steps up one scope level (never
                         // deletes); always preventDefault to block browser
                         // back-navigation. Scope change waits behind changeScope's overlay.
-                        if (scopeRef.current) {
-                            pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                            changeScope('');
-                        }
+                        goUpScope();
                         e.preventDefault();
                         return;
                     }
@@ -5050,10 +5056,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 scope !== '' && { separator: true },
                 scope !== '' && {
                     label: 'Exit Nodegraph', icon: 'chevrons-left', keys: 'Backspace',
-                    onSelect: () => {
-                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                        changeScope('');
-                    } },
+                    onSelect: goUpScope },
                 { separator: true },
                 { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
                 { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
@@ -5088,6 +5091,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     ref={importInputRef}
                                     type="file"
                                     multiple
+                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
                                     className="hidden"
                                     onChange={onPickFiles}
                                 />
@@ -5124,12 +5128,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         {parsed ? (
                             <div className="flex items-center h-7 min-w-0">
                                 <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
-                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={() => {
-                                        // Cheap ref write stays immediate; changeScope is a
-                                        // no-op (no overlay flash) when already at the root.
-                                        if (scopeRef.current) pendingScopeSelectRef.current = 'g:' + scopeRef.current;
-                                        changeScope('');
-                                    }}>
+                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
                                         {parsed.label}
                                     </button>
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
@@ -5383,6 +5382,20 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">
                                     {error}
                                 </div>
+                            )}
+
+                            {/* Leave-nodegraph pill: centered at the canvas
+                                host's top edge, only while scoped inside a
+                                nodegraph. Same go-up action as Backspace. */}
+                            {scope && (
+                                <button
+                                    onClick={goUpScope}
+                                    title={scope + ' (Backspace)'}
+                                    className={HUD_PILL + ' absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[16rem]'}
+                                >
+                                    <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="truncate">Leave {scope}</span>
+                                </button>
                             )}
 
                             {/* Types window (bottom left): zoom/fit cluster docked
