@@ -1188,7 +1188,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             title="Carpaint (Standard Surface) vs the same values translated to OpenPBR"
                             className={PILL_ACTION + ' pointer-events-auto'}
                         >
-                            <MtlxIcon name="sparkles" className="w-3.5 h-3.5" />
+                            <MtlxIcon name="inner-shadow-bottom-right" className="w-3.5 h-3.5" />
                             Load an example pair
                         </button>
                     </div>

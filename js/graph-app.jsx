@@ -859,6 +859,12 @@
                     p.label = path;
                     setParsed(p);
                     setScope('');
+                    // Same default-target reset as opening a document fresh:
+                    // a stale selection/pin from a PREVIOUS document (multi-
+                    // document dropdown switch) must not leak into this one.
+                    setSelectedId(null);
+                    setPreviewSel(null);
+                    setPinnedTarget(null);
                     setStatus(null);
                     if (snapshotTimerRef.current) { clearTimeout(snapshotTimerRef.current); snapshotTimerRef.current = null; }
                     try {
@@ -916,7 +922,10 @@
             // `rootKey` (optional): when the caller already knows which
             // .mtlx is the document (loadPreset's map may hold .mtlx-
             // suffixed includes too), skip the ambiguous-drop heuristic below.
-            const ingest = async (map, rootKey) => {
+            // `additive` (File > Import): never replaces the session, new
+            // .mtlx files join the mtlxPaths candidates list instead of
+            // loading; textures still merge and rebind live previews.
+            const ingest = async (map, rootKey, additive) => {
                 setError(null);
                 try {
                     await expandZips(map);
@@ -925,12 +934,12 @@
                     return;
                 }
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
-                // Same session semantics as the material viewer: a drop with
-                // a .mtlx replaces the session (unless none existed yet);
-                // other files merge in — they may be xi:include targets.
+                // Same session semantics as the material viewer: a .mtlx
+                // drop replaces the session (unless none existed yet, or
+                // additive); other files merge in as possible xi:includes.
                 const hadSession = Object.keys(fileMapRef.current).some((k) => /\.mtlx$/i.test(k));
                 let merged;
-                if (droppedMtlx.length && hadSession) {
+                if (droppedMtlx.length && hadSession && !additive) {
                     merged = Object.assign({}, map);
                     setParsed(null);
                     setScope('');
@@ -949,6 +958,13 @@
                     return;
                 }
                 if (droppedMtlx.length) {
+                    if (additive) {
+                        // Added, not loaded: the existing multi-document
+                        // dropdown (mtlxPaths) is how the user reaches them.
+                        setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
+                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
+                        return;
+                    }
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
@@ -1072,7 +1088,7 @@
             externalReloadRef.current = externalReload;
 
             // ---- Unsaved-changes protection for actions that REPLACE the
-            // current document (Import, drag-drop, switching documents).
+            // current document (Open, drag-drop, switching documents).
             // Tab/window close is separately guarded by beforeunload below.
             const [confirmCloseOpen, setConfirmCloseOpen] = React.useState(false);
             const pendingActionRef = React.useRef(null);
@@ -1220,13 +1236,15 @@
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
                         if (!hasSession && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Import, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
 
-            // File > Import drives this hidden input by ref: a menu row
-            // can't be the <label> the old toolbar button was.
+            // File > Open / File > Import each drive their own hidden
+            // input by ref: a menu row can't be the <label> the old
+            // toolbar button was.
+            const openInputRef = React.useRef(null);
             const importInputRef = React.useRef(null);
 
             const onPickFiles = (e) => {
@@ -1236,6 +1254,18 @@
                 }
                 e.target.value = '';
                 guardedIngest(map);
+            };
+
+            // Import is additive (textures merge, .mtlx documents join the
+            // candidates list) so it never discards anything: no
+            // confirmReplace guard, straight to ingest().
+            const onPickImportFiles = (e) => {
+                const map = {};
+                for (const f of Array.from(e.target.files || [])) {
+                    map[f.webkitRelativePath || f.name] = f;
+                }
+                e.target.value = '';
+                ingest(map, undefined, true);
             };
 
             // (Re)build the flow whenever the document or the scope changes.
@@ -4884,9 +4914,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     title: 'New material (empty document)',
                 },
                 !IN_VSCODE && {
-                    label: 'Import…', icon: 'file-upload',
+                    label: 'Open…', icon: 'file-upload',
+                    onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
+                    title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
+                },
+                !IN_VSCODE && {
+                    label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Import .mtlx / .zip / companion files (drag and drop works anywhere on the page)',
+                    title: 'Add textures or more .mtlx documents to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
@@ -5083,9 +5118,19 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             the undo/redo pair that stays out of them, the
                             way Word keeps those on the toolbar too. */}
                         <div ref={topLeftRowRef} className="flex items-center gap-1.5 flex-nowrap w-full min-w-0">
-                            {/* File > Import needs a real input: a menu row
-                                cannot be the <label> the old toolbar button
-                                was, so the row clicks this one by ref. */}
+                            {/* File > Open / File > Import need real inputs: a
+                                menu row cannot be the <label> the old toolbar
+                                button was, so each row clicks one by ref. */}
+                            {!IN_VSCODE && (
+                                <input
+                                    ref={openInputRef}
+                                    type="file"
+                                    multiple
+                                    accept=".mtlx,.zip"
+                                    className="hidden"
+                                    onChange={onPickFiles}
+                                />
+                            )}
                             {!IN_VSCODE && (
                                 <input
                                     ref={importInputRef}
@@ -5093,7 +5138,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     multiple
                                     accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
                                     className="hidden"
-                                    onChange={onPickFiles}
+                                    onChange={onPickImportFiles}
                                 />
                             )}
                             <MtlxMenuBar className="shrink-0">
@@ -5818,9 +5863,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         />
                     )}
 
-                    {/* Unsaved-changes dialog: gates Import / drag-drop of a
-                        new .mtlx / switching documents while dirty. See
-                        confirmReplace. */}
+                    {/* Unsaved-changes dialog: gates Open / drag-drop of a
+                        new .mtlx / switching documents while dirty (never
+                        the additive Import). See confirmReplace. */}
                     {confirmCloseOpen && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
                             onMouseDown={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}>
@@ -5904,12 +5949,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 <div className="text-sm text-gray-300 font-medium">
                                     {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
                                 </div>
-                                {/* Mentions the Import button and page-wide drag-drop,
+                                {/* Mentions the Open button and page-wide drag-drop,
                                     neither of which exist under VS Code (single opened
                                     .mtlx file). */}
                                 {!IN_VSCODE && (
                                 <div className="text-xs text-gray-500 mt-1.5">
-                                    Files can be dropped anywhere on the page — or use Import or Presets in the top left.
+                                    Files can be dropped anywhere on the page — or use Open or Presets in the top left.
                                 </div>
                                 )}
                             </div>
