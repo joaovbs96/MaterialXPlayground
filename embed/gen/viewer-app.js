@@ -1601,7 +1601,9 @@ function MaterialViewerApp({
       ref: modelInputRef,
       type: "file",
       accept: ".obj,.glb,.gltf",
-      className: "hidden",
+      style: {
+        display: 'none'
+      },
       onChange: onPickModelFile
     }), dragOver && /*#__PURE__*/React.createElement("div", {
       className: `fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`

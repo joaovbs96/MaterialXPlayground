@@ -12,10 +12,10 @@
 // (bootstrap.js:510-513 does the same thing for its own message types),
 // instead of accidentally reacting to a foreign message shaped like ours.
 //
-// Inbound (host -> iframe): load, setGeometry, setEnvRotation,
-// setEnvExposure, setEnvBackground, setBackdrop, setEnvMap, setTransparent,
-// setForceTransparency, setTheme, resetCamera, snapshot, setMaterial,
-// setCamera, getCamera.
+// Inbound (host -> iframe): load, setGeometry, setGeometryUrl,
+// setEnvRotation, setEnvExposure, setEnvBackground, setBackdrop, setEnvMap,
+// setTransparent, setForceTransparency, setTheme, resetCamera, snapshot,
+// setMaterial, setCamera, getCamera.
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
 (function () {
     'use strict';
@@ -238,6 +238,10 @@
     var initialCameraPose = parseCameraParam(qs.get('camera'));
     var initialCameraApplied = false; // applied once, to the first view build only, see onView().
 
+    // Not folded into props.geometry yet - the registry has nothing named
+    // 'custom' until applyGeometryUrl's fetch resolves.
+    var geometryUrlParam = qs.get('geometryUrl') || undefined;
+
     var props = {
         embed: true,
         documentUrl: qs.get('src') || undefined,
@@ -311,6 +315,8 @@
 
     var currentHandle = null;
     var readyPosted = false;
+    var geomUrlSeq = 0;
+    var geometryTouched = false; // true once a host explicitly sets geometry, see handleSetGeometry.
 
     // ------------------------------------------------------------------
     // MaterialViewerApp callback props -> outbound messages.
@@ -405,6 +411,7 @@
         })));
     }
     render();
+    if (geometryUrlParam) applyGeometryUrl(geometryUrlParam);
 
     // ------------------------------------------------------------------
     // Inbound commands.
@@ -457,8 +464,45 @@
 
     function handleSetGeometry(msg) {
         if (typeof msg.geometry !== 'string') return;
+        geometryTouched = true; // wins over a still-pending boot geometryUrl fetch.
         props.geometry = msg.geometry;
         render();
+    }
+
+    // Custom model fetch, independent of handleLoad's document fetch/WASM
+    // warmup - a brief built-in flash before the swap is accepted, same as
+    // envmap. geomUrlSeq discards a stale resolution/rejection.
+    function applyGeometryUrl(url) {
+        if (typeof window.loadCustomPreviewGeomFromUrl !== 'function') {
+            post('error', { message: 'Custom model loading is not available in this build.' });
+            return;
+        }
+        var id = ++geomUrlSeq;
+        window.loadCustomPreviewGeomFromUrl(url).then(function () {
+            if (id !== geomUrlSeq || geometryTouched) return;
+            props.geometry = 'custom';
+            render();
+        }).catch(function (e) {
+            if (id !== geomUrlSeq) return;
+            post('error', { message: 'Custom model failed to load: ' + (e && e.message || e) });
+        });
+    }
+
+    // Live `geometryUrl` update: falsy `url` clears back to the boot
+    // geometry; a real URL re-fetches. Both un-mark geometryTouched so a
+    // fresh outcome is free to apply.
+    function handleSetGeometryUrl(msg) {
+        var url = msg && msg.url;
+        if (!url) {
+            geomUrlSeq++;
+            geometryTouched = false;
+            if (typeof window.clearCustomPreviewGeom === 'function') window.clearCustomPreviewGeom();
+            props.geometry = qs.get('geometry') || undefined;
+            render();
+            return;
+        }
+        geometryTouched = false;
+        applyGeometryUrl(url);
     }
 
     function handleSetEnvRotation(msg) {
@@ -621,6 +665,7 @@
     var HANDLERS = {
         load: handleLoad,
         setGeometry: handleSetGeometry,
+        setGeometryUrl: handleSetGeometryUrl,
         setEnvRotation: handleSetEnvRotation,
         setEnvExposure: handleSetEnvExposure,
         setEnvBackground: handleSetEnvBackground,

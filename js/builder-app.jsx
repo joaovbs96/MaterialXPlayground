@@ -90,6 +90,7 @@ const BUILDER_DEFAULTS = {
     env: '',
     exposure: '',
     envmap: '',
+    geometryUrl: '',
     accent: BUILDER_THEME_DEFAULTS.accent,
     surface: BUILDER_THEME_DEFAULTS.surface,
     text: BUILDER_THEME_DEFAULTS.text,
@@ -202,6 +203,7 @@ const parseBuilderHashSettings = () => {
     if (params.has('env')) patch.env = params.get('env');
     if (params.has('exposure')) patch.exposure = params.get('exposure');
     if (params.has('envmap')) patch.envmap = params.get('envmap');
+    if (params.has('geometryUrl')) patch.geometryUrl = params.get('geometryUrl');
     if (params.has('autorotate')) patch.autorotate = builderParseBool(params.get('autorotate'));
     if (params.has('controls')) patch.controls = controlsObjFromStr(params.get('controls'));
     if (params.has('backdrop') && ['studio', 'studio-dark', 'environment', 'none'].includes(params.get('backdrop'))) {
@@ -238,6 +240,7 @@ const buildShareParams = (s) => {
     if (s.env.trim() !== '') params.set('env', s.env.trim());
     if (s.exposure.trim() !== '') params.set('exposure', s.exposure.trim());
     if (s.envmap.trim()) params.set('envmap', s.envmap.trim());
+    if (s.geometryUrl.trim()) params.set('geometryUrl', s.geometryUrl.trim());
     if (s.autorotate) params.set('autorotate', '1');
     const cs = controlsStrFrom(s.controls);
     if (cs) params.set('controls', cs);
@@ -921,8 +924,8 @@ function BuilderApp({ active } = {}) {
     const patch = (values) => setSettings((s) => ({ ...s, ...values }));
     const {
         src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
-        accent, surface, text, radius, width, height, sizing, material, camera, wheelZoom,
-        version, poster, eager,
+        geometryUrl, accent, surface, text, radius, width, height, sizing, material, camera,
+        wheelZoom, version, poster, eager,
     } = settings;
 
     const [presetPick, setPresetPick] = React.useState(''); // selected MTLX_PRESETS URL, or '' (placeholder)
@@ -1005,6 +1008,7 @@ function BuilderApp({ active } = {}) {
         if (version) el.version = version;
         if (poster.trim()) el.poster = poster.trim();
         if (envmap.trim()) el.envmap = envmap.trim();
+        if (geometryUrl.trim()) el.geometryUrl = geometryUrl.trim();
         const handleError = (e) => {
             const message = (e && e.detail && e.detail.message) || 'Unknown error';
             // The Scene/Look cards keep transparent + shaderball-scene
@@ -1102,6 +1106,17 @@ function BuilderApp({ active } = {}) {
     };
     const commitEnvmap = () => commitEnvmapValue(envmap);
 
+    // geometryUrl mirrors envmap: LIVE, but every change fetches inside the
+    // iframe, so commit on blur/Enter only. Empty commits a removal via the
+    // element's own reflection, restoring the configured/default geometry.
+    const commitGeometryUrlValue = (raw) => {
+        if (!previewElRef.current) return;
+        const next = String(raw == null ? '' : raw).trim();
+        if (previewElRef.current.geometryUrl === next) return;
+        previewElRef.current.geometryUrl = next;
+    };
+    const commitGeometryUrl = () => commitGeometryUrlValue(geometryUrl);
+
     // Picking a preset fills the src field and commits it immediately,
     // same as typing a URL then pressing Enter. Typing in the src field
     // afterwards resets this select back to its placeholder (see below).
@@ -1130,6 +1145,7 @@ function BuilderApp({ active } = {}) {
         setPresetPick('');
         commitSrcValue(next.src);
         commitEnvmapValue(next.envmap);
+        commitGeometryUrlValue(next.geometryUrl);
     };
     const handleReset = () => applySettings({});
     const handleTemplate = (t) => applySettings(t.values);
@@ -1176,6 +1192,7 @@ function BuilderApp({ active } = {}) {
         if (env.trim() !== '') entries.push(['env', env.trim()]);
         if (exposure.trim() !== '') entries.push(['exposure', exposure.trim()]);
         if (envmap.trim()) entries.push(['envmap', envmap.trim()]);
+        if (geometryUrl.trim()) entries.push(['geometryUrl', geometryUrl.trim()]);
         if (autorotate) entries.push(['autorotate', '1']);
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
@@ -1219,6 +1236,7 @@ function BuilderApp({ active } = {}) {
         if (env.trim() !== '') attrs.push(`env="${env.trim()}"`);
         if (exposure.trim() !== '') attrs.push(`exposure="${exposure.trim()}"`);
         if (envmap.trim()) attrs.push(`envmap="${builderEscAttr(envmap.trim())}"`);
+        if (geometryUrl.trim()) attrs.push(`geometryurl="${builderEscAttr(geometryUrl.trim())}"`);
         if (autorotate) attrs.push('autorotate');
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
@@ -1248,6 +1266,9 @@ function BuilderApp({ active } = {}) {
     const themeSummary = activeThemePreset ? activeThemePreset.label : 'Custom';
     const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
     const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
+    // A custom model URL takes over the geometry entirely - every built-in
+    // tile is disabled while one is set (docs/EMBEDDING.md geometryUrl).
+    const urlActive = !!geometryUrl.trim();
     // Std. Shader Ball w/ Backdrop is an opaque authored room; several
     // controls below are dead against it, all keyed on this condition.
     const roomGeom = geometry === 'shaderball-scene';
@@ -1402,7 +1423,7 @@ function BuilderApp({ active } = {}) {
                 <FieldLabel label="Geometry" />
                 <div className="grid grid-cols-3 gap-2">
                     {BUILDER_GEOM_OPTIONS.map((g) => {
-                        const geomDisabled = g === 'shaderball-scene' && transparent;
+                        const geomDisabled = urlActive || (g === 'shaderball-scene' && transparent);
                         return (
                             <GeometryTile
                                 key={g}
@@ -1410,12 +1431,23 @@ function BuilderApp({ active } = {}) {
                                 icon={GEOM_ICONS[g]}
                                 selected={geometry === g}
                                 disabled={geomDisabled}
-                                title={geomDisabled ? 'Not available with a transparent page background' : undefined}
+                                title={urlActive ? 'Not available while a custom model URL is set' : (geomDisabled ? 'Not available with a transparent page background' : undefined)}
                                 onClick={() => patch({ geometry: g })}
                             />
                         );
                     })}
                 </div>
+            </div>
+            <div>
+                <FieldLabel label="Custom model URL (.obj / .glb / .gltf)" />
+                <input
+                    type="text" value={geometryUrl}
+                    onChange={(e) => patch({ geometryUrl: e.target.value })}
+                    onBlur={commitGeometryUrl}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { commitGeometryUrl(); e.currentTarget.blur(); } }}
+                    placeholder="https://example.com/models/prop.glb"
+                    className={TEXT_INPUT_CLS}
+                />
             </div>
         </SectionCard>,
 

@@ -1572,14 +1572,14 @@
                 // full-bleed flex row (docked sidebar + stage column), via
                 // js/shell.jsx's now-empty viewer wrapClass.
                 <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`}>
-                    {/* Always mounted (unlike the sidebar's own model
-                        FilePickerField, which unmounts with it) so the HUD's
-                        geomFooterAction (VS Code) can click it by ref. */}
+                    {/* Always mounted (the sidebar's FilePickerField unmounts
+                        with it) so VS Code's geomFooterAction can click it by
+                        ref. Inline display: the embed loads no Tailwind. */}
                     <input
                         ref={modelInputRef}
                         type="file"
                         accept=".obj,.glb,.gltf"
-                        className="hidden"
+                        style={{ display: 'none' }}
                         onChange={onPickModelFile}
                     />
                     {/* Full-page drop indicator, below the sticky header
