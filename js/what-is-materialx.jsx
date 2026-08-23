@@ -14,11 +14,6 @@ const TRANSPARENT_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAA
 // so a portrait pane on narrow screens still can't clip, well inside 3.6.
 const HERO_CAMERA = '0,0.35,2.8,0,0,0';
 
-// ViewerPane's hover-action pill: a smaller variant of home-app.jsx's
-// HeroStage pillClass, used on every preview on this page (hero, showcase,
-// "See it") so they all read as one consistent family, just smaller.
-const PILL_CLASS = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-wait';
-
 // "What it actually is", four pillar cards in reading order.
 const WHAT_PILLARS = [
     { icon: 'article', title: 'An open standard', desc: (<>MaterialX is an open standard, with <code className={CODE_CLASS}>.mtlx</code> as its XML file format for writing a look down and moving it between applications.</>) },
@@ -32,9 +27,7 @@ const WHAT_NOT = [
     { title: 'Not a renderer', desc: 'MaterialX does not render anything itself. It describes a look; a renderer or engine turns that description into pixels.' },
     { title: 'Not a DCC or authoring app', desc: 'There is no MaterialX modeling or animation tool. Artists build looks inside a DCC, or a tool like this Playground, then save the result as .mtlx.' },
     { title: 'Not a single fixed shading model', desc: (<><code className={CODE_CLASS}>standard_surface</code>, OpenPBR Surface, glTF PBR and the others are all node graphs built from the standard library, not hardcoded modes.</>) },
-    { title: 'No promise of identical pixels', desc: (<>The spec asks implementations to support standard nodes{' '}
-        <a href={window.SITE_LINKS.spec} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40">"to the degree their architecture and capabilities allow."</a>{' '}
-        A look transfers without being rebuilt; rendering it in two engines is not guaranteed to look pixel-identical.</>) },
+    { title: 'No promise of identical pixels', desc: 'A look transfers without being rebuilt and should render closely everywhere; two engines still are not guaranteed to produce identical pixels.' },
 ];
 
 // Glossary cards: an artist-readable line first, a precise one second.
@@ -277,7 +270,7 @@ function ViewerPane({ src, label, glow, className, geometry, transparent, autoro
                             {actions && actions.length > 0 && (
                                 <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
                                     {actions.map((a) => (
-                                        <button key={a.label} type="button" disabled={actionsBusy} onClick={a.onClick} className={PILL_CLASS}>
+                                        <button key={a.label} type="button" disabled={actionsBusy} onClick={a.onClick} className={PILL_ACTION_SM}>
                                             <MtlxIcon name={a.icon} className="w-3 h-3 text-gray-500 transition-colors" />
                                             {a.busy ? 'Loading' : a.label}
                                         </button>
@@ -569,11 +562,11 @@ function WhatIsMaterialXApp({ active } = {}) {
                            clears both the graph's own React Flow attribution and the
                            3D column's reset button, which both sit at the far right. */}
                         <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
-                            <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('viewer')} className={PILL_CLASS}>
+                            <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('viewer')} className={PILL_ACTION_SM}>
                                 <MtlxIcon name="camera" className="w-3 h-3 text-gray-500 transition-colors" />
                                 {seeItBusy === 'viewer' ? 'Loading' : 'Open in Viewer'}
                             </button>
-                            <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('graph')} className={PILL_CLASS}>
+                            <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('graph')} className={PILL_ACTION_SM}>
                                 <MtlxIcon name="share" className="w-3 h-3 text-gray-500 transition-colors" />
                                 {seeItBusy === 'graph' ? 'Loading' : 'Open in Graph Editor'}
                             </button>
@@ -748,12 +741,14 @@ function WhatIsMaterialXApp({ active } = {}) {
                         </div>
                         <div className="bg-gray-800 border border-gray-800 rounded-xl px-5 py-[18px] flex flex-col gap-1">
                             <h3 className="text-[15px] font-semibold text-gray-100 mb-1.5">Official sources</h3>
-                            {officialLinks.map((l) => (
-                                <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer" className="group flex items-center gap-2.5 py-1.5 text-sm text-gray-300 hover:text-gray-100 transition-colors">
-                                    <span className="flex-1 min-w-0">{l.title}</span>
-                                    <MtlxIcon name="external-link" className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors" />
-                                </a>
-                            ))}
+                            <div className="flex-1 flex flex-col justify-evenly">
+                                {officialLinks.map((l) => (
+                                    <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer" className="group flex items-center gap-2.5 py-1.5 text-sm text-gray-300 hover:text-gray-100 transition-colors">
+                                        <span className="flex-1 min-w-0">{l.title}</span>
+                                        <MtlxIcon name="external-link" className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 transition-colors" />
+                                    </a>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </section>
