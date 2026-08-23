@@ -78,7 +78,7 @@
     // navigation, with a fresh 'ready' handshake) — the only way to change
     // those short of a parallel protocol embed-boot.js doesn't speak.
     var LIVE_ATTRS = {
-        geometry: 1, env: 1, exposure: 1, background: 1, transparent: 1,
+        geometry: 1, env: 1, exposure: 1, background: 1, backdrop: 1, transparent: 1,
         accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
         envmap: 1, forcetransparency: 1,
     };
@@ -92,7 +92,7 @@
     // "no build step": every current browser runs this syntax natively.)
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
-            return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'transparent', 'base', 'poster',
+            return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'backdrop', 'transparent', 'base', 'poster',
                 'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency'];
         }
 
@@ -172,6 +172,12 @@
 
         get background() { return this.hasAttribute('background'); }
         set background(v) { this._reflectBool('background', v); }
+
+        // 'studio' (default), 'environment', or 'none'; live, see
+        // LIVE_ATTRS/_liveUpdate. `background` above is the legacy boolean
+        // alias for this - see docs/EMBEDDING.md for how the two resolve.
+        get backdrop() { return this.getAttribute('backdrop') || ''; }
+        set backdrop(v) { this._reflect('backdrop', v); }
 
         // Page transparency, not the environment skybox toggle above (see
         // docs/EMBEDDING.md). Only meaningful with a compatible geometry;
@@ -410,6 +416,7 @@
             if (this.exposure !== undefined) qp.set('exposure', String(this.exposure));
             if (this.autorotate) qp.set('autorotate', '1');
             if (this.controls) qp.set('controls', this.controls);
+            if (this.backdrop) qp.set('backdrop', this.backdrop);
             if (this.background) qp.set('background', '1');
             if (this.transparent) qp.set('transparent', '1');
             if (this.forceTransparency) qp.set('forcetransparency', '1');
@@ -442,6 +449,11 @@
                 this._send('setEnvExposure', { value: v !== undefined ? v : 1 });
             } else if (name === 'background') {
                 this._send('setEnvBackground', { on: this.background });
+            } else if (name === 'backdrop') {
+                // Absent/cleared: send the default explicitly, same reasoning
+                // as `env`/`exposure` above - so clearing the attribute
+                // actually moves the live preview back to the studio room.
+                this._send('setBackdrop', { mode: this.backdrop || 'studio' });
             } else if (name === 'transparent') {
                 this._send('setTransparent', { on: this.transparent });
             } else if (name === 'forcetransparency') {

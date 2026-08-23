@@ -584,6 +584,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                 value={targetKey}
                                 options={EXPORT_TARGETS.map((t) => ({ value: t.key, label: t.label }))}
                                 onChange={setTargetKey}
+                                defValue={null}
                                 size="md"
                                 variant="toolbar"
                                 font="mono"
@@ -597,6 +598,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                     value={matIndex}
                                     options={renderables.map((r, i) => ({ value: i, label: r.name }))}
                                     onChange={setMatIndex}
+                                    defValue={null}
                                     size="md"
                                     variant="toolbar"
                                     font="mono"
@@ -665,6 +667,18 @@ const useViewToggle = (viewRef, method, initial) => {
         return nv;
     });
     return [value, toggle];
+};
+
+// String-valued sibling of useViewToggle (backdrop picker, etc.): same
+// idea, but the value is any string the caller hands it instead of a
+// flipped boolean, so the setter takes the next value directly.
+const useViewEnum = (viewRef, method, initial) => {
+    const [value, setValue] = React.useState(initial);
+    const set = (next) => {
+        setValue(next);
+        if (viewRef.current && viewRef.current[method]) viewRef.current[method](next);
+    };
+    return [value, set];
 };
 
 // PNG snapshot of the given render view's frame, downloaded as
@@ -756,9 +770,12 @@ const attributeExportedXml = async (xml) => withExportAttribution(xml, await exp
 // js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
 // every existing caller omits these, and `!!undefined` is `false`, so
 // today's default (both off) is unchanged.
-const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg) => {
+// `initialBackdrop`: seed for the four-way backdrop picker (studio /
+// studio-dark / environment / none). Defaults to 'studio', the engine's new default.
+const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg, initialBackdrop = 'studio') => {
     const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
     const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
+    const [backdrop, setBackdrop] = useViewEnum(viewRef, 'setBackdrop', initialBackdrop);
     const [envAvail, setEnvAvail] = React.useState(false);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
@@ -772,6 +789,7 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
     return {
         rotating, toggleRotating,
         envBg, toggleEnvBg,
+        backdrop, setBackdrop,
         envAvail, setEnvAvail,
         viewEpoch, setViewEpoch,
         isFullscreen, toggleFullscreen,
@@ -906,8 +924,12 @@ const formatEv = (ev) => (ev >= 0 ? '+' : '') + (Math.round(ev * 10) / 10).toFix
 
 const EnvDialog = ({
     anchorRef, open, onClose,
-    envBg, onToggleEnvBg,
-    showBackgroundToggle = true,
+    backdrop, onBackdropChange,
+    showBackdropPicker = true,
+    // True while the active geometry is an authored room (e.g.
+    // shaderball-scene) that ignores the backdrop entirely. ViewportControls
+    // computes this from its own `geom` prop, since this dialog has none.
+    backdropDisabled = false,
     rotation, onRotationChange,
     exposure, onExposureChange,
     onImportFile, onReset,
@@ -939,6 +961,15 @@ const EnvDialog = ({
         const next = !keyLightOn;
         setKeyLightOn(next);
         if (keyLightAvail) window.setKeyLightEnabled(next);
+    };
+
+    // Reset also puts the key light back on (the engine default), guarded
+    // since the setter rebuilds the active environment; the rest of the
+    // reset (override/rotation/exposure/backdrop) is the caller's onReset.
+    const handleResetClick = () => {
+        if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+        setKeyLightOn(true);
+        onReset();
     };
 
     // Right-align to the anchor and clamp both axes, flipping above if it
@@ -989,18 +1020,39 @@ const EnvDialog = ({
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
             className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
         >
-            {showBackgroundToggle && (
-                <div className="flex items-center justify-between">
-                    <span>Background</span>
-                    <button
-                        onClick={onToggleEnvBg}
-                        title={envBg ? 'Hide the environment map background' : 'Show the environment map as background'}
-                        className={`h-5 px-2 rounded border transition-colors ${
-                            envBg ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
-                        }`}
-                    >
-                        {envBg ? 'On' : 'Off'}
-                    </button>
+            <div>
+                <FilePickerField
+                    value={envFileName}
+                    placeholder="Default environment"
+                    accept=".hdr,.exr"
+                    icon="file"
+                    onFiles={(files) => {
+                        const f = files && files[0];
+                        if (f) onImportFile(f);
+                    }}
+                    onClear={onClearEnv}
+                />
+            </div>
+            {importError && (
+                <div className="text-red-400">{importError}</div>
+            )}
+            {showBackdropPicker && (
+                <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                        <span>Backdrop</span>
+                    </div>
+                    <MtlxSelect
+                        value={backdrop}
+                        options={['studio', 'studio-dark', 'environment', 'none']}
+                        labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
+                        onChange={onBackdropChange}
+                        defValue="studio"
+                        disabled={backdropDisabled}
+                        title={backdropDisabled
+                            ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting'
+                            : 'Studio: a white room. Environment: the HDRI as background. None: a dark void.'}
+                        size="sm" block
+                    />
                 </div>
             )}
             <div className="flex items-center justify-between">
@@ -1040,27 +1092,11 @@ const EnvDialog = ({
                     className="w-full accent-blue-500"
                 />
             </div>
-            <div>
-                <FilePickerField
-                    value={envFileName}
-                    placeholder="Default environment"
-                    accept=".hdr,.exr"
-                    icon="file"
-                    onFiles={(files) => {
-                        const f = files && files[0];
-                        if (f) onImportFile(f);
-                    }}
-                    onClear={onClearEnv}
-                />
-            </div>
-            {importError && (
-                <div className="text-red-400">{importError}</div>
-            )}
             {/* Bottom-most: resets rotation/exposure too, so it must not
                 sit beside the file picker above (which only clears the
                 imported environment). */}
             <button
-                onClick={onReset}
+                onClick={handleResetClick}
                 className="w-full h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
             >
                 Reset
@@ -1353,7 +1389,8 @@ const ViewportControls = ({
     labelsClass = 'flex-wrap justify-end max-w-[calc(100%-1rem)]',
     onCameraReset,
     envBg, onToggleEnvBg, envAvail = true,
-    showBackgroundToggle = true,
+    backdrop, onBackdropChange,
+    showBackdropPicker = true,
     viewRef, viewEpoch,
     onScreenshot,
     // Hides the screenshot button. Additive — every existing caller omits
@@ -1386,6 +1423,10 @@ const ViewportControls = ({
     clusterClassName = 'flex items-center gap-1',
 }) => {
     const envBtnRef = React.useRef(null);
+    // Std. Shader Ball w/ Backdrop is an authored room that ignores the
+    // backdrop setting. EnvDialog has no geom of its own, so this is
+    // derived here (from the geom prop this strip already receives).
+    const backdropDisabled = geom === 'shaderball-scene';
     // Spans the full strip width (which spans the panel in the graph
     // preview's docked layout), approximating the PANEL's left edge — used
     // by EnvDialog's placement="left" to clear the whole panel.
@@ -1445,12 +1486,16 @@ const ViewportControls = ({
         setEnvFileName('');
         setEnvRotation(0);
         setEnvExposure(1.0);
+        // Backdrop back to the sitewide 'studio' default, when this
+        // caller wired a controlled backdrop (graph editor / node previews).
+        if (onBackdropChange) onBackdropChange('studio');
         if (viewRef && viewRef.current) {
             if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
             if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
         }
-        // Background show/hide toggle deliberately left as-is (Reset only
-        // touches rotation/exposure/override, per spec).
+        // Background show/hide toggle deliberately left as-is; Reset now
+        // also covers backdrop and key light, in addition to
+        // rotation/exposure/override.
     };
 
     // When labels are shown the strip is wider, so let it wrap to a second
@@ -1474,6 +1519,7 @@ const ViewportControls = ({
                         options={geomList}
                         labels={GEOM_LABELS}
                         badges={geomBadges}
+                        defValue={null}
                         onChange={onGeomChange}
                         title="Preview geometry"
                         size={selectSize}
@@ -1510,7 +1556,7 @@ const ViewportControls = ({
                             ref={envBtnRef}
                             onClick={() => (viewRef ? setEnvOpen((o) => !o) : onToggleEnvBg())}
                             title="Environment…"
-                            className={buttonClassName(envBg || envOpen)}
+                            className={buttonClassName(envOpen)}
                         >
                             <MtlxIcon name="environment" className="w-3.5 h-3.5" />
                             {showLabels && <span className="ml-1.5 whitespace-nowrap">Environment</span>}
@@ -1522,9 +1568,10 @@ const ViewportControls = ({
                                 open={envOpen}
                                 onClose={() => setEnvOpen(false)}
                                 placement={envDialogPlacement}
-                                envBg={envBg}
-                                onToggleEnvBg={onToggleEnvBg}
-                                showBackgroundToggle={showBackgroundToggle}
+                                backdrop={backdrop}
+                                onBackdropChange={onBackdropChange}
+                                showBackdropPicker={showBackdropPicker}
+                                backdropDisabled={backdropDisabled}
                                 rotation={envRotation}
                                 onRotationChange={(deg) => {
                                     setEnvRotation(deg);
@@ -1959,6 +2006,9 @@ const selectThemeStyle = (theme) => {
     return out;
 };
 
+// `dots`: optional { value: CSS color string }, rendered as a small
+// round swatch before that option's label, on both the ROW and the
+// closed trigger (once it's the selected value).
 // `badges`: optional { value: text | { text, tone } }, rendered as a
 // small pill after that option's ROW label. Tone comes from this map
 // (warn = amber, else neutral gray) unless the badge itself overrides it.
@@ -1996,20 +2046,25 @@ const SELECT_VARIANT_CLS = {
 };
 
 // Normalizes `options` (string[], unchanged, or object-form entries)
-// into one shape. Top-level icons/titles/disabledOptions/badges maps
-// fill in per-value data when an entry doesn't already carry its own.
+// into one shape. Top-level icons/titles/disabledOptions/badges/dots
+// maps fill in per-value data when an entry doesn't already carry its own.
+// `defValue` auto-badges its matching option 'default'; an explicit
+// per-option badge or `badges` map entry for that value wins over it.
 const normalizeSelectOptions = (options, labels, extras) => {
-    const { icons, titles, disabledOptions, badges } = extras || {};
+    const { icons, titles, disabledOptions, badges, dots, defValue } = extras || {};
     const disabledSet = Array.isArray(disabledOptions) ? new Set(disabledOptions) : disabledOptions;
     const isDisabledValue = (v) => !!(disabledSet && (disabledSet instanceof Set ? disabledSet.has(v) : disabledSet[v]));
     return (options || []).map((o) => {
         const isObj = o !== null && typeof o === 'object';
         const value = isObj ? o.value : o;
+        const explicitBadge = isObj && o.badge != null ? o.badge : (badges && badges[value]);
+        const autoBadge = explicitBadge == null && defValue != null && value === defValue ? 'default' : undefined;
         return {
             value,
             label: isObj && o.label != null ? o.label : (labels[value] || value),
             icon: (isObj && o.icon) || (icons && icons[value]) || undefined,
-            badge: resolveSelectBadge(isObj && o.badge != null ? o.badge : (badges && badges[value])),
+            badge: resolveSelectBadge(explicitBadge != null ? explicitBadge : autoBadge),
+            dot: (isObj && o.dot != null ? o.dot : (dots && dots[value])) || undefined,
             title: (isObj && o.title) || (titles && titles[value]) || undefined,
             disabled: !!((isObj && o.disabled) || isDisabledValue(value)),
         };
@@ -2017,12 +2072,22 @@ const normalizeSelectOptions = (options, labels, extras) => {
 };
 
 const MtlxSelect = ({
-    value, options, labels = {}, badges, onChange, title, className, popWidth,
+    value, options, labels = {}, badges, dots, defValue, onChange, title, className, popWidth,
     icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
     size = 'sm', variant = 'toolbar', block, font,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
 }) => {
+    // `defValue`: the value that's this select's real default, badged
+    // automatically; pass `null` to declare no default exists. Omitting
+    // the prop is treated as a bug, so it warns once per mount instead.
+    React.useEffect(() => {
+        if (defValue === undefined) {
+            const vals = (options || []).map((o) => (o !== null && typeof o === 'object') ? o.value : o);
+            console.warn('MtlxSelect: defValue omitted for options [' + vals.join(', ') + ']. Pass a real defValue or defValue={null} when there is no default.');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     const [open, setOpen] = React.useState(false);
     const [pos, setPos] = React.useState(null);
     const [hi, setHi] = React.useState(0);
@@ -2040,13 +2105,13 @@ const MtlxSelect = ({
     const listboxId = React.useId();
 
     const normalized = React.useMemo(() => {
-        const base = normalizeSelectOptions(options, labels, { icons, titles, disabledOptions, badges });
+        const base = normalizeSelectOptions(options, labels, { icons, titles, disabledOptions, badges, dots, defValue });
         if (!emptyOption) return base;
         // A real, selectable "back to default" row (value ''), distinct
         // from `placeholder` which only affects the trigger's own text.
         const emptyLabel = typeof emptyOption === 'string' ? emptyOption : (placeholder || '');
-        return [{ value: '', label: emptyLabel, icon: undefined, badge: null, title: undefined, disabled: false }].concat(base);
-    }, [options, labels, icons, titles, disabledOptions, badges, emptyOption, placeholder]);
+        return [{ value: '', label: emptyLabel, icon: undefined, badge: null, dot: undefined, title: undefined, disabled: false }].concat(base);
+    }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder]);
 
     // Wider popover when badge pills share the rows with the labels,
     // unless the caller knows its content is narrower and overrides it.
@@ -2327,6 +2392,12 @@ const MtlxSelect = ({
                             {o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
                         </span>
                         {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
+                        {o.dot && (
+                            <span
+                                className="w-2 h-2 rounded-full inline-block shrink-0"
+                                style={{ backgroundColor: o.dot }}
+                            />
+                        )}
                         <span className="flex-1 truncate">{o.label}</span>
                         {o.badge && (
                             <span
@@ -2360,6 +2431,12 @@ const MtlxSelect = ({
                 style={triggerStyle}
             >
                 {icon && <MtlxIcon name={icon} className="w-3.5 h-3.5 flex-none" />}
+                {!showPlaceholder && selected && selected.dot && (
+                    <span
+                        className="w-2 h-2 rounded-full inline-block shrink-0"
+                        style={{ backgroundColor: selected.dot }}
+                    />
+                )}
                 <span className="truncate" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
                 <MtlxIcon name="chevron-down" className={'w-3 h-3 flex-none opacity-70' + (alignLeft ? ' ml-auto' : '')} />
             </button>
@@ -2721,7 +2798,7 @@ Object.assign(window, {
     BTN_SECONDARY, BTN_PRIMARY, BTN_TOOLBAR,
     GEOM_LABELS, GEOM_ICONS, defaultGeomFor,
     errMsg,
-    useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle,
+    useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle, useViewEnum,
     downloadSnapshot, downloadBlob, downloadXml, attributeExportedXml,
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,

@@ -33,6 +33,13 @@ function resolveViewerGeom(requested, wantTransparent) {
   };
 }
 
+// A studio backdrop is just as opaque as the shaderball-scene room
+// above, so transparent forces it to 'none' too. Unlike
+// resolveViewerGeom this never touches the geometry, only the backdrop.
+function resolveViewerBackdrop(requested, wantTransparent) {
+  return wantTransparent ? 'none' : requested || 'studio';
+}
+
 // Resolves the `material` controlled prop against the current
 // renderables list: exact name, then case-insensitive name, then
 // a non-negative integer index ("2"). -1 when unresolved.
@@ -124,6 +131,7 @@ function MaterialViewerApp({
   envBackground,
   autoRotate,
   wheelMode,
+  backdrop = 'studio',
   transparent = false,
   documentUrl,
   mtlxVersion,
@@ -288,8 +296,8 @@ function MaterialViewerApp({
   const {
     rotating,
     toggleRotating,
-    envBg,
-    toggleEnvBg,
+    backdrop: backdropMode,
+    setBackdrop: setBackdropMode,
     viewEpoch,
     setViewEpoch,
     isFullscreen,
@@ -298,8 +306,31 @@ function MaterialViewerApp({
     // autoRotate/envBackground: controlled props seed the hook's
     // initial toggle state (`!!undefined` -> false for every
     // existing, uncontrolled caller — see useViewportControls'
-    // header comment in js/shared/mtlx-ui.jsx).
-  } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground);
+    // header comment in js/shared/mtlx-ui.jsx). The `backdrop` prop
+    // is resolved against `transparent` first (resolveViewerBackdrop
+    // above), same as the geometry resolution at mount.
+  } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground, resolveViewerBackdrop(backdrop, transparent));
+  // Read fresh after async view builds: a backdrop switch made
+  // mid-build would otherwise land on the disposed predecessor.
+  const backdropModeRef = React.useRef(backdropMode);
+  backdropModeRef.current = backdropMode;
+  // Live transparent toggle for the backdrop: mirrors the geometry
+  // effect above, but only ever forces the backdrop to 'none' -
+  // it never touches geom.
+  React.useEffect(() => {
+    if (transparent && backdropMode !== 'none') setBackdropMode('none');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transparent]);
+  // `backdrop` controlled-prop sync, mirroring the geometry prop
+  // sync effect further below: a host changing `backdrop` after
+  // mount (e.g. an embed re-render) updates the local state too.
+  const backdropPropRef = React.useRef(backdrop);
+  React.useEffect(() => {
+    if (backdrop === backdropPropRef.current) return;
+    backdropPropRef.current = backdrop;
+    setBackdropMode(resolveViewerBackdrop(backdrop, transparent));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backdrop]);
   // The hook's takeScreenshot has no internal try/catch (the
   // previewers swallow failures silently); here it surfaces as
   // an error banner instead, so the wrapping stays local.
@@ -472,6 +503,10 @@ function MaterialViewerApp({
       const r = resolveViewerGeom(payload.geometry, transparent);
       if (!r.invalid) setGeom(r.geom);
     }
+    // Same guard as the geometry one above, kept consistent
+    // across an inbound import (Send to Viewer, or the embed's
+    // own `load` message, both funnel through here).
+    setBackdropMode(resolveViewerBackdrop(backdropMode, transparent));
     ingestRef.current(map);
   };
   React.useEffect(() => {
@@ -600,9 +635,6 @@ function MaterialViewerApp({
   mtlxVersions.forEach(v => {
     versionLabels[v] = v;
   });
-  const versionBadges = {
-    [mtlxDefaultVersion]: 'Default'
-  };
   // Narrow popover: rows are just a version string + Default badge,
   // nowhere near MtlxSelect's default badge width (long geo labels).
   const VERSION_POP_W = 144;
@@ -803,7 +835,7 @@ function MaterialViewerApp({
           sceneOrbit: geom === 'shaderball-scene',
           autoRotate: rotating,
           wheelMode,
-          envBackground: envBg,
+          backdrop: backdropMode,
           isMounted: () => mounted,
           isActive: () => activeRef.current,
           debugKind: 'material'
@@ -814,6 +846,7 @@ function MaterialViewerApp({
           return;
         }
         viewRef.current = view;
+        if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
         // Initial env rotation/exposure controlled props —
         // applied once per (re)build, same as autoRotate/
         // envBackground above. Live updates after this point
@@ -861,8 +894,8 @@ function MaterialViewerApp({
   // the old HUD settings popover's only built-in block.
   const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
 
-  // Environment card state (browser only): envBg stays the
-  // existing hook state above; rotation/exposure live here since
+  // Environment card state (browser only): the backdrop mode stays
+  // the existing hook state above; rotation/exposure live here since
   // the HUD's env cluster is gone in the browser.
   const [envUI, setEnvUI] = React.useState({
     rotation: 0,
@@ -870,6 +903,23 @@ function MaterialViewerApp({
   });
   const [envImportError, setEnvImportError] = React.useState(null);
   const [envFileName, setEnvFileName] = React.useState('');
+
+  // Extract key light toggle: local mirror of the engine-wide
+  // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js),
+  // same degrade-to-disabled contract as EnvDialog's own copy
+  // (js/shared/mtlx-ui.jsx).
+  const keyLightAvail = typeof window.getKeyLightEnabled === 'function' && typeof window.setKeyLightEnabled === 'function';
+  const [keyLightOn, setKeyLightOn] = React.useState(() => keyLightAvail ? window.getKeyLightEnabled() : true);
+  // Re-read the global whenever the view is rebuilt, mirroring
+  // EnvDialog's re-read on open since this row has no open event.
+  React.useEffect(() => {
+    setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewEpoch]);
+  const handleToggleKeyLight = next => {
+    setKeyLightOn(next);
+    if (keyLightAvail) window.setKeyLightEnabled(next);
+  };
   const setEnvRotationDeg = v => {
     setEnvUI(s => ({
       ...s,
@@ -909,6 +959,14 @@ function MaterialViewerApp({
       rotation: 0,
       exposure: 1
     });
+    // Backdrop back to the sitewide default too, still resolved
+    // against `transparent` so a transparent page keeps 'none'.
+    setBackdropMode(resolveViewerBackdrop('studio', transparent));
+    // Key light back to the engine default (on). Guarded: the
+    // setter rebuilds the active environment, so only call it
+    // when the light is actually off.
+    if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+    setKeyLightOn(true);
     if (viewRef.current) {
       if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
       if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
@@ -1024,7 +1082,7 @@ function MaterialViewerApp({
     value: version,
     options: mtlxVersions,
     labels: versionLabels,
-    badges: versionBadges,
+    defValue: mtlxDefaultVersion,
     disabledOptions: versionDisabledOptions,
     titles: versionTitles,
     popWidth: VERSION_POP_W,
@@ -1047,6 +1105,7 @@ function MaterialViewerApp({
       setChosenMtlx(v);
       loadDocument(v);
     },
+    defValue: null,
     size: "lg",
     variant: "field",
     block: true
@@ -1068,6 +1127,7 @@ function MaterialViewerApp({
       const preset = window.MTLX_PRESETS.find(p => p.path === path);
       if (preset) loadPreset(preset);
     },
+    defValue: null,
     size: "lg",
     variant: "field",
     block: true
@@ -1083,6 +1143,7 @@ function MaterialViewerApp({
       label: r.name
     })),
     onChange: setChosenMat,
+    defValue: null,
     size: "lg",
     variant: "field",
     block: true
@@ -1106,7 +1167,19 @@ function MaterialViewerApp({
     summary: envSummary,
     defaultOpen: true,
     dense: true
-  }, /*#__PURE__*/React.createElement(SliderField, {
+  }, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: envFileName,
+    placeholder: "Default environment",
+    accept: ".hdr,.exr",
+    icon: "file",
+    onFiles: files => {
+      const f = files && files[0];
+      if (f) importEnv(f);
+    },
+    onClear: clearEnvOverride
+  }), envImportError && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-red-400"
+  }, envImportError), /*#__PURE__*/React.createElement(SliderField, {
     label: "Environment rotation",
     unit: "deg",
     value: envUI.rotation,
@@ -1124,26 +1197,36 @@ function MaterialViewerApp({
     step: EV_STEP,
     onSlider: v => setEnvExposureVal(evToLinear(v)),
     onNumber: v => setEnvExposureVal(evToLinear(v))
-  }), /*#__PURE__*/React.createElement("label", {
-    className: "flex items-center justify-between cursor-pointer"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-medium text-gray-400"
-  }, "Show environment as background"), /*#__PURE__*/React.createElement(Toggle, {
-    checked: envBg,
-    onChange: () => toggleEnvBg()
-  })), /*#__PURE__*/React.createElement(FilePickerField, {
-    value: envFileName,
-    placeholder: "Default environment",
-    accept: ".hdr,.exr",
-    icon: "file",
-    onFiles: files => {
-      const f = files && files[0];
-      if (f) importEnv(f);
+  }, "Backdrop"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: backdropMode,
+    options: ['studio', 'studio-dark', 'environment', 'none'],
+    labels: {
+      studio: 'Studio',
+      'studio-dark': 'Studio (Dark)',
+      environment: 'Environment',
+      none: 'None'
     },
-    onClear: clearEnvOverride
-  }), envImportError && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs text-red-400"
-  }, envImportError), /*#__PURE__*/React.createElement("button", {
+    onChange: setBackdropMode,
+    defValue: "studio",
+    disabled: roomGeomActive,
+    title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined,
+    size: "sm"
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center justify-between cursor-pointer",
+    title: keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "Extract key light"), /*#__PURE__*/React.createElement(Toggle, {
+    checked: keyLightOn,
+    onChange: handleToggleKeyLight,
+    disabled: !keyLightAvail
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-1 text-[11px] text-gray-400"
+  }, "Pull a sun-like light out of the HDRI for crisp highlights."), /*#__PURE__*/React.createElement("button", {
     onClick: resetEnv,
     title: "Also clears an imported .hdr/.exr and restores the default environment",
     className: BTN_SECONDARY + ' w-full'
@@ -1228,14 +1311,14 @@ function MaterialViewerApp({
     onToggleRotating: toggleRotating
     // Hidden while shaderball-scene is active
     // (roomGeomActive above), same for the
-    // background toggle below; not reported.
+    // backdrop picker below; not reported.
     ,
     showRotate: ctlFlags.rotate,
     onCameraReset: handleCameraReset,
     showReset: ctlFlags.reset,
-    envBg: envBg,
-    onToggleEnvBg: toggleEnvBg,
-    showBackgroundToggle: !roomGeomActive,
+    backdrop: backdropMode,
+    onBackdropChange: setBackdropMode,
+    showBackdropPicker: !roomGeomActive,
     showEnv: ctlFlags.env,
     initialEnvRotation: envRotation,
     initialEnvExposure: envExposure,
@@ -1263,19 +1346,19 @@ function MaterialViewerApp({
     showGeomSelect: IN_VSCODE,
     rotating: rotating,
     onToggleRotating: toggleRotating
-    // Engine no-ops auto-rotate for the full scene, and the
-    // backdrop box fully occludes the env-background sky
-    // sphere - hide both controls while it's selected.
+    // Engine no-ops auto-rotate for the full scene, and
+    // shaderball-scene is an authored room that ignores
+    // the backdrop entirely - hide both while it's selected.
     ,
     showRotate: showCtl('rotate') && geom !== 'shaderball-scene',
-    showBackgroundToggle: geom !== 'shaderball-scene',
+    showBackdropPicker: geom !== 'shaderball-scene',
     onCameraReset: showCtl('reset') ? handleCameraReset : undefined
     // Env cluster moved into the sidebar's Environment card in
     // the browser; VS Code keeps the HUD's own env popover.
     ,
     envAvail: IN_VSCODE,
-    envBg: envBg,
-    onToggleEnvBg: toggleEnvBg,
+    backdrop: backdropMode,
+    onBackdropChange: setBackdropMode,
     viewRef: viewRef,
     viewEpoch: viewEpoch,
     onScreenshot: takeScreenshot,
@@ -1338,6 +1421,7 @@ function MaterialViewerApp({
       label: r.name
     })),
     onChange: setChosenMat,
+    defValue: null,
     title: "Material to display",
     size: "sm",
     variant: "toolbar"

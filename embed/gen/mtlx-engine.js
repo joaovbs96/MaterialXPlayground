@@ -2147,6 +2147,18 @@ const parseEnvBuffer = (buf, ext) => {
 // reproduces that automatically for any loaded environment.
 const KEYLIGHT_MIN_CONTRAST = 64;
 const KEYLIGHT_RADIUS_RAD = 0.10;
+// Shared data-space -> world direction mapping (extractKeyLight AND
+// extractSoftKeyDir): gamma absorbs u_envMatrix's +90deg base, flipY
+// matches the texture's row convention, negate flips TO-light into TRAVELS.
+const dataDirToWorld = (tex, x, y, W, H) => {
+  const U = (x + 0.5) / W;
+  const gamma = 2 * Math.PI * U - Math.PI;
+  const vRow = tex.flipY ? H - 1 - y : y;
+  const thetaV = Math.PI * (vRow + 0.5) / H;
+  const sinV = Math.sin(thetaV),
+    cosV = Math.cos(thetaV);
+  return new THREE.Vector3(sinV * Math.cos(gamma), cosV, sinV * Math.sin(gamma)).negate();
+};
 const extractKeyLight = tex => {
   try {
     const img = tex.image;
@@ -2242,17 +2254,9 @@ const extractKeyLight = tex => {
     const cx = cxW / cW,
       cy = cyW / cW;
 
-    // Direction: data-coord centroid -> world. gamma already absorbs
-    // u_envMatrix's +90deg base — do NOT also apply the rig's RotY.
-    const U = (cx + 0.5) / W;
-    const gamma = 2 * Math.PI * U - Math.PI;
-    const vRow = tex.flipY ? H - 1 - cy : cy;
-    const thetaV = Math.PI * (vRow + 0.5) / H;
-    const sinV = Math.sin(thetaV),
-      cosV = Math.cos(thetaV);
-    // MaterialX directional lights store the direction light TRAVELS
-    // (light -> scene), so negate the computed direction-TO-light.
-    const direction = new THREE.Vector3(sinV * Math.cos(gamma), cosV, sinV * Math.sin(gamma)).negate();
+    // Direction: data-coord centroid -> world, via the shared helper
+    // above (also used by extractSoftKeyDir).
+    const direction = dataDirToWorld(tex, cx, cy, W, H);
 
     // Clamp: overwrite the cluster with the annulus's mean color — the
     // "split" that removes the sun from radiance/irradiance/backdrop.
@@ -2271,6 +2275,53 @@ const extractKeyLight = tex => {
     };
   } catch (e) {
     console.warn('key-light extraction failed:', e);
+    return null;
+  }
+};
+// Cheaper direction-only estimate for the studio shadow when
+// extractKeyLight found nothing (or was skipped): luminance-weighted
+// centroid of texels >= 2x mean, via the same helper as extractKeyLight.
+const extractSoftKeyDir = tex => {
+  try {
+    const img = tex.image;
+    const W = img.width,
+      H = img.height;
+    const stride = img.data.length / (W * H);
+    const isHalf = img.data.constructor === Uint16Array;
+    const rd = i => isHalf ? halfToFloat(img.data[i]) : img.data[i];
+    const lum = new Float32Array(W * H);
+    let sumW = 0,
+      sumLW = 0;
+    for (let y = 0; y < H; y++) {
+      const theta = Math.PI * (y + 0.5) / H;
+      const dOmega = Math.sin(theta) * (2 * Math.PI / W) * (Math.PI / H);
+      for (let x = 0; x < W; x++) {
+        const idx = (y * W + x) * stride;
+        const L = 0.2126 * rd(idx) + 0.7152 * rd(idx + 1) + 0.0722 * rd(idx + 2);
+        lum[y * W + x] = L;
+        sumW += dOmega;
+        sumLW += L * dOmega;
+      }
+    }
+    const Lfloor = 2 * (sumW > 0 ? sumLW / sumW : 0);
+    let cxW = 0,
+      cyW = 0,
+      cW = 0;
+    for (let y = 0; y < H; y++) {
+      const theta = Math.PI * (y + 0.5) / H;
+      const dOmega = Math.sin(theta) * (2 * Math.PI / W) * (Math.PI / H);
+      for (let x = 0; x < W; x++) {
+        const L = lum[y * W + x];
+        if (L < Lfloor) continue;
+        const w = L * dOmega;
+        cxW += x * w;
+        cyW += y * w;
+        cW += w;
+      }
+    }
+    if (cW <= 0) return null;
+    return dataDirToWorld(tex, cxW / cW, cyW / cW, W, H);
+  } catch (e) {
     return null;
   }
 };
@@ -2323,13 +2374,17 @@ const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad) => {
   if (uniforms.u_numActiveLightSources) uniforms.u_numActiveLightSources.value = rigCount + (keyLight ? 1 : 0);
 };
 // Builds the full { radiance, irradiance, mips, background,
-// prefilteredIrr, keyLight } shape from a raw parseEnvBuffer() result —
-// shared by getEnvironment() and loadEnvironmentFromFile.
+// prefilteredIrr, keyLight, softKeyDir } shape from a raw
+// parseEnvBuffer() result, shared by getEnvironment() and loadEnvironmentFromFile.
 const buildEnvFromParsedTexture = raw => {
   // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
   // background are built below, so it disappears from all three —
   // matching official "split" env assets.
   const keyLight = keyLightEnabled ? extractKeyLight(raw) : null;
+  // extractKeyLight only mutates raw on a SUCCESSFUL extraction (both
+  // its null-return paths run before the clamp), so raw is still
+  // pristine here whenever the soft fallback is actually needed.
+  const softKeyDir = keyLight ? null : extractSoftKeyDir(raw);
   const radiance = prepareEnv(raw);
   const irrSrc = shIrradianceFromEquirect(raw);
   const irradiance = irrSrc ? prepareEnv(irrSrc) : radiance;
@@ -2344,7 +2399,8 @@ const buildEnvFromParsedTexture = raw => {
     mips,
     background,
     prefilteredIrr: false,
-    keyLight
+    keyLight,
+    softKeyDir
   };
 };
 const getEnvironment = () => {
@@ -2361,7 +2417,8 @@ const getEnvironment = () => {
         buf,
         ext
       }; // pristine bytes, for the key-light toggle rebuild
-      return buildEnvFromParsedTexture(raw);
+      const built = buildEnvFromParsedTexture(raw);
+      return built;
     });
   }
   return envPromise;
@@ -3309,6 +3366,223 @@ const effectiveFullSceneVFov = (authoredFovDeg, authoredAspect, canvasAspect) =>
   const effHalfVFov = Math.atan(Math.tan(authoredHalfHFov) / canvasAspect);
   return effHalfVFov * 2 * 180 / Math.PI;
 };
+
+// ------------------------------------------------------------------
+// Studio backdrop: procedural cyclorama (light or dark) + contact
+// shadow, the third mode of the background switch alongside bgMesh's
+// 'environment'/'none'. Tunables gathered here for one-place tuning.
+// ------------------------------------------------------------------
+const STUDIO_WALL_R = 16; // must exceed OrbitControls' maxDistance (9)
+const STUDIO_WALL_H = 10; // must clear the top of frame at the polar clamp
+const STUDIO_FLOOR_R = 13; // flat floor radius, before the fillet starts
+const STUDIO_FILLET_R = 3; // STUDIO_FLOOR_R + STUDIO_FILLET_R == STUDIO_WALL_R, for a tangent join
+const STUDIO_SHADOW_OPACITY = 0.28;
+const STUDIO_SHADOW_OPACITY_DARK = 0.4; // dark backdrop needs a denser catcher to read against it
+const STUDIO_MAX_POLAR = Math.PI * 0.54; // ceiling on the dip below the horizon
+const STUDIO_FLOOR_CLEARANCE = 0.25; // world units the eye keeps above the floor
+const STUDIO_PROFILE_STEP = 0.4; // world units between profile points, see getStudioGeometry
+const STUDIO_LIGHT_DISTANCE = 7.5; // fixed light-to-floor-point distance, see placeStudioLight
+const STUDIO_LIGHT_CONE_R = 5; // world-unit radius the spot cone should cover at the floor; must fit the min-elevation worst case below
+const STUDIO_LIGHT_MIN_ELEV_RAD = 0.61; // ~35deg; a near-horizon key would stretch the shadow past any reasonable catcher footprint
+const STUDIO_BACKDROP_OFFSET = 0.02; // world units the backdrop sits behind the shadow catcher
+// VSM (not PCFSoft) honors shadow.radius for a real blur pass, so map
+// size trades resolution for cost here, not softness; see
+// studioLight's radius/bias for the actual softness knobs.
+const STUDIO_SHADOW_MAP_SIZE = 1024;
+
+// Procedural gradient shader, replacing a baked canvas texture: pixel-
+// perfect, no 8-bit banding from a rasterized ramp. Stop/hotspot values
+// are the exact sRGB byte-space colors the old canvas gradient used;
+// raw gl_FragColor output matches the old toneMapped:false + sRGB-texture path.
+const hexToVec3 = hex => {
+  const n = parseInt(hex.slice(1), 16);
+  return new THREE.Vector3((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255);
+};
+// Light mirrors a paper cyclorama, dark mirrors the site's own
+// background family (Tailwind gray-900, #111827).
+const STUDIO_GRADIENT_STOPS = {
+  light: [hexToVec3('#f6f6f6'), hexToVec3('#ffffff'), hexToVec3('#e3e3e3'), hexToVec3('#c8c8c8')],
+  dark: [hexToVec3('#1d2635'), hexToVec3('#242e40'), hexToVec3('#131a28'), hexToVec3('#0c1220')]
+};
+// Soft hotspot high on the wall, reads as a key-light wash with no
+// actual scene light. Position/radius are baked into the fragment shader below.
+const STUDIO_HOTSPOT = {
+  light: {
+    color: new THREE.Vector3(1, 1, 1),
+    alpha: 0.55
+  },
+  dark: {
+    color: new THREE.Vector3(151 / 255, 170 / 255, 200 / 255),
+    alpha: 0.18
+  }
+};
+const STUDIO_GRADIENT_VERTEX_SHADER = `
+varying vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+const STUDIO_GRADIENT_FRAGMENT_SHADER = `
+varying vec2 vUv;
+uniform vec3 uStop0;
+uniform vec3 uStop1;
+uniform vec3 uStop2;
+uniform vec3 uStop3;
+uniform vec3 uHotspotColor;
+uniform float uHotspotA;
+uniform float uLinearOut;
+
+vec3 srgbToLinear(vec3 c) {
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.04045))));
+}
+
+// Exact inverse of ACES_SRGB_GLSL (mtlx-engine.js): sRGB OETF^-1, acesOut^-1,
+// invert the per-channel Hill-fit rational (positive quadratic root),
+// acesInInv, then undo the /0.6 exposure scale.
+vec3 inverseAcesSrgb(vec3 col) {
+    const mat3 acesInInv = mat3(
+        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),
+        vec3(-0.08896329, -0.01322366, 1.19877327)
+    );
+    const mat3 acesOutInv = mat3(
+        vec3(0.64303825, 0.05926869, 0.00596190), vec3(0.31118675, 0.93143649, 0.06392902),
+        vec3(0.04577546, 0.00929492, 0.93011838)
+    );
+    vec3 y = acesOutInv * srgbToLinear(col);
+    vec3 qa = vec3(1.0) - 0.983729 * y;
+    vec3 qb = vec3(0.0245786) - 0.4329510 * y;
+    vec3 qc = vec3(-0.000090537) - 0.238081 * y;
+    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);
+    return (acesInInv * x) * 0.6;
+}
+
+void main() {
+    // The old CanvasTexture's flipY made uv.y=1 the canvas top, so this
+    // reproduces the canvas's top-down gradient position from the lathe's v.
+    float t = clamp(1.0 - vUv.y, 0.0, 1.0);
+    vec3 col;
+    if (t < 0.35) {
+        col = mix(uStop0, uStop1, t / 0.35);
+    } else if (t < 0.78) {
+        col = mix(uStop1, uStop2, (t - 0.35) / (0.78 - 0.35));
+    } else {
+        col = mix(uStop2, uStop3, (t - 0.78) / (1.0 - 0.78));
+    }
+
+    float d = length(vec2(vUv.x - 0.5, t - 0.28));
+    float a = uHotspotA * clamp(1.0 - d / 0.55, 0.0, 1.0);
+    col = mix(col, uHotspotColor, a);
+
+    // Breaks 8-bit banding on the shallow ramp.
+    float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    col += (n - 0.5) * (1.5 / 255.0);
+
+    // Peel composite applies ACES filmic then sRGB (ACES_SRGB_GLSL), so
+    // pre-apply that composite's exact inverse to stay tone-map-exempt
+    // and land back on this same display color once composited.
+    if (uLinearOut > 0.5) col = inverseAcesSrgb(col);
+
+    gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// Single source of truth for the two gradient variants; called at build
+// time below and again from applyBackdrop when the mode flips.
+const applyStudioVariantUniforms = (material, dark) => {
+  const stops = dark ? STUDIO_GRADIENT_STOPS.dark : STUDIO_GRADIENT_STOPS.light;
+  const hotspot = dark ? STUDIO_HOTSPOT.dark : STUDIO_HOTSPOT.light;
+  material.uniforms.uStop0.value.copy(stops[0]);
+  material.uniforms.uStop1.value.copy(stops[1]);
+  material.uniforms.uStop2.value.copy(stops[2]);
+  material.uniforms.uStop3.value.copy(stops[3]);
+  material.uniforms.uHotspotColor.value.copy(hotspot.color);
+  material.uniforms.uHotspotA.value = hotspot.alpha;
+};
+
+// Shared lathe profile, a CLOSED room: floor centre, flat floor, fillet,
+// wall, then mirrored back over the top to a ceiling centre. Points
+// only, reused by getStudioGeometry and getStudioCatcherGeometry below.
+const buildStudioProfile = () => {
+  // LatheGeometry sets uv.y from the point INDEX, not arc length, so
+  // the profile is emitted at a uniform step. A coarse floor/wall
+  // would otherwise squeeze the whole gradient into the fillet.
+  const wallH = STUDIO_WALL_H - STUDIO_FILLET_R;
+  const filletLen = Math.PI / 2 * STUDIO_FILLET_R;
+  const segsFor = len => Math.max(1, Math.round(len / STUDIO_PROFILE_STEP));
+  const floorSegs = segsFor(STUDIO_FLOOR_R);
+  const filletSegs = segsFor(filletLen);
+  const wallSegs = segsFor(wallH);
+  const points = [];
+  for (let i = 0; i <= floorSegs; i++) {
+    points.push(new THREE.Vector2(i / floorSegs * STUDIO_FLOOR_R, 0));
+  }
+  for (let i = 1; i <= filletSegs; i++) {
+    const t = i / filletSegs * (Math.PI / 2);
+    points.push(new THREE.Vector2(STUDIO_FLOOR_R + Math.sin(t) * STUDIO_FILLET_R, (1 - Math.cos(t)) * STUDIO_FILLET_R));
+  }
+  for (let i = 1; i <= wallSegs; i++) {
+    points.push(new THREE.Vector2(STUDIO_WALL_R, STUDIO_FILLET_R + i / wallSegs * wallH));
+  }
+  // Ceiling: the floor's fillet and disc mirrored, closing the room
+  // so no camera angle inside it can see past the rim to the page.
+  const ceilY = STUDIO_WALL_H + STUDIO_FILLET_R;
+  for (let i = 1; i <= filletSegs; i++) {
+    const t = i / filletSegs * (Math.PI / 2);
+    points.push(new THREE.Vector2(STUDIO_FLOOR_R + Math.cos(t) * STUDIO_FILLET_R, STUDIO_WALL_H + Math.sin(t) * STUDIO_FILLET_R));
+  }
+  for (let i = 1; i <= floorSegs; i++) {
+    points.push(new THREE.Vector2((1 - i / floorSegs) * STUDIO_FLOOR_R, ceilY));
+  }
+  return points;
+};
+
+// Offsets a profile inward by `inset`, from the local tangent at each
+// point (forward diff at the first, backward at the last, central
+// elsewhere) rotated +90 degrees: (x,y) -> (-y,x). Points into the room.
+const insetStudioProfile = (points, inset) => {
+  const last = points.length - 1;
+  return points.map((p, i) => {
+    const prev = points[Math.max(0, i - 1)];
+    const next = points[Math.min(last, i + 1)];
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
+    const len = Math.hypot(tx, ty) || 1;
+    return new THREE.Vector2(p.x + -ty / len * inset, p.y + tx / len * inset);
+  });
+};
+
+// Shared bowl geometry, guarded so a missing THREE.LatheGeometry can't
+// throw here.
+let studioLatheGeometry = null;
+const getStudioGeometry = () => {
+  if (studioLatheGeometry) return studioLatheGeometry;
+  try {
+    if (!THREE.LatheGeometry) return null;
+    studioLatheGeometry = new THREE.LatheGeometry(buildStudioProfile(), 64);
+  } catch (e) {
+    studioLatheGeometry = null; // no studio backdrop this session; bgMesh/no-backdrop modes still work
+  }
+  return studioLatheGeometry;
+};
+
+// The BACKDROP gets its own copy, pushed OUTWARD off the true bowl, so the
+// catcher can keep the exact floor the model rests on. Offsetting the catcher
+// instead floated the shadow above the contact point.
+let studioBackdropLatheGeometry = null;
+const getStudioBackdropGeometry = () => {
+  if (studioBackdropLatheGeometry) return studioBackdropLatheGeometry;
+  try {
+    if (!THREE.LatheGeometry) return null;
+    const outset = insetStudioProfile(buildStudioProfile(), -STUDIO_BACKDROP_OFFSET);
+    studioBackdropLatheGeometry = new THREE.LatheGeometry(outset, 64);
+  } catch (e) {
+    studioBackdropLatheGeometry = null; // caller degrades along with getStudioGeometry
+  }
+  return studioBackdropLatheGeometry;
+};
 const createMtlxRenderView = async ({
   canvas,
   mx,
@@ -3321,6 +3595,10 @@ const createMtlxRenderView = async ({
   geomName,
   autoRotate = true,
   envBackground = false,
+  // Background switch: 'studio' | 'studio-dark' | 'environment' |
+  // 'none'. No default here (see backdropMode below), undefined lets
+  // envBackground's back-compat rule decide the initial mode.
+  backdrop,
   // 'zoom' (default): plain wheel zooms. 'scroll': plain wheel is gated
   // (page scrolls), Ctrl/Cmd+wheel zooms; see the wheel-gate block below.
   // 'none': no zoom at all (wheel, Ctrl+wheel, pinch), orbit still works.
@@ -3354,6 +3632,15 @@ const createMtlxRenderView = async ({
   // no controls/spin, no visible backdrop. Orthogonal to sceneMode
   // (null there, so the ordinary buildPreviewGeometry path runs).
   const flat2d = geomName === 'buffer2d';
+  // Known before the renderer exists, so the shadow map can be configured
+  // up front. Flipping shadowMap.enabled after the PMREM and the materials
+  // are built invalidated program state and blacked out scene.environment.
+  const wantsStudio = !flat2d && sceneMode !== 'full';
+  // Unrecognized/missing values fall back to 'studio'. envBackground
+  // back-compat only applies when `backdrop` itself was never passed
+  // at all; an explicit `backdrop` (even 'studio') always wins.
+  const normalizeBackdropMode = v => v === 'environment' || v === 'none' || v === 'studio-dark' ? v : 'studio';
+  let backdropMode = normalizeBackdropMode(backdrop !== undefined ? backdrop : envBackground ? 'environment' : 'studio');
   let reqId = null;
   let renderer = null;
   let resizeObs = null;
@@ -3435,6 +3722,13 @@ const createMtlxRenderView = async ({
   // WebGLBackground caches an equirect texture as a cubemap, ignoring
   // texture.offset/matrix (a per-frame offset write was a silent no-op).
   let bgMesh = null;
+  // Studio backdrop group (wall/floor lathe + shadow catcher + zero-
+  // intensity spotlight), null for flat2d/full-scene, where the
+  // studio mode is never built (see its construction further down).
+  let studioGroup = null,
+    studioMesh = null,
+    studioCatcher = null,
+    studioLight = null;
   // Shell-level env (IBL) state, fetched ONCE (not per material
   // apply) since env textures never change across a document edit.
   // bindMaterialUniforms() reads these on every apply.
@@ -3450,6 +3744,10 @@ const createMtlxRenderView = async ({
   // The active env's auto-extracted key light (null = none) — see
   // extractKeyLight/currentLights. rigCount fixes u_lightData's length.
   let envKeyLight = null;
+  // Cheaper fallback direction for the studio shadow ONLY (no direct
+  // light emitted) when there's no strong-enough sun for envKeyLight;
+  // see extractSoftKeyDir/placeStudioLight.
+  let envSoftKeyDir = null;
   const rigCount = lightData && lightData.length || 0;
   // Per-view state for the handle's setEnvMap(url): the textures from
   // the last URL this view privately fetched, never shared with other
@@ -3527,6 +3825,17 @@ const createMtlxRenderView = async ({
         scene.remove(bgMesh);
         bgMesh.geometry.dispose();
         bgMesh.material.dispose();
+      }
+    } catch (e) {/* already disposed/invalid, or scene never got this far */}
+    // studioGroup: drop it, dispose its two per-view MATERIALS and
+    // the spotlight's own shadow render target. Do NOT dispose the
+    // two lathe geometries (reused everywhere).
+    try {
+      if (studioGroup) {
+        scene.remove(studioGroup);
+        if (studioMesh) studioMesh.material.dispose();
+        if (studioCatcher) studioCatcher.material.dispose();
+        if (studioLight) studioLight.shadow.dispose();
       }
     } catch (e) {/* already disposed/invalid, or scene never got this far */}
     // sceneGroup (scene-mode only): drops the GLB hierarchy and
@@ -3626,6 +3935,17 @@ const createMtlxRenderView = async ({
       antialias: true,
       alpha: true
     });
+    // A reused canvas still carries GL state left by the prior
+    // renderer, but fresh r128 state caches assume defaults, so
+    // leaked blending corrupts the PMREM bake below; resync both.
+    renderer.resetState();
+    // GLOBAL flag keying every lit material's program cache, so set
+    // ONCE here, before any material or PMREM work, and left at the
+    // default (off) for views that never build a studio bowl.
+    if (wantsStudio) {
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.VSMShadowMap;
+    }
     renderer.setSize(cw, ch, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
     renderer.debug.checkShaderErrors = true;
@@ -3665,7 +3985,10 @@ const createMtlxRenderView = async ({
       // EXCEPT the backplanes' MeshBasicMaterial clones
       // (no envMap). Same duck-typing check as setEnvExposure.
       sceneOwnedMaterials.forEach(m => {
-        if ('envMapIntensity' in m) patchNeutralMaterialEnvRotation(m);
+        // BISECT: the env-rotation chunk is the only hand-injected
+        // shader in the scene, and it is the last suspect for the
+        // black neutral materials under an enabled shadow map.
+        if ('envMapIntensity' in m && !wantsStudio) patchNeutralMaterialEnvRotation(m);
       });
     }
     // fullScene: the full authored preset (shaderball.glb) —
@@ -3928,6 +4251,7 @@ const createMtlxRenderView = async ({
           envHasFile = true;
           envPrefilteredIrr = !!env.prefilteredIrr;
           envKeyLight = env.keyLight || null;
+          envSoftKeyDir = env.softKeyDir || null;
         } else {
           envRadiance = makeEnvTexture(256, 128, false);
           envIrradiance = makeEnvTexture(64, 32, true);
@@ -3954,7 +4278,7 @@ const createMtlxRenderView = async ({
           }));
           bgMesh.renderOrder = -1000;
           bgMesh.rotation.y = BG_BASE + BG_SIGN * envRotationRad;
-          bgMesh.visible = !!envBackground;
+          bgMesh.visible = false; // real visibility set by applyBackdrop() below
           scene.add(bgMesh);
         }
       }
@@ -3970,17 +4294,180 @@ const createMtlxRenderView = async ({
       }
     }
 
+    // Last resort (see placeStudioLight): the studio's original
+    // hardcoded angle, still rotated by envRotationRad. Used
+    // only when neither envKeyLight nor envSoftKeyDir is available.
+    const STUDIO_LIGHT_FALLBACK_DIR = new THREE.Vector3(2.5, 6, 4).normalize();
+    // Single source of truth for the spotlight's placement
+    // (called here and by setEnvRotation), so the shadow tracks
+    // envKeyLight, or failing that envSoftKeyDir, like u_lightData does.
+    const placeStudioLight = () => {
+      if (!studioLight) return;
+      const toLightDir = (envKeyLight ? envKeyLight.direction.clone().negate() : envSoftKeyDir ? envSoftKeyDir.clone().negate() : STUDIO_LIGHT_FALLBACK_DIR.clone()).applyMatrix4(keyLightRotationMatrix(envRotationRad)).normalize();
+      // A near-horizon key light drags the contact shadow far
+      // past the catcher footprint, so floor the elevation,
+      // rescaling (x, z) to keep the vector normalized and the azimuth intact.
+      const minY = Math.sin(STUDIO_LIGHT_MIN_ELEV_RAD);
+      if (toLightDir.y < minY) {
+        const horizLen = Math.hypot(toLightDir.x, toLightDir.z);
+        if (horizLen > 1e-6) {
+          const scale = Math.sqrt(Math.max(0, 1 - minY * minY)) / horizLen;
+          toLightDir.x *= scale;
+          toLightDir.z *= scale;
+          toLightDir.y = minY;
+        }
+      }
+      studioLight.position.copy(toLightDir).multiplyScalar(STUDIO_LIGHT_DISTANCE);
+    };
+
+    // Procedural studio cyclorama + contact shadow, the third
+    // backdrop mode alongside bgMesh above (light/dark share
+    // this same build). Skipped for flat2d and full-scene (its own authored room).
+    if (wantsStudio) {
+      try {
+        const studioGeom = getStudioGeometry();
+        if (studioGeom) {
+          studioGroup = new THREE.Group();
+          studioMesh = new THREE.Mesh(getStudioBackdropGeometry() || studioGeom, new THREE.ShaderMaterial({
+            uniforms: {
+              uStop0: {
+                value: new THREE.Vector3()
+              },
+              uStop1: {
+                value: new THREE.Vector3()
+              },
+              uStop2: {
+                value: new THREE.Vector3()
+              },
+              uStop3: {
+                value: new THREE.Vector3()
+              },
+              uHotspotColor: {
+                value: new THREE.Vector3()
+              },
+              uHotspotA: {
+                value: 0
+              },
+              uLinearOut: {
+                value: 0
+              }
+            },
+            vertexShader: STUDIO_GRADIENT_VERTEX_SHADER,
+            fragmentShader: STUDIO_GRADIENT_FRAGMENT_SHADER,
+            side: THREE.BackSide,
+            fog: false
+          }));
+          applyStudioVariantUniforms(studioMesh.material, backdropMode === 'studio-dark');
+          studioMesh.renderOrder = -900;
+          // BackSide like studioMesh: a FrontSide catcher
+          // would be culled from inside and show no shadow.
+          // It keeps the true bowl, so the shadow meets the model where it lands.
+          studioCatcher = new THREE.Mesh(studioGeom, new THREE.ShadowMaterial({
+            opacity: backdropMode === 'studio-dark' ? STUDIO_SHADOW_OPACITY_DARK : STUDIO_SHADOW_OPACITY,
+            side: THREE.BackSide
+          }));
+          studioCatcher.receiveShadow = true;
+          studioCatcher.material.depthWrite = false;
+          studioCatcher.renderOrder = -800;
+          // Zero intensity + castShadow: only the simple
+          // GLB's neutral glTF meshes read lights, so this
+          // casts a shadow while lighting nothing.
+          studioLight = new THREE.SpotLight(0xffffff, 0);
+          studioLight.target.position.set(0, 0, 0);
+          studioLight.castShadow = true;
+          studioLight.angle = Math.atan(STUDIO_LIGHT_CONE_R / STUDIO_LIGHT_DISTANCE);
+          studioLight.penumbra = 0.5;
+          // Near brackets tightly around the fixed light-
+          // to-floor distance, but far must clear the whole
+          // bowl or VSM blacks out the crossing band; VSM half-float handles the range fine.
+          studioLight.shadow.camera.near = STUDIO_LIGHT_DISTANCE - 4;
+          studioLight.shadow.camera.far = STUDIO_LIGHT_DISTANCE + STUDIO_WALL_R + 2;
+          studioLight.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE, STUDIO_SHADOW_MAP_SIZE);
+          // VSM honors shadow.radius for a real blur pass;
+          // PCFSoft ignores it and stair-steps instead.
+          studioLight.shadow.radius = 12;
+          studioLight.shadow.bias = -0.0005;
+          studioLight.shadow.normalBias = 0.02;
+          placeStudioLight();
+          studioGroup.add(studioMesh, studioCatcher, studioLight, studioLight.target);
+          scene.add(studioGroup);
+        }
+      } catch (e) {
+        // Build failure (e.g. no THREE.LatheGeometry) must
+        // never take down the whole view, degrade to no
+        // studio backdrop instead; bgMesh/'none' still work.
+        studioGroup = null;
+        studioMesh = null;
+        studioCatcher = null;
+        studioLight = null;
+      }
+    }
+
+    // 'studio' and 'studio-dark' share the same bowl/light/
+    // catcher, so every mode check below tests this instead of
+    // a literal 'studio' equality.
+    const isStudioBackdrop = m => m === 'studio' || m === 'studio-dark';
+
+    // Single source of truth for the four backdrop modes,
+    // applied once below for the initial `backdrop` option,
+    // and again by the handle's setBackdrop()/setEnvBackground().
+    // The orbit target sits above the floor, so a fixed dip below
+    // the horizon drops the eye THROUGH the floor once the
+    // distance grows. Re-derived per frame from that distance.
+    let studioPolarApplied = false;
+    const applyStudioPolarClamp = () => {
+      if (!controls) return;
+      if (!studioGroup || !isStudioBackdrop(backdropMode)) {
+        // Only ever restore a clamp we set: full-scene mode
+        // has no studioGroup and owns its own orbit limits.
+        if (studioPolarApplied) {
+          controls.maxPolarAngle = Math.PI;
+          studioPolarApplied = false;
+        }
+        return;
+      }
+      const dist = camera.position.distanceTo(controls.target);
+      const rel = studioGroup.position.y + STUDIO_FLOOR_CLEARANCE - controls.target.y;
+      const limit = dist > 1e-3 ? Math.acos(Math.max(-1, Math.min(1, rel / dist))) : STUDIO_MAX_POLAR;
+      controls.maxPolarAngle = Math.min(STUDIO_MAX_POLAR, limit);
+      studioPolarApplied = true;
+    };
+
+    // Single source of truth for the four backdrop modes,
+    // applied once below for the initial `backdrop` option,
+    // and again by the handle's setBackdrop()/setEnvBackground().
+    const applyBackdrop = mode => {
+      backdropMode = normalizeBackdropMode(mode);
+      if (bgMesh) bgMesh.visible = backdropMode === 'environment';
+      if (studioGroup) studioGroup.visible = isStudioBackdrop(backdropMode);
+      // Live variant swap: rewrite the gradient uniforms for
+      // the now-active variant (light vs dark).
+      if (studioMesh) {
+        applyStudioVariantUniforms(studioMesh.material, backdropMode === 'studio-dark');
+      }
+      if (studioCatcher) {
+        studioCatcher.material.opacity = backdropMode === 'studio-dark' ? STUDIO_SHADOW_OPACITY_DARK : STUDIO_SHADOW_OPACITY;
+      }
+      applyStudioPolarClamp();
+    };
+    applyBackdrop(backdropMode);
+
     // Non-MaterialX materials (skybox + GLB clones) — fixed
     // for this shell's lifetime, so cached once. setSceneLinear
     // detones them for the merged linear-opaque pass (sRGB needs
     // no flag: the RT's own texture.encoding gates that, r128-verified).
-    const sceneBuiltinMaterials = (bgMesh ? [bgMesh.material] : []).concat(sceneOwnedMaterials);
+    const sceneBuiltinMaterials = (bgMesh ? [bgMesh.material] : []).concat(studioMesh ? [studioMesh.material] : [], studioCatcher ? [studioCatcher.material] : []).concat(sceneOwnedMaterials);
     const setSceneLinear = on => {
       sceneBuiltinMaterials.forEach(m => {
         if (m.toneMapped === !on) return;
         m.toneMapped = !on;
         m.needsUpdate = true;
       });
+      // Raw ShaderMaterial ignores toneMapped and RT encoding,
+      // so the linear pass needs an explicit flag.
+      if (studioMesh && studioMesh.material && studioMesh.material.uniforms && studioMesh.material.uniforms.uLinearOut) {
+        studioMesh.material.uniforms.uLinearOut.value = on ? 1 : 0;
+      }
     };
 
     // Selected preview geometry. Scene mode pre-assigns the
@@ -4388,6 +4875,32 @@ const createMtlxRenderView = async ({
       introspected,
       transparent
     }, label);
+
+    // Contact-shadow casters, only when a studioGroup exists
+    // to receive them. Full-scene mode has no catcher, so
+    // `mesh`/sceneGroup meshes there are left untouched.
+    if (studioGroup) {
+      // The whole model casts the contact shadow now: the
+      // MaterialX surface plus, in scene mode, the neutral
+      // glTF parts (same envMapIntensity duck-type as the env-rotation patch above).
+      if (mesh) mesh.castShadow = true;
+      if (sceneGroup) {
+        sceneGroup.traverse(obj => {
+          if (!obj.isMesh || !obj.material) return;
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          if (mats.some(m => 'envMapIntensity' in m)) obj.castShadow = true;
+        });
+      }
+      // Silhouette bottom, not the bounding-sphere bottom:
+      // normalizeGeometry puts sphere at y=-1 but cube at
+      // about y=-0.577, so a fixed floor would leave the cube hovering.
+      let floorY = -1;
+      try {
+        const box = new THREE.Box3().setFromObject(sceneGroup || mesh);
+        if (isFinite(box.min.y)) floorY = box.min.y;
+      } catch (e) {/* degenerate/empty box - keep the -1 fallback */}
+      studioGroup.position.y = floorY;
+    }
 
     // ------------------------------------------------------
     // freePeel — release this view's depth-peel GPU resources
@@ -4826,6 +5339,9 @@ const createMtlxRenderView = async ({
       if (stopped || !aliveFn()) return;
       reqId = requestAnimationFrame(animate);
       if (controls) {
+        // Before update(): OrbitControls clamps phi in there,
+        // so a zoom-out this frame is corrected in the same one.
+        applyStudioPolarClamp();
         controls.update(); // damping + autoRotate
         // Scene-orbit hard containment (null elsewhere):
         // the primary floor/side-wall enforcement, since
@@ -4918,15 +5434,14 @@ const createMtlxRenderView = async ({
         if (makeDefault) controls.saveState();
         return true;
       },
-      // Show/hide the environment map as the visible backdrop
-      // (bgMesh). No-op when there is no env (unlit previews —
-      // bgMesh is null, see its declaration above).
-      setEnvBackground: on => {
-        if (bgMesh) bgMesh.visible = !!on;
-      },
-      // Whether this view HAS an environment to show — lets the
-      // UI hide the toggle for unlit previews instead of
-      // offering a button that can't do anything.
+      // Background switch: 'studio'/'studio-dark' cyclorama /
+      // 'environment' skybox / 'none', see applyBackdrop above.
+      // Live, no view rebuild; setup already ran this once for the `backdrop` option.
+      setBackdrop: mode => applyBackdrop(mode),
+      getBackdrop: () => backdropMode,
+      // Thin aliases kept for existing callers, on/off maps onto
+      // the same two-mode slice of setBackdrop/getBackdrop.
+      setEnvBackground: on => applyBackdrop(on ? 'environment' : 'none'),
       // Pane drags: suspend buffer reallocation so the existing
       // frame just scales, then resync once on release.
       setResizeSuspended: on => {
@@ -4934,6 +5449,9 @@ const createMtlxRenderView = async ({
         resizeSuspended = !!on;
         if (was && !resizeSuspended) syncSizeRef();
       },
+      // Capability, NOT current mode: whether this view has an env
+      // texture to show at all. node-preview/graph preview call it
+      // once at setup to gate the env control. getBackdrop() is state.
       hasEnvBackground: () => !!envBgTexture,
       // Live rotation offset (radians) for the IBL environment —
       // takes effect next frame via uniform mutation, no rebuild.
@@ -4946,6 +5464,10 @@ const createMtlxRenderView = async ({
         // The extracted key light tracks the (clamped) sun's
         // position as the env rotates — rig lights don't.
         updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, rad);
+        // Studio spotlight follows the SAME rotated direction, so
+        // the shadow agrees with the highlight; shadow.autoUpdate
+        // defaults to true, so the shadow map redraws on its own.
+        placeStudioLight();
         // Rotates the visible backdrop mesh to match (a real
         // geometry rotation, not a texture-offset — see bgMesh's
         // declaration above for why offset.x never worked on r128).
@@ -5009,7 +5531,12 @@ const createMtlxRenderView = async ({
         // New env => possibly a new (or no) key light; refresh the
         // bound uniform entry in place, honoring current rotation.
         envKeyLight = env.keyLight || null;
+        envSoftKeyDir = env.softKeyDir || null;
         updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, envRotationRad);
+        // Same refresh for the shadow: without this the studio light
+        // would keep aiming along the PREVIOUS env's key light until
+        // the next rotation change.
+        placeStudioLight();
         // bgMesh is null for previews with no env — guard so
         // an Import/Reset broadcast (setEnvOverride's LIVE_VIEWS
         // loop) can't throw calling this standalone.

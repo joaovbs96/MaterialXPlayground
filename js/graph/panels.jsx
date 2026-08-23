@@ -325,6 +325,7 @@
                         options={COLORSPACES}
                         emptyOption={'(nodedef default' + (inp.defColorspace ? ': ' + inp.defColorspace : '') + ')'}
                         onChange={(v) => { if (onSetColorspace) onSetColorspace(v); }}
+                        defValue={null}
                         size="sm"
                         variant="field"
                         icon="palette"
@@ -378,7 +379,7 @@
                         <MtlxSelect
                             value={sel === -1 ? '' : String(sel)}
                             options={enumOptions}
-                            badges={defIdx !== -1 ? { [String(defIdx)]: 'default' } : undefined}
+                            defValue={defIdx !== -1 ? String(defIdx) : null}
                             onChange={(v) => {
                                 const i = parseInt(v, 10);
                                 if (!isNaN(i)) commitNow(valOf(i));

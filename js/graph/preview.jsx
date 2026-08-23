@@ -498,7 +498,7 @@
             // Geometry is selectable via the Settings popover's MtlxSelect
             // (persisted), not this strip; controls apply live via viewRef.
             const {
-                envBg, toggleEnvBg,
+                backdrop, setBackdrop,
                 envAvail, setEnvAvail,
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
@@ -742,7 +742,7 @@
                                 // buffer stays fixed via the engine's flat2d gate.
                                 sceneOrbit: wantGeom === 'shaderball-scene',
                                 autoRotate: false,
-                                envBackground: envBg,
+                                backdrop,
                                 isMounted: () => mounted,
                                 isActive: () => activeRef.current,
                                 // The shell this builds can outlive THIS run's
@@ -803,6 +803,7 @@
                     options={GRAPH_GEOM_MODES}
                     labels={GRAPH_GEOM_LABELS}
                     badges={GRAPH_GEOM_BADGES}
+                    defValue={null}
                     onChange={setGeomMode}
                     title="Preview geometry"
                     size="sm" block icon="cube" className="flex-1 min-w-0"
@@ -825,13 +826,13 @@
                         (send/colorspace/collapse, then geometry/screenshot/
                         env/settings), one row in fullscreen; see clusters. */}
                     <ViewportControls
-                        envBg={envBg}
-                        onToggleEnvBg={toggleEnvBg}
+                        backdrop={backdrop}
+                        onBackdropChange={setBackdrop}
                         envAvail={envAvail}
-                        // The GLB scene's backdrop box occludes the sky and the
-                        // flat buffer has no backdrop mesh, so the Background
-                        // toggle in the Environment popover is a no-op for those.
-                        showBackgroundToggle={resolvedGeom !== 'shaderball-scene' && resolvedGeom !== 'buffer2d'}
+                        // The GLB scene is an authored room that ignores the
+                        // backdrop entirely, and the flat buffer has no backdrop
+                        // mesh either, so hide the picker for both.
+                        showBackdropPicker={resolvedGeom !== 'shaderball-scene' && resolvedGeom !== 'buffer2d'}
                         viewRef={viewRef}
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}

@@ -42,9 +42,9 @@ const EmbedControls = ({
   showRotate,
   onCameraReset,
   showReset,
-  envBg,
-  onToggleEnvBg,
-  showBackgroundToggle,
+  backdrop,
+  onBackdropChange,
+  showBackdropPicker,
   showEnv,
   initialEnvRotation,
   initialEnvExposure,
@@ -170,14 +170,20 @@ const EmbedControls = ({
     className: "mtlx-ec-icon"
   }), !compact && /*#__PURE__*/React.createElement("span", null, isFullscreen ? 'Exit' : 'Fullscreen'))), openPanel === 'env' && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel"
-  }, showBackgroundToggle && /*#__PURE__*/React.createElement("div", {
+  }, showBackdropPicker && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel-row"
-  }, /*#__PURE__*/React.createElement("span", null, "Background"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: 'mtlx-ec-toggle' + (envBg ? ' is-on' : ''),
-    onClick: onToggleEnvBg,
-    title: envBg ? 'Hide the environment map background' : 'Show the environment map as background'
-  }, envBg ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null, "Backdrop"), /*#__PURE__*/React.createElement("select", {
+    className: "mtlx-ec-select",
+    value: backdrop,
+    onChange: e => onBackdropChange(e.target.value),
+    title: "Studio: a white room. Environment: the HDRI as background. None: a dark void."
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "studio"
+  }, "Studio"), /*#__PURE__*/React.createElement("option", {
+    value: "environment"
+  }, "Environment"), /*#__PURE__*/React.createElement("option", {
+    value: "none"
+  }, "None"))), /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel-row mtlx-ec-panel-row--slider"
   }, /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-slider-label"
