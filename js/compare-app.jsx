@@ -1404,6 +1404,8 @@ function MaterialCompareApp({ active = true } = {}) {
                                     options={['studio', 'environment', 'none']}
                                     labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
                                     onChange={setBackdrop}
+                                    disabled={geom === 'shaderball-scene'}
+                                    title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined}
                                     size="sm"
                                 />
                             </div>

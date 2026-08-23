@@ -1168,6 +1168,8 @@ function MaterialViewerApp({
       none: 'None'
     },
     onChange: setBackdropMode,
+    disabled: roomGeomActive,
+    title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined,
     size: "sm"
   })), /*#__PURE__*/React.createElement(FilePickerField, {
     value: envFileName,

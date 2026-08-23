@@ -2081,7 +2081,8 @@ const getEnvironment = () => {
                 const raw = parseEnvBuffer(buf, ext);
                 if (!raw || !raw.image || !raw.image.data) return null; // parse failed → synthesized sky
                 defaultEnvSource = { buf, ext }; // pristine bytes, for the key-light toggle rebuild
-                return buildEnvFromParsedTexture(raw);
+                const built = buildEnvFromParsedTexture(raw);
+                return built;
             });
     }
     return envPromise;
@@ -2842,6 +2843,10 @@ const STUDIO_PROFILE_STEP = 0.4; // world units between profile points, see getS
 const STUDIO_LIGHT_DISTANCE = 7.5; // fixed light-to-floor-point distance, see placeStudioLight
 const STUDIO_LIGHT_CONE_R = 3; // world-unit radius the spot cone should cover at the floor
 const STUDIO_BACKDROP_OFFSET = 0.02; // world units the backdrop sits behind the shadow catcher
+// LOWER is SOFTER here: r128's PCFSoftShadowMap ignores shadow.radius,
+// so texel size (this map size vs. the fixed cone/floor footprint) is
+// the only softness control the studio light has.
+const STUDIO_SHADOW_MAP_SIZE = 512;
 
 // Shared across every view, built once, never disposed per-view (see
 // disposePartial's studioGroup block below). Only vertical position
@@ -3244,10 +3249,10 @@ const createMtlxRenderView = async ({
                 if (!isMounted()) { disposePartial(); return null; }
                 const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-                // TEMPORARY: how many renderers this canvas has seen. A canvas
-                // has ONE GL context, so a second renderer here inherits the
-                // first one's context, and a disposed predecessor can strand it.
-                try { canvas.__mtlxRendererCount = (canvas.__mtlxRendererCount || 0) + 1; } catch (e) { /* ignore */ }
+                // A reused canvas still carries GL state left by the prior
+                // renderer, but fresh r128 state caches assume defaults, so
+                // leaked blending corrupts the PMREM bake below; resync both.
+                renderer.resetState();
                 // GLOBAL flag keying every lit material's program cache, so set
                 // ONCE here, before any material or PMREM work, and left at the
                 // default (off) for views that never build a studio bowl.
@@ -3646,7 +3651,7 @@ const createMtlxRenderView = async ({
                             // margin either side) instead of the loose 1..14 range.
                             studioLight.shadow.camera.near = STUDIO_LIGHT_DISTANCE - 4;
                             studioLight.shadow.camera.far = STUDIO_LIGHT_DISTANCE + 4;
-                            studioLight.shadow.mapSize.set(2048, 2048);
+                            studioLight.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE, STUDIO_SHADOW_MAP_SIZE);
                             // PCF, not VSM: VSM leans on half-float linear
                             // filtering and stippled the whole frustum on
                             // real hardware. Softness comes from the map size.
@@ -4087,9 +4092,9 @@ const createMtlxRenderView = async ({
                 // to receive them. Full-scene mode has no catcher, so
                 // `mesh`/sceneGroup meshes there are left untouched.
                 if (studioGroup) {
-                    // Only the MaterialX surface casts. The simple GLB's
-                    // neutral parts are left out of the shadow system while
-                    // the black-room bug is still open, see the diag below.
+                    // Only the MaterialX surface casts a contact shadow.
+                    // The simple GLB's neutral parts stay out of the
+                    // shadow system.
                     if (mesh) mesh.castShadow = true;
                     // Silhouette bottom, not the bounding-sphere bottom:
                     // normalizeGeometry puts sphere at y=-1 but cube at
@@ -4101,54 +4106,6 @@ const createMtlxRenderView = async ({
                     } catch (e) { /* degenerate/empty box - keep the -1 fallback */ }
                     studioGroup.position.y = floorY;
                 }
-
-                // TEMPORARY DIAGNOSTIC, remove once the black-room bug is
-                // found. Dumps the lighting inputs the neutral glTF
-                // materials depend on, on every view build.
-                try {
-                    const neutrals = [];
-                    if (sceneGroup) {
-                        sceneGroup.traverse((o) => {
-                            if (o.isMesh && o !== mesh && o.material && 'envMapIntensity' in o.material) {
-                                neutrals.push({
-                                    name: o.name,
-                                    intensity: o.material.envMapIntensity,
-                                    hasEnvMap: !!o.material.envMap,
-                                    visible: o.visible,
-                                    color: o.material.color && o.material.color.getHexString(),
-                                    map: o.material.map ? {
-                                        w: o.material.map.image && o.material.map.image.width,
-                                        h: o.material.map.image && o.material.map.image.height,
-                                        v: o.material.map.version,
-                                    } : null,
-                                });
-                            }
-                        });
-                    }
-                    const envTex = scene.environment;
-                    console.log('[mtlx-studio-diag]', JSON.stringify({
-                        geom: geomName,
-                        sceneMode,
-                        backdrop: backdropMode,
-                        studioGroup: !!studioGroup,
-                        shadowsOn: renderer.shadowMap.enabled,
-                        shadowType: renderer.shadowMap.type,
-                        sceneEnvironment: envTex ? { uuid: envTex.uuid.slice(0, 8), w: envTex.image && envTex.image.width, h: envTex.image && envTex.image.height } : null,
-                        pmremRT: !!pmremRT,
-                        envRadiance: !!envRadiance,
-                        envExposure,
-                        neutralCount: neutrals.length,
-                        neutrals: neutrals.slice(0, 4),
-                        // The load-bearing ones: a PMREM target is GPU-only, so it
-                        // can exist with no content if it lost the renderer that made it.
-                        renderersOnCanvas: canvas.__mtlxRendererCount,
-                        contextLost: renderer.getContext().isContextLost(),
-                        envIsRenderTarget: !!(envTex && envTex.isRenderTargetTexture),
-                        envHasCpuData: !!(envTex && envTex.image && envTex.image.data),
-                        envVersion: envTex && envTex.version,
-                        memory: JSON.parse(JSON.stringify(renderer.info.memory)),
-                    }));
-                } catch (e) { console.log('[mtlx-studio-diag] failed', e && e.message); }
 
                 // ------------------------------------------------------
                 // freePeel — release this view's depth-peel GPU resources
@@ -4613,6 +4570,7 @@ const createMtlxRenderView = async ({
                     console.log('[mtlx-perf] createMtlxRenderView total: '
                         + (performance.now() - __totalPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
                 }
+
         const handle = {
             uniforms, introspected, vs, fs, controls, renderer,
             isTransparent: !!transparent,

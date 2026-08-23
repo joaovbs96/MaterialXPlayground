@@ -924,6 +924,10 @@ const EnvDialog = ({
     anchorRef, open, onClose,
     backdrop, onBackdropChange,
     showBackdropPicker = true,
+    // True while the active geometry is an authored room (e.g.
+    // shaderball-scene) that ignores the backdrop entirely. ViewportControls
+    // computes this from its own `geom` prop, since this dialog has none.
+    backdropDisabled = false,
     rotation, onRotationChange,
     exposure, onExposureChange,
     onImportFile, onReset,
@@ -1015,7 +1019,10 @@ const EnvDialog = ({
                         options={['studio', 'environment', 'none']}
                         labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
                         onChange={onBackdropChange}
-                        title="Studio: a white room. Environment: the HDRI as background. None: a dark void."
+                        disabled={backdropDisabled}
+                        title={backdropDisabled
+                            ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting'
+                            : 'Studio: a white room. Environment: the HDRI as background. None: a dark void.'}
                         size="sm" block
                     />
                 </div>
@@ -1404,6 +1411,10 @@ const ViewportControls = ({
     clusterClassName = 'flex items-center gap-1',
 }) => {
     const envBtnRef = React.useRef(null);
+    // Std. Shader Ball w/ Backdrop is an authored room that ignores the
+    // backdrop setting. EnvDialog has no geom of its own, so this is
+    // derived here (from the geom prop this strip already receives).
+    const backdropDisabled = geom === 'shaderball-scene';
     // Spans the full strip width (which spans the panel in the graph
     // preview's docked layout), approximating the PANEL's left edge — used
     // by EnvDialog's placement="left" to clear the whole panel.
@@ -1543,6 +1554,7 @@ const ViewportControls = ({
                                 backdrop={backdrop}
                                 onBackdropChange={onBackdropChange}
                                 showBackdropPicker={showBackdropPicker}
+                                backdropDisabled={backdropDisabled}
                                 rotation={envRotation}
                                 onRotationChange={(deg) => {
                                     setEnvRotation(deg);
