@@ -831,8 +831,8 @@
                 () => !!(window.getForceTransparency && window.getForceTransparency())
             );
 
-            // Environment card state (browser only): envBg stays the
-            // existing hook state above; rotation/exposure live here since
+            // Environment card state (browser only): the backdrop mode stays
+            // the existing hook state above; rotation/exposure live here since
             // the HUD's env cluster is gone in the browser.
             const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1 });
             const [envImportError, setEnvImportError] = React.useState(null);
@@ -1096,10 +1096,16 @@
                             onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                             onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                         />
-                        <label className="flex items-center justify-between cursor-pointer">
-                            <span className="text-xs font-medium text-gray-400">Show environment as background</span>
-                            <Toggle checked={envBg} onChange={() => toggleEnvBg()} />
-                        </label>
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                            <MtlxSelect
+                                value={backdropMode}
+                                options={['studio', 'environment', 'none']}
+                                labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                                onChange={setBackdropMode}
+                                size="sm"
+                            />
+                        </div>
                         <FilePickerField
                             value={envFileName}
                             placeholder="Default environment"
@@ -1258,8 +1264,6 @@
                                         // Env cluster moved into the sidebar's Environment card in
                                         // the browser; VS Code keeps the HUD's own env popover.
                                         envAvail={IN_VSCODE}
-                                        envBg={envBg}
-                                        onToggleEnvBg={toggleEnvBg}
                                         backdrop={backdropMode}
                                         onBackdropChange={setBackdropMode}
                                         viewRef={viewRef}

@@ -892,8 +892,8 @@ function MaterialViewerApp({
   // the old HUD settings popover's only built-in block.
   const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
 
-  // Environment card state (browser only): envBg stays the
-  // existing hook state above; rotation/exposure live here since
+  // Environment card state (browser only): the backdrop mode stays
+  // the existing hook state above; rotation/exposure live here since
   // the HUD's env cluster is gone in the browser.
   const [envUI, setEnvUI] = React.useState({
     rotation: 0,
@@ -1155,13 +1155,20 @@ function MaterialViewerApp({
     step: EV_STEP,
     onSlider: v => setEnvExposureVal(evToLinear(v)),
     onNumber: v => setEnvExposureVal(evToLinear(v))
-  }), /*#__PURE__*/React.createElement("label", {
-    className: "flex items-center justify-between cursor-pointer"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-medium text-gray-400"
-  }, "Show environment as background"), /*#__PURE__*/React.createElement(Toggle, {
-    checked: envBg,
-    onChange: () => toggleEnvBg()
+  }, "Backdrop"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: backdropMode,
+    options: ['studio', 'environment', 'none'],
+    labels: {
+      studio: 'Studio',
+      environment: 'Environment',
+      none: 'None'
+    },
+    onChange: setBackdropMode,
+    size: "sm"
   })), /*#__PURE__*/React.createElement(FilePickerField, {
     value: envFileName,
     placeholder: "Default environment",
@@ -1305,8 +1312,6 @@ function MaterialViewerApp({
     // the browser; VS Code keeps the HUD's own env popover.
     ,
     envAvail: IN_VSCODE,
-    envBg: envBg,
-    onToggleEnvBg: toggleEnvBg,
     backdrop: backdropMode,
     onBackdropChange: setBackdropMode,
     viewRef: viewRef,
