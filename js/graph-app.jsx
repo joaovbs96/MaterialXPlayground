@@ -5197,6 +5197,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     options={mtlxPaths}
                                     placeholder={'Pick a .mtlx…'}
                                     onChange={(path) => confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); })}
+                                    defValue={null}
                                     title="Which .mtlx document to display"
                                     size="md"
                                     className="max-w-[10rem] md:max-w-[14rem] shrink-0"
@@ -5412,6 +5413,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     options={nodegraphs}
                                     emptyOption="(document root)"
                                     onChange={changeScope}
+                                    defValue={null}
                                     // Keyboard shortcuts like Backspace must go back to
                                     // the canvas, not the control, once a scope is picked.
                                     commitFocus="none"
@@ -5540,6 +5542,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             value={docColorspace}
                                             options={COLORSPACES}
                                             emptyOption="(doc colorspace)"
+                                            defValue={null}
                                             onChange={(v) => {
                                                 setDocColorspace(v);
                                                 if (v) mxSafe(() => { parsed.doc.setColorSpace(v); return true; }, false);

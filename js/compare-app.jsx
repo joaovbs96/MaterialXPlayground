@@ -258,6 +258,9 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                 // never flashes the default rotation/exposure for a frame.
                 if (view.setEnvRotation) view.setEnvRotation(envUIRef.current.rotation * Math.PI / 180);
                 if (view.setEnvExposure) view.setEnvExposure(envUIRef.current.exposure);
+                // Backdrop too: a switch made while this build was in
+                // flight landed on the disposed predecessor, not on us.
+                if (view.setBackdrop) view.setBackdrop(envUIRef.current.backdrop);
                 slot.viewRef.current = view;
                 // Adopt the surviving peer's camera framing, never the
                 // reverse — the fresh view matches whatever's on screen.
@@ -448,10 +451,9 @@ function MaterialCompareApp({ active = true } = {}) {
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     const [geom, setGeom] = React.useState('shaderball-scene');
-    // Deliberate exception to the engine's 'studio' default: this is the
-    // only page that starts with the environment shown as the backdrop,
-    // since side-by-side comparison reads best against the real HDRI.
-    const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'environment' });
+    // 'studio' matches the sitewide default (js/viewer-app.jsx and
+    // EnvDialog); the room geometry above disables the picker anyway.
+    const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'studio' });
     const [envImportError, setEnvImportError] = React.useState(null);
     const [envFileName, setEnvFileName] = React.useState('');
     // Backs the Rendering card's transparency-forcing toggle: local mirror
@@ -578,7 +580,6 @@ function MaterialCompareApp({ active = true } = {}) {
     const mtlxDefaultVersion = window.MtlxAssets.MTLX_DEFAULT_VERSION;
     const versionLabels = {};
     mtlxVersions.forEach((v) => { versionLabels[v] = v; });
-    const versionBadges = { [mtlxDefaultVersion]: 'Default' };
     // Narrow popover: rows are just a version string + Default badge,
     // nowhere near MtlxSelect's default badge width (long geo labels).
     const VERSION_POP_W = 144;
@@ -693,14 +694,19 @@ function MaterialCompareApp({ active = true } = {}) {
         setEnvOverride(null);
         setEnvImportError(null);
         setEnvFileName('');
-        // Same deliberate exception as the initial state above: Reset
-        // restores 'environment', not the engine's 'studio' default.
-        setEnvUI({ rotation: 0, exposure: 1, backdrop: 'environment' });
+        // Back to the sitewide 'studio' default. Goes through setBackdrop
+        // so the live views follow the dropdown.
+        setBackdrop('studio');
+        setEnvUI((s) => ({ ...s, rotation: 0, exposure: 1 }));
         [slotA.viewRef.current, slotB.viewRef.current].forEach((v) => {
             if (!v) return;
             if (v.setEnvRotation) v.setEnvRotation(0);
             if (v.setEnvExposure) v.setEnvExposure(1.0);
         });
+        // Key light back to the engine default (on). Guarded: the setter
+        // rebuilds the active environment, so only call it when off.
+        if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+        setKeyLightOn(true);
         statsDirtyRef.current = true; diffDirtyRef.current = true;
     };
 
@@ -758,6 +764,20 @@ function MaterialCompareApp({ active = true } = {}) {
         return () => handles.forEach((h) => h.controls.removeEventListener('change', onChange));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slotA.viewEpoch, slotB.viewEpoch]);
+
+    // Force Transparency swaps each view's render pipeline in place (no
+    // viewEpoch bump), so nothing above sees it. mtlx-engine.js dispatches
+    // this event from setForceTransparency; the 200ms ticker below already
+    // gives both views time to repaint before it recomputes.
+    React.useEffect(() => {
+        const onSettingsChanged = (e) => {
+            if (!e.detail || e.detail.key !== 'forceTransparency') return;
+            statsDirtyRef.current = true;
+            diffDirtyRef.current = true;
+        };
+        window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+        return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+    }, []);
 
     // Stage resizes also invalidate the last computed stats.
     React.useEffect(() => {
@@ -1041,7 +1061,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             value={slot.version}
                             options={mtlxVersions}
                             labels={versionLabels}
-                            badges={versionBadges}
+                            defValue={mtlxDefaultVersion}
                             disabledOptions={versionDisabledOptions}
                             titles={versionTitles}
                             popWidth={VERSION_POP_W}
@@ -1083,6 +1103,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         options={slot.mtlxPaths}
                         placeholder={'Pick a .mtlx…'}
                         onChange={(v) => { slot.setChosenMtlx(v); slot.loadDocument(v); }}
+                        defValue={null}
                         size="lg"
                         variant="field"
                         block
@@ -1102,6 +1123,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 const preset = window.MTLX_PRESETS.find((p) => p.path === path);
                                 if (preset) loadPresetIntoSlot(slot, slotKey, preset);
                             }}
+                            defValue={null}
                             size="lg"
                             variant="field"
                             block
@@ -1113,6 +1135,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         value={slot.chosenMat}
                         options={slot.renderables.map((r, i) => ({ value: i, label: r.name }))}
                         onChange={slot.setChosenMat}
+                        defValue={null}
                         size="lg"
                         variant="field"
                         block
@@ -1437,6 +1460,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     options={['studio', 'studio-dark', 'environment', 'none']}
                                     labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
                                     onChange={setBackdrop}
+                                    defValue="studio"
                                     disabled={geom === 'shaderball-scene'}
                                     title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined}
                                     size="sm"

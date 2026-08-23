@@ -701,6 +701,7 @@ function ShaderExportDialog({
       label: t.label
     })),
     onChange: setTargetKey,
+    defValue: null,
     size: "md",
     variant: "toolbar",
     font: "mono",
@@ -714,6 +715,7 @@ function ShaderExportDialog({
       label: r.name
     })),
     onChange: setMatIndex,
+    defValue: null,
     size: "md",
     variant: "toolbar",
     font: "mono",
@@ -1102,6 +1104,15 @@ const EnvDialog = ({
     if (keyLightAvail) window.setKeyLightEnabled(next);
   };
 
+  // Reset also puts the key light back on (the engine default), guarded
+  // since the setter rebuilds the active environment; the rest of the
+  // reset (override/rotation/exposure/backdrop) is the caller's onReset.
+  const handleResetClick = () => {
+    if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+    setKeyLightOn(true);
+    onReset();
+  };
+
   // Right-align to the anchor and clamp both axes, flipping above if it
   // would overflow the bottom. `placement="left"` (graph preview only)
   // anchors to the panel's left edge instead of dropping on the canvas.
@@ -1179,6 +1190,7 @@ const EnvDialog = ({
       none: 'None'
     },
     onChange: onBackdropChange,
+    defValue: "studio",
     disabled: backdropDisabled,
     title: backdropDisabled ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : 'Studio: a white room. Environment: the HDRI as background. None: a dark void.',
     size: "sm",
@@ -1215,7 +1227,7 @@ const EnvDialog = ({
     onChange: e => onExposureChange(evToLinear(e.target.value)),
     className: "w-full accent-blue-500"
   })), /*#__PURE__*/React.createElement("button", {
-    onClick: onReset,
+    onClick: handleResetClick,
     className: "w-full h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
   }, "Reset")), fullscreenPortalRoot());
 };
@@ -1654,12 +1666,16 @@ const ViewportControls = ({
     setEnvFileName('');
     setEnvRotation(0);
     setEnvExposure(1.0);
+    // Backdrop back to the sitewide 'studio' default, when this
+    // caller wired a controlled backdrop (graph editor / node previews).
+    if (onBackdropChange) onBackdropChange('studio');
     if (viewRef && viewRef.current) {
       if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
       if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
     }
-    // Background show/hide toggle deliberately left as-is (Reset only
-    // touches rotation/exposure/override, per spec).
+    // Background show/hide toggle deliberately left as-is; Reset now
+    // also covers backdrop and key light, in addition to
+    // rotation/exposure/override.
   };
 
   // When labels are shown the strip is wider, so let it wrap to a second
@@ -1680,6 +1696,7 @@ const ViewportControls = ({
           options: geomList,
           labels: GEOM_LABELS,
           badges: geomBadges,
+          defValue: null,
           onChange: onGeomChange,
           title: "Preview geometry",
           size: selectSize
@@ -2226,6 +2243,9 @@ const selectThemeStyle = theme => {
   return out;
 };
 
+// `dots`: optional { value: CSS color string }, rendered as a small
+// round swatch before that option's label, on both the ROW and the
+// closed trigger (once it's the selected value).
 // `badges`: optional { value: text | { text, tone } }, rendered as a
 // small pill after that option's ROW label. Tone comes from this map
 // (warn = amber, else neutral gray) unless the badge itself overrides it.
@@ -2268,25 +2288,32 @@ const SELECT_VARIANT_CLS = {
 };
 
 // Normalizes `options` (string[], unchanged, or object-form entries)
-// into one shape. Top-level icons/titles/disabledOptions/badges maps
-// fill in per-value data when an entry doesn't already carry its own.
+// into one shape. Top-level icons/titles/disabledOptions/badges/dots
+// maps fill in per-value data when an entry doesn't already carry its own.
+// `defValue` auto-badges its matching option 'default'; an explicit
+// per-option badge or `badges` map entry for that value wins over it.
 const normalizeSelectOptions = (options, labels, extras) => {
   const {
     icons,
     titles,
     disabledOptions,
-    badges
+    badges,
+    dots,
+    defValue
   } = extras || {};
   const disabledSet = Array.isArray(disabledOptions) ? new Set(disabledOptions) : disabledOptions;
   const isDisabledValue = v => !!(disabledSet && (disabledSet instanceof Set ? disabledSet.has(v) : disabledSet[v]));
   return (options || []).map(o => {
     const isObj = o !== null && typeof o === 'object';
     const value = isObj ? o.value : o;
+    const explicitBadge = isObj && o.badge != null ? o.badge : badges && badges[value];
+    const autoBadge = explicitBadge == null && defValue != null && value === defValue ? 'default' : undefined;
     return {
       value,
       label: isObj && o.label != null ? o.label : labels[value] || value,
       icon: isObj && o.icon || icons && icons[value] || undefined,
-      badge: resolveSelectBadge(isObj && o.badge != null ? o.badge : badges && badges[value]),
+      badge: resolveSelectBadge(explicitBadge != null ? explicitBadge : autoBadge),
+      dot: (isObj && o.dot != null ? o.dot : dots && dots[value]) || undefined,
       title: isObj && o.title || titles && titles[value] || undefined,
       disabled: !!(isObj && o.disabled || isDisabledValue(value))
     };
@@ -2297,6 +2324,8 @@ const MtlxSelect = ({
   options,
   labels = {},
   badges,
+  dots,
+  defValue,
   onChange,
   title,
   className,
@@ -2318,6 +2347,16 @@ const MtlxSelect = ({
   ariaLabel,
   align
 }) => {
+  // `defValue`: the value that's this select's real default, badged
+  // automatically; pass `null` to declare no default exists. Omitting
+  // the prop is treated as a bug, so it warns once per mount instead.
+  React.useEffect(() => {
+    if (defValue === undefined) {
+      const vals = (options || []).map(o => o !== null && typeof o === 'object' ? o.value : o);
+      console.warn('MtlxSelect: defValue omitted for options [' + vals.join(', ') + ']. Pass a real defValue or defValue={null} when there is no default.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState(null);
   const [hi, setHi] = React.useState(0);
@@ -2341,7 +2380,9 @@ const MtlxSelect = ({
       icons,
       titles,
       disabledOptions,
-      badges
+      badges,
+      dots,
+      defValue
     });
     if (!emptyOption) return base;
     // A real, selectable "back to default" row (value ''), distinct
@@ -2352,10 +2393,11 @@ const MtlxSelect = ({
       label: emptyLabel,
       icon: undefined,
       badge: null,
+      dot: undefined,
       title: undefined,
       disabled: false
     }].concat(base);
-  }, [options, labels, icons, titles, disabledOptions, badges, emptyOption, placeholder]);
+  }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder]);
 
   // Wider popover when badge pills share the rows with the labels,
   // unless the caller knows its content is narrower and overrides it.
@@ -2665,6 +2707,11 @@ const MtlxSelect = ({
     })), o.icon && /*#__PURE__*/React.createElement(MtlxIcon, {
       name: o.icon,
       className: "w-3.5 h-3.5 flex-none"
+    }), o.dot && /*#__PURE__*/React.createElement("span", {
+      className: "w-2 h-2 rounded-full inline-block shrink-0",
+      style: {
+        backgroundColor: o.dot
+      }
     }), /*#__PURE__*/React.createElement("span", {
       className: "flex-1 truncate"
     }, o.label), o.badge && /*#__PURE__*/React.createElement("span", {
@@ -2693,6 +2740,11 @@ const MtlxSelect = ({
   }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
     name: icon,
     className: "w-3.5 h-3.5 flex-none"
+  }), !showPlaceholder && selected && selected.dot && /*#__PURE__*/React.createElement("span", {
+    className: "w-2 h-2 rounded-full inline-block shrink-0",
+    style: {
+      backgroundColor: selected.dot
+    }
   }), /*#__PURE__*/React.createElement("span", {
     className: "truncate",
     style: {

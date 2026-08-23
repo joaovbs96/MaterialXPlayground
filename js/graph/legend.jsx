@@ -14,13 +14,21 @@
 // embedding this legend must carry those rules itself; do not
 // duplicate them into a stylesheet.
 
-        // Every type used anywhere in the given nodes: port types (data.inputs/
-        // data.outputs), plus 'nodegraph'/'node' when a node's header dot
-        // (getNodeColor) falls back to that kind color, deduped and alphabetized.
+        // Every type used anywhere in the given nodes: each node's own
+        // type attribute (data.type, e.g. 'multioutput' on stdlib
+        // translation nodes), every port type (data.inputs/data.outputs),
+        // plus 'nodegraph'/'node' when a node's header dot (getNodeColor)
+        // falls back to that kind color, deduped and alphabetized.
         function legendTypesFor(nodes) {
             const s = new Set();
             for (const n of nodes) {
                 const d = n.data || {};
+
+                // The node's own type attribute drives its header dot
+                // color (getNodeColor case 2); census it directly so
+                // e.g. multioutput nodes show up even with no synthetic
+                // 'multioutput' port left on data.outputs.
+                if (d.type) s.add(d.type);
 
                 // Scan every input/output port's type
                 for (const p of (d.inputs || [])) if (p.type) s.add(p.type);

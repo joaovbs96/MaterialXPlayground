@@ -310,6 +310,10 @@ function MaterialViewerApp({
     // is resolved against `transparent` first (resolveViewerBackdrop
     // above), same as the geometry resolution at mount.
   } = useViewportControls(viewRef, viewportRef, getSnapshotBase, autoRotate, envBackground, resolveViewerBackdrop(backdrop, transparent));
+  // Read fresh after async view builds: a backdrop switch made
+  // mid-build would otherwise land on the disposed predecessor.
+  const backdropModeRef = React.useRef(backdropMode);
+  backdropModeRef.current = backdropMode;
   // Live transparent toggle for the backdrop: mirrors the geometry
   // effect above, but only ever forces the backdrop to 'none' -
   // it never touches geom.
@@ -631,9 +635,6 @@ function MaterialViewerApp({
   mtlxVersions.forEach(v => {
     versionLabels[v] = v;
   });
-  const versionBadges = {
-    [mtlxDefaultVersion]: 'Default'
-  };
   // Narrow popover: rows are just a version string + Default badge,
   // nowhere near MtlxSelect's default badge width (long geo labels).
   const VERSION_POP_W = 144;
@@ -845,6 +846,7 @@ function MaterialViewerApp({
           return;
         }
         viewRef.current = view;
+        if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
         // Initial env rotation/exposure controlled props —
         // applied once per (re)build, same as autoRotate/
         // envBackground above. Live updates after this point
@@ -957,6 +959,14 @@ function MaterialViewerApp({
       rotation: 0,
       exposure: 1
     });
+    // Backdrop back to the sitewide default too, still resolved
+    // against `transparent` so a transparent page keeps 'none'.
+    setBackdropMode(resolveViewerBackdrop('studio', transparent));
+    // Key light back to the engine default (on). Guarded: the
+    // setter rebuilds the active environment, so only call it
+    // when the light is actually off.
+    if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
+    setKeyLightOn(true);
     if (viewRef.current) {
       if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
       if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
@@ -1072,7 +1082,7 @@ function MaterialViewerApp({
     value: version,
     options: mtlxVersions,
     labels: versionLabels,
-    badges: versionBadges,
+    defValue: mtlxDefaultVersion,
     disabledOptions: versionDisabledOptions,
     titles: versionTitles,
     popWidth: VERSION_POP_W,
@@ -1095,6 +1105,7 @@ function MaterialViewerApp({
       setChosenMtlx(v);
       loadDocument(v);
     },
+    defValue: null,
     size: "lg",
     variant: "field",
     block: true
@@ -1116,6 +1127,7 @@ function MaterialViewerApp({
       const preset = window.MTLX_PRESETS.find(p => p.path === path);
       if (preset) loadPreset(preset);
     },
+    defValue: null,
     size: "lg",
     variant: "field",
     block: true
@@ -1131,6 +1143,7 @@ function MaterialViewerApp({
       label: r.name
     })),
     onChange: setChosenMat,
+    defValue: null,
     size: "lg",
     variant: "field",
     block: true
@@ -1198,6 +1211,7 @@ function MaterialViewerApp({
       none: 'None'
     },
     onChange: setBackdropMode,
+    defValue: "studio",
     disabled: roomGeomActive,
     title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined,
     size: "sm"
@@ -1407,6 +1421,7 @@ function MaterialViewerApp({
       label: r.name
     })),
     onChange: setChosenMat,
+    defValue: null,
     title: "Material to display",
     size: "sm",
     variant: "toolbar"

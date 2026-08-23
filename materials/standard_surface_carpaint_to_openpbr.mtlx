@@ -23,7 +23,6 @@
     <input name="specular_roughness" type="float" nodename="carpaint_to_openpbr" output="specular_roughness_out" />
     <input name="specular_ior" type="float" nodename="carpaint_to_openpbr" output="specular_ior_out" />
     <input name="specular_roughness_anisotropy" type="float" nodename="carpaint_to_openpbr" output="specular_roughness_anisotropy_out" />
-    <input name="transmission_weight" type="float" nodename="carpaint_to_openpbr" output="transmission_weight_out" />
     <input name="transmission_color" type="color3" nodename="carpaint_to_openpbr" output="transmission_color_out" />
     <input name="transmission_depth" type="float" nodename="carpaint_to_openpbr" output="transmission_depth_out" />
     <input name="transmission_scatter" type="color3" nodename="carpaint_to_openpbr" output="transmission_scatter_out" />
@@ -48,7 +47,6 @@
     <input name="thin_film_ior" type="float" nodename="carpaint_to_openpbr" output="thin_film_ior_out" />
     <input name="emission_luminance" type="float" nodename="carpaint_to_openpbr" output="emission_luminance_out" />
     <input name="emission_color" type="color3" nodename="carpaint_to_openpbr" output="emission_color_out" />
-    <input name="geometry_opacity" type="float" nodename="carpaint_to_openpbr" output="geometry_opacity_out" />
     <input name="geometry_thin_walled" type="boolean" nodename="carpaint_to_openpbr" output="geometry_thin_walled_out" />
   </open_pbr_surface>
   <surfacematerial name="Car_Paint_OpenPBR" type="material">

@@ -200,13 +200,13 @@
                         const h = block.match(SUBHEADING_RE);
                         if (h) {
                             return (
-                                <h4 key={i} className="text-sm font-semibold text-gray-200 uppercase tracking-wider mt-5 mb-2">
+                                <h4 key={i} className="text-xs font-semibold text-gray-200 uppercase tracking-wider mt-5 mb-2">
                                     {h[1]}
                                 </h4>
                             );
                         }
                         return (
-                            <p key={i} className="mb-3">
+                            <p key={i} className="text-sm leading-6 text-gray-400 mb-3">
                                 <MathText text={block} refs={refs} />
                             </p>
                         );

@@ -540,6 +540,13 @@
             const sigCount = sigGroups.length;
             const sig = Math.min(sigIndex, Math.max(sigCount - 1, 0));
             const selectedGroup = sigGroups[sig] || null;
+            // Signature select dots: one color per option index, off the
+            // same output type the option's label already shows.
+            const sigDots = React.useMemo(() => {
+                const map = {};
+                sigGroups.forEach((g, i) => { map[i] = typeColor(g.type); });
+                return map;
+            }, [sigGroups]);
             // Which table(s) to render — see resolveDisplayTables above
             // for the full selection rules.
             const displayTables = React.useMemo(
@@ -558,6 +565,9 @@
             const versionIdx = selectedGroup
                 ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
             const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
+            // Index of the nodedef's own default version, for the version
+            // picker's automatic 'default' badge (MtlxSelect's defValue).
+            const defaultVersionIdx = selectedGroup ? selectedGroup.versions.findIndex((v) => v.isDefaultVersion) : -1;
             // Markdown tables carry only ONE signature's port rows, so once
             // several exist, the selected version's live type/default data
             // must be projected onto them, or a picked signature shows stale data.
@@ -711,7 +721,18 @@
                                             <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300 mb-1">
                                                 {selectedNode.lib}<span className="text-gray-600">/</span><span className="text-gray-400">{selectedNode.group}</span>
                                             </div>
-                                            <h2 className="text-xl sm:text-3xl font-bold text-white font-mono tracking-[-0.01em] break-words min-w-0">{selectedNode.name}</h2>
+                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-white font-mono tracking-[-0.01em] min-w-0">
+                                                <span
+                                                    className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 rounded-full shrink-0"
+                                                    style={{ backgroundColor: typeColor(previewType) }}
+                                                />
+                                                <span className="break-words min-w-0">
+                                                    {selectedNode.name}
+                                                    {previewType && (
+                                                        <span className="text-base sm:text-xl font-normal text-gray-400"> ({previewType})</span>
+                                                    )}
+                                                </span>
+                                            </h2>
                                             <div className="flex items-center gap-2 flex-wrap mt-2">
                                                 {selectedNode.info.section && (
                                                     <span className="inline-flex items-center h-6 px-2 rounded-md border border-gray-700 bg-gray-800/60 text-[11px] font-medium text-gray-400">
@@ -788,7 +809,9 @@
                                                                         const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
                                                                         return { value: i, label: (i + 1) + ' / ' + sigCount + (l ? ' - ' + l : '') };
                                                                     })}
+                                                                    dots={sigDots}
                                                                     onChange={setSigIndex}
+                                                                    defValue={null}
                                                                     title="This node has several signatures - pick which one to document and preview"
                                                                     ariaLabel="Signature"
                                                                     font="mono"
@@ -807,9 +830,10 @@
                                                                     value={versionIdx}
                                                                     options={selectedGroup.versions.map((v, i) => ({
                                                                         value: i,
-                                                                        label: (v.version || '?') + (v.isDefaultVersion ? ' (default)' : ''),
+                                                                        label: v.version || '?',
                                                                     }))}
                                                                     onChange={setVersionIndex}
+                                                                    defValue={defaultVersionIdx !== -1 ? defaultVersionIdx : null}
                                                                     title="This node has several nodedef versions - same ports, different defaults"
                                                                     ariaLabel="Version"
                                                                     font="mono"
@@ -870,7 +894,7 @@
                                             <RichBlocks
                                                 text={selectedNode.info.description}
                                                 refs={refs}
-                                                className="text-gray-300 leading-relaxed mb-8 text-base sm:text-lg"
+                                                className="mb-8"
                                             />
                                         )}
 
@@ -897,7 +921,7 @@
                                             <RichBlocks
                                                 text={selectedNode.info.notes}
                                                 refs={refs}
-                                                className="text-gray-300 leading-relaxed mt-8 pt-6 border-t border-gray-700"
+                                                className="mt-8 pt-6 border-t border-gray-700"
                                             />
                                         )}
 

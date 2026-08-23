@@ -3431,6 +3431,33 @@ uniform vec3 uStop2;
 uniform vec3 uStop3;
 uniform vec3 uHotspotColor;
 uniform float uHotspotA;
+uniform float uLinearOut;
+
+vec3 srgbToLinear(vec3 c) {
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.04045))));
+}
+
+// Exact inverse of ACES_SRGB_GLSL (mtlx-engine.js): sRGB OETF^-1, acesOut^-1,
+// invert the per-channel Hill-fit rational (positive quadratic root),
+// acesInInv, then undo the /0.6 exposure scale.
+vec3 inverseAcesSrgb(vec3 col) {
+    const mat3 acesInInv = mat3(
+        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),
+        vec3(-0.08896329, -0.01322366, 1.19877327)
+    );
+    const mat3 acesOutInv = mat3(
+        vec3(0.64303825, 0.05926869, 0.00596190), vec3(0.31118675, 0.93143649, 0.06392902),
+        vec3(0.04577546, 0.00929492, 0.93011838)
+    );
+    vec3 y = acesOutInv * srgbToLinear(col);
+    vec3 qa = vec3(1.0) - 0.983729 * y;
+    vec3 qb = vec3(0.0245786) - 0.4329510 * y;
+    vec3 qc = vec3(-0.000090537) - 0.238081 * y;
+    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);
+    return (acesInInv * x) * 0.6;
+}
 
 void main() {
     // The old CanvasTexture's flipY made uv.y=1 the canvas top, so this
@@ -3452,6 +3479,11 @@ void main() {
     // Breaks 8-bit banding on the shallow ramp.
     float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     col += (n - 0.5) * (1.5 / 255.0);
+
+    // Peel composite applies ACES filmic then sRGB (ACES_SRGB_GLSL), so
+    // pre-apply that composite's exact inverse to stay tone-map-exempt
+    // and land back on this same display color once composited.
+    if (uLinearOut > 0.5) col = inverseAcesSrgb(col);
 
     gl_FragColor = vec4(col, 1.0);
 }
@@ -4315,6 +4347,9 @@ const createMtlxRenderView = async ({
               },
               uHotspotA: {
                 value: 0
+              },
+              uLinearOut: {
+                value: 0
               }
             },
             vertexShader: STUDIO_GRADIENT_VERTEX_SHADER,
@@ -4428,6 +4463,11 @@ const createMtlxRenderView = async ({
         m.toneMapped = !on;
         m.needsUpdate = true;
       });
+      // Raw ShaderMaterial ignores toneMapped and RT encoding,
+      // so the linear pass needs an explicit flag.
+      if (studioMesh && studioMesh.material && studioMesh.material.uniforms && studioMesh.material.uniforms.uLinearOut) {
+        studioMesh.material.uniforms.uLinearOut.value = on ? 1 : 0;
+      }
     };
 
     // Selected preview geometry. Scene mode pre-assigns the

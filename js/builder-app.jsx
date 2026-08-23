@@ -1355,6 +1355,7 @@ function BuilderApp({ active } = {}) {
                         options={window.MTLX_PRESETS.map((p) => ({ value: window.MTLX_PRESETS_BASE + p.path, label: p.label }))}
                         placeholder="Choose a curated example"
                         onChange={handlePresetPick}
+                        defValue={null}
                         size="lg"
                         variant="field"
                         block
@@ -1371,6 +1372,7 @@ function BuilderApp({ active } = {}) {
                         disabled={renderables.length < 2}
                         icon={renderables.length < 2 ? 'lock' : undefined}
                         onChange={(v) => patch({ material: v })}
+                        defValue={null}
                         size="lg"
                         variant="field"
                         block
@@ -1384,6 +1386,7 @@ function BuilderApp({ active } = {}) {
                             value={version}
                             options={BUILDER_VERSIONS}
                             onChange={(v) => patch({ version: v })}
+                            defValue={BUILDER_DEFAULT_VERSION || null}
                             size="lg"
                             variant="field"
                             block
@@ -1457,6 +1460,7 @@ function BuilderApp({ active } = {}) {
                         options={['studio', 'studio-dark', 'environment', 'none']}
                         labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
                         onChange={(v) => patch({ backdrop: v })}
+                        defValue={BUILDER_DEFAULTS.backdrop}
                         disabled={backdropPickerDisabled}
                         size="sm"
                     />

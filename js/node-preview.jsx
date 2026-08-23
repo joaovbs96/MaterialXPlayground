@@ -1451,12 +1451,12 @@
                 if (p.type === 'string' && p.options && p.options.length) {
                     // p.def is the NODEDEF default (read off the nodedef's
                     // own input, never the live edit): badge it, not `cur`.
-                    const defBadge = p.options.indexOf(p.def) !== -1 ? { [p.def]: 'default' } : undefined;
+                    const defOptVal = p.options.indexOf(p.def) !== -1 ? p.def : null;
                     return (
                         <MtlxSelect
                             value={String(cur)}
                             options={p.options}
-                            badges={defBadge}
+                            defValue={defOptVal}
                             onChange={(v) => onParamChange(p, v)}
                             disabled={loading}
                             size="sm"
@@ -1490,7 +1490,7 @@
                         <MtlxSelect
                             value={selIdx}
                             options={p.enumNames.map((nm, i) => ({ value: i, label: nm }))}
-                            badges={defIdx !== -1 ? { [defIdx]: 'default' } : undefined}
+                            defValue={defIdx !== -1 ? defIdx : null}
                             onChange={(i) => onParamChange(p, valOf(i))}
                             disabled={loading}
                             size="sm"
@@ -1524,6 +1524,7 @@
                                     options={COLORSPACES}
                                     emptyOption={'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}
                                     onChange={(v) => onColorspacePick(p, v)}
+                                    defValue={null}
                                     disabled={loading}
                                     size="sm"
                                     variant="field"
@@ -1621,6 +1622,7 @@
                                         options={COLORSPACES}
                                         emptyOption={'(nodedef default' + (p.colorspace ? ': ' + p.colorspace : '') + ')'}
                                         onChange={(v) => onColorspacePick(p, v)}
+                                        defValue={null}
                                         disabled={loading}
                                         size="sm"
                                         variant="field"
@@ -1850,6 +1852,7 @@
                                     options={['default'].concat(PREVIEW_GEOM_LIST)}
                                     labels={GEOM_LABELS}
                                     badges={GEOM_BADGES}
+                                    defValue={null}
                                     onChange={setGeomChoice}
                                     title="Preview geometry"
                                     size="md" variant="plain" className="absolute top-2 left-2 z-20"

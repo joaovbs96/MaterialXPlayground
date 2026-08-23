@@ -803,6 +803,7 @@
                     options={GRAPH_GEOM_MODES}
                     labels={GRAPH_GEOM_LABELS}
                     badges={GRAPH_GEOM_BADGES}
+                    defValue={null}
                     onChange={setGeomMode}
                     title="Preview geometry"
                     size="sm" block icon="cube" className="flex-1 min-w-0"
