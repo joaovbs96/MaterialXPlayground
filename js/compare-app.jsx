@@ -15,6 +15,11 @@ const COMPARE_SIDEBAR_INSET = 320;
 // markers on document labels/pills across the stage and sidebar cards.
 const SLOT_COLORS = { A: '#60a5fa', B: '#fbbf24' };
 
+// Mirrors mtlx-ui.jsx's private SectionCard-only CARD_SURFACE (not
+// exported to window) so the pinned Statistics panel matches the same
+// card background family without editing that shared file.
+const STATS_PANEL_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
+
 // Example pair: the Standard Surface carpaint preset vs a repo-local doc
 // that feeds the same values through the stdlib translation graph into
 // open_pbr_surface (see materials/standard_surface_carpaint_to_openpbr.mtlx).
@@ -449,6 +454,7 @@ function MaterialCompareApp({ active = true } = {}) {
     const swipeDiffPosRef = React.useRef(swipeDiffPos);
     swipeDiffPosRef.current = swipeDiffPos;
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
+    const [statsHelpOpen, setStatsHelpOpen] = React.useState(false); // pinned Statistics panel's help popover
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     const [geom, setGeom] = React.useState('shaderball-scene');
     // 'studio' matches the sitewide default (js/viewer-app.jsx and
@@ -473,6 +479,8 @@ function MaterialCompareApp({ active = true } = {}) {
     const envUIRef = React.useRef(envUI);
     envUIRef.current = envUI;
     const heatmapCanvasRef = React.useRef(null);
+    const statsHelpBtnRef = React.useRef(null);
+    const statsHelpPopRef = React.useRef(null);
     const gpuDiffCanvasRef = React.useRef(null);
     const gpuDiffViewRef = React.useRef(null);
     const diffOverlayRef = React.useRef(null);
@@ -905,6 +913,20 @@ function MaterialCompareApp({ active = true } = {}) {
     }, []);
 
     const bothLive = slotA.viewEpoch > 0 && slotB.viewEpoch > 0 && !!slotA.viewRef.current && !!slotB.viewRef.current;
+
+    // Statistics panel's help popover: Escape + outside-pointerdown close,
+    // same pattern as mtlx-ui.jsx's anchored popovers (EnvDialog etc.).
+    useEscapeToClose(() => setStatsHelpOpen(false), statsHelpOpen);
+    React.useEffect(() => {
+        if (!statsHelpOpen) return undefined;
+        const onDown = (e) => {
+            if (statsHelpPopRef.current && statsHelpPopRef.current.contains(e.target)) return;
+            if (statsHelpBtnRef.current && statsHelpBtnRef.current.contains(e.target)) return;
+            setStatsHelpOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [statsHelpOpen]);
 
     // "Switch Views": toggles the diff-pane position for whichever mode is
     // currently active. Style-only — never touches the always-mounted
@@ -1510,37 +1532,60 @@ function MaterialCompareApp({ active = true } = {}) {
                                 Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                             </div>
                         </SectionCard>
-
-                        <SectionCard
-                            icon="compare"
-                            title="Statistics"
-                            pill={bothLive ? <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">live</span> : null}
-                            summary={stats ? stats.metrics.ssim.toFixed(3) : '—'}
-                            defaultOpen
-                        >
-                            <div className="space-y-1 text-[11px] text-gray-300">
-                                <div className="flex justify-between"><span>SSIM</span><span className="font-mono tabular-nums">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
-                                <div className="flex justify-between"><span>RMSE</span><span className="font-mono tabular-nums">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
-                                <div className="flex justify-between">
-                                    <span>PSNR</span>
-                                    <span className="font-mono tabular-nums">{stats ? (stats.metrics.psnr === Infinity ? '∞ dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '—'}</span>
-                                </div>
-                                <div className="flex justify-between"><span>Mean abs diff</span><span className="font-mono tabular-nums">{stats ? stats.metrics.meanAbsDiff.toFixed(2) : '—'}</span></div>
-                                {stats && <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 pt-1">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</div>}
-                            </div>
-                            <div className="space-y-1.5 text-xs text-gray-500">
-                                <div>
-                                    The difference heatmap shows the per-pixel absolute color difference of the
-                                    two renders, log-scaled through a false-color ramp (black → blue → cyan → yellow → red)
-                                    so subtle differences stay visible.
-                                </div>
-                                <div>
-                                    Note: antialiasing can produce small spurious
-                                    differences, especially along geometry edges, the backdrop, and the environment background.
-                                </div>
-                            </div>
-                        </SectionCard>
                     </div>
+
+                    {/* Pinned Statistics panel: always expanded and non-scrolling,
+                        a sibling BELOW the scrollable cards column above (not one
+                        more card inside it). */}
+                    <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-2.5" style={{ background: STATS_PANEL_SURFACE }}>
+                        <div className="flex items-center gap-2">
+                            <MtlxIcon name="compare" className="w-4 h-4 text-gray-400 shrink-0" />
+                            <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
+                            {bothLive && <span className="shrink-0 text-[10px] text-gray-600">·</span>}
+                            {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">live</span>}
+                            {bothLive && stats && <span className="shrink-0 text-[10px] text-gray-600">·</span>}
+                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</span>}
+                            <div className="flex-1" />
+                            <div className="relative shrink-0">
+                                <button
+                                    ref={statsHelpBtnRef}
+                                    type="button"
+                                    onClick={() => setStatsHelpOpen((o) => !o)}
+                                    title="About these statistics"
+                                    className="w-5 h-5 inline-flex items-center justify-center rounded-full border border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                                >
+                                    <MtlxIcon name="help" className="w-3.5 h-3.5" />
+                                </button>
+                                {statsHelpOpen && (
+                                    <div
+                                        ref={statsHelpPopRef}
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        className="absolute bottom-full right-0 mb-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg p-3 space-y-1.5 text-[11px] text-gray-300 z-10"
+                                    >
+                                        <div>
+                                            The difference heatmap shows the per-pixel absolute color difference of the
+                                            two renders, log-scaled through a false-color ramp (black → blue → cyan → yellow → red)
+                                            so subtle differences stay visible.
+                                        </div>
+                                        <div>
+                                            Note: antialiasing can produce small spurious
+                                            differences, especially along geometry edges, the backdrop, and the environment background.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="space-y-1 text-[11px] text-gray-300">
+                            <div className="flex justify-between"><span>SSIM</span><span className="font-mono tabular-nums">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
+                            <div className="flex justify-between"><span>RMSE</span><span className="font-mono tabular-nums">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
+                            <div className="flex justify-between">
+                                <span>PSNR</span>
+                                <span className="font-mono tabular-nums">{stats ? (stats.metrics.psnr === Infinity ? '∞ dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '—'}</span>
+                            </div>
+                            <div className="flex justify-between"><span>Mean abs diff</span><span className="font-mono tabular-nums">{stats ? stats.metrics.meanAbsDiff.toFixed(2) : '—'}</span></div>
+                        </div>
+                    </div>
+
                     <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
                         Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                     </div>
