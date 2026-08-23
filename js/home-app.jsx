@@ -300,7 +300,6 @@ function HeroStage({ active, busy, onOpen }) {
     }, [failed]);
 
     const basename = HERO_PRESET.path.split('/').pop();
-    const pillClass = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-gray-600/50 bg-gray-900/70 text-xs font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-wait';
 
     return (
         <div className="relative group h-[320px] lg:h-[400px] w-full">
@@ -334,11 +333,11 @@ function HeroStage({ active, busy, onOpen }) {
                 </div>
             )}
             <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
-                <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={pillClass}>
+                <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={PILL_ACTION}>
                     <MtlxIcon name="camera" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
                     {busy === 'viewer' ? 'Loading' : 'Open in Viewer'}
                 </button>
-                <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={pillClass}>
+                <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={PILL_ACTION}>
                     <MtlxIcon name="share" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
                     {busy === 'graph' ? 'Loading' : 'Open in Graph Editor'}
                 </button>

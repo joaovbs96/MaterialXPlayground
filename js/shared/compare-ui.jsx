@@ -72,7 +72,7 @@ const CompareLabel = ({ side, children, version, className, style }) => (
         style={style}
     >
         {children}
-        {version && <span className="ml-1.5 text-white/50">{version}</span>}
+        {version && <span className="ml-1.5 font-mono text-white/50">{version}</span>}
     </div>
 );
 

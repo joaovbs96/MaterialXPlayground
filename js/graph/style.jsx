@@ -75,45 +75,8 @@
 
         // ---- React Flow node rendering ---------------------------------------
 
-        // MaterialX type -> port/edge color, curated so co-occurring
-        // types are never confusable. Types outside the table hash to
-        // a stable color, so custom/struct/array types stay consistent.
-        const TYPE_COLORS = {
-            boolean: '#d2372b',            // crimson red
-            BSDF: '#2e7d32',               // forest green
-            color3: '#fdd835',             // sunflower yellow
-            color4: '#f4511e',             // coral orange
-            displacementshader: '#8d6e63', // warm taupe
-            EDF: '#cddc39',                // yellow-green
-            filename: '#90a4ae',           // cool blue-gray
-            float: '#3949ab',              // deep indigo blue
-            integer: '#8e24aa',            // royal violet
-            lightshader: '#ff934f',        // warm apricot orange
-            material: '#ff404f',           // vivid red
-            matrix33: '#cfd8dc',           // pale blue-gray
-            matrix44: '#546e7a',           // slate blue-gray
-            string: '#d7c4a3',             // warm sand
-            surfaceshader: '#00897b',      // deep teal
-            vector2: '#5c6bc0',            // muted indigo
-            vector3: '#b388ff',            // soft lavender
-            vector4: '#ec407a',            // rose pink
-            VDF: '#9ccc65',                // fresh green
-            volumeshader: '#00bcd4',       // bright cyan
-            node: '#a1887f',               // muted warm stone
-            nodegraph: '#854d0e'           // bronze brown
-        };
-        // Stable string hash → hue; fixed saturation/lightness keeps hashed
-        // colors legible on the dark stage.
-        const typeHue = (s) => {
-            let h = 0;
-            for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-            return ((h % 360) + 360) % 360;
-        };
-        const typeColor = (t) => {
-            if (!t) return '#94a3b8'; // untyped: default slate
-            if (TYPE_COLORS[t]) return TYPE_COLORS[t];
-            return 'hsl(' + typeHue(String(t)) + ', 65%, 62%)';
-        };
+        // TYPE_COLORS, typeHue, typeColor now live in js/shared/ui-commons.js
+        // (loaded eagerly before this file); resolved here via window.
 
         // Node-kind accents (header dot + minimap) derive from TYPE_COLORS so
         // they always track the palette; nodegraph/generic have no MaterialX
@@ -218,6 +181,6 @@
         const CONN_ATTRS = ['interfacename', 'nodegraph', 'nodename', 'output'];
 
 Object.assign(window, {
-    TYPE_COLORS, typeColor, getNodeColor, handleStyle, NODE_W, nodeHeight, layoutScope,
+    getNodeColor, handleStyle, NODE_W, nodeHeight, layoutScope,
     visiblePortsFor, toFlow, toRfEdge, CONN_ATTRS,
 });

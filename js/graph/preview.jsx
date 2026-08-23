@@ -794,8 +794,8 @@
             }, [parsed, target, docRev, fileMap, geomMode]);
 
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
-            // built-in slot) so it shares geomMode with the Settings-popover's
-            // own MtlxSelect just below.
+            // built-in slot) so it's the single geometry control for the
+            // graph preview.
             const graphGeomSlot = (
                 <MtlxSelect
                     key="graphGeom"
@@ -852,32 +852,6 @@
                         // Show button labels only in fullscreen, matching the
                         // render's own camera-reset/fullscreen buttons.
                         showLabels={isFullscreen}
-                        settingsChildren={
-                            <div>
-                                {/* Dropdown on its OWN line: label + trigger
-                                    can't share the popup's 288px row without
-                                    overflowing its edge. The Experimental
-                                    badge sits on the Auto ROW (via badges) —
-                                    picking a geometry isn't the experiment,
-                                    the Auto mode is. */}
-                                <div className="text-gray-200">Preview Geometry</div>
-                                <MtlxSelect
-                                    value={geomMode}
-                                    options={GRAPH_GEOM_MODES}
-                                    labels={GRAPH_GEOM_LABELS}
-                                    badges={GRAPH_GEOM_BADGES}
-                                    onChange={setGeomMode}
-                                    title="Global graph-preview geometry"
-                                    size="sm" block className="mt-1.5"
-                                />
-                                <div className="mt-1 text-[11px] text-gray-400">
-                                    Applies to every preview in the graph editor. 3D geometries
-                                    orbit with the mouse; the 2D Buffer stays fixed. "Auto (by
-                                    node type)" flattens an element only when it and everything
-                                    upstream of it are flat (patterns/math).
-                                </div>
-                            </div>
-                        }
                     />
                     <div
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}

@@ -11,8 +11,8 @@
 // Recurring Tailwind button strings, pulled out because the exact same
 // string (verbatim) repeats across files. Near-twin variants elsewhere
 // (different opacity/sizing) are NOT this — leave those inline.
-const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
-const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
@@ -22,6 +22,11 @@ const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded
 // the button never changes size between states. No backdrop-blur: the
 // menu bar it sits on is opaque, so there is nothing to blur.
 const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border border-transparent bg-transparent text-gray-300 hover:bg-gray-700/80 hover:border-gray-600 transition-colors whitespace-nowrap shrink-0';
+// Labeled overlay pills for the tool HUDs (viewer/compare) and the
+// collapsed-sidebar pills: deliberately 11px normal weight, not the
+// bolder PILL_ACTION, to match the sidebar's own labeled pills.
+const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-gray-600/50 bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors whitespace-nowrap';
+const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-blue-500 bg-blue-600/80 backdrop-blur text-white transition-colors whitespace-nowrap';
 
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
@@ -1049,13 +1054,14 @@ const EnvDialog = ({
   onExposureChange,
   onImportFile,
   onReset,
+  envFileName,
+  onClearEnv,
   importError,
   placement,
   edgeRef
 }) => {
   const popRef = React.useRef(null);
   const [pos, setPos] = React.useState(null);
-  const fileInputRef = React.useRef(null);
   // Key-light extraction toggle: window.getKeyLightEnabled/setKeyLightEnabled
   // live in js/mtlx-engine.js and may be absent (standalone/older builds),
   // so the control degrades to disabled rather than throwing.
@@ -1165,27 +1171,22 @@ const EnvDialog = ({
     value: linearToEv(exposure),
     onChange: e => onExposureChange(evToLinear(e.target.value)),
     className: "w-full accent-blue-500"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-1.5 pt-1 border-t border-gray-700"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => fileInputRef.current && fileInputRef.current.click(),
-    className: "flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-  }, "Import\u2026"), /*#__PURE__*/React.createElement("button", {
-    onClick: onReset,
-    className: "flex-1 h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-  }, "Reset"), /*#__PURE__*/React.createElement("input", {
-    ref: fileInputRef,
-    type: "file",
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: envFileName,
+    placeholder: "Default environment",
     accept: ".hdr,.exr",
-    className: "hidden",
-    onChange: e => {
-      const f = e.target.files && e.target.files[0];
-      e.target.value = '';
+    icon: "file",
+    onFiles: files => {
+      const f = files && files[0];
       if (f) onImportFile(f);
-    }
+    },
+    onClear: onClearEnv
   })), importError && /*#__PURE__*/React.createElement("div", {
     className: "text-red-400"
-  }, importError)), fullscreenPortalRoot());
+  }, importError), /*#__PURE__*/React.createElement("button", {
+    onClick: onReset,
+    className: "w-full h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+  }, "Reset")), fullscreenPortalRoot());
 };
 
 // Friendly labels for the preview-geometry dropdown's raw values (which
@@ -1409,6 +1410,107 @@ function GeometryTile({
     className: "text-[11px] leading-tight text-center min-h-[26px] flex items-center"
   }, label));
 }
+
+// Joined file-picker row (read-only path display + a Choose button), one
+// field-height (~26px) control matching the graph sidebar's field rows.
+// `onChoose` drives a caller's own file dialog; else a hidden file input.
+// `editable`/`onCommit` swap the path area for a real text input; `onClear`
+// adds an x button inside the field when `value` is non-empty.
+function FilePickerField({
+  value,
+  placeholder = 'No file selected',
+  accept,
+  multiple,
+  onFiles,
+  onChoose,
+  editable,
+  onCommit,
+  onClear,
+  disabled,
+  buttonLabel = 'Choose...',
+  icon,
+  // Mono typography is opt-in: only the graph editor's and node specs'
+  // parameter-editing rows want it. Everyone else gets the app's sans.
+  mono = false
+}) {
+  const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-gray-700 rounded-r-md bg-gray-800 hover:bg-gray-700 text-[11px] px-2 text-gray-300 whitespace-nowrap' + (mono ? ' font-mono' : '');
+  const [draft, setDraft] = React.useState(value || '');
+  // A ref (not state) so blurring alone never re-triggers the seed
+  // effect below -- only an actual `value` change should re-seed.
+  const focusedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!focusedRef.current) setDraft(value || '');
+  }, [value]);
+  const commit = () => {
+    if (draft !== (value || '') && onCommit) onCommit(draft);
+  };
+  const showClear = !!onClear && !!value;
+  const fieldBase = 'bg-gray-900 border border-gray-700 rounded-l-md px-2 text-[11px] text-gray-300 h-full w-full' + (mono ? ' font-mono' : '') + (showClear ? ' pr-6' : '');
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex h-[26px]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "relative min-w-0 flex-1"
+  }, editable ? /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: draft,
+    placeholder: placeholder,
+    disabled: disabled,
+    onFocus: () => {
+      focusedRef.current = true;
+    },
+    onChange: e => setDraft(e.target.value),
+    onBlur: () => {
+      focusedRef.current = false;
+      commit();
+    },
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.currentTarget.blur();
+      }
+    },
+    className: fieldBase + ' placeholder-gray-500 focus:outline-none'
+  }) : /*#__PURE__*/React.createElement("div", {
+    title: value,
+    className: fieldBase + ' flex items-center'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "truncate"
+  }, value || /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-500"
+  }, placeholder))), showClear && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "Clear",
+    disabled: disabled,
+    onClick: onClear,
+    className: "absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "x",
+    className: "w-3 h-3"
+  }))), onChoose ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onChoose,
+    disabled: disabled,
+    className: buttonCls + (disabled ? ' opacity-50 cursor-not-allowed' : '')
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5"
+  }), buttonLabel) : /*#__PURE__*/React.createElement("label", {
+    className: buttonCls + ' cursor-pointer' + (disabled ? ' opacity-50 pointer-events-none' : '')
+  }, icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: icon,
+    className: "w-3.5 h-3.5"
+  }), buttonLabel, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: accept,
+    multiple: multiple,
+    className: "hidden",
+    disabled: disabled,
+    onChange: e => {
+      if (onFiles) onFiles(e.target.files);
+      // Clear so re-picking the SAME file still fires a change event.
+      e.target.value = '';
+    }
+  })));
+}
 const ViewportControls = ({
   geomList = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'],
   geom,
@@ -1467,6 +1569,8 @@ const ViewportControls = ({
   const [envRotation, setEnvRotation] = React.useState(0); // degrees, 0-360
   const [envExposure, setEnvExposure] = React.useState(1.0);
   const [envImportError, setEnvImportError] = React.useState(null);
+  // Imported environment's filename, shown by EnvDialog's FilePickerField.
+  const [envFileName, setEnvFileName] = React.useState('');
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   // Re-apply rotation/exposure to the current view on every (re)build
@@ -1490,9 +1594,19 @@ const ViewportControls = ({
       // one) via the engine's LIVE_VIEWS registry — no need to also
       // call viewRef.current.setEnvironment here.
       window.setEnvOverride(env);
+      setEnvFileName(file.name);
     } catch (e) {
       setEnvImportError(errMsg(e));
     }
+  };
+
+  // FilePickerField's own x button: clears the imported environment back
+  // to the default WITHOUT touching rotation/exposure -- that stays the
+  // Reset button's job below.
+  const handleClearEnv = () => {
+    window.setEnvOverride(null);
+    setEnvImportError(null);
+    setEnvFileName('');
   };
   const handleReset = () => {
     // setEnvOverride(null) broadcasts the default environment to every
@@ -1500,6 +1614,7 @@ const ViewportControls = ({
     // needed here.
     window.setEnvOverride(null);
     setEnvImportError(null);
+    setEnvFileName('');
     setEnvRotation(0);
     setEnvExposure(1.0);
     if (viewRef && viewRef.current) {
@@ -1594,6 +1709,8 @@ const ViewportControls = ({
           },
           onImportFile: handleImportFile,
           onReset: handleReset,
+          envFileName: envFileName,
+          onClearEnv: handleClearEnv,
           importError: envImportError
         })) : null;
       case 'screenshot':
@@ -2160,7 +2277,8 @@ const MtlxSelect = ({
   popMaxHeight,
   theme,
   commitFocus = 'trigger',
-  ariaLabel
+  ariaLabel,
+  align
 }) => {
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState(null);
@@ -2421,7 +2539,14 @@ const MtlxSelect = ({
   // its own chrome from size/variant, and className is appended for
   // positioning/flex sizing/margins on top of that.
   const chrome = 'rounded ' + (SELECT_SIZE_CLS[size] || SELECT_SIZE_CLS.sm) + ' ' + (SELECT_VARIANT_CLS[variant] || SELECT_VARIANT_CLS.toolbar);
-  const triggerClassName = [chrome, 'inline-flex items-center gap-1', block && 'w-full justify-between', fontCls, disabled && 'opacity-50 pointer-events-none', className].filter(Boolean).join(' ');
+  // Default (no `align`, i.e. today's every call site): `justify-between`
+  // across icon/label/chevron splits the free width into two roughly
+  // equal gaps, which visually centers the label once an icon is
+  // present -- that's the reported "centered" look. `align="left"`
+  // drops justify-between so icon+label pack flush left; the chevron
+  // gets ml-auto below to stay pinned at the right edge instead.
+  const alignLeft = align === 'left';
+  const triggerClassName = [chrome, 'inline-flex items-center gap-1', block && (alignLeft ? 'w-full' : 'justify-between'), fontCls, disabled && 'opacity-50 pointer-events-none', className].filter(Boolean).join(' ');
 
   // Chrome color/background/border comes from theme custom properties,
   // always applied now that className no longer replaces the trigger's
@@ -2508,7 +2633,7 @@ const MtlxSelect = ({
       style: o.badge.tone === 'warn' ? {
         color: MXS_BADGE_WARN
       } : undefined,
-      className: 'flex-none text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]
+      className: 'flex-none font-sans text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + SELECT_BADGE_TONE_CLS[o.badge.tone]
     }, o.badge.text));
   })) : null;
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
@@ -2537,7 +2662,7 @@ const MtlxSelect = ({
     }
   }, triggerLabel), /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "chevron-down",
-    className: "w-3 h-3 flex-none opacity-70"
+    className: 'w-3 h-3 flex-none opacity-70' + (alignLeft ? ' ml-auto' : '')
   })), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
 };
 
@@ -2971,6 +3096,8 @@ Object.assign(window, {
   PreviewErrorBoundary,
   fullscreenPortalRoot,
   BTN_MENUBAR,
+  HUD_PILL,
+  HUD_PILL_ACTIVE,
   DialogFrame,
   PresetsDialog,
   SettingsDialog,
@@ -2987,6 +3114,7 @@ Object.assign(window, {
   Chip,
   SectionCard,
   GeometryTile,
+  FilePickerField,
   EV_MIN,
   EV_MAX,
   EV_STEP,
