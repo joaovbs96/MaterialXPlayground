@@ -768,8 +768,8 @@ const attributeExportedXml = async (xml) => withExportAttribution(xml, await exp
 // js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
 // every existing caller omits these, and `!!undefined` is `false`, so
 // today's default (both off) is unchanged.
-// `initialBackdrop`: seed for the three-way backdrop picker (studio /
-// environment / none). Defaults to 'studio', the engine's new default.
+// `initialBackdrop`: seed for the four-way backdrop picker (studio /
+// studio-dark / environment / none). Defaults to 'studio', the engine's new default.
 const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg, initialBackdrop = 'studio') => {
     const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
     const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
@@ -1009,6 +1009,22 @@ const EnvDialog = ({
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
             className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
         >
+            <div>
+                <FilePickerField
+                    value={envFileName}
+                    placeholder="Default environment"
+                    accept=".hdr,.exr"
+                    icon="file"
+                    onFiles={(files) => {
+                        const f = files && files[0];
+                        if (f) onImportFile(f);
+                    }}
+                    onClear={onClearEnv}
+                />
+            </div>
+            {importError && (
+                <div className="text-red-400">{importError}</div>
+            )}
             {showBackdropPicker && (
                 <div>
                     <div className="flex items-center justify-between mb-0.5">
@@ -1016,8 +1032,8 @@ const EnvDialog = ({
                     </div>
                     <MtlxSelect
                         value={backdrop}
-                        options={['studio', 'environment', 'none']}
-                        labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                        options={['studio', 'studio-dark', 'environment', 'none']}
+                        labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
                         onChange={onBackdropChange}
                         disabled={backdropDisabled}
                         title={backdropDisabled
@@ -1064,22 +1080,6 @@ const EnvDialog = ({
                     className="w-full accent-blue-500"
                 />
             </div>
-            <div>
-                <FilePickerField
-                    value={envFileName}
-                    placeholder="Default environment"
-                    accept=".hdr,.exr"
-                    icon="file"
-                    onFiles={(files) => {
-                        const f = files && files[0];
-                        if (f) onImportFile(f);
-                    }}
-                    onClear={onClearEnv}
-                />
-            </div>
-            {importError && (
-                <div className="text-red-400">{importError}</div>
-            )}
             {/* Bottom-most: resets rotation/exposure too, so it must not
                 sit beside the file picker above (which only clears the
                 imported environment). */}

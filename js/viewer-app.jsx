@@ -838,6 +838,26 @@
             const [envImportError, setEnvImportError] = React.useState(null);
             const [envFileName, setEnvFileName] = React.useState('');
 
+            // Extract key light toggle: local mirror of the engine-wide
+            // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js),
+            // same degrade-to-disabled contract as EnvDialog's own copy
+            // (js/shared/mtlx-ui.jsx).
+            const keyLightAvail = typeof window.getKeyLightEnabled === 'function'
+                && typeof window.setKeyLightEnabled === 'function';
+            const [keyLightOn, setKeyLightOn] = React.useState(() => (
+                keyLightAvail ? window.getKeyLightEnabled() : true
+            ));
+            // Re-read the global whenever the view is rebuilt, mirroring
+            // EnvDialog's re-read on open since this row has no open event.
+            React.useEffect(() => {
+                setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [viewEpoch]);
+            const handleToggleKeyLight = (next) => {
+                setKeyLightOn(next);
+                if (keyLightAvail) window.setKeyLightEnabled(next);
+            };
+
             const setEnvRotationDeg = (v) => {
                 setEnvUI((s) => ({ ...s, rotation: v }));
                 if (viewRef.current && viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(v * Math.PI / 180);
@@ -1084,6 +1104,18 @@
                     </SectionCard>
 
                     <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
+                        <FilePickerField
+                            value={envFileName}
+                            placeholder="Default environment"
+                            accept=".hdr,.exr"
+                            icon="file"
+                            onFiles={(files) => {
+                                const f = files && files[0];
+                                if (f) importEnv(f);
+                            }}
+                            onClear={clearEnvOverride}
+                        />
+                        {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
                         <SliderField
                             label="Environment rotation" unit="deg"
                             value={envUI.rotation} min={0} max={360} step={1}
@@ -1100,26 +1132,28 @@
                             <span className="text-xs font-medium text-gray-400">Backdrop</span>
                             <MtlxSelect
                                 value={backdropMode}
-                                options={['studio', 'environment', 'none']}
-                                labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                                options={['studio', 'studio-dark', 'environment', 'none']}
+                                labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
                                 onChange={setBackdropMode}
                                 disabled={roomGeomActive}
                                 title={roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined}
                                 size="sm"
                             />
                         </div>
-                        <FilePickerField
-                            value={envFileName}
-                            placeholder="Default environment"
-                            accept=".hdr,.exr"
-                            icon="file"
-                            onFiles={(files) => {
-                                const f = files && files[0];
-                                if (f) importEnv(f);
-                            }}
-                            onClear={clearEnvOverride}
-                        />
-                        {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                        <label
+                            className="flex items-center justify-between cursor-pointer"
+                            title={keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'}
+                        >
+                            <span className="text-xs font-medium text-gray-400">Extract key light</span>
+                            <Toggle
+                                checked={keyLightOn}
+                                onChange={handleToggleKeyLight}
+                                disabled={!keyLightAvail}
+                            />
+                        </label>
+                        <div className="mt-1 text-[11px] text-gray-400">
+                            Pull a sun-like light out of the HDRI for crisp highlights.
+                        </div>
                         <button
                             onClick={resetEnv}
                             title="Also clears an imported .hdr/.exr and restores the default environment"

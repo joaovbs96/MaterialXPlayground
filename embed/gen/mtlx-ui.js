@@ -856,8 +856,8 @@ const attributeExportedXml = async xml => withExportAttribution(xml, await expor
 // js/viewer-app.jsx's `autoRotate`/`envBackground` controlled props) —
 // every existing caller omits these, and `!!undefined` is `false`, so
 // today's default (both off) is unchanged.
-// `initialBackdrop`: seed for the three-way backdrop picker (studio /
-// environment / none). Defaults to 'studio', the engine's new default.
+// `initialBackdrop`: seed for the four-way backdrop picker (studio /
+// studio-dark / environment / none). Defaults to 'studio', the engine's new default.
 const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotating, initialEnvBg, initialBackdrop = 'studio') => {
   const [rotating, toggleRotating] = useViewToggle(viewRef, 'setAutoRotate', initialRotating);
   const [envBg, toggleEnvBg] = useViewToggle(viewRef, 'setEnvBackground', initialEnvBg);
@@ -1155,13 +1155,26 @@ const EnvDialog = ({
       width: ENV_DIALOG_W
     }, pos || {}),
     className: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
-  }, showBackdropPicker && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: envFileName,
+    placeholder: "Default environment",
+    accept: ".hdr,.exr",
+    icon: "file",
+    onFiles: files => {
+      const f = files && files[0];
+      if (f) onImportFile(f);
+    },
+    onClear: onClearEnv
+  })), importError && /*#__PURE__*/React.createElement("div", {
+    className: "text-red-400"
+  }, importError), showBackdropPicker && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between mb-0.5"
   }, /*#__PURE__*/React.createElement("span", null, "Backdrop")), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: backdrop,
-    options: ['studio', 'environment', 'none'],
+    options: ['studio', 'studio-dark', 'environment', 'none'],
     labels: {
       studio: 'Studio',
+      'studio-dark': 'Studio (Dark)',
       environment: 'Environment',
       none: 'None'
     },
@@ -1201,19 +1214,7 @@ const EnvDialog = ({
     value: linearToEv(exposure),
     onChange: e => onExposureChange(evToLinear(e.target.value)),
     className: "w-full accent-blue-500"
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FilePickerField, {
-    value: envFileName,
-    placeholder: "Default environment",
-    accept: ".hdr,.exr",
-    icon: "file",
-    onFiles: files => {
-      const f = files && files[0];
-      if (f) onImportFile(f);
-    },
-    onClear: onClearEnv
-  })), importError && /*#__PURE__*/React.createElement("div", {
-    className: "text-red-400"
-  }, importError), /*#__PURE__*/React.createElement("button", {
+  })), /*#__PURE__*/React.createElement("button", {
     onClick: onReset,
     className: "w-full h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
   }, "Reset")), fullscreenPortalRoot());

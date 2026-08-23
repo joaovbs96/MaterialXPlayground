@@ -195,7 +195,7 @@
     // `backdrop` -> props.backdrop, replacing the old boolean `background`
     // toggle. Undefined when absent (the legacy alias below decides then);
     // otherwise the parsed mode, or `'studio'` (reported) if unrecognized.
-    var BACKDROP_MODES = ['studio', 'environment', 'none'];
+    var BACKDROP_MODES = ['studio', 'studio-dark', 'environment', 'none'];
     function parseBackdrop(v) {
         if (v == null || v === '') return undefined;
         var lower = String(v).trim().toLowerCase();

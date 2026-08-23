@@ -459,6 +459,15 @@ function MaterialCompareApp({ active = true } = {}) {
     const [forceTransparency, setForceTransparency] = React.useState(
         () => !!(window.getForceTransparency && window.getForceTransparency())
     );
+    // Extract key light toggle: local mirror of the engine-wide
+    // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js), one
+    // setting shared by both slots. Degrades to disabled like EnvDialog's
+    // own copy (js/shared/mtlx-ui.jsx) when the engine hasn't loaded it.
+    const keyLightAvail = typeof window.getKeyLightEnabled === 'function'
+        && typeof window.setKeyLightEnabled === 'function';
+    const [keyLightOn, setKeyLightOn] = React.useState(() => (
+        keyLightAvail ? window.getKeyLightEnabled() : true
+    ));
     const envUIRef = React.useRef(envUI);
     envUIRef.current = envUI;
     const heatmapCanvasRef = React.useRef(null);
@@ -632,6 +641,18 @@ function MaterialCompareApp({ active = true } = {}) {
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slotA.viewEpoch, slotB.viewEpoch]);
+
+    // Re-read the key light global whenever either slot's view is rebuilt,
+    // mirroring EnvDialog's re-read on open since this row has no open event.
+    React.useEffect(() => {
+        setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [slotA.viewEpoch, slotB.viewEpoch]);
+
+    const handleToggleKeyLight = (next) => {
+        setKeyLightOn(next);
+        if (keyLightAvail) window.setKeyLightEnabled(next);
+    };
 
     const setBackdrop = (mode) => {
         setEnvUI((s) => ({ ...s, backdrop: mode }));
@@ -1385,6 +1406,18 @@ function MaterialCompareApp({ active = true } = {}) {
                         </SectionCard>
 
                         <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
+                            <FilePickerField
+                                value={envFileName}
+                                placeholder="Default environment"
+                                accept=".hdr,.exr"
+                                icon="file"
+                                onFiles={(files) => {
+                                    const f = files && files[0];
+                                    if (f) importEnv(f);
+                                }}
+                                onClear={clearEnvOverride}
+                            />
+                            {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
                             <SliderField
                                 label="Environment rotation" unit="deg"
                                 value={envUI.rotation} min={0} max={360} step={1}
@@ -1401,26 +1434,28 @@ function MaterialCompareApp({ active = true } = {}) {
                                 <span className="text-xs font-medium text-gray-400">Backdrop</span>
                                 <MtlxSelect
                                     value={envUI.backdrop}
-                                    options={['studio', 'environment', 'none']}
-                                    labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                                    options={['studio', 'studio-dark', 'environment', 'none']}
+                                    labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
                                     onChange={setBackdrop}
                                     disabled={geom === 'shaderball-scene'}
                                     title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined}
                                     size="sm"
                                 />
                             </div>
-                            <FilePickerField
-                                value={envFileName}
-                                placeholder="Default environment"
-                                accept=".hdr,.exr"
-                                icon="file"
-                                onFiles={(files) => {
-                                    const f = files && files[0];
-                                    if (f) importEnv(f);
-                                }}
-                                onClear={clearEnvOverride}
-                            />
-                            {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'}
+                            >
+                                <span className="text-xs font-medium text-gray-400">Extract key light</span>
+                                <Toggle
+                                    checked={keyLightOn}
+                                    onChange={handleToggleKeyLight}
+                                    disabled={!keyLightAvail}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Pull a sun-like light out of the HDRI for crisp highlights.
+                            </div>
                             <button
                                 onClick={resetEnv}
                                 title="Also clears an imported .hdr/.exr and restores the default environment"

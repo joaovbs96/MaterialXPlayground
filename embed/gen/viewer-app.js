@@ -901,6 +901,23 @@ function MaterialViewerApp({
   });
   const [envImportError, setEnvImportError] = React.useState(null);
   const [envFileName, setEnvFileName] = React.useState('');
+
+  // Extract key light toggle: local mirror of the engine-wide
+  // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js),
+  // same degrade-to-disabled contract as EnvDialog's own copy
+  // (js/shared/mtlx-ui.jsx).
+  const keyLightAvail = typeof window.getKeyLightEnabled === 'function' && typeof window.setKeyLightEnabled === 'function';
+  const [keyLightOn, setKeyLightOn] = React.useState(() => keyLightAvail ? window.getKeyLightEnabled() : true);
+  // Re-read the global whenever the view is rebuilt, mirroring
+  // EnvDialog's re-read on open since this row has no open event.
+  React.useEffect(() => {
+    setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewEpoch]);
+  const handleToggleKeyLight = next => {
+    setKeyLightOn(next);
+    if (keyLightAvail) window.setKeyLightEnabled(next);
+  };
   const setEnvRotationDeg = v => {
     setEnvUI(s => ({
       ...s,
@@ -1137,7 +1154,19 @@ function MaterialViewerApp({
     summary: envSummary,
     defaultOpen: true,
     dense: true
-  }, /*#__PURE__*/React.createElement(SliderField, {
+  }, /*#__PURE__*/React.createElement(FilePickerField, {
+    value: envFileName,
+    placeholder: "Default environment",
+    accept: ".hdr,.exr",
+    icon: "file",
+    onFiles: files => {
+      const f = files && files[0];
+      if (f) importEnv(f);
+    },
+    onClear: clearEnvOverride
+  }), envImportError && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-red-400"
+  }, envImportError), /*#__PURE__*/React.createElement(SliderField, {
     label: "Environment rotation",
     unit: "deg",
     value: envUI.rotation,
@@ -1161,9 +1190,10 @@ function MaterialViewerApp({
     className: "text-xs font-medium text-gray-400"
   }, "Backdrop"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: backdropMode,
-    options: ['studio', 'environment', 'none'],
+    options: ['studio', 'studio-dark', 'environment', 'none'],
     labels: {
       studio: 'Studio',
+      'studio-dark': 'Studio (Dark)',
       environment: 'Environment',
       none: 'None'
     },
@@ -1171,19 +1201,18 @@ function MaterialViewerApp({
     disabled: roomGeomActive,
     title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined,
     size: "sm"
-  })), /*#__PURE__*/React.createElement(FilePickerField, {
-    value: envFileName,
-    placeholder: "Default environment",
-    accept: ".hdr,.exr",
-    icon: "file",
-    onFiles: files => {
-      const f = files && files[0];
-      if (f) importEnv(f);
-    },
-    onClear: clearEnvOverride
-  }), envImportError && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs text-red-400"
-  }, envImportError), /*#__PURE__*/React.createElement("button", {
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center justify-between cursor-pointer",
+    title: keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "Extract key light"), /*#__PURE__*/React.createElement(Toggle, {
+    checked: keyLightOn,
+    onChange: handleToggleKeyLight,
+    disabled: !keyLightAvail
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-1 text-[11px] text-gray-400"
+  }, "Pull a sun-like light out of the HDRI for crisp highlights."), /*#__PURE__*/React.createElement("button", {
     onClick: resetEnv,
     title: "Also clears an imported .hdr/.exr and restores the default environment",
     className: BTN_SECONDARY + ' w-full'

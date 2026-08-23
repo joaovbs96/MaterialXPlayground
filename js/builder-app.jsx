@@ -204,7 +204,7 @@ const parseBuilderHashSettings = () => {
     if (params.has('envmap')) patch.envmap = params.get('envmap');
     if (params.has('autorotate')) patch.autorotate = builderParseBool(params.get('autorotate'));
     if (params.has('controls')) patch.controls = controlsObjFromStr(params.get('controls'));
-    if (params.has('backdrop') && ['studio', 'environment', 'none'].includes(params.get('backdrop'))) {
+    if (params.has('backdrop') && ['studio', 'studio-dark', 'environment', 'none'].includes(params.get('backdrop'))) {
         patch.backdrop = params.get('backdrop');
     }
     if (params.has('transparent')) patch.transparent = builderParseBool(params.get('transparent'));
@@ -1417,6 +1417,17 @@ function BuilderApp({ active } = {}) {
         </SectionCard>,
 
         <SectionCard key="lighting" icon="sun" title="Lighting" summary={builderLightingSummary(env, exposure)} defaultOpen={defaultOpen}>
+            <div>
+                <FieldLabel label="Environment map URL (.hdr / .exr)" />
+                <input
+                    type="text" value={envmap}
+                    onChange={(e) => patch({ envmap: e.target.value })}
+                    onBlur={commitEnvmap}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
+                    placeholder="(default environment)"
+                    className={TEXT_INPUT_CLS}
+                />
+            </div>
             <SliderField
                 label="Environment rotation" unit="deg" value={env} min={0} max={360} step={1} placeholder="0"
                 onSlider={(v) => patch({ env: Number(v) === 0 ? '' : v })}
@@ -1439,23 +1450,12 @@ function BuilderApp({ active } = {}) {
                 </button>
             </div>
             <div>
-                <FieldLabel label="Environment map URL (.hdr / .exr)" />
-                <input
-                    type="text" value={envmap}
-                    onChange={(e) => patch({ envmap: e.target.value })}
-                    onBlur={commitEnvmap}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
-                    placeholder="(default environment)"
-                    className={TEXT_INPUT_CLS}
-                />
-            </div>
-            <div>
                 <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-gray-400">Backdrop</span>
                     <MtlxSelect
                         value={backdrop}
-                        options={['studio', 'environment', 'none']}
-                        labels={{ studio: 'Studio', environment: 'Environment', none: 'None' }}
+                        options={['studio', 'studio-dark', 'environment', 'none']}
+                        labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
                         onChange={(v) => patch({ backdrop: v })}
                         disabled={backdropPickerDisabled}
                         size="sm"
