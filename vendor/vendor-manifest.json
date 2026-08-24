@@ -242,6 +242,30 @@
       "bytes": 407279
     },
     {
+      "path": "three/draco/draco_decoder.wasm",
+      "source": "three@0.128.0",
+      "sha256": "32b19d590ca48d4478f74788170c7b713e0addf1f8dbab5cb07e3b2ad5f6e32e",
+      "bytes": 194983
+    },
+    {
+      "path": "three/draco/draco_wasm_wrapper.js",
+      "source": "three@0.128.0",
+      "sha256": "fc724571efc24138ffb7e430fb1c5c59a9760e64c1c3fdb98cc2503d110a3846",
+      "bytes": 53604
+    },
+    {
+      "path": "three/draco/LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE",
+      "sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4",
+      "bytes": 13898
+    },
+    {
+      "path": "three/DRACOLoader.js",
+      "source": "three@0.128.0",
+      "sha256": "bbd4a1bb08f05d9c8df1b411644a1fc31a32fdcd36489e5bcdfe6c4fa2b8e4e9",
+      "bytes": 13453
+    },
+    {
       "path": "three/fflate.min.js",
       "source": "three-147@0.147.0",
       "sha256": "798b397d482f2ff743452362e880f1be4b683c43d7b2db3e8751f7412e7d5f4b",

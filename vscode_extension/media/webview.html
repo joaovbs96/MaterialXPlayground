@@ -14,8 +14,9 @@
          edit it there and regenerate; webview-only insertions (this CSP
          meta tag, the <base> tag, the bootstrap script tag, and the
          focus-outline CSS near the bottom) are fragments defined in
-         scripts/build-webview.mjs — edit them there instead. Contains
-         five ${...} placeholders substituted at runtime by
+         scripts/build-webview.mjs — edit them there instead. Loaders:
+         RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
+         Contains five ${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->
 
@@ -64,6 +65,8 @@
                          see js/mtlx-assets.js). blob:/data: cover the
                          object-URL and inline-asset fetches issued
                          against the img-src sources above.
+           worker-src  blob:  DRACOLoader (r128) decodes in a blob-URL
+                       Worker; script-src alone (no blob:) blocks it here.
          TRADEOFF: 'unsafe-inline' is in script-src (not just style-src)
          because index.html's inline scripts (embed-mode detection, the
          ReactDOM.createRoot(...) boot call) and this template's own
@@ -77,6 +80,7 @@
         font-src ${cspSource};
         img-src ${cspSource} https: blob: data:;
         connect-src ${cspSource} https://raw.githubusercontent.com blob: data:;
+        worker-src blob:;
     ">
 
     <!-- Every relative URL below (favicon.ico, js/..., ...) resolves
@@ -130,7 +134,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '2c0c0d08554be45a';</script>
+    <script>window.__MTLX_BUILD = '3ba3efa02595a650';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -253,6 +257,11 @@
          loadTifTexture in js/mtlx-engine.js for dropped .tif/.tiff textures. -->
     <script src="vendor/utif/UTIF.js"></script>
     <script src="vendor/three/GLTFLoader.js"></script>
+    <!-- DRACOLoader: decodes KHR_draco_mesh_compression meshes in custom
+         preview models. Decoder files (vendor/three/draco/) are the WASM
+         build bundled with three@0.128.0, licensed separately (Apache-2.0,
+         Google) from the rest of three. -->
+    <script src="vendor/three/DRACOLoader.js"></script>
     <script src="vendor/three/OBJLoader.js"></script>
     <script src="vendor/three/OrbitControls.js"></script>
     <script src="js/mtlx-assets.js"></script>

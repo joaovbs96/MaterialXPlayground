@@ -196,6 +196,8 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 
 **Patchwork rug material.** `materials/Motley_Patchwork_Rug/` is the Motley Patchwork Rug material from the [AMD GPU Open](https://gpuopen.com/) material library, licensed [MIT](materials/Motley_Patchwork_Rug/LICENSE.txt), copyright 2022 AMD.
 
+**Draco decoder.** `vendor/three/DRACOLoader.js` and `vendor/three/draco/` are the [Draco](https://github.com/google/draco) mesh-compression decoder bundled with three.js@0.128.0, © Google, licensed [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [`vendor/three/draco/LICENSE.txt`](vendor/three/draco/LICENSE.txt).
+
 ## License
 
 Released under the [Apache License 2.0](LICENSE). The MaterialX standard libraries vendored under `libraries/` are © the Academy Software Foundation and its contributors, also under the Apache License 2.0.
