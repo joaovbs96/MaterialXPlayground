@@ -41,6 +41,12 @@ protocol.registerSchemesAsPrivileged([
     },
 ]);
 
+// Electron 43 dropped the CLI flag, so remote debugging (used by the
+// screenshot/diagnostic tooling) is opt-in via this env variable.
+if (process.env.MTLX_DEBUG_PORT) {
+    app.commandLine.appendSwitch('remote-debugging-port', process.env.MTLX_DEBUG_PORT);
+}
+
 function getSiteRoot() {
     if (process.env.MTLX_SITE_ROOT) return path.resolve(process.env.MTLX_SITE_ROOT);
     return path.join(process.resourcesPath, 'site');
