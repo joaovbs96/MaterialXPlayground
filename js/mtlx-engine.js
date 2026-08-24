@@ -407,14 +407,17 @@ const patchUnlitLightingRefs = (src) => {
 };
 
 // Shared display-transform GLSL body (`inVar`/`outVar`: vec3 in/out).
-// `mode` ('aces'|'srgb', see getDisplayTransform()) picks ACES filmic
-// (three r128's Hill fit) + sRGB OETF, or sRGB OETF alone (MaterialXView
-// parity). Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
+// `mode` ('aces'|'srgb'|'lin_rec709', see getDisplayTransform()) picks ACES
+// filmic (three r128's Hill fit) + sRGB OETF, sRGB OETF alone (MaterialXView
+// parity), or raw linear (no OETF, no tone map). Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
 const ACES_SRGB_GLSL = (inVar, outVar, mode) => {
     // renderer.toneMappingExposure and this pre-scale are independent
     // knobs; this one is baked straight into RawShaderMaterial GLSL and
     // bypasses renderer.toneMappingExposure entirely, so keep them from drifting.
-    const acesBody = mode === 'srgb' ? '' :
+    // srgb matches MaterialXView: glEnable(GL_FRAMEBUFFER_SRGB) wraps its env/
+    // opaque/transparent passes (RenderPipelineGL.cpp:357, disabled :458) for a
+    // hardware sRGB OETF only, no tone map (hwSrgbEncodeOutput false, GenOptions.h:92).
+    const acesBody = (mode === 'srgb' || mode === 'lin_rec709') ? '' :
         '        const mat3 _acesIn = mat3(\n' +
         '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
         '            vec3(0.04823, 0.01566, 0.83777)\n' +
@@ -428,9 +431,12 @@ const ACES_SRGB_GLSL = (inVar, outVar, mode) => {
         '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
         '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
         '        _c = _acesOut * (_aces_a / _aces_b);\n';
-    return '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
+    const guarded = '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
         acesBody +
-        '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
+        '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n';
+    // lin_rec709: raw linear passthrough, no OETF curve applied at all.
+    if (mode === 'lin_rec709') return guarded + '        vec3 ' + outVar + ' = _c;\n';
+    return guarded +
         '        vec3 _lo = _c * 12.92;\n' +
         '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
         '        vec3 ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n';
@@ -1405,11 +1411,11 @@ const setGlobalGeom = (value) => {
 };
 
 // ---- Global display transform selection (shared across every tool) ----
-// 'aces' (default) matches this app's original look: ACES filmic + sRGB
-// OETF. 'srgb' is sRGB OETF alone, matching the C++ MaterialXView (no
-// tone mapping). See ACES_SRGB_GLSL's header comment for the shared math.
+// 'srgb' (default) matches the C++ MaterialXView (no tone mapping). 'aces'
+// adds ACES filmic before that curve (this app's original look).
+// 'lin_rec709' is raw linear: no OETF, no tone map. See ACES_SRGB_GLSL for the math.
 const DISPLAY_TRANSFORM_KEY = 'mtlx_display_transform';
-const DISPLAY_TRANSFORM_VALUES = ['aces', 'srgb'];
+const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'lin_rec709'];
 
 let MTLX_DISPLAY_TRANSFORM = null;
 
@@ -1417,7 +1423,7 @@ let MTLX_DISPLAY_TRANSFORM = null;
 const initDisplayTransform = () => {
     let stored = null;
     try { stored = localStorage.getItem(DISPLAY_TRANSFORM_KEY); } catch (e) { /* privacy mode */ }
-    MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'aces';
+    MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'srgb';
 };
 
 const getDisplayTransform = () => {
@@ -1596,6 +1602,94 @@ const stripGltfTextures = (json) => {
     });
 };
 
+// Reads a .glb container's two chunks (parsed JSON, raw BIN bytes or null)
+// per the layout in vendor/three/GLTFLoader.js's GLTFBinaryExtension
+// (:839-900). Returns null on ANY parse anomaly (bad magic/version,
+// truncated chunk, invalid JSON) so callers can fall back safely.
+const readGlbChunks = (arrayBuffer) => {
+    try {
+        if (!arrayBuffer || typeof arrayBuffer.byteLength !== 'number' || arrayBuffer.byteLength < 12) return null;
+        const header = new DataView(arrayBuffer, 0, 12);
+        const magic = String.fromCharCode.apply(null, new Uint8Array(arrayBuffer, 0, 4));
+        if (magic !== 'glTF') return null;
+        const version = header.getUint32(4, true);
+        const totalLength = header.getUint32(8, true);
+        if (version < 2 || totalLength > arrayBuffer.byteLength) return null;
+
+        let jsonBytes = null;
+        let binBytes = null;
+        let offset = 12;
+        while (offset + 8 <= totalLength) {
+            const chunkHeader = new DataView(arrayBuffer, offset, 8);
+            const chunkLength = chunkHeader.getUint32(0, true);
+            const chunkType = chunkHeader.getUint32(4, true);
+            const dataStart = offset + 8;
+            if (dataStart + chunkLength > totalLength) return null;
+            if (chunkType === 0x4e4f534a) jsonBytes = new Uint8Array(arrayBuffer, dataStart, chunkLength); // 'JSON'
+            else if (chunkType === 0x004e4942) binBytes = arrayBuffer.slice(dataStart, dataStart + chunkLength); // 'BIN\0'
+            offset = dataStart + chunkLength;
+        }
+        if (!jsonBytes) return null;
+        return { json: JSON.parse(new TextDecoder().decode(jsonBytes)), binBytes };
+    } catch (e) {
+        return null;
+    }
+};
+
+// KTX2/Basis (and any texture) tolerance for .glb: strips textures from a
+// binary .glb's JSON chunk by reusing stripGltfTextures, then
+// re-serializes (JSON chunk padded to a 4-byte boundary with 0x20 spaces,
+// BIN chunk byte-verbatim, all lengths recomputed). Also stops .glb
+// embedded textures being pointlessly fetched and decoded then discarded.
+// Returns the ORIGINAL buffer unchanged on any parse anomaly.
+const stripGlbTextures = (arrayBuffer) => {
+    const parsed = readGlbChunks(arrayBuffer);
+    if (!parsed) return arrayBuffer;
+    stripGltfTextures(parsed.json);
+
+    let jsonText = JSON.stringify(parsed.json);
+    while (jsonText.length % 4 !== 0) jsonText += ' ';
+    const jsonBytes = new TextEncoder().encode(jsonText);
+    const binBytes = parsed.binBytes ? new Uint8Array(parsed.binBytes) : null;
+
+    const jsonChunkLen = 8 + jsonBytes.length;
+    const binChunkLen = binBytes ? 8 + binBytes.length : 0;
+    const totalLength = 12 + jsonChunkLen + binChunkLen;
+
+    const out = new ArrayBuffer(totalLength);
+    const outView = new DataView(out);
+    const outBytes = new Uint8Array(out);
+    outBytes.set([0x67, 0x6c, 0x54, 0x46], 0); // 'glTF'
+    outView.setUint32(4, 2, true);
+    outView.setUint32(8, totalLength, true);
+
+    outView.setUint32(12, jsonBytes.length, true);
+    outView.setUint32(16, 0x4e4f534a, true); // 'JSON'
+    outBytes.set(jsonBytes, 20);
+
+    if (binBytes) {
+        const binOffset = 12 + jsonChunkLen;
+        outView.setUint32(binOffset, binBytes.length, true);
+        outView.setUint32(binOffset + 4, 0x004e4942, true); // 'BIN\0'
+        outBytes.set(binBytes, binOffset + 8);
+    }
+
+    return out;
+};
+
+// Lazy DRACOLoader singleton: own default LoadingManager (not
+// parseModelRoot's per-call manager) so parseModelRoot's setURLModifier
+// (blank-PNG texture swap) never intercepts the decoder wasm/js fetches.
+let dracoLoaderInstance = null;
+const getDracoLoader = () => {
+    if (!THREE.DRACOLoader) return null;
+    if (!dracoLoaderInstance) {
+        dracoLoaderInstance = new THREE.DRACOLoader()
+            .setDecoderPath(new URL('vendor/three/draco/', document.baseURI).href);
+    }
+    return dracoLoaderInstance;
+};
+
 // Parses model bytes (string for obj/gltf, ArrayBuffer for glb) into a root
 // Object3D. opts.sidecars (File map keyed by lowerBasename) and
 // opts.resourcePath resolve .bin/texture references; label is for errors.
@@ -1642,6 +1736,7 @@ const parseModelRoot = async (ext, data, label, opts) => {
 
     try {
         let payload = data;
+        let declaresDraco = false;
         if (ext === 'gltf') {
             let json;
             try {
@@ -1649,18 +1744,56 @@ const parseModelRoot = async (ext, data, label, opts) => {
             } catch (e) {
                 throw new Error('Could not parse "' + label + '": ' + e.message);
             }
+            declaresDraco = Array.isArray(json.extensionsUsed) && json.extensionsUsed.indexOf('KHR_draco_mesh_compression') !== -1;
             stripGltfTextures(json);
             payload = JSON.stringify(json);
+        } else if (ext === 'glb') {
+            payload = stripGlbTextures(data);
+            const parsedGlb = readGlbChunks(payload);
+            declaresDraco = !!(parsedGlb && Array.isArray(parsedGlb.json.extensionsUsed) && parsedGlb.json.extensionsUsed.indexOf('KHR_draco_mesh_compression') !== -1);
         }
+
+        const dracoLoader = getDracoLoader();
+        if (declaresDraco && dracoLoader) {
+            // decodeDracoFile has no error path at all (see the trap noted
+            // beside getDracoLoader): preload the decoder files up front so
+            // a 404/offline decoder rejects catchably here, rather than
+            // only surfacing 20s later via the timeout race below.
+            try {
+                await dracoLoader.preload();
+            } catch (e) {
+                throw new Error('"' + label + '" uses Draco mesh compression, but the decoder is unavailable (script blocked/offline): ' + ((e && e.message) || e));
+            }
+        }
+
         try {
-            const gltf = await new Promise((resolve, reject) => {
-                try { new THREE.GLTFLoader(manager).parse(payload, resourcePath, resolve, reject); } catch (e) { reject(e); }
+            const gltfLoader = new THREE.GLTFLoader(manager);
+            if (dracoLoader) gltfLoader.setDRACOLoader(dracoLoader);
+            // Belt-and-braces: textures (including any KTX2/Basis
+            // reference) are already stripped above; if one slips through
+            // anyway, hand back a blank texture instead of leaving
+            // setKTX2Loader unset, which throws when the extension is
+            // declared required.
+            gltfLoader.setKTX2Loader({ load: (u, onLoad) => onLoad(new THREE.Texture()) });
+
+            const parsePromise = new Promise((resolve, reject) => {
+                try { gltfLoader.parse(payload, resourcePath, resolve, reject); } catch (e) { reject(e); }
             });
+            // DRACOLoader r128 has no error path (decodeDracoFile has no
+            // .catch and GLTFDracoMeshCompressionExtension wraps it in a
+            // Promise with no reject), so a corrupt payload or a
+            // CSP-blocked decoder worker hangs parse() forever without this.
+            const gltf = declaresDraco
+                ? await Promise.race([parsePromise, new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('"' + label + '" timed out decoding (possibly a corrupt Draco payload).')), 20000);
+                })])
+                : await parsePromise;
             return gltf.scene || (gltf.scenes && gltf.scenes[0]);
         } catch (e) {
             const msg = (e && e.message) || String(e);
+            if (/timed out decoding/.test(msg)) throw e;
             if (/DRACOLoader/i.test(msg)) {
-                throw new Error('"' + label + '" uses Draco mesh compression, which is not supported here: re-export without Draco.');
+                throw new Error('"' + label + '" uses Draco mesh compression, but the decoder is unavailable (script blocked/offline).');
             }
             if (/KTX2|basisu/i.test(msg)) {
                 throw new Error('"' + label + '" uses KTX2/Basis texture compression, which is not supported here: re-export without KTX2/Basis textures.');
@@ -1753,6 +1886,7 @@ const clearCustomPreviewGeom = () => {
     window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
     if (getGlobalGeom() === 'custom') setGlobalGeom('shaderball-scene');
     if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
+    if (dracoLoaderInstance) { dracoLoaderInstance.dispose(); dracoLoaderInstance = null; }
 };
 
 // Shaderball: two GLB exports of the ASWF/USD-WG Standard Shader Ball
@@ -1763,7 +1897,10 @@ const loadGlbScene = (url) => {
     if (!glbSceneCache.has(url)) {
         glbSceneCache.set(url, new Promise((resolve) => {
             if (!THREE.GLTFLoader) { resolve(null); return; }
-            new THREE.GLTFLoader().load(url, (gltf) => resolve(gltf), undefined, (e) => {
+            const loader = new THREE.GLTFLoader();
+            const dracoLoader = getDracoLoader();
+            if (dracoLoader) loader.setDRACOLoader(dracoLoader);
+            loader.load(url, (gltf) => resolve(gltf), undefined, (e) => {
                 console.warn('shaderball scene load failed:', url, e);
                 resolve(null);
             });
@@ -1857,7 +1994,10 @@ const getShaderballMtlxGeometry = () => {
             if (!THREE.GLTFLoader) return null;
             const url = new URL('models/shaderball_mtlx.glb', document.baseURI).href;
             return new Promise((resolve) => {
-                new THREE.GLTFLoader().load(url, (gltf) => {
+                const loader = new THREE.GLTFLoader();
+                const dracoLoader = getDracoLoader();
+                if (dracoLoader) loader.setDRACOLoader(dracoLoader);
+                loader.load(url, (gltf) => {
                     try {
                         // Several meshes (ball, base, ...) with node transforms —
                         // bake each mesh's world matrix and concatenate into one
@@ -3377,9 +3517,13 @@ void main() {
 // Studio backdrop's inverse of ACES_SRGB_GLSL for the given mode: undoes
 // finalMat's forward transform so the backdrop's authored color survives
 // the peel composite's real pass unchanged. 'srgb' has no tone mapping to undo, so its inverse is just srgbToLinear.
-const studioInverseAcesSrgbGlsl = (mode) => mode === 'srgb' ?
-    'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n' :
-    'vec3 inverseAcesSrgb(vec3 col) {\n' +
+// lin_rec709's forward transform is identity (no OETF, no tone map), so
+// its exact inverse is identity too: the round trip must hand back the
+// authored color unchanged, not a linearized one.
+const studioInverseAcesSrgbGlsl = (mode) => {
+    if (mode === 'lin_rec709') return 'vec3 inverseAcesSrgb(vec3 col) { return col; }\n';
+    if (mode === 'srgb') return 'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n';
+    return 'vec3 inverseAcesSrgb(vec3 col) {\n' +
     '    const mat3 acesInInv = mat3(\n' +
     '        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),\n' +
     '        vec3(-0.08896329, -0.01322366, 1.19877327)\n' +
@@ -3389,12 +3533,16 @@ const studioInverseAcesSrgbGlsl = (mode) => mode === 'srgb' ?
     '        vec3(0.04577546, 0.00929492, 0.93011838)\n' +
     '    );\n' +
     '    vec3 y = acesOutInv * srgbToLinear(col);\n' +
+    // FIXME: the per-channel quadratic inverse of the ACES fit is only valid for
+    // colors the tonemap can reach. Near-neutral stops round-trip at ~1e-9 error,
+    // but saturated hues fail badly (pure cyan misses by up to 0.93); rework before authoring a colorful backdrop.
     '    vec3 qa = vec3(1.0) - 0.983729 * y;\n' +
     '    vec3 qb = vec3(0.0245786) - 0.4329510 * y;\n' +
     '    vec3 qc = vec3(-0.000090537) - 0.238081 * y;\n' +
     '    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);\n' +
     '    return (acesInInv * x) * 0.6;\n' +
     '}\n';
+};
 
 const STUDIO_GRADIENT_FRAGMENT_SHADER = (mode) => `
 varying vec2 vUv;
@@ -3859,8 +4007,9 @@ const createMtlxRenderView = async ({
                 // No-ops for the RawShaderMaterial surface (encodeDisplay bakes
                 // its transform in); set here for the ordinary three materials
                 // in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
-                if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
-                renderer.toneMapping = getDisplayTransform() === 'srgb' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+                const __displayMode = getDisplayTransform();
+                if ('outputEncoding' in renderer) renderer.outputEncoding = __displayMode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
+                renderer.toneMapping = __displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
                 renderer.toneMappingExposure = 1.0;
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] WebGLRenderer init: '
