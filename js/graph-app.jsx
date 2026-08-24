@@ -1963,7 +1963,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // Same document packaged as a .zip alongside every matched
             // texture (`resolvedTextures`, from scanExportTextures). Stored
             // under its authored ref path so re-dropping the zip resolves normally.
-            const doExportZip = async (name, resolvedTextures) => {
+            const doExportZip = async (name, resolvedTextures, convertTo = 'keep') => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
                 if (xml == null) {
@@ -1975,15 +1975,63 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     return false;
                 }
                 const zip = new JSZip();
-                zip.file(name + '.mtlx', await attributeExportedXml(xml));
-                const seenPaths = new Set();
-                for (const t of (resolvedTextures || [])) {
-                    const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                    if (!zipPath || seenPaths.has(zipPath)) continue;
-                    seenPaths.add(zipPath);
-                    const blob = fileMapRef.current[t.key];
-                    if (blob) zip.file(zipPath, blob);
+                let keptNote = null;
+
+                if (!convertTo || convertTo === 'keep') {
+                    zip.file(name + '.mtlx', await attributeExportedXml(xml));
+                    const seenPaths = new Set();
+                    for (const t of (resolvedTextures || [])) {
+                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
+                        if (!zipPath || seenPaths.has(zipPath)) continue;
+                        seenPaths.add(zipPath);
+                        const blob = fileMapRef.current[t.key];
+                        if (blob) zip.file(zipPath, blob);
+                    }
+                } else {
+                    // Experimental: swap every texture to convertTo's format.
+                    // Pass 1 converts each source; pass 2 writes kept/failed
+                    // originals first, then converted files, falling back to
+                    // the original path+bytes on a collision with one of those.
+                    const seenPaths = new Set();
+                    const convertedByRef = {};
+                    const kept = [];
+                    const entries = [];
+                    for (const t of (resolvedTextures || [])) {
+                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
+                        if (!zipPath || seenPaths.has(zipPath)) continue;
+                        seenPaths.add(zipPath);
+                        const blob = fileMapRef.current[t.key];
+                        if (!blob) continue;
+                        const srcExt = (t.key.split('.').pop() || t.ref.split('.').pop() || '').toLowerCase();
+                        const result = await convertTextureBlob(blob, srcExt, convertTo);
+                        entries.push({ zipPath, blob, result });
+                    }
+                    const writtenPaths = new Set();
+                    for (const { zipPath, blob, result } of entries) {
+                        if (result.keep || !result.ok) {
+                            zip.file(zipPath, blob);
+                            writtenPaths.add(zipPath);
+                            if (!result.ok) kept.push(zipPath);
+                        }
+                    }
+                    for (const { zipPath, blob, result } of entries) {
+                        if (result.keep || !result.ok) continue;
+                        const swappedPath = zipPath.replace(/\.[A-Za-z0-9]+$/, '.' + result.ext);
+                        if (writtenPaths.has(swappedPath)) {
+                            zip.file(zipPath, blob);
+                            kept.push(zipPath);
+                            continue;
+                        }
+                        zip.file(swappedPath, result.blob);
+                        writtenPaths.add(swappedPath);
+                        convertedByRef[zipPath] = result.ext;
+                    }
+                    zip.file(name + '.mtlx', await attributeExportedXml(rewriteFilenameRefs(xml, (ref) => convertedByRef[ref])));
+                    if (kept.length > 0) {
+                        keptNote = kept.length + ' texture(s) could not be converted and were packaged unchanged.';
+                    }
                 }
+
                 let blob;
                 try {
                     blob = await zip.generateAsync({ type: 'blob' });
@@ -1993,6 +2041,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 }
                 downloadBlob(blob, name + '.zip');
                 markSaved(); // the just-downloaded zip's document matches the current one
+                if (keptNote) setStatus(keptNote);
                 return true;
             };
             // A second picker opening mid-export would race the first —
@@ -2008,11 +2057,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     exportBusyRef.current = false;
                 }
             };
-            const exportZip = async (name, resolvedTextures) => {
+            const exportZip = async (name, resolvedTextures, convertTo = 'keep') => {
                 if (exportBusyRef.current) return false;
                 exportBusyRef.current = true;
                 try {
-                    return await doExportZip(name, resolvedTextures);
+                    return await doExportZip(name, resolvedTextures, convertTo);
                 } finally {
                     exportBusyRef.current = false;
                 }
@@ -2118,9 +2167,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
-            const handleExportDialogSubmit = async ({ name, format }) => {
+            const handleExportDialogSubmit = async ({ name, format, convertTo }) => {
                 const ok = format === 'zip'
-                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [])
+                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [], convertTo)
                     : await exportMtlx(name);
                 if (!ok) throw new Error('export failed');
             };

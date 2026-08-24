@@ -298,6 +298,7 @@
         function ExportDialog({ open, onClose, defaultName, textures, onExport }) {
             const [name, setName] = React.useState(defaultName || '');
             const [format, setFormat] = React.useState('mtlx');
+            const [convertTo, setConvertTo] = React.useState('keep');
             const [busy, setBusy] = React.useState(false);
             useEscapeToClose(onClose, open && !busy);
 
@@ -309,6 +310,7 @@
                 if (open && !wasOpen.current) {
                     setName(defaultName || '');
                     setFormat('mtlx');
+                    setConvertTo('keep');
                     setBusy(false);
                 }
                 wasOpen.current = open;
@@ -327,7 +329,7 @@
                 if (!trimmedName || busy) return;
                 setBusy(true);
                 try {
-                    await onExport({ name: trimmedName, format });
+                    await onExport({ name: trimmedName, format, convertTo });
                     onClose();
                 } catch (e) {
                     // Leave the dialog open so the user can see the error
@@ -375,6 +377,21 @@
                                     ZIP with textures (.zip)
                                 </span>
                             </label>
+                            {format === 'zip' && (
+                                <div className="flex items-center gap-1.5 pl-6">
+                                    <span className="text-[10px] text-gray-500 flex-none font-mono">Texture format</span>
+                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-amber-700/60 bg-amber-900/20 text-amber-400">Experimental</span>
+                                    <MtlxSelect
+                                        value={convertTo}
+                                        options={['keep', 'png', 'jpeg', 'exr']}
+                                        labels={{ keep: 'Keep original', png: 'PNG', jpeg: 'JPEG', exr: 'EXR' }}
+                                        defValue={'keep'}
+                                        onChange={(v) => setConvertTo(v)}
+                                        size="sm"
+                                        variant="field"
+                                    />
+                                </div>
+                            )}
                         </div>
                         {resolved.length > 0 && (
                             <div className="text-gray-500 text-[11px]">
