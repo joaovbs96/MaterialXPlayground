@@ -216,7 +216,7 @@ const useCompareSlot = () => {
 // (Re)builds one slot's render view whenever its chosen document/material
 // or the shared geometry changes — mirrors viewer-app.jsx's render effect,
 // called once per slot from the app component below.
-const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch) => {
+const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch, displayTransform) => {
     React.useEffect(() => {
         const loaded = slot.loadedRef.current;
         if (!loaded || !loaded.renderables.length) return undefined;
@@ -308,7 +308,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch]);
+    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch, displayTransform]);
 };
 
 // Window-wide drag & drop, split into two zones (Document A / Document B)
@@ -509,6 +509,30 @@ function MaterialCompareApp({ active = true } = {}) {
         window.addEventListener('mtlx-global-geom', onGlobalGeom);
         return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
     }, []);
+    // Global display transform ('aces'|'srgb', js/mtlx-engine.js), shared
+    // by both slots below like geom. encodeDisplay bakes it into shader
+    // source, so a change is a render-effect dependency: full dispose+regenerate, not a live tweak.
+    const [displayTransform, setDisplayTransformState] = React.useState(
+        () => (window.getDisplayTransform ? window.getDisplayTransform() : 'aces')
+    );
+    const displayTransformRef = React.useRef(displayTransform);
+    displayTransformRef.current = displayTransform;
+    // Adopts the shared display transform pick from any realm; no per-
+    // instance resolution exists here (unlike geometry), so this always
+    // participates, same hidden-surface deferral as onGlobalGeom above.
+    function applyDisplayTransform() {
+        const v = window.getDisplayTransform ? window.getDisplayTransform() : null;
+        if (!v || v === displayTransformRef.current) return;
+        setDisplayTransformState(v);
+    }
+    React.useEffect(() => {
+        const onDisplayTransform = () => {
+            if (surfaceHidden()) { pendingDisplayTransformRef.current = true; return; }
+            applyDisplayTransform();
+        };
+        window.addEventListener('mtlx-display-transform', onDisplayTransform);
+        return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+    }, []);
     const hasCustom = !!customGeom;
     // Custom Model tile's expanded/collapsed state: starts open only if a
     // model is already loaded, then latches open whenever one loads (never
@@ -573,6 +597,7 @@ function MaterialCompareApp({ active = true } = {}) {
     const pendingGlRestoredARef = React.useRef(false);
     const pendingGlRestoredBRef = React.useRef(false);
     const pendingGlobalGeomRef = React.useRef(false);
+    const pendingDisplayTransformRef = React.useRef(false);
     function surfaceHidden() {
         // Both slots share one view container, hidden together by the
         // shell; slotA's canvas is always mounted once Compare loads,
@@ -589,8 +614,8 @@ function MaterialCompareApp({ active = true } = {}) {
     // on screen) should rebuild either slot; imports made while some OTHER
     // geom is selected must not, so this stays 0 unless geom is 'custom'.
     const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB);
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
 
     // Restore re-inits GL state but not render-target contents, so a
     // glEpoch bump forces that slot's build effect to dispose and fully
@@ -631,6 +656,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 if (pendingGlRestoredARef.current) { pendingGlRestoredARef.current = false; setGlEpochA((n) => n + 1); }
                 if (pendingGlRestoredBRef.current) { pendingGlRestoredBRef.current = false; setGlEpochB((n) => n + 1); }
                 if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
+                if (pendingDisplayTransformRef.current) { pendingDisplayTransformRef.current = false; applyDisplayTransform(); }
             });
         };
         window.addEventListener('hashchange', flush);
@@ -851,6 +877,11 @@ function MaterialCompareApp({ active = true } = {}) {
     const pickGeom = (g) => {
         setGeom(g);
         window.setGlobalGeom(g);
+    };
+    // Same global pick pattern as pickGeom.
+    const pickDisplayTransform = (mode) => {
+        setDisplayTransformState(mode);
+        if (window.setDisplayTransform) window.setDisplayTransform(mode);
     };
     const resetEnv = () => {
         setEnvOverride(null);
@@ -1653,6 +1684,18 @@ function MaterialCompareApp({ active = true } = {}) {
                                 onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                                 onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                             />
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-gray-400">Display</span>
+                                <MtlxSelect
+                                    value={displayTransform}
+                                    options={['aces', 'srgb']}
+                                    labels={{ aces: 'ACES', srgb: 'sRGB (MaterialXView)' }}
+                                    onChange={pickDisplayTransform}
+                                    defValue="aces"
+                                    title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+                                    size="sm"
+                                />
+                            </div>
                             <div className="flex items-center justify-between gap-2">
                                 <span className="text-xs font-medium text-gray-400">Backdrop</span>
                                 <MtlxSelect
