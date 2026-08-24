@@ -38,6 +38,11 @@ ipcRenderer.on('mtlx-request-save', async () => {
 let saveCommittedCallback = null;
 ipcRenderer.on('mtlx-save-committed', () => { if (saveCommittedCallback) saveCommittedCallback(); });
 
+// Native menu items with no main-process logic of their own (New/Export/
+// Undo/Redo) forward a command string here for glue.js to route in-page.
+let menuCommandCallback = null;
+ipcRenderer.on('mtlx-menu-command', (event, cmd) => { if (menuCommandCallback) menuCommandCallback(cmd); });
+
 const api = {
     saveMtlx: (opts) => ipcRenderer.invoke('mtlx-save', opts),
     notifyEdit: (dirty) => ipcRenderer.send('mtlx-notify-edit', !!dirty),
@@ -51,6 +56,7 @@ const api = {
     },
     onRequestSave: (callback) => { requestSaveCallback = callback; },
     onSaveCommitted: (callback) => { saveCommittedCallback = callback; },
+    onMenuCommand: (callback) => { menuCommandCallback = callback; },
 };
 contextBridge.exposeInMainWorld('mtlxDesktop', api);
 

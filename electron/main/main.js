@@ -3,7 +3,7 @@
 // docs/local/ELECTRON.md for why).
 'use strict';
 
-const { app, BrowserWindow, protocol, session, shell, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, protocol, session, shell, ipcMain, dialog, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
@@ -213,6 +213,7 @@ async function saveMtlxForWindow(win, { xml, suggestedName, forceDialog } = {}) 
     state.currentPath = target;
     state.dirty = false;
     app.addRecentDocument(target);
+    addRecent(target);
     startWatcher(win, target);
     updateWindowTitle(win);
     return { ok: true, path: target };
@@ -232,8 +233,8 @@ ipcMain.on('mtlx-notify-edit', (event, dirty) => {
     updateWindowTitle(win);
 });
 
-// Asks a window's renderer to hand back its current graph XML, for a
-// future native Save menu item (phase 5); nothing calls this yet.
+// Asks a window's renderer to hand back its current graph XML; used by
+// saveFromMenu (the native Save/Save As menu items) below.
 function requestSaveFromRenderer(win) {
     return new Promise((resolve, reject) => {
         const listener = (event, result) => {
@@ -278,6 +279,7 @@ async function openMtlxFromDisk(filePath, win) {
     state.currentPath = filePath;
     state.dirty = false;
     app.addRecentDocument(filePath);
+    addRecent(filePath);
     startWatcher(win, filePath);
     updateWindowTitle(win);
 
@@ -349,6 +351,223 @@ async function runSmokeOpen(filePath) {
     }
 }
 
+// Path for our own menu-facing "Open Recent" list; additive to (not a
+// replacement for) app.addRecentDocument's OS-level jump-list integration.
+function getRecentsPath() {
+    return path.join(app.getPath('userData'), 'mtlx-recents.json');
+}
+
+let recentFiles = [];
+
+// Tolerant of a missing/corrupt file: any failure just means "no recents
+// yet", same as a fresh install.
+function loadRecents() {
+    try {
+        const parsed = JSON.parse(fsSync.readFileSync(getRecentsPath(), 'utf8'));
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveRecents(list) {
+    try {
+        fsSync.writeFileSync(getRecentsPath(), JSON.stringify(list), 'utf8');
+    } catch (e) {
+        console.error('[main] failed to save recent files: ' + errMsg(e));
+    }
+}
+
+// Dedupe+prepend+cap at 10, most-recent-first; persists and refreshes the
+// Open Recent submenu immediately.
+function addRecent(filePath) {
+    recentFiles = [filePath].concat(recentFiles.filter((p) => p !== filePath)).slice(0, 10);
+    saveRecents(recentFiles);
+    rebuildMenu();
+}
+
+function clearRecents() {
+    recentFiles = [];
+    saveRecents(recentFiles);
+    rebuildMenu();
+}
+
+// Forwards a command string to a window's renderer, for menu items with
+// no main-process business logic of their own (New/Export/Undo/Redo).
+function sendMenuCommand(win, cmd) {
+    if (win) win.webContents.send('mtlx-menu-command', cmd);
+}
+
+// Save/Save As: asks the renderer for its current XML, then reuses the
+// exact same write/dialog/watcher logic saveMtlxForWindow already has.
+async function saveFromMenu(win, forceDialog) {
+    if (!win) return;
+    let xml;
+    try {
+        xml = await requestSaveFromRenderer(win);
+    } catch (e) {
+        dialog.showMessageBox(win, {
+            type: 'info',
+            title: 'MaterialX Playground',
+            message: 'Save needs the graph editor to be open in this window.',
+        });
+        return;
+    }
+    const result = await saveMtlxForWindow(win, { xml, forceDialog });
+    if (result.ok) {
+        win.webContents.send('mtlx-save-committed');
+    } else if (result.error) {
+        dialog.showErrorBox('MaterialX Playground', 'Could not save: ' + result.error);
+    }
+}
+
+// One item per known recent path, "prune on click" if the file is gone,
+// a trailing Clear Recent, or a single disabled placeholder when empty.
+function buildRecentSubmenu() {
+    if (recentFiles.length === 0) {
+        return [{ label: 'No Recent Documents', enabled: false }];
+    }
+    const items = recentFiles.map((filePath) => ({
+        label: filePath,
+        click: (menuItem, win) => {
+            if (!fsSync.existsSync(filePath)) {
+                console.warn('[main] recent file no longer exists: ' + filePath);
+                recentFiles = recentFiles.filter((p) => p !== filePath);
+                saveRecents(recentFiles);
+                rebuildMenu();
+                return;
+            }
+            openMtlxFromDisk(filePath, win || createWindow());
+        },
+    }));
+    items.push({ type: 'separator' });
+    items.push({ label: 'Clear Recent', click: () => clearRecents() });
+    return items;
+}
+
+// Undo/Redo forward a command string instead of role: 'undo'/'redo' (that
+// is Chromium's single global edit stack); the graph editor keeps its own
+// document-level undo stack, same precedent as the VS Code extension bridge.
+function buildMenuTemplate() {
+    const iconPath = process.platform === 'darwin' ? undefined : path.join(__dirname, '..', 'build', 'icon.ico');
+
+    return [
+        {
+            label: 'File',
+            submenu: [
+                { label: 'New', accelerator: 'CmdOrCtrl+N', click: (menuItem, win) => sendMenuCommand(win, 'new') },
+                {
+                    label: 'Open...',
+                    accelerator: 'CmdOrCtrl+O',
+                    click: async (menuItem, win) => {
+                        const options = {
+                            filters: [{ name: 'MaterialX Document', extensions: ['mtlx'] }],
+                            properties: ['openFile'],
+                        };
+                        const result = win
+                            ? await dialog.showOpenDialog(win, options)
+                            : await dialog.showOpenDialog(options);
+                        if (result.canceled || !result.filePaths[0]) return;
+                        openMtlxFromDisk(result.filePaths[0], win || createWindow());
+                    },
+                },
+                { label: 'Open Recent', submenu: buildRecentSubmenu() },
+                { type: 'separator' },
+                { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (menuItem, win) => saveFromMenu(win, false) },
+                {
+                    label: 'Save As...',
+                    accelerator: 'CmdOrCtrl+Shift+S',
+                    click: (menuItem, win) => saveFromMenu(win, true),
+                },
+                {
+                    label: 'Export...',
+                    accelerator: 'CmdOrCtrl+E',
+                    click: (menuItem, win) => sendMenuCommand(win, 'export'),
+                },
+                { type: 'separator' },
+                { label: 'Close Window', role: 'close' },
+                { label: 'Quit', role: 'quit' },
+            ],
+        },
+        {
+            label: 'Edit',
+            submenu: [
+                { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: (menuItem, win) => sendMenuCommand(win, 'undo') },
+                {
+                    label: 'Redo',
+                    accelerator: 'CmdOrCtrl+Shift+Z',
+                    click: (menuItem, win) => sendMenuCommand(win, 'redo'),
+                },
+                {
+                    label: 'Redo',
+                    visible: false,
+                    accelerator: 'CmdOrCtrl+Y',
+                    acceleratorWorksWhenHidden: true,
+                    click: (menuItem, win) => sendMenuCommand(win, 'redo'),
+                },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'selectAll' },
+            ],
+        },
+        {
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'toggleDevTools' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' },
+            ],
+        },
+        {
+            label: 'Window',
+            submenu: [
+                { role: 'minimize' },
+                { role: 'close' },
+            ],
+        },
+        {
+            label: 'Help',
+            submenu: [
+                {
+                    label: 'MaterialX Playground Website',
+                    click: () => shell.openExternal('https://joaovbs96.github.io/MaterialXPlayground/'),
+                },
+                {
+                    label: 'GitHub Repository',
+                    click: () => shell.openExternal('https://github.com/joaovbs96/MaterialXPlayground'),
+                },
+                { type: 'separator' },
+                {
+                    label: 'About MaterialX Playground',
+                    click: (menuItem, win) => {
+                        const options = {
+                            type: 'info',
+                            title: 'About MaterialX Playground',
+                            message: 'MaterialX Playground',
+                            detail: 'Version ' + app.getVersion() + '\nElectron ' + process.versions.electron +
+                                '\nChromium ' + process.versions.chrome +
+                                '\n\nhttps://joaovbs96.github.io/MaterialXPlayground/',
+                            icon: iconPath,
+                        };
+                        if (win) dialog.showMessageBox(win, options);
+                        else dialog.showMessageBox(options);
+                    },
+                },
+            ],
+        },
+    ];
+}
+
+function rebuildMenu() {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()));
+}
+
 function createWindow() {
     const win = new BrowserWindow({
         width: 1440,
@@ -407,17 +626,23 @@ function createWindow() {
         win.webContents.once('did-finish-load', () => {
             const currentUrl = win.webContents.getURL();
             const title = win.webContents.getTitle();
-            if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title) {
+            const appMenu = Menu.getApplicationMenu();
+            const fileMenu = appMenu && appMenu.items.find((item) => item.label === 'File');
+            const hasSave = fileMenu && fileMenu.submenu.items.some((item) => item.label === 'Save');
+            const menuOk = !!(appMenu && fileMenu && hasSave);
+            // The empty write's callback only fires once the console.log
+            // above has actually flushed, same race/fix as finishSmoke.
+            if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title && menuOk) {
                 console.log('[smoke] OK ' + title);
-                app.quit();
+                process.stdout.write('', () => app.quit());
             } else {
-                console.log('[smoke] FAIL bad url or empty title: ' + currentUrl);
-                app.exit(1);
+                console.log('[smoke] FAIL bad url, empty title, or missing menu: ' + currentUrl);
+                process.stdout.write('', () => app.exit(1));
             }
         });
         win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
             console.log('[smoke] FAIL ' + errorCode + ' ' + errorDescription);
-            app.exit(1);
+            process.stdout.write('', () => app.exit(1));
         });
     }
 
@@ -471,6 +696,9 @@ if (!gotLock) {
                 defaultPath: path.join(app.getPath('downloads'), item.getFilename()),
             });
         });
+
+        recentFiles = loadRecents();
+        rebuildMenu();
 
         if (process.env.MTLX_SMOKE_OPEN) {
             runSmokeOpen(path.resolve(process.env.MTLX_SMOKE_OPEN));

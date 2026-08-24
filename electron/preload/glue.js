@@ -34,8 +34,8 @@
         window.mtlxDesktop.notifyEdit(true);
     };
 
-    // Wired for a future native Save menu item (phase 5); nothing in this
-    // phase triggers onRequestSave/onSaveCommitted yet.
+    // Wired to the native Save/Save As menu items (main.js's saveFromMenu),
+    // which drive onRequestSave and onSaveCommitted via the IPC round trip.
     window.mtlxDesktop.onRequestSave(function () {
         if (typeof window.__mtlxGetGraphXml !== 'function') {
             return Promise.reject(new Error('graph view is not open'));
@@ -44,5 +44,21 @@
     });
     window.mtlxDesktop.onSaveCommitted(function () {
         if (typeof window.__mtlxMarkGraphSaved === 'function') window.__mtlxMarkGraphSaved();
+    });
+
+    // New/Export/Undo/Redo forward here from the native menu (main.js's
+    // sendMenuCommand); an editable-focused field gets the OS text-edit
+    // command instead, mirroring graph-app.jsx's own Ctrl+C/V/Z guard.
+    window.mtlxDesktop.onMenuCommand(function (cmd) {
+        if (cmd === 'undo' || cmd === 'redo') {
+            var active = document.activeElement;
+            var isEditable = active && (active.isContentEditable
+                || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''));
+            if (isEditable) {
+                document.execCommand(cmd);
+                return;
+            }
+        }
+        window.dispatchEvent(new CustomEvent('mtlx-desktop-command', { detail: { cmd: cmd } }));
     });
 })();
