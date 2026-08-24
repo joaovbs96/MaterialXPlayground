@@ -200,6 +200,27 @@ const VIEW_DEPS = {
         app: 'js/what-is-materialx.jsx',
         globalName: 'WhatIsMaterialXApp',
     },
+    gallery: {
+        css: [
+            'vendor/reactflow/style.css',
+            'js/graph/graph-preview.css',
+        ],
+        scripts: [
+            'vendor/reactflow/index.js',
+            'vendor/dagre/dagre.min.js',
+            'embed/mtlx-viewer.js',
+        ],
+        babelScripts: [
+            'js/shared/mtlx-ui.jsx',
+            'js/graph/model.jsx',
+            'js/graph/style.jsx',
+            'js/graph/legend.jsx',
+            'js/graph/node-component.jsx',
+            'js/graph/graph-preview.jsx',
+        ],
+        app: 'js/gallery-app.jsx',
+        globalName: 'MtlxGalleryApp',
+    },
     compare: {
         css: [],
         scripts: ['vendor/jszip/jszip.min.js', 'js/shared/image-metrics.js'],
@@ -387,6 +408,7 @@ function Shell() {
         builder: { mounted: false, status: 'idle' },
         vscode: { mounted: false, status: 'idle' },
         whatIsMaterialx: { mounted: false, status: 'idle' },
+        gallery: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -460,6 +482,7 @@ function Shell() {
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
             whatIsMaterialx: 'MaterialX Playground - What is MaterialX?',
+            gallery: 'MaterialX Playground - Material Gallery',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -493,6 +516,7 @@ function Shell() {
             builder: 'p-2 sm:p-6 md:pb-3 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             whatIsMaterialx: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            gallery: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -586,6 +610,10 @@ function Shell() {
                 // Same wrapper contract as vscode/home: a static,
                 // scrollable content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+            } else if (view === 'gallery') {
+                // Same wrapper contract as vscode/whatIsMaterialx/home: a
+                // static, scrollable content page, not a full-bleed canvas.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
                 // directly via their own `absolute inset-0` root.
@@ -615,6 +643,7 @@ function Shell() {
             {renderView('builder')}
             {renderView('vscode')}
             {renderView('whatIsMaterialx')}
+            {renderView('gallery')}
         </div>
     );
 }
