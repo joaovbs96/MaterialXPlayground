@@ -107,6 +107,17 @@ jobs:
       - name: Check
         run: npm run check
 
+      # Populates vendor/materialx/ before staging below, so the rsync ships
+      # it and the deployed site serves MaterialX resources locally. Same
+      # release-or-dispatch gate as the version fetch above, smoke-tested.
+      - name: Fetch the MaterialX offline snapshot
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        run: |
+          node --input-type=module -e '
+            import { runMaterialx } from "./scripts/vendor.mjs";
+            await runMaterialx();
+          '
+
       - name: Stage Pages artifact
         if: github.event_name == 'release'
         run: |
@@ -118,6 +129,18 @@ jobs:
             --exclude='tutorials-src' \
             --exclude='scripts' \
             ./ "$RUNNER_TEMP/site"/
+
+      - name: Install Playwright chromium
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        run: npx playwright install --with-deps chromium
+
+      # Generated straight into the staged site; gitignored locally (see
+      # docs/local/GALLERY.md). Same release-or-dispatch gate as above.
+      - name: Generate gallery data
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        run: |
+          node scripts/build-gallery.mjs --out "$RUNNER_TEMP/site/gallery"
+          node scripts/gallery-shots.mjs --manifest "$RUNNER_TEMP/site/gallery/manifest.json" --out "$RUNNER_TEMP/site/gallery"
 
       # Not committed: the tag isn't knowable ahead of release, and the
       # build-id gate byte-compares committed artifacts. vsix name/url are
