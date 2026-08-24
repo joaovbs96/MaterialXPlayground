@@ -386,6 +386,15 @@
         // this standalone check covers the filename/color3/color4 cases.
         const ifaceColorManaged = (t) => t === 'filename' || t === 'color3' || t === 'color4';
 
+        // Spec: uimin/uimax/uisoftmin/uisoftmax/uistep only make sense on
+        // numeric-valued types.
+        const ifaceNumericType = (t) => ['float', 'integer', 'vector2', 'vector3', 'vector4',
+            'color3', 'color4'].indexOf(t) !== -1;
+
+        // Spec: shader-semantic types carry no literal default value.
+        const ifaceLiteralType = (t) => ['surfaceshader', 'displacementshader', 'volumeshader',
+            'BSDF', 'EDF', 'VDF', 'lightshader', 'material'].indexOf(t) === -1;
+
         // Builds descriptor + edge lists for one scope: '' = document root
         // (top-level nodes/nodegraphs/outputs), or a nodegraph name (its
         // nodes plus pseudo-nodes for interface inputs and outputs).
@@ -533,4 +542,5 @@ Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef, signatureInputTypes, CLOSURE_TYPES, isClosureModifier,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG, ifaceColorManaged,
+    ifaceNumericType, ifaceLiteralType,
 });

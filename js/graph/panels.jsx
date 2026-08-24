@@ -146,7 +146,13 @@
                                     <select
                                         className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
                                         value={ifaceDraft.type}
-                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { type: e.target.value }))}
+                                        onChange={(e) => {
+                                            const type = e.target.value;
+                                            const patch = { type };
+                                            if (!ifaceNumericType(type)) { patch.uimin = ''; patch.uimax = ''; }
+                                            if (!ifaceLiteralType(type)) patch.value = '';
+                                            setIfaceDraft(Object.assign({}, ifaceDraft, patch));
+                                        }}
                                     >
                                         {IFACE_VALUE_TYPES.map((t) => (
                                             <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
@@ -178,14 +184,16 @@
                                                         spellCheck={false}
                                                         onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uifolder: e.target.value }))}
                                                     />
-                                                    <input
-                                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
-                                                        placeholder="default value (optional)"
-                                                        value={ifaceDraft.value}
-                                                        spellCheck={false}
-                                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { value: e.target.value }))}
-                                                    />
-                                                    {(ifaceDraft.type === 'float' || ifaceDraft.type === 'integer') && (
+                                                    {ifaceLiteralType(ifaceDraft.type) && (
+                                                        <input
+                                                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                            placeholder="default value (optional)"
+                                                            value={ifaceDraft.value}
+                                                            spellCheck={false}
+                                                            onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { value: e.target.value }))}
+                                                        />
+                                                    )}
+                                                    {ifaceNumericType(ifaceDraft.type) && (
                                                         <div className="flex items-center gap-1.5">
                                                             <input
                                                                 className="w-1/2 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"

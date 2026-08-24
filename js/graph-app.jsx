@@ -3852,12 +3852,12 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 // options" disclosure: value/colorspace/ui* attrs, all
                 // optional. Outputs never carry meta.
                 if (kind === 'iface-input' && meta) {
-                    if (meta.value) mxWriteValue(el, meta.value, type);
+                    if (meta.value && ifaceLiteralType(type)) mxWriteValue(el, meta.value, type);
                     if (meta.colorspace && ifaceColorManaged(type)) mxSetColorspace(el, meta.colorspace);
                     if (meta.uiname) mxSetAttr(el, 'uiname', meta.uiname);
                     if (meta.uifolder) mxSetAttr(el, 'uifolder', meta.uifolder);
-                    if (meta.uimin) mxSetAttr(el, 'uimin', meta.uimin);
-                    if (meta.uimax) mxSetAttr(el, 'uimax', meta.uimax);
+                    if (meta.uimin && ifaceNumericType(type)) mxSetAttr(el, 'uimin', meta.uimin);
+                    if (meta.uimax && ifaceNumericType(type)) mxSetAttr(el, 'uimax', meta.uimax);
                     if (meta.uiadvanced) mxSetAttr(el, 'uiadvanced', 'true');
                 }
 
@@ -3865,11 +3865,12 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 const data = kind === 'iface-input'
                     ? {
                         id, kind: 'input', name, category: 'interface input', type,
-                        inputs: [], allInputs: [], value: (meta && meta.value) || '',
+                        inputs: [], allInputs: [], value: (ifaceLiteralType(type) && meta && meta.value) || '',
                         outputs: [{ name: 'out', type }], portMode: 'authored',
                         colorspace: (meta && meta.colorspace) || '', colorManaged: ifaceColorManaged(type),
                         uiname: (meta && meta.uiname) || '', uifolder: (meta && meta.uifolder) || '',
-                        uimin: (meta && meta.uimin) || '', uimax: (meta && meta.uimax) || '',
+                        uimin: (ifaceNumericType(type) && meta && meta.uimin) || '',
+                        uimax: (ifaceNumericType(type) && meta && meta.uimax) || '',
                         uisoftmin: '', uisoftmax: '', defColorspace: '',
                         uiadvanced: !!(meta && meta.uiadvanced),
                     }
@@ -5341,12 +5342,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const panelReadOnly = !!displayNode && displayNode.id.indexOf('o:') === 0;
             const panelInputs = !displayNode ? [] :
                 (displayNode.id.indexOf('i:') === 0
-                    ? [{ name: 'value', type: displayNode.data.type,
-                         value: displayNode.data.value || '', connected: false,
-                         colorspace: displayNode.data.colorspace, colorManaged: displayNode.data.colorManaged,
-                         uimin: displayNode.data.uimin, uimax: displayNode.data.uimax,
-                         uisoftmin: displayNode.data.uisoftmin, uisoftmax: displayNode.data.uisoftmax,
-                         defColorspace: '' }]
+                    ? (ifaceLiteralType(displayNode.data.type)
+                        ? [{ name: 'value', type: displayNode.data.type,
+                             value: displayNode.data.value || '', connected: false,
+                             colorspace: displayNode.data.colorspace, colorManaged: displayNode.data.colorManaged,
+                             uimin: displayNode.data.uimin, uimax: displayNode.data.uimax,
+                             uisoftmin: displayNode.data.uisoftmin, uisoftmax: displayNode.data.uisoftmax,
+                             defColorspace: '' }]
+                        : [])
                     : (displayNode.data.allInputs || displayNode.data.inputs || []));
             // Group panelInputs by uifolder (item F2.3): ungrouped inputs
             // render first; foldered ones bucket under a collapsible
@@ -6422,22 +6425,26 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                             onCommit={(v) => applyInterfaceMeta(displayNode.id, { uifolder: v })}
                                                         />
                                                     </div>
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimin</span>
-                                                        <IfaceMetaField
-                                                            value={displayNode.data.uimin}
-                                                            placeholder="(none)"
-                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
-                                                        />
-                                                    </div>
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimax</span>
-                                                        <IfaceMetaField
-                                                            value={displayNode.data.uimax}
-                                                            placeholder="(none)"
-                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
-                                                        />
-                                                    </div>
+                                                    {ifaceNumericType(displayNode.data.type) && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimin</span>
+                                                            <IfaceMetaField
+                                                                value={displayNode.data.uimin}
+                                                                placeholder="(none)"
+                                                                onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                    {ifaceNumericType(displayNode.data.type) && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimax</span>
+                                                            <IfaceMetaField
+                                                                value={displayNode.data.uimax}
+                                                                placeholder="(none)"
+                                                                onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
+                                                            />
+                                                        </div>
+                                                    )}
                                                     <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
                                                         <input
                                                             type="checkbox"
