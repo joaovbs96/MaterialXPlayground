@@ -1,0 +1,62 @@
+{
+  "name": "materialx-playground-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main/main.js",
+  "devDependencies": {
+    "electron": "43.4.1",
+    "electron-builder": "26.15.3",
+    "jimp": "1.6.1",
+    "png-to-ico": "3.0.2"
+  },
+  "build": {
+    "appId": "com.joaovbs96.materialxplayground",
+    "productName": "MaterialX Playground",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main/**/*",
+      "preload/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dist-site",
+        "to": "site"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png"
+    },
+    "fileAssociations": [
+      {
+        "ext": "mtlx",
+        "name": "MaterialX Document",
+        "role": "Editor"
+      }
+    ]
+  }
+}

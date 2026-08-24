@@ -3,6 +3,10 @@ node_modules/
 vendor/materialx/
 *.vsix
 
+# electron/: local dev/pack output, never committed.
+electron/dist/
+electron/dist-site/
+
 # Generated into the Pages artifact by deploy.yml at release time, never
 # committed: a committed copy would serve a stale version locally. Kept out
 # of js/** on purpose since the deterministic build id hashes js/** from disk.

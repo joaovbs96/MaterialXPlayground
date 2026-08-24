@@ -33,7 +33,9 @@
     "test:embed:smoke": "playwright test --grep @smoke",
     "gallery:manifest": "node scripts/build-gallery.mjs",
     "gallery:thumbs": "node scripts/gallery-shots.mjs",
-    "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs"
+    "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs",
+    "electron:dev": "node electron/scripts/dev.mjs",
+    "electron:pack": "node electron/scripts/pack.mjs"
   },
   "devDependencies": {
     "@babel/standalone": "7.26.10",
