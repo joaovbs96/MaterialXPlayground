@@ -98,6 +98,32 @@
     display: none;
 }
 
+/* Window Controls Overlay (Electron shell, marker class in site-header.js):
+   drag region for the OS title bar; padding-right reserves the overlay
+   button corner via titlebar-area-x/width (absent means zero extra padding). */
+.mtlx-header-bar.mtlx-desktop-titlebar {
+    -webkit-app-region: drag;
+    app-region: drag;
+    padding-right: calc(12px + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+}
+@media (min-width: 640px) {
+    .mtlx-header-bar.mtlx-desktop-titlebar {
+        padding-right: calc(24px + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+    }
+}
+/* Every interactive descendant opts out of the drag region: nav links,
+   group triggers plus their popover panels (.mtlx-menu, incl. disabled
+   rows), the version/source pills, and the mobile hamburger toggle. */
+.mtlx-header-bar.mtlx-desktop-titlebar a,
+.mtlx-header-bar.mtlx-desktop-titlebar button,
+.mtlx-header-bar.mtlx-desktop-titlebar select,
+.mtlx-header-bar.mtlx-desktop-titlebar input,
+.mtlx-header-bar.mtlx-desktop-titlebar [role="button"],
+.mtlx-header-bar.mtlx-desktop-titlebar .mtlx-menu {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+}
+
 /* Brand: logo mark + site title. Color lives on the outer element
    (anchor in the SPA/tutorials, a plain span under VS Code — same class
    either way) and cascades to the icon/title via normal CSS

@@ -348,12 +348,17 @@
             '</a>';
     }).join('');
 
+    // Desktop shell only: marks the header bar as the WCO draggable title
+    // bar (js/site-header.css + electron/main/main.js's titleBarOverlay).
+    // Native min/max/close buttons render over its right edge, themed to match.
+    var DESKTOP_TITLEBAR_CLASS = window.__MTLX_ELECTRON__ ? ' mtlx-desktop-titlebar' : '';
+
     // Markup below is styled entirely by js/site-header.css (`mtlx-`
     // prefixed classes, no Tailwind utilities), so it renders identically
     // whether or not Tailwind Play is loaded on the page.
     var html =
         '<header class="mtlx-header">' +
-            '<div id="mtlx-header-bar" class="mtlx-header-bar">' +
+            '<div id="mtlx-header-bar" class="mtlx-header-bar' + DESKTOP_TITLEBAR_CLASS + '">' +
 
                 // Brand: logo mark + site title, linking to the shell's
                 // home view (#!home). Under VS Code there's no home to
