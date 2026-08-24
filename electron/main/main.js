@@ -645,6 +645,13 @@ function openMtlxRouted(filePath) {
     openMtlxFromDisk(filePath, target, false);
 }
 
+// Window Controls Overlay theming: matches .mtlx-header's rgba(17,24,39,.95)
+// blended over the same #111827 page background, and the gray-200 icon
+// color from js/site-tokens.css; height matches --site-header-height.
+const TITLEBAR_OVERLAY_COLOR = '#111827';
+const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e5e7eb';
+const TITLEBAR_OVERLAY_HEIGHT = 56;
+
 function createWindow() {
     const win = new BrowserWindow({
         width: 1440,
@@ -654,6 +661,17 @@ function createWindow() {
         backgroundColor: '#0b0f19',
         show: false,
         icon: process.platform === 'darwin' ? undefined : path.join(__dirname, '..', 'build', 'icon.ico'),
+        // Hides the native title bar behind the site header, which becomes
+        // the draggable bar (see js/site-header.js/.css); autoHideMenuBar
+        // only hides the menu strip visually (Alt reveals it) and does not
+        // unregister the application menu, so accelerators keep working.
+        titleBarStyle: 'hidden',
+        titleBarOverlay: {
+            color: TITLEBAR_OVERLAY_COLOR,
+            symbolColor: TITLEBAR_OVERLAY_SYMBOL_COLOR,
+            height: TITLEBAR_OVERLAY_HEIGHT,
+        },
+        autoHideMenuBar: true,
         webPreferences: {
             contextIsolation: true,
             // Sandboxed preloads only get a curated Node module subset
@@ -707,20 +725,40 @@ function createWindow() {
     win.loadURL(START_URL);
 
     if (process.env.MTLX_SMOKE === '1') {
-        win.webContents.once('did-finish-load', () => {
+        win.webContents.once('did-finish-load', async () => {
             const currentUrl = win.webContents.getURL();
             const title = win.webContents.getTitle();
             const appMenu = Menu.getApplicationMenu();
             const fileMenu = appMenu && appMenu.items.find((item) => item.label === 'File');
             const hasSave = fileMenu && fileMenu.submenu.items.some((item) => item.label === 'Save');
             const menuOk = !!(appMenu && fileMenu && hasSave);
+
+            // Window Controls Overlay: the header bar must carry the
+            // desktop-titlebar marker class and actually be a drag region,
+            // or the whole overlay affordance is dead.
+            let titlebarOk = false;
+            try {
+                titlebarOk = await win.webContents.executeJavaScript(
+                    '(function () {' +
+                    '  var bar = document.getElementById("mtlx-header-bar");' +
+                    '  if (!bar) return false;' +
+                    '  if (!bar.classList.contains("mtlx-desktop-titlebar")) return false;' +
+                    '  var region = getComputedStyle(bar).getPropertyValue("app-region") || ' +
+                    '    getComputedStyle(bar).getPropertyValue("-webkit-app-region");' +
+                    '  return region.trim() === "drag";' +
+                    '})()'
+                );
+            } catch (e) {
+                titlebarOk = false;
+            }
+
             // The empty write's callback only fires once the console.log
             // above has actually flushed, same race/fix as finishSmoke.
-            if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title && menuOk) {
+            if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title && menuOk && titlebarOk) {
                 console.log('[smoke] OK ' + title);
                 process.stdout.write('', () => app.quit());
             } else {
-                console.log('[smoke] FAIL bad url, empty title, or missing menu: ' + currentUrl);
+                console.log('[smoke] FAIL bad url, empty title, missing menu, or bad titlebar: ' + currentUrl);
                 process.stdout.write('', () => app.exit(1));
             }
         });
