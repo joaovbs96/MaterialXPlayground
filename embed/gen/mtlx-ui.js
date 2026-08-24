@@ -1264,6 +1264,19 @@ const GEOM_LABELS = {
   'custom': 'Custom Model'
 };
 
+// Tile-only label override: a controlled line break for the two
+// GEOM_LABELS entries long enough to wrap arbitrarily inside a
+// GeometryTile. Every other caller keeps the plain GEOM_LABELS string.
+const GEOM_TILE_LABEL_BREAKS = {
+  'shaderball-scene': ['Std. Shader Ball', 'w/ Backdrop'],
+  'shaderball-mtlx': ['MaterialX', 'Shader Ball']
+};
+const geomTileLabel = g => {
+  const lines = GEOM_TILE_LABEL_BREAKS[g];
+  if (!lines) return GEOM_LABELS[g] || g;
+  return /*#__PURE__*/React.createElement(React.Fragment, null, lines[0], /*#__PURE__*/React.createElement("br", null), lines[1]);
+};
+
 // Icons for the preview-geometry options (GeometryTile rows).
 const GEOM_ICONS = {
   'shaderball-scene': 'inner-shadow-bottom-right',
@@ -1491,11 +1504,14 @@ function CustomModelTile({
   return /*#__PURE__*/React.createElement("div", {
     className: 'relative rounded-lg border overflow-hidden w-full transition-colors ' + (selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600') + (className ? ' ' + className : '')
   }, /*#__PURE__*/React.createElement("span", {
-    className: "absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300"
+    className: 'absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border ' + SELECT_BADGE_TONE_CLS.warn,
+    style: {
+      color: MXS_BADGE_WARN
+    }
   }, "Experimental"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: handleTopClick,
-    className: "w-full h-9 flex items-center justify-center gap-2 pl-3 pr-16"
+    className: "w-full h-9 flex items-center justify-center gap-2 px-3"
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: GEOM_ICONS['custom'],
     className: "w-4 h-4 shrink-0"
@@ -3361,6 +3377,7 @@ Object.assign(window, {
   GEOM_LABELS,
   GEOM_ICONS,
   defaultGeomFor,
+  geomTileLabel,
   errMsg,
   useEscapeToClose,
   useNarrowPane,

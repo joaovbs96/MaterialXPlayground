@@ -1348,7 +1348,7 @@ function MaterialViewerApp({
     className: "grid grid-cols-2 gap-2"
   }, VIEWER_GEOM_NAMES.map(g => /*#__PURE__*/React.createElement(GeometryTile, {
     key: g,
-    label: GEOM_LABELS[g] || g,
+    label: geomTileLabel(g),
     icon: GEOM_ICONS[g],
     selected: geom === g,
     onClick: () => {

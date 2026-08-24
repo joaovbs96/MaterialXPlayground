@@ -1601,7 +1601,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 {GEOM_OPTIONS.map((g) => (
                                     <GeometryTile
                                         key={g}
-                                        label={GEOM_LABELS[g] || g}
+                                        label={geomTileLabel(g)}
                                         icon={GEOM_ICONS[g]}
                                         selected={geom === g}
                                         onClick={() => {

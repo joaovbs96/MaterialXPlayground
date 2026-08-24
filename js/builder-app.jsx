@@ -1453,7 +1453,7 @@ function BuilderApp({ active } = {}) {
                         return (
                             <GeometryTile
                                 key={g}
-                                label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
+                                label={window.geomTileLabel ? window.geomTileLabel(g) : ((window.GEOM_LABELS && window.GEOM_LABELS[g]) || g)}
                                 icon={GEOM_ICONS[g]}
                                 selected={geometry === g}
                                 disabled={geomDisabled}
