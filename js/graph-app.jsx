@@ -442,6 +442,9 @@
             // This tab's current autosave session id, set by adoptSession()
             // in the mount effect below.
             const autosaveIdRef = React.useRef(null);
+            // This tab's PREVIOUS rotation of that id (adoptSession's
+            // prevId), for File > Restore Autosaved's offerable() call.
+            const prevSessionIdRef = React.useRef(null);
             // Texture fileMap keys already confirmed stored in IndexedDB,
             // diffed on every dirty flush so only new/changed keys are
             // re-put.
@@ -1403,6 +1406,7 @@
                 if (!AUTOSAVE_ON) return;
                 const auto = window.MtlxAutosave.adoptSession();
                 autosaveIdRef.current = auto.id;
+                prevSessionIdRef.current = auto.prevId;
                 const continueRecord = auto.continueId ? window.MtlxAutosave.readRecord(auto.continueId) : null;
                 // Set BEFORE anything async: closes the default-doc fetch
                 // race on a warm cache (localStorage reads are sync).
@@ -5325,6 +5329,15 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
                     title: 'Load a curated official MaterialX example document',
+                },
+                AUTOSAVE_ON && {
+                    label: 'Restore Autosaved…', icon: 'restore',
+                    onSelect: () => {
+                        const offers = window.MtlxAutosave.offerable(autosaveIdRef.current, prevSessionIdRef.current);
+                        if (offers.length) setRestoreOffer(offers);
+                        else setStatus('No autosaved sessions to restore.');
+                    },
+                    title: 'Browse and restore a previous editing session recovered from autosave',
                 },
                 !IN_VSCODE && { separator: true },
                 {
