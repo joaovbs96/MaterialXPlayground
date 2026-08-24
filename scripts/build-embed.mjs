@@ -40,7 +40,7 @@ const INTENTIONALLY_EXCLUDED = {
 };
 
 // Matches `<script ... src="PATH">` tags where PATH starts with
-// `vendor/three/`, `vendor/utif/` or `js/vendor/` — the script families this
+// `vendor/three/`, `vendor/utif/` or `js/vendor/`, the script families this
 // guard tracks (three.js core + its loaders, plus the UTIF.js TIFF decoder).
 // Deliberately narrow: index.html also loads vendor/react/**,
 // vendor/tailwind/**, vendor/babel/**, etc., none of which this guard is about.
