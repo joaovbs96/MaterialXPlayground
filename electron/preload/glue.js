@@ -20,7 +20,7 @@
                 blobMap[key] = new Blob([rawFiles[key]]);
             });
         }
-        var loaded = { xml: payload.xml, name: payload.name, files: blobMap };
+        var loaded = { xml: payload.xml, name: payload.name, files: blobMap, reload: payload.reload };
         window.__mtlxPendingImport = loaded;
         window.__mtlxPendingViewerImport = loaded;
         window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: loaded }));

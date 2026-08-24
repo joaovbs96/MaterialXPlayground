@@ -1357,10 +1357,10 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    // Under VS Code or Electron the .mtlx file is the source
-                    // of truth (resent per edit, or watched on disk), so this
-                    // bypasses the confirm dialog; first ingest()s, then externalReload.
-                    if (IN_VSCODE || IN_ELECTRON) {
+                    // The soft (no-confirm) path is for a host-driven reload of
+                    // the SAME document already open (VS Code always; Electron
+                    // only when payload.reload flags its own file watcher).
+                    if (IN_VSCODE || (IN_ELECTRON && payload.reload)) {
                         if (parsedRef.current) externalReloadRef.current(map);
                         else ingestRef.current(map);
                     } else {

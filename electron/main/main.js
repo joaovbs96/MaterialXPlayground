@@ -178,7 +178,7 @@ function startWatcher(win, filePath) {
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 debounceTimer = null;
-                openMtlxFromDisk(filePath, win);
+                openMtlxFromDisk(filePath, win, true);
             }, RELOAD_DEBOUNCE_MS);
         });
     } catch (e) {
@@ -249,9 +249,9 @@ function requestSaveFromRenderer(win) {
 }
 
 // Reads filePath, scans it for xi:include/texture refs, and sends the
-// result to win as 'mtlx-open-file'; used for the initial launch-time
-// open, file association re-opens, and the disk watcher's re-ingest.
-async function openMtlxFromDisk(filePath, win) {
+// result to win as 'mtlx-open-file'. isReload marks a host-driven re-feed
+// of the same document; only the disk watcher passes true.
+async function openMtlxFromDisk(filePath, win, isReload = false) {
     let xml;
     try {
         xml = (await fs.readFile(filePath)).toString('utf8');
@@ -283,7 +283,7 @@ async function openMtlxFromDisk(filePath, win) {
     startWatcher(win, filePath);
     updateWindowTitle(win);
 
-    const payload = { name, xml, files };
+    const payload = { name, xml, files, reload: isReload };
     if (win.webContents.isLoading()) {
         win.webContents.once('did-finish-load', () => win.webContents.send('mtlx-open-file', payload));
     } else {
@@ -329,7 +329,7 @@ async function runSmokeOpen(filePath) {
             // Best-effort probe only; falls back to the non-empty check below.
         }
 
-        await openMtlxFromDisk(filePath, win);
+        await openMtlxFromDisk(filePath, win, false);
 
         const deadline = Date.now() + 30000;
         while (Date.now() < deadline) {
@@ -437,7 +437,7 @@ function buildRecentSubmenu() {
                 rebuildMenu();
                 return;
             }
-            openMtlxFromDisk(filePath, win || createWindow());
+            openMtlxFromDisk(filePath, win || createWindow(), false);
         },
     }));
     items.push({ type: 'separator' });
@@ -468,7 +468,7 @@ function buildMenuTemplate() {
                             ? await dialog.showOpenDialog(win, options)
                             : await dialog.showOpenDialog(options);
                         if (result.canceled || !result.filePaths[0]) return;
-                        openMtlxFromDisk(result.filePaths[0], win || createWindow());
+                        openMtlxFromDisk(result.filePaths[0], win || createWindow(), false);
                     },
                 },
                 { label: 'Open Recent', submenu: buildRecentSubmenu() },
@@ -664,7 +664,7 @@ if (!gotLock) {
         const filePath = getMtlxArg(argv);
         if (filePath) {
             const win = createWindow();
-            openMtlxFromDisk(filePath, win);
+            openMtlxFromDisk(filePath, win, false);
         } else if (BrowserWindow.getAllWindows().length === 0) {
             createWindow();
         } else {
@@ -683,7 +683,7 @@ if (!gotLock) {
             return;
         }
         const win = BrowserWindow.getAllWindows()[0] || createWindow();
-        openMtlxFromDisk(path.resolve(filePath), win);
+        openMtlxFromDisk(path.resolve(filePath), win, false);
     });
 
     app.whenReady().then(() => {
@@ -708,7 +708,7 @@ if (!gotLock) {
         const win = createWindow();
         const argFile = pendingOpenFilePath || getMtlxArg(process.argv);
         pendingOpenFilePath = null;
-        if (argFile) openMtlxFromDisk(argFile, win);
+        if (argFile) openMtlxFromDisk(argFile, win, false);
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) createWindow();
