@@ -1809,20 +1809,15 @@ const instantiateShaderballScene = async (mode /* 'full' | 'simple' */) => {
     return { group, surfaceMesh, glbCamera, ownedMaterials };
 };
 
-// The official ASWF MaterialX shaderball (gh-pages branch asset), fetched
-// once and cached — reference geometry alongside the bundled models/*.glb
-// presets. mtlx-assets.js's ghPagesUrl() was removed in 6da20b1 along with
-// this geometry, so its gh-pages-branch URL is rebuilt here instead.
+// The MaterialX project's shader ball (models/shaderball_mtlx.glb, see
+// models/LICENSE_shaderball_mtlx.txt): fetched once and cached as
+// reference geometry alongside the bundled models/*.glb presets.
 let shaderballMtlxPromise = null;
 const getShaderballMtlxGeometry = () => {
     if (!shaderballMtlxPromise) {
         shaderballMtlxPromise = (async () => {
             if (!THREE.GLTFLoader) return null;
-            if (window.MtlxAssets && window.MtlxAssets.ready) await window.MtlxAssets.ready;
-            const local = window.MtlxAssets && window.MtlxAssets.isLocal && window.MtlxAssets.isLocal();
-            const url = local
-                ? new URL('vendor/materialx/gh-pages/Geometry/shaderball.glb', document.baseURI).href
-                : 'https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/gh-pages/Geometry/shaderball.glb';
+            const url = new URL('models/shaderball_mtlx.glb', document.baseURI).href;
             return new Promise((resolve) => {
                 new THREE.GLTFLoader().load(url, (gltf) => {
                     try {
