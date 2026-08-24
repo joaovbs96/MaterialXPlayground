@@ -344,6 +344,35 @@ function ColorField({ label, value, onChange, placeholder }) {
     );
 }
 
+// A text input with a small x button at its right edge, shown only once
+// there's a value to clear. Mirrors FilePickerField's own clear-x
+// (js/shared/mtlx-ui.jsx) so every URL field in the builder matches.
+function ClearableTextField({ value, onChange, onBlur, onKeyDown, placeholder, onClear }) {
+    return (
+        <div className="relative">
+            <input
+                type="text"
+                value={value}
+                onChange={onChange}
+                onBlur={onBlur}
+                onKeyDown={onKeyDown}
+                placeholder={placeholder}
+                className={TEXT_INPUT_CLS + (value ? ' pr-7' : '')}
+            />
+            {value && (
+                <button
+                    type="button"
+                    title="Clear"
+                    onClick={onClear}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                >
+                    <MtlxIcon name="x" className="w-3 h-3" />
+                </button>
+            )}
+        </div>
+    );
+}
+
 // Small amber "reloads the frame" pill, reused inline next to a field
 // label or a section title (BUILDER's live/reload split, docs/EMBEDDING.md).
 function ReloadsPill({ className }) {
@@ -1266,9 +1295,6 @@ function BuilderApp({ active } = {}) {
     const themeSummary = activeThemePreset ? activeThemePreset.label : 'Custom';
     const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
     const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
-    // A custom model URL takes over the geometry entirely - every built-in
-    // tile is disabled while one is set (docs/EMBEDDING.md geometryUrl).
-    const urlActive = !!geometryUrl.trim();
     // Std. Shader Ball w/ Backdrop is an opaque authored room; several
     // controls below are dead against it, all keyed on this condition.
     const roomGeom = geometry === 'shaderball-scene';
@@ -1358,13 +1384,13 @@ function BuilderApp({ active } = {}) {
         <SectionCard key="doc" icon="file-text" title="Document" pill={<ReloadsPill />} summary={docSummary} defaultOpen={defaultOpen}>
             <div>
                 <FieldLabel label="Document URL (src)" />
-                <input
-                    type="text" value={src}
+                <ClearableTextField
+                    value={src}
                     onChange={(e) => { patch({ src: e.target.value }); setPresetPick(''); }}
                     onBlur={commitSrc}
                     onKeyDown={(e) => { if (e.key === 'Enter') { commitSrc(); e.currentTarget.blur(); } }}
                     placeholder="https://example.com/materials/brushed_steel.mtlx"
-                    className={TEXT_INPUT_CLS}
+                    onClear={() => { patch({ src: '' }); setPresetPick(''); commitSrcValue(''); }}
                 />
                 <p className="text-[11px] text-gray-500 mt-1">Applies on Enter or when the field loses focus.</p>
             </div>
@@ -1423,7 +1449,7 @@ function BuilderApp({ active } = {}) {
                 <FieldLabel label="Geometry" />
                 <div className="grid grid-cols-3 gap-2">
                     {BUILDER_GEOM_OPTIONS.map((g) => {
-                        const geomDisabled = urlActive || (g === 'shaderball-scene' && transparent);
+                        const geomDisabled = g === 'shaderball-scene' && transparent;
                         return (
                             <GeometryTile
                                 key={g}
@@ -1431,8 +1457,18 @@ function BuilderApp({ active } = {}) {
                                 icon={GEOM_ICONS[g]}
                                 selected={geometry === g}
                                 disabled={geomDisabled}
-                                title={urlActive ? 'Not available while a custom model URL is set' : (geomDisabled ? 'Not available with a transparent page background' : undefined)}
-                                onClick={() => patch({ geometry: g })}
+                                title={geomDisabled ? 'Not available with a transparent page background' : undefined}
+                                onClick={() => {
+                                    // Picking a tile while a model URL is active clears the
+                                    // URL as part of the pick, and pushes the clear through
+                                    // the preview element itself (state alone won't commit it).
+                                    if (geometryUrl.trim()) {
+                                        patch({ geometry: g, geometryUrl: '' });
+                                        commitGeometryUrlValue('');
+                                    } else {
+                                        patch({ geometry: g });
+                                    }
+                                }}
                             />
                         );
                     })}
@@ -1440,13 +1476,13 @@ function BuilderApp({ active } = {}) {
             </div>
             <div>
                 <FieldLabel label="Custom model URL (.obj / .glb / .gltf)" />
-                <input
-                    type="text" value={geometryUrl}
+                <ClearableTextField
+                    value={geometryUrl}
                     onChange={(e) => patch({ geometryUrl: e.target.value })}
                     onBlur={commitGeometryUrl}
                     onKeyDown={(e) => { if (e.key === 'Enter') { commitGeometryUrl(); e.currentTarget.blur(); } }}
                     placeholder="https://example.com/models/prop.glb"
-                    className={TEXT_INPUT_CLS}
+                    onClear={() => { patch({ geometryUrl: '' }); commitGeometryUrlValue(''); }}
                 />
             </div>
         </SectionCard>,
@@ -1454,13 +1490,13 @@ function BuilderApp({ active } = {}) {
         <SectionCard key="lighting" icon="sun" title="Lighting" summary={builderLightingSummary(env, exposure)} defaultOpen={defaultOpen}>
             <div>
                 <FieldLabel label="Environment map URL (.hdr / .exr)" />
-                <input
-                    type="text" value={envmap}
+                <ClearableTextField
+                    value={envmap}
                     onChange={(e) => patch({ envmap: e.target.value })}
                     onBlur={commitEnvmap}
                     onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
                     placeholder="(default environment)"
-                    className={TEXT_INPUT_CLS}
+                    onClear={() => { patch({ envmap: '' }); commitEnvmapValue(''); }}
                 />
             </div>
             <SliderField

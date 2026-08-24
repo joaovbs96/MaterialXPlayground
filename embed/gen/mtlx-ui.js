@@ -1467,6 +1467,82 @@ function GeometryTile({
   }, label));
 }
 
+// Composite Scene-card control replacing the paired GeometryTile +
+// FilePickerField rows: top row selects/loads, bottom row (once expanded)
+// shows the file. Expansion is owned by the caller so it persists.
+function CustomModelTile({
+  name,
+  selected,
+  expanded,
+  accept,
+  onSelect,
+  onExpand,
+  onFiles,
+  onClear,
+  className
+}) {
+  const inputRef = React.useRef(null);
+  const openPicker = () => {
+    if (inputRef.current) inputRef.current.click();
+  };
+  const handleTopClick = () => {
+    if (name) onSelect();else if (expanded) openPicker();else onExpand();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: 'rounded-lg border overflow-hidden w-full transition-colors ' + (selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600') + (className ? ' ' + className : '')
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: handleTopClick,
+    className: "w-full h-9 flex items-center gap-2 px-3"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: GEOM_ICONS['custom'],
+    className: "w-4 h-4 shrink-0"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] truncate"
+  }, GEOM_LABELS['custom'])), expanded && /*#__PURE__*/React.createElement("div", {
+    className: "h-7 flex border-t border-gray-700/60"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "relative min-w-0 flex-1 flex items-center px-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: 'truncate text-[11px]' + (name ? ' pr-5' : '')
+  }, name || /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-500"
+  }, "No model loaded")), name && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "Clear",
+    onClick: e => {
+      e.stopPropagation();
+      onClear();
+    },
+    className: "absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "x",
+    className: "w-3 h-3"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "border-l border-gray-700/60 flex items-center px-2.5 shrink-0"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: e => {
+      e.stopPropagation();
+      openPicker();
+    },
+    className: "inline-flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 whitespace-nowrap"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "file-import",
+    className: "w-3.5 h-3.5"
+  }), "Choose"))), /*#__PURE__*/React.createElement("input", {
+    ref: inputRef,
+    type: "file",
+    accept: accept,
+    className: "hidden",
+    onChange: e => {
+      if (onFiles) onFiles(e.target.files);
+      // Clear so re-picking the SAME file still fires a change event.
+      e.target.value = '';
+    }
+  }));
+}
+
 // Joined file-picker row (read-only path display + a Choose button), one
 // field-height (~26px) control matching the graph sidebar's field rows.
 // `onChoose` drives a caller's own file dialog; else a hidden file input.
@@ -2751,10 +2827,13 @@ const MtlxSelect = ({
       className: 'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' + (o.disabled ? 'cursor-default' : 'cursor-pointer')
     }, /*#__PURE__*/React.createElement("span", {
       className: "w-3.5 flex-none"
-    }, !o.isFooter && o.value === value && /*#__PURE__*/React.createElement(MtlxIcon, {
+    }, o.isFooter ? o.icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: o.icon,
+      className: "w-3.5 h-3.5"
+    }) : o.value === value && /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "check",
       className: "w-3.5 h-3.5"
-    })), o.icon && /*#__PURE__*/React.createElement(MtlxIcon, {
+    })), o.icon && !o.isFooter && /*#__PURE__*/React.createElement(MtlxIcon, {
       name: o.icon,
       className: "w-3.5 h-3.5 flex-none"
     }), o.dot && /*#__PURE__*/React.createElement("span", {
@@ -3268,6 +3347,7 @@ Object.assign(window, {
   Chip,
   SectionCard,
   GeometryTile,
+  CustomModelTile,
   FilePickerField,
   EV_MIN,
   EV_MAX,

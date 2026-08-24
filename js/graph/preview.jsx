@@ -866,7 +866,7 @@
                     labels={GRAPH_GEOM_LABELS}
                     badges={GRAPH_GEOM_BADGES}
                     footerAction={{
-                        label: hasCustom ? 'Replace model...' : 'Import model...',
+                        label: 'Import Custom Model...',
                         icon: 'file-import',
                         onSelect: () => { if (modelInputRef.current) modelInputRef.current.click(); },
                     }}

@@ -266,6 +266,13 @@ function MaterialViewerApp({
     return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
   }, []);
   const hasCustom = !!customGeom;
+  // Custom Model tile's expanded/collapsed state: starts open only
+  // if a model is loaded, then latches open once one loads (only
+  // clicking another tile while empty collapses it, below).
+  const [customOpen, setCustomOpen] = React.useState(() => hasCustom);
+  React.useEffect(() => {
+    if (hasCustom) setCustomOpen(true);
+  }, [hasCustom]);
   const [status, setStatus] = React.useState('Loading the default material…');
   const [error, setError] = React.useState(null);
   // Reports a failure both to the local error banner (unchanged
@@ -1244,28 +1251,25 @@ function MaterialViewerApp({
     label: GEOM_LABELS[g] || g,
     icon: GEOM_ICONS[g],
     selected: geom === g,
-    onClick: () => setGeom(g),
+    onClick: () => {
+      setGeom(g);
+      if (!hasCustom) setCustomOpen(false);
+    },
     badge: g === 'shaderball-scene' ? 'Default' : undefined
-  })), /*#__PURE__*/React.createElement(GeometryTile, {
-    label: GEOM_LABELS['custom'],
-    icon: GEOM_ICONS['custom'],
+  })), /*#__PURE__*/React.createElement(CustomModelTile, {
+    className: "col-span-2",
+    name: customGeom ? customGeom.name : '',
     selected: geom === 'custom',
-    disabled: !hasCustom,
-    title: !hasCustom ? 'Import a model file below first' : undefined,
-    onClick: () => setGeom('custom')
-  })), /*#__PURE__*/React.createElement(FieldLabel, {
-    label: "Custom model"
-  }), /*#__PURE__*/React.createElement(FilePickerField, {
-    value: customGeom ? customGeom.name : '',
-    placeholder: "No model loaded",
+    expanded: customOpen,
     accept: ".obj,.glb,.gltf",
-    icon: "file",
+    onSelect: () => setGeom('custom'),
+    onExpand: () => setCustomOpen(true),
     onFiles: files => {
       const f = files && files[0];
       if (f) importModel(f);
     },
     onClear: clearModel
-  }), modelError && /*#__PURE__*/React.createElement("div", {
+  })), modelError && /*#__PURE__*/React.createElement("div", {
     className: "text-xs text-red-400"
   }, modelError)), /*#__PURE__*/React.createElement(SectionCard, {
     icon: "sun",
@@ -1456,7 +1460,7 @@ function MaterialViewerApp({
     // hidden input above by ref instead.
     ,
     geomFooterAction: {
-      label: hasCustom ? 'Replace model...' : 'Import model...',
+      label: 'Import Custom Model...',
       icon: 'file-import',
       onSelect: () => {
         if (modelInputRef.current) modelInputRef.current.click();

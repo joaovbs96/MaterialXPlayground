@@ -483,6 +483,13 @@ function MaterialCompareApp({ active = true } = {}) {
         return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
     }, []);
     const hasCustom = !!customGeom;
+    // Custom Model tile's expanded/collapsed state: starts open only if a
+    // model is already loaded, then latches open whenever one loads (never
+    // auto-collapses -- only clicking another tile while empty does, below).
+    const [customOpen, setCustomOpen] = React.useState(() => hasCustom);
+    React.useEffect(() => {
+        if (hasCustom) setCustomOpen(true);
+    }, [hasCustom]);
     const [modelImportError, setModelImportError] = React.useState(null);
     // 'studio' matches the sitewide default (js/viewer-app.jsx and
     // EnvDialog); the room geometry above disables the picker anyway.
@@ -1500,31 +1507,28 @@ function MaterialCompareApp({ active = true } = {}) {
                                         label={GEOM_LABELS[g] || g}
                                         icon={GEOM_ICONS[g]}
                                         selected={geom === g}
-                                        onClick={() => setGeom(g)}
+                                        onClick={() => {
+                                            setGeom(g);
+                                            if (!hasCustom) setCustomOpen(false);
+                                        }}
                                         badge={g === 'shaderball-scene' ? 'Default' : undefined}
                                     />
                                 ))}
-                                <GeometryTile
-                                    label={GEOM_LABELS['custom']}
-                                    icon={GEOM_ICONS['custom']}
+                                <CustomModelTile
+                                    className="col-span-2"
+                                    name={customGeom ? customGeom.name : ''}
                                     selected={geom === 'custom'}
-                                    disabled={!hasCustom}
-                                    title={!hasCustom ? 'Import a model file below first' : undefined}
-                                    onClick={() => setGeom('custom')}
+                                    expanded={customOpen}
+                                    accept=".obj,.glb,.gltf"
+                                    onSelect={() => setGeom('custom')}
+                                    onExpand={() => setCustomOpen(true)}
+                                    onFiles={(files) => {
+                                        const f = files && files[0];
+                                        if (f) importModel(f);
+                                    }}
+                                    onClear={clearModel}
                                 />
                             </div>
-                            <FieldLabel label="Custom model" />
-                            <FilePickerField
-                                value={customGeom ? customGeom.name : ''}
-                                placeholder="No model loaded"
-                                accept=".obj,.glb,.gltf"
-                                icon="file"
-                                onFiles={(files) => {
-                                    const f = files && files[0];
-                                    if (f) importModel(f);
-                                }}
-                                onClear={clearModel}
-                            />
                             {modelImportError && <div className="text-xs text-red-400">{modelImportError}</div>}
                         </SectionCard>
 

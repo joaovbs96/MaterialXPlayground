@@ -489,15 +489,14 @@
     }
 
     // Live `geometryUrl` update: falsy `url` clears back to the boot
-    // geometry; a real URL re-fetches. Both un-mark geometryTouched so a
-    // fresh outcome is free to apply.
+    // geometry, but only if the host never explicitly set one - a clear
+    // must not undo a host-set geometry. A real URL re-fetches.
     function handleSetGeometryUrl(msg) {
         var url = msg && msg.url;
         if (!url) {
             geomUrlSeq++;
-            geometryTouched = false;
             if (typeof window.clearCustomPreviewGeom === 'function') window.clearCustomPreviewGeom();
-            props.geometry = qs.get('geometry') || undefined;
+            if (!geometryTouched) props.geometry = qs.get('geometry') || undefined;
             render();
             return;
         }

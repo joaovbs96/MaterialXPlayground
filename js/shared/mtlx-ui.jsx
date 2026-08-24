@@ -1303,6 +1303,71 @@ function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }
     );
 }
 
+// Composite Scene-card control replacing the paired GeometryTile +
+// FilePickerField rows: top row selects/loads, bottom row (once expanded)
+// shows the file. Expansion is owned by the caller so it persists.
+function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand, onFiles, onClear, className }) {
+    const inputRef = React.useRef(null);
+    const openPicker = () => { if (inputRef.current) inputRef.current.click(); };
+    const handleTopClick = () => {
+        if (name) onSelect();
+        else if (expanded) openPicker();
+        else onExpand();
+    };
+    return (
+        <div
+            className={'rounded-lg border overflow-hidden w-full transition-colors '
+                + (selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')
+                + (className ? ' ' + className : '')}
+        >
+            <button type="button" onClick={handleTopClick} className="w-full h-9 flex items-center gap-2 px-3">
+                <MtlxIcon name={GEOM_ICONS['custom']} className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] truncate">{GEOM_LABELS['custom']}</span>
+            </button>
+            {expanded && (
+                <div className="h-7 flex border-t border-gray-700/60">
+                    <div className="relative min-w-0 flex-1 flex items-center px-3">
+                        <span className={'truncate text-[11px]' + (name ? ' pr-5' : '')}>
+                            {name || <span className="text-gray-500">No model loaded</span>}
+                        </span>
+                        {name && (
+                            <button
+                                type="button"
+                                title="Clear"
+                                onClick={(e) => { e.stopPropagation(); onClear(); }}
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                            >
+                                <MtlxIcon name="x" className="w-3 h-3" />
+                            </button>
+                        )}
+                    </div>
+                    <div className="border-l border-gray-700/60 flex items-center px-2.5 shrink-0">
+                        <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openPicker(); }}
+                            className="inline-flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 whitespace-nowrap"
+                        >
+                            <MtlxIcon name="file-import" className="w-3.5 h-3.5" />
+                            Choose
+                        </button>
+                    </div>
+                </div>
+            )}
+            <input
+                ref={inputRef}
+                type="file"
+                accept={accept}
+                className="hidden"
+                onChange={(e) => {
+                    if (onFiles) onFiles(e.target.files);
+                    // Clear so re-picking the SAME file still fires a change event.
+                    e.target.value = '';
+                }}
+            />
+        </div>
+    );
+}
+
 // Joined file-picker row (read-only path display + a Choose button), one
 // field-height (~26px) control matching the graph sidebar's field rows.
 // `onChoose` drives a caller's own file dialog; else a hidden file input.
@@ -2432,11 +2497,14 @@ const MtlxSelect = ({
                             + (o.disabled ? 'cursor-default' : 'cursor-pointer')}
                     >
                         {/* Fixed check gutter so labels align selected or not,
-                            disabled rows included. */}
+                            disabled rows included; footer rows put their
+                            own icon here instead of a check. */}
                         <span className="w-3.5 flex-none">
-                            {!o.isFooter && o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
+                            {o.isFooter
+                                ? (o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5" />)
+                                : (o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />)}
                         </span>
-                        {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
+                        {o.icon && !o.isFooter && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
                         {o.dot && (
                             <span
                                 className="w-2 h-2 rounded-full inline-block shrink-0"
@@ -2864,6 +2932,6 @@ Object.assign(window, {
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     presetDocUrl, presetKey,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
-    TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile, FilePickerField,
+    TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile, CustomModelTile, FilePickerField,
     EV_MIN, EV_MAX, EV_STEP, evToLinear, linearToEv, formatEv,
 });

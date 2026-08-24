@@ -10,8 +10,9 @@
         // Geometry choices for the docs node preview (labels come from
         // the shared GEOM_LABELS map): the default list plus 'buffer2d',
         // which is deliberately absent from ViewportControls' default so
-        // the material viewer doesn't grow the option.
-        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d'];
+        // the material viewer doesn't grow the option. Order matches the
+        // Graph Editor's GRAPH_GEOM_MODES.
+        const PREVIEW_GEOM_LIST = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d'];
         // ONE global geometry choice for every docs node preview, shared by
         // the preview dropdowns and the Settings popup, in one localStorage
         // slot. Whitelist-validated on read so a corrupt/stale value falls
@@ -1724,9 +1725,9 @@
             // Shared between both geometry dropdown instances below: the
             // 'custom' entry only appears once the registry actually holds
             // a model, and its footer row opens the hidden file input.
-            const geomList = ['default'].concat(PREVIEW_GEOM_LIST).concat(hasCustom ? ['custom'] : []);
+            const geomList = PREVIEW_GEOM_LIST.concat(['default']).concat(hasCustom ? ['custom'] : []);
             const geomFooter = {
-                label: hasCustom ? 'Replace model...' : 'Import model...',
+                label: 'Import Custom Model...',
                 icon: 'file-import',
                 onSelect: () => { if (modelInputRef.current) modelInputRef.current.click(); },
             };
