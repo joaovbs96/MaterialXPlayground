@@ -406,37 +406,40 @@ const patchUnlitLightingRefs = (src) => {
     return src;
 };
 
-// Shared ACES filmic (three r128's Hill fit) + sRGB OETF transform body.
-// `inVar` is a vec3 GLSL expression (may be a bare name or `x.rgb`);
-// the returned statements declare `outVar` (vec3) as the encoded result.
-// Sole source for this math — encodeDisplay() and finalMat's linear
-// composite (see allocPeel) both emit it, so the two never drift apart.
-const ACES_SRGB_GLSL = (inVar, outVar) =>
-    '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
-    '        const mat3 _acesIn = mat3(\n' +
-    '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
-    '            vec3(0.04823, 0.01566, 0.83777)\n' +
-    '        );\n' +
-    '        const mat3 _acesOut = mat3(\n' +
-    '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
-    '            vec3(-0.07367, -0.00605,  1.07602)\n' +
-    '        );\n' +
-    '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' +
-    '        _c = _acesIn * _c;\n' +
-    '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
-    '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
-    '        _c = _acesOut * (_aces_a / _aces_b);\n' +
-    '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
-    '        vec3 _lo = _c * 12.92;\n' +
-    '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
-    '        vec3 ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n';
+// Shared display-transform GLSL body (`inVar`/`outVar`: vec3 in/out).
+// `mode` ('aces'|'srgb', see getDisplayTransform()) picks ACES filmic
+// (three r128's Hill fit) + sRGB OETF, or sRGB OETF alone (MaterialXView
+// parity). Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
+const ACES_SRGB_GLSL = (inVar, outVar, mode) => {
+    // renderer.toneMappingExposure and this pre-scale are independent
+    // knobs; this one is baked straight into RawShaderMaterial GLSL and
+    // bypasses renderer.toneMappingExposure entirely, so keep them from drifting.
+    const acesBody = mode === 'srgb' ? '' :
+        '        const mat3 _acesIn = mat3(\n' +
+        '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
+        '            vec3(0.04823, 0.01566, 0.83777)\n' +
+        '        );\n' +
+        '        const mat3 _acesOut = mat3(\n' +
+        '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
+        '            vec3(-0.07367, -0.00605,  1.07602)\n' +
+        '        );\n' +
+        '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' +
+        '        _c = _acesIn * _c;\n' +
+        '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
+        '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
+        '        _c = _acesOut * (_aces_a / _aces_b);\n';
+    return '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
+        acesBody +
+        '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
+        '        vec3 _lo = _c * 12.92;\n' +
+        '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
+        '        vec3 ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n';
+};
 
-// Injects ACES filmic tone mapping (three r128's exact constants) and
-// sRGB OETF before main()'s closing brace — RawShaderMaterial bypasses
-// renderer.toneMapping, so this keeps it matching the rest of the scene.
-// The injected block is gated at runtime (see its `if` opener below):
-// linear peel/tail passes defer this transform to finalMat's single
-// composite-time pass instead, so it isn't applied twice.
+// Injects the current display transform (getDisplayTransform(), see
+// ACES_SRGB_GLSL) before main()'s closing brace: RawShaderMaterial bypasses
+// renderer.toneMapping, so this is what keeps it matching the rest of the
+// scene. Gated at runtime (see the `if` below): linear peel/tail passes defer to finalMat's single composite-time pass instead, so it isn't applied twice.
 const encodeDisplay = (src) => {
     // Both anchors are load-bearing: a silent skip here used to ship
     // raw-linear output straight to the display with no error anywhere.
@@ -446,10 +449,11 @@ const encodeDisplay = (src) => {
     const v = m[1];
     const idx = src.lastIndexOf('}');
     if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader — MaterialX output format may have changed');
+    const mode = getDisplayTransform();
     const inject =
-        '\n    // Injected by previewer: ACES filmic tone map (three r128\'s Hill fit — see encodeDisplay()\'s header comment) then sRGB.\n' +
+        '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' +
         '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' +
-        ACES_SRGB_GLSL(v + '.rgb', '_enc') +
+        ACES_SRGB_GLSL(v + '.rgb', '_enc', mode) +
         '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' +
         '    }\n';
     return src.slice(0, idx) + inject + src.slice(idx);
@@ -1398,6 +1402,40 @@ const setGlobalGeom = (value) => {
         try { localStorage.setItem(GLOBAL_GEOM_KEY, value); } catch (e) { /* privacy mode */ }
     }
     window.dispatchEvent(new CustomEvent('mtlx-global-geom', { detail: { value } }));
+};
+
+// ---- Global display transform selection (shared across every tool) ----
+// 'aces' (default) matches this app's original look: ACES filmic + sRGB
+// OETF. 'srgb' is sRGB OETF alone, matching the C++ MaterialXView (no
+// tone mapping). See ACES_SRGB_GLSL's header comment for the shared math.
+const DISPLAY_TRANSFORM_KEY = 'mtlx_display_transform';
+const DISPLAY_TRANSFORM_VALUES = ['aces', 'srgb'];
+
+let MTLX_DISPLAY_TRANSFORM = null;
+
+// Runs once, on first getDisplayTransform/setDisplayTransform call.
+const initDisplayTransform = () => {
+    let stored = null;
+    try { stored = localStorage.getItem(DISPLAY_TRANSFORM_KEY); } catch (e) { /* privacy mode */ }
+    MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'aces';
+};
+
+const getDisplayTransform = () => {
+    if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
+    return MTLX_DISPLAY_TRANSFORM;
+};
+
+// Persists only from the top-realm page (same embed guard as setGlobalGeom).
+// encodeDisplay bakes the mode into shader source, so every live view must
+// fully regenerate off this event, not just refresh a uniform.
+const setDisplayTransform = (value) => {
+    if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
+    if (!DISPLAY_TRANSFORM_VALUES.includes(value) || value === MTLX_DISPLAY_TRANSFORM) return;
+    MTLX_DISPLAY_TRANSFORM = value;
+    if (window.self === window.top) {
+        try { localStorage.setItem(DISPLAY_TRANSFORM_KEY, value); } catch (e) { /* privacy mode */ }
+    }
+    window.dispatchEvent(new CustomEvent('mtlx-display-transform', { detail: { value } }));
 };
 
 // Merges every mesh under `root` into one normalized BufferGeometry.
@@ -3336,7 +3374,29 @@ void main() {
 }
 `;
 
-const STUDIO_GRADIENT_FRAGMENT_SHADER = `
+// Studio backdrop's inverse of ACES_SRGB_GLSL for the given mode: undoes
+// finalMat's forward transform so the backdrop's authored color survives
+// the peel composite's real pass unchanged. 'srgb' has no tone mapping to undo, so its inverse is just srgbToLinear.
+const studioInverseAcesSrgbGlsl = (mode) => mode === 'srgb' ?
+    'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n' :
+    'vec3 inverseAcesSrgb(vec3 col) {\n' +
+    '    const mat3 acesInInv = mat3(\n' +
+    '        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),\n' +
+    '        vec3(-0.08896329, -0.01322366, 1.19877327)\n' +
+    '    );\n' +
+    '    const mat3 acesOutInv = mat3(\n' +
+    '        vec3(0.64303825, 0.05926869, 0.00596190), vec3(0.31118675, 0.93143649, 0.06392902),\n' +
+    '        vec3(0.04577546, 0.00929492, 0.93011838)\n' +
+    '    );\n' +
+    '    vec3 y = acesOutInv * srgbToLinear(col);\n' +
+    '    vec3 qa = vec3(1.0) - 0.983729 * y;\n' +
+    '    vec3 qb = vec3(0.0245786) - 0.4329510 * y;\n' +
+    '    vec3 qc = vec3(-0.000090537) - 0.238081 * y;\n' +
+    '    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);\n' +
+    '    return (acesInInv * x) * 0.6;\n' +
+    '}\n';
+
+const STUDIO_GRADIENT_FRAGMENT_SHADER = (mode) => `
 varying vec2 vUv;
 uniform vec3 uStop0;
 uniform vec3 uStop1;
@@ -3352,25 +3412,7 @@ vec3 srgbToLinear(vec3 c) {
     return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.04045))));
 }
 
-// Exact inverse of ACES_SRGB_GLSL (mtlx-engine.js): sRGB OETF^-1, acesOut^-1,
-// invert the per-channel Hill-fit rational (positive quadratic root),
-// acesInInv, then undo the /0.6 exposure scale.
-vec3 inverseAcesSrgb(vec3 col) {
-    const mat3 acesInInv = mat3(
-        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),
-        vec3(-0.08896329, -0.01322366, 1.19877327)
-    );
-    const mat3 acesOutInv = mat3(
-        vec3(0.64303825, 0.05926869, 0.00596190), vec3(0.31118675, 0.93143649, 0.06392902),
-        vec3(0.04577546, 0.00929492, 0.93011838)
-    );
-    vec3 y = acesOutInv * srgbToLinear(col);
-    vec3 qa = vec3(1.0) - 0.983729 * y;
-    vec3 qb = vec3(0.0245786) - 0.4329510 * y;
-    vec3 qc = vec3(-0.000090537) - 0.238081 * y;
-    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);
-    return (acesInInv * x) * 0.6;
-}
+${studioInverseAcesSrgbGlsl(mode)}
 
 void main() {
     // The old CanvasTexture's flipY made uv.y=1 the canvas top, so this
@@ -3393,9 +3435,9 @@ void main() {
     float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     col += (n - 0.5) * (1.5 / 255.0);
 
-    // Peel composite applies ACES filmic then sRGB (ACES_SRGB_GLSL), so
-    // pre-apply that composite's exact inverse to stay tone-map-exempt
-    // and land back on this same display color once composited.
+    // The peel composite applies its one display transform here (see
+    // ACES_SRGB_GLSL), so pre-apply that transform's exact inverse to land
+    // back on this same display color once composited.
     if (uLinearOut > 0.5) col = inverseAcesSrgb(col);
 
     gl_FragColor = vec4(col, 1.0);
@@ -3814,11 +3856,11 @@ const createMtlxRenderView = async ({
                 renderer.setSize(cw, ch, false);
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
                 renderer.debug.checkShaderErrors = true;
-                // No-ops for the RawShaderMaterial surface (encodeDisplay
-                // bakes its transform into the shader); set here for the
-                // ordinary three materials in the scene — skybox, backplanes, neutral glTF parts.
+                // No-ops for the RawShaderMaterial surface (encodeDisplay bakes
+                // its transform in); set here for the ordinary three materials
+                // in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
                 if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
-                renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                renderer.toneMapping = getDisplayTransform() === 'srgb' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
                 renderer.toneMappingExposure = 1.0;
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] WebGLRenderer init: '
@@ -4204,7 +4246,7 @@ const createMtlxRenderView = async ({
                                         uLinearOut: { value: 0 },
                                     },
                                     vertexShader: STUDIO_GRADIENT_VERTEX_SHADER,
-                                    fragmentShader: STUDIO_GRADIENT_FRAGMENT_SHADER,
+                                    fragmentShader: STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform()),
                                     side: THREE.BackSide,
                                     fog: false,
                                 })
@@ -4874,13 +4916,14 @@ const createMtlxRenderView = async ({
                     // page since the canvas's own alpha stayed at 0.
                     // When peelLinearOk, accum.rgb is linear HDR and tOpaque
                     // (opaqueRT, also linear HDR now — see allocPeel) is
-                    // folded in HERE, so the whole frame gets ACES+sRGB
-                    // (ACES_SRGB_GLSL, shared with encodeDisplay) exactly
-                    // ONCE; the result NoBlending-replaces the canvas — no
-                    // separate opaque screen draw, no double-encoding.
+                    // folded in HERE, so the whole frame gets the display
+                    // transform (ACES_SRGB_GLSL, shared with encodeDisplay)
+                    // exactly ONCE; the result NoBlending-replaces the
+                    // canvas, no separate opaque screen draw, no double-encoding.
                     // Otherwise accum is already display-encoded opaque+
                     // transparent composited via three's own blend state,
                     // same as before (plain passthrough + CustomBlending).
+                    const displayMode = getDisplayTransform();
                     const finalMat = new THREE.RawShaderMaterial(Object.assign({
                         glslVersion: THREE.GLSL3,
                         vertexShader:
@@ -4898,7 +4941,7 @@ const createMtlxRenderView = async ({
                               '    vec4 a = texture(tAccum, vUv);\n' +
                               '    vec4 op = texture(tOpaque, vUv);\n' +
                               '    vec3 lin = a.rgb + a.a * op.rgb;\n' +
-                              ACES_SRGB_GLSL('lin', 'encv') +
+                              ACES_SRGB_GLSL('lin', 'encv', displayMode) +
                               '    float outA = (1.0 - a.a) + a.a * op.a;\n' +
                               '    o = vec4(encv, outA);\n' +
                               '}\n'
@@ -5754,6 +5797,7 @@ Object.assign(window, {
     loadCustomPreviewGeomFromFile, loadCustomPreviewGeomFromUrl,
     getCustomPreviewGeom, clearCustomPreviewGeom,
     getGlobalGeom, setGlobalGeom,
+    getDisplayTransform, setDisplayTransform,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
