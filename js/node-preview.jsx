@@ -374,11 +374,13 @@
                 });
             };
             // Load a user image into a filename sampler uniform (live).
+            // exr/hdr/tif route through mtlx-engine's dedicated decoders;
+            // everything else keeps the plain THREE.TextureLoader path.
             const onFilePick = (p, file) => {
                 if (loadingRef.current) return;
                 if (!file) return;
-                const url = URL.createObjectURL(file);
-                new THREE.TextureLoader().load(url, (tex) => {
+                const applyTex = (tex) => {
+                    if (!tex) return;
                     configureLoadedTexture(tex);
                     // Survives re-inits (geometry/regen) — see valuesRef.
                     pickedTexRef.current[p.uniform] = tex;
@@ -390,8 +392,21 @@
                     if (su && sourceUniformsRef.current && sourceUniformsRef.current[su.name]) {
                         sourceUniformsRef.current[su.name].value = tex;
                     }
-                    URL.revokeObjectURL(url);
-                }, undefined, () => URL.revokeObjectURL(url));
+                };
+                const ext = (file.name.split('.').pop() || '').toLowerCase();
+                if (ext === 'exr') {
+                    loadExrTexture(file).then(applyTex);
+                } else if (ext === 'hdr') {
+                    loadHdrTexture(file).then(applyTex);
+                } else if (ext === 'tif' || ext === 'tiff') {
+                    loadTifTexture(file).then(applyTex);
+                } else {
+                    const url = URL.createObjectURL(file);
+                    new THREE.TextureLoader().load(url, (tex) => {
+                        applyTex(tex);
+                        URL.revokeObjectURL(url);
+                    }, undefined, () => URL.revokeObjectURL(url));
+                }
                 valuesRef.current = Object.assign({}, valuesRef.current, { [p.uniform]: file.name });
                 setValues((prev) => Object.assign({}, prev, { [p.uniform]: file.name }));
             };
