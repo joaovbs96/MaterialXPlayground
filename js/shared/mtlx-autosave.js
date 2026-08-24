@@ -190,6 +190,25 @@
         return out;
     }
 
+    // Non-mutating count behind UI checks that can't run every render:
+    // same crash-ish filter as offerable(), minus its GC and its sort
+    // (prevId only reorders offerable()'s list, so isn't needed here).
+    function offerableCount(currentId) {
+        var all = listSessions();
+        var now = Date.now();
+        var count = 0;
+        for (var i = 0; i < all.length; i++) {
+            var record = all[i];
+            if (record.id === currentId) continue;
+            var savedAt = typeof record.savedAt === 'number' ? record.savedAt : 0;
+            if (now - savedAt > AGE_MAX_MS) continue;
+            var beatAt = typeof record.beat === 'number' ? record.beat : savedAt;
+            var stale = (now - beatAt) > STALE_MS;
+            if (record.closedAt != null || stale) count++;
+        }
+        return count;
+    }
+
     // One open/transaction for the whole batch, not per blob like the
     // old handoff capture() chain. Stops once the running byte total
     // would exceed BYTES_BUDGET; resolves the keys actually stored.
@@ -382,6 +401,7 @@
         readRecord: readRecord,
         listSessions: listSessions,
         offerable: offerable,
+        offerableCount: offerableCount,
         removeSession: removeSession,
         putBlobs: putBlobs,
         getBlobs: getBlobs,
@@ -396,5 +416,6 @@
         BYTES_BUDGET: BYTES_BUDGET,
         BEAT_MS: BEAT_MS,
         STALE_MS: STALE_MS,
+        LS_PREFIX: LS_PREFIX,
     };
 })();

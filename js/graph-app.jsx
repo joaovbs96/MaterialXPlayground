@@ -490,6 +490,15 @@
                 if (AUTOSAVE_ON) window.MtlxAutosave.clearCurrent();
             };
 
+            // File > Restore Autosaved's disabled state (below): a cheap
+            // probe refreshed at a few chosen moments, not every render,
+            // since offerable() itself GCs stale records as a side effect.
+            const [restorableCount, setRestorableCount] = React.useState(0);
+            const refreshRestorable = () => {
+                if (!AUTOSAVE_ON) return;
+                setRestorableCount(window.MtlxAutosave.offerableCount(autosaveIdRef.current));
+            };
+
             // ---- Undo / redo: coarse XML-snapshot history --------------
             // Every markDirty() edit schedules a debounced full-document
             // snapshot (minus transient __pv_* preview nodes); excludes the
@@ -1406,7 +1415,7 @@
             // confirmReplace accepts, so a cancelled confirm keeps the
             // dialog open and every offered session untouched.
             const onRestoreDraft = (record) => {
-                restoreDraft(record, { onCommit: () => setRestoreOffer(null) });
+                restoreDraft(record, { onCommit: () => { setRestoreOffer(null); refreshRestorable(); } });
             };
             const onDiscardDraft = (record) => {
                 window.MtlxAutosave.removeSession(record.id);
@@ -1414,12 +1423,14 @@
                     const next = (q || []).filter((r) => r.id !== record.id);
                     return next.length ? next : null;
                 });
+                refreshRestorable();
             };
             const onDiscardAllDrafts = () => {
                 const queue = restoreOffer;
                 if (!queue) return;
                 queue.forEach((s) => window.MtlxAutosave.removeSession(s.id));
                 setRestoreOffer(null);
+                refreshRestorable();
             };
 
             // ---- Adopt this tab's autosave session, GC stale drafts, and
@@ -1441,6 +1452,7 @@
                     const offers = window.MtlxAutosave.offerable(auto.id, auto.prevId);
                     if (offers.length) setRestoreOffer(offers);
                 }
+                refreshRestorable();
                 // Mount-time only: a modal popping over active editing
                 // mid-session would be hostile. Orphans from a late-crashed
                 // sibling tab surface on the next reload instead.
@@ -1753,6 +1765,29 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     if (dirtyRevRef.current !== savedRevRef.current) window.MtlxAutosave.beat();
                 }, window.MtlxAutosave.BEAT_MS);
                 return () => clearInterval(id);
+            }, []);
+
+            // Refresh File > Restore Autosaved's count on a sibling tab's
+            // autosave write ('storage' fires only in OTHER tabs, exactly
+            // the crashed-tab case) and when the user refocuses this one.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                let timer = null;
+                const scheduleRefresh = () => {
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(() => { timer = null; refreshRestorable(); }, 200);
+                };
+                const onStorage = (e) => {
+                    if (e.key != null && e.key.indexOf(window.MtlxAutosave.LS_PREFIX) !== 0) return;
+                    scheduleRefresh();
+                };
+                window.addEventListener('storage', onStorage);
+                window.addEventListener('focus', scheduleRefresh);
+                return () => {
+                    window.removeEventListener('storage', onStorage);
+                    window.removeEventListener('focus', scheduleRefresh);
+                    if (timer) clearTimeout(timer);
+                };
             }, []);
 
             // Autosave producer registration (item 13): the missing half
@@ -2523,6 +2558,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     const orphanId = pendingAdoptRef.current;
                     pendingAdoptRef.current = null;
                     window.MtlxAutosave.removeSession(orphanId);
+                    refreshRestorable();
                 };
                 const { resolved } = scanExportTextures();
                 const missing = [];
@@ -5544,12 +5580,15 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 },
                 AUTOSAVE_ON && {
                     label: 'Restore Autosaved…', icon: 'restore',
+                    disabled: restorableCount === 0,
                     onSelect: () => {
                         const offers = window.MtlxAutosave.offerable(autosaveIdRef.current, prevSessionIdRef.current);
                         if (offers.length) setRestoreOffer(offers);
                         else setStatus('No autosaved sessions to restore.');
                     },
-                    title: 'Browse and restore a previous editing session recovered from autosave',
+                    title: restorableCount === 0
+                        ? 'No autosaved sessions to restore.'
+                        : 'Browse and restore a previous editing session recovered from autosave',
                 },
                 !IN_VSCODE && { separator: true },
                 {
