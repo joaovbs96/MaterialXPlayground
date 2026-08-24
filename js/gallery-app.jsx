@@ -191,7 +191,8 @@ function GalleryDetailOverlay({ material, tag, doc, docStatus, docError, actionB
                             interactive={true}
                             controls={['zoom']}
                             autoFocus="fit"
-                            chrome="none"
+                            chrome="card"
+                            transparent={false}
                             height={400}
                         />
                     )}
@@ -386,83 +387,91 @@ function MtlxGalleryApp({ active } = {}) {
         window.downloadXml(doc.xml, openMaterial.id + '.mtlx');
     };
 
+    // Grid extent resolved against the shell's view wrapper (HeroGrid's own
+    // contract); fades across the header block, same idiom as what-is.
+    const rootRef = React.useRef(null);
+    const fadeRef = React.useRef(null);
+
     return (
-        <div className="space-y-6">
-            <div className="space-y-2">
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
-                    Learn <span className="text-gray-600">/</span> <span className="text-gray-400">Material Gallery</span>
-                </div>
-                <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-gray-100 text-balance">
-                    Material Gallery
-                </h1>
-                <p className="text-gray-400 text-sm sm:text-base max-w-[60em]">
-                    Every example material shipped in the MaterialX project repo ({tag}), plus a few playground
-                    materials of our own, ready to search, preview and reopen in the Viewer or Graph Editor.
-                </p>
-            </div>
-
-            {manifest === 'error' && <GalleryEmptyState />}
-            {manifest === null && (
-                <div className="flex items-center justify-center h-40 text-gray-400 text-sm animate-pulse">Loading gallery…</div>
-            )}
-
-            {materials && (
-                <>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <input
-                            type="text"
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            placeholder="Search materials…"
-                            aria-label="Search materials"
-                            className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-600 bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                        />
-                        <div className="flex flex-wrap gap-2">
-                            {chips.map((c) => {
-                                const isActive = family === c.id;
-                                return (
-                                    <button
-                                        key={c.id}
-                                        type="button"
-                                        aria-pressed={isActive}
-                                        onClick={() => setFamily(c.id)}
-                                        className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
-                                            + (isActive
-                                                ? 'border-blue-500 bg-blue-500/[0.12] text-blue-300'
-                                                : 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100')}
-                                    >
-                                        {c.label}
-                                    </button>
-                                );
-                            })}
-                        </div>
+        <div ref={rootRef} className="relative">
+            <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="top" />
+            <div className="relative space-y-6">
+                <div ref={fadeRef} className="space-y-2">
+                    <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
+                        Learn <span className="text-gray-600">/</span> <span className="text-gray-400">Material Gallery</span>
                     </div>
+                    <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-gray-100 text-balance">
+                        Material Gallery
+                    </h1>
+                    <p className="text-gray-400 text-sm sm:text-base max-w-[60em]">
+                        Every example material shipped in the MaterialX project repo ({tag}), plus a few playground
+                        materials of our own, ready to search, preview and reopen in the Viewer or Graph Editor.
+                    </p>
+                </div>
 
-                    <p className="text-xs text-gray-500">{countLabel}</p>
+                {manifest === 'error' && <GalleryEmptyState />}
+                {manifest === null && (
+                    <div className="flex items-center justify-center h-40 text-gray-400 text-sm animate-pulse">Loading gallery…</div>
+                )}
 
-                    {filtered.length === 0 ? (
-                        <div className="flex items-center justify-center py-16 text-sm text-gray-500 text-center">
-                            No materials match this search.
+                {materials && (
+                    <>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <input
+                                type="text"
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                placeholder="Search materials…"
+                                aria-label="Search materials"
+                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-600 bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                            />
+                            <div className="flex flex-wrap gap-2">
+                                {chips.map((c) => {
+                                    const isActive = family === c.id;
+                                    return (
+                                        <button
+                                            key={c.id}
+                                            type="button"
+                                            aria-pressed={isActive}
+                                            onClick={() => setFamily(c.id)}
+                                            className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
+                                                + (isActive
+                                                    ? 'border-blue-500 bg-blue-500/[0.12] text-blue-300'
+                                                    : 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100')}
+                                        >
+                                            {c.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </div>
-                    ) : (
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-4">
-                            {filtered.map((m) => <GalleryCard key={m.id} m={m} onOpen={setOpenId} />)}
-                        </div>
-                    )}
-                </>
-            )}
 
-            <GalleryDetailOverlay
-                material={openMaterial}
-                tag={tag}
-                doc={doc}
-                docStatus={docStatus}
-                docError={docError}
-                actionBusy={actionBusy}
-                onOpenIn={openIn}
-                onDownload={downloadDoc}
-                onClose={() => setOpenId(null)}
-            />
+                        <p className="text-xs text-gray-500">{countLabel}</p>
+
+                        {filtered.length === 0 ? (
+                            <div className="flex items-center justify-center py-16 text-sm text-gray-500 text-center">
+                                No materials match this search.
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-4">
+                                {filtered.map((m) => <GalleryCard key={m.id} m={m} onOpen={setOpenId} />)}
+                            </div>
+                        )}
+                    </>
+                )}
+
+                <GalleryDetailOverlay
+                    material={openMaterial}
+                    tag={tag}
+                    doc={doc}
+                    docStatus={docStatus}
+                    docError={docError}
+                    actionBusy={actionBusy}
+                    onOpenIn={openIn}
+                    onDownload={downloadDoc}
+                    onClose={() => setOpenId(null)}
+                />
+            </div>
         </div>
     );
 }

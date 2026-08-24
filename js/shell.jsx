@@ -212,6 +212,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
             'js/graph/model.jsx',
             'js/graph/style.jsx',
             'js/graph/legend.jsx',
