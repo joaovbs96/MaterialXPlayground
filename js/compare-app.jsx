@@ -460,7 +460,14 @@ function MaterialCompareApp({ active = true } = {}) {
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
     const [statsHelpOpen, setStatsHelpOpen] = React.useState(false); // pinned Statistics panel's help popover
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
-    const [geom, setGeom] = React.useState('shaderball-scene');
+    // Seeded from the global geometry shared across the four tools,
+    // falling back the same way an unsupported/emptied 'custom' pick always
+    // has. Compare exists only in the shell, so it always participates.
+    const [geom, setGeom] = React.useState(() => {
+        let g = window.getGlobalGeom ? window.getGlobalGeom() : 'shaderball-scene';
+        if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+        return (g === 'custom' || GEOM_OPTIONS.indexOf(g) !== -1) ? g : 'shaderball-scene';
+    });
     const geomRef = React.useRef(geom);
     geomRef.current = geom;
     // Imported custom model geometry (js/mtlx-engine.js registry): a COPY
@@ -483,6 +490,24 @@ function MaterialCompareApp({ active = true } = {}) {
         };
         window.addEventListener('mtlx-custom-geom', onCustomGeom);
         return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+    }, []);
+    // Adopts the shared global geometry pick from any other tool's tile or
+    // dropdown selection. Same hidden-surface deferral as onCustomGeom above.
+    function applyGlobalGeom() {
+        let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
+        if (g == null) return;
+        if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+        if (g !== 'custom' && GEOM_OPTIONS.indexOf(g) === -1) return; // e.g. buffer2d, unsupported here
+        if (g === geomRef.current) return;
+        setGeom(g);
+    }
+    React.useEffect(() => {
+        const onGlobalGeom = () => {
+            if (surfaceHidden()) { pendingGlobalGeomRef.current = true; return; }
+            applyGlobalGeom();
+        };
+        window.addEventListener('mtlx-global-geom', onGlobalGeom);
+        return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
     }, []);
     const hasCustom = !!customGeom;
     // Custom Model tile's expanded/collapsed state: starts open only if a
@@ -547,6 +572,7 @@ function MaterialCompareApp({ active = true } = {}) {
     const pendingCustomGeomRef = React.useRef(false);
     const pendingGlRestoredARef = React.useRef(false);
     const pendingGlRestoredBRef = React.useRef(false);
+    const pendingGlobalGeomRef = React.useRef(false);
     function surfaceHidden() {
         // Both slots share one view container, hidden together by the
         // shell; slotA's canvas is always mounted once Compare loads,
@@ -604,6 +630,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
                 if (pendingGlRestoredARef.current) { pendingGlRestoredARef.current = false; setGlEpochA((n) => n + 1); }
                 if (pendingGlRestoredBRef.current) { pendingGlRestoredBRef.current = false; setGlEpochB((n) => n + 1); }
+                if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
             });
         };
         window.addEventListener('hashchange', flush);
@@ -803,13 +830,12 @@ function MaterialCompareApp({ active = true } = {}) {
         statsDirtyRef.current = true; diffDirtyRef.current = true;
     };
     // Imports into the shared engine registry (js/mtlx-engine.js), fired
-    // to every subscribed view. No manual statsDirtyRef/diffDirtyRef here:
-    // setGeom rebuilds both slots, already dirtying both via viewEpoch.
+    // to every subscribed view. Does not select 'custom' itself: the
+    // registry's own setGlobalGeom('custom') call does that instead.
     const importModel = async (f) => {
         setModelImportError(null);
         try {
             await window.loadCustomPreviewGeomFromFile(f);
-            setGeom('custom');
         } catch (e) {
             setModelImportError(errMsg(e));
         }
@@ -820,6 +846,11 @@ function MaterialCompareApp({ active = true } = {}) {
     const clearModel = () => {
         setModelImportError(null);
         window.clearCustomPreviewGeom();
+    };
+    // Concrete geometry picks are global across the four tools.
+    const pickGeom = (g) => {
+        setGeom(g);
+        window.setGlobalGeom(g);
     };
     const resetEnv = () => {
         setEnvOverride(null);
@@ -1574,7 +1605,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                         icon={GEOM_ICONS[g]}
                                         selected={geom === g}
                                         onClick={() => {
-                                            setGeom(g);
+                                            pickGeom(g);
                                             if (!hasCustom) setCustomOpen(false);
                                         }}
                                         badge={g === 'shaderball-scene' ? 'Default' : undefined}
@@ -1586,7 +1617,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     selected={geom === 'custom'}
                                     expanded={customOpen}
                                     accept=".obj,.glb,.gltf"
-                                    onSelect={() => setGeom('custom')}
+                                    onSelect={() => pickGeom('custom')}
                                     onExpand={() => setCustomOpen(true)}
                                     onFiles={(files) => {
                                         const f = files && files[0];

@@ -176,14 +176,17 @@
         const GRAPH_GEOM_MODES = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'pernode'];
         const readGraphGeomMode = () => {
             try {
-                const v = localStorage.getItem(GRAPH_GEOM_KEY);
-                // Registry is session-only, localStorage is not: 'custom'
+                // The key now only ever stores the Auto (pernode) flag; any
+                // concrete choice lives in the engine's global geometry key.
+                if (localStorage.getItem(GRAPH_GEOM_KEY) === 'pernode') return 'pernode';
+                const g = window.getGlobalGeom ? window.getGlobalGeom() : 'shaderball-scene';
+                // Registry is session-only, the global key is not: 'custom'
                 // only sticks when the registry still holds a model. Also
                 // guards Send to Viewer, which calls this window-exported fn.
-                if (v === 'custom') {
+                if (g === 'custom') {
                     return (window.getCustomPreviewGeom && window.getCustomPreviewGeom()) ? 'custom' : 'shaderball-scene';
                 }
-                return GRAPH_GEOM_MODES.indexOf(v) !== -1 ? v : 'shaderball-scene';
+                return g;
             } catch (e) { return 'shaderball-scene'; }
         };
         const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
@@ -487,9 +490,14 @@
             // experimental) — persisted across reloads; see
             // readGraphGeomMode/GRAPH_GEOM_KEY above.
             const [geomMode, setGeomModeState] = React.useState(readGraphGeomMode);
+            // Only the Auto (pernode) flag persists here; a concrete pick
+            // is instead pushed to the engine's global geometry key.
             const setGeomMode = (mode) => {
                 setGeomModeState(mode);
-                try { localStorage.setItem(GRAPH_GEOM_KEY, mode); } catch (e) { /* best-effort */ }
+                try {
+                    if (mode === 'pernode') localStorage.setItem(GRAPH_GEOM_KEY, mode);
+                    else localStorage.removeItem(GRAPH_GEOM_KEY);
+                } catch (e) { /* best-effort */ }
             };
             // Ref mirror so the registry subscription below (mount-once)
             // always reads the CURRENT mode without re-subscribing.
@@ -511,6 +519,7 @@
             // (hashchange flush effect below), never while offscreen.
             const pendingCustomGeomRef = React.useRef(false);
             const pendingGlRestoredRef = React.useRef(false);
+            const pendingGlobalGeomRef = React.useRef(false);
             // A hidden ancestor (the shell's display:none wrapper) makes
             // offsetParent null regardless of which level it's applied at.
             const surfaceHidden = () => {
@@ -535,6 +544,24 @@
                 };
                 window.addEventListener('mtlx-custom-geom', onCustomGeom);
                 return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            // Adopts the shared global geometry pick (any tool's tile or
+            // dropdown selection). A concrete value pulls this preview out
+            // of Auto (pernode); the same value already selected no-ops.
+            const applyGlobalGeom = () => {
+                let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
+                if (g == null) return;
+                if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+                if (g === geomModeRef.current) return;
+                setGeomMode(g);
+            };
+            React.useEffect(() => {
+                const onGlobalGeom = () => {
+                    if (surfaceHidden()) { pendingGlobalGeomRef.current = true; return; }
+                    applyGlobalGeom();
+                };
+                window.addEventListener('mtlx-global-geom', onGlobalGeom);
+                return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
             }, []);
             // Restore re-inits GL state but not render-target contents, so
             // a glEpoch bump forces the build effect to dispose and fully
@@ -565,24 +592,24 @@
                         if (surfaceHidden()) return;
                         if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
                         if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
+                        if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                     });
                 };
                 window.addEventListener('hashchange', flush);
                 return () => window.removeEventListener('hashchange', flush);
             }, []);
-            const hasCustom = !!customGeom;
             // Imported model's file-picker error, shown as its own chip:
             // distinct from `error`, which is reserved for build failures.
             const [modelError, setModelError] = React.useState(null);
-            const modelInputRef = React.useRef(null);
-            const onPickModelFile = async (e) => {
-                const f = e.target.files && e.target.files[0];
-                e.target.value = '';
+            // Fed by the geometry dropdown's integrated model-picker footer
+            // (modelFooter.onFiles). Only touches the registry: the
+            // resulting 'mtlx-global-geom' event adopts 'custom' instead.
+            const onModelFiles = async (files) => {
+                const f = files && files[0];
                 if (!f) return;
                 try {
                     await window.loadCustomPreviewGeomFromFile(f);
                     setModelError(null);
-                    setGeomMode('custom');
                 } catch (e2) {
                     setModelError(errMsg(e2));
                 }
@@ -914,20 +941,30 @@
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
             // built-in slot) so it's the single geometry control for the
             // graph preview ('custom' shows once the registry holds a model).
+            // Concrete picks are global; Auto (pernode) stays local-only,
+            // same rule the mtlx-global-geom listener above applies in reverse.
+            const pickGeom = (v) => {
+                setGeomMode(v);
+                if (v !== 'pernode') window.setGlobalGeom(v);
+            };
+            const geomModelFooter = {
+                name: customGeom ? customGeom.name : '',
+                selected: geomMode === 'custom',
+                accept: '.obj,.glb,.gltf',
+                onSelect: () => pickGeom('custom'),
+                onFiles: onModelFiles,
+                onClear: () => window.clearCustomPreviewGeom(),
+            };
             const graphGeomSlot = (
                 <MtlxSelect
                     key="graphGeom"
                     value={geomMode}
-                    options={GRAPH_GEOM_MODES.concat(hasCustom ? ['custom'] : [])}
+                    options={GRAPH_GEOM_MODES}
                     labels={GRAPH_GEOM_LABELS}
                     badges={GRAPH_GEOM_BADGES}
-                    footerAction={{
-                        label: 'Import Custom Model...',
-                        icon: 'file-import',
-                        onSelect: () => { if (modelInputRef.current) modelInputRef.current.click(); },
-                    }}
+                    modelFooter={geomModelFooter}
                     defValue={null}
-                    onChange={setGeomMode}
+                    onChange={pickGeom}
                     title="Preview geometry"
                     size="sm" block icon="cube" className="flex-1 min-w-0"
                 />
@@ -981,15 +1018,6 @@
                         className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
                     >
                         <canvas ref={canvasRef} className="block w-full h-full" />
-                        {/* Always rendered so the geometry dropdown's footer
-                            action (graphGeomSlot above) can open it by ref. */}
-                        <input
-                            ref={modelInputRef}
-                            type="file"
-                            accept=".obj,.glb,.gltf"
-                            className="hidden"
-                            onChange={onPickModelFile}
-                        />
                         {modelError && (
                             // top-8: clears the pin overlay button below
                             // (top-1 left-1, ~28px tall), same left edge.

@@ -216,7 +216,15 @@ function MaterialViewerApp({
   // a geometry this component can render, else today's default —
   // undefined (the uncontrolled case, every existing caller)
   // always falls through to 'shaderball-scene' unchanged.
-  const [geom, setGeom] = React.useState(() => resolveViewerGeom(geometry, transparent).geom);
+  // Chromeless (embed) keeps today's geometry-prop resolution
+  // untouched; the shell realm instead seeds from the shared
+  // global geometry (same custom/unsupported fallback as below).
+  const [geom, setGeom] = React.useState(() => {
+    if (chromeless) return resolveViewerGeom(geometry, transparent).geom;
+    let g = window.getGlobalGeom ? window.getGlobalGeom() : 'shaderball-scene';
+    if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+    return g === 'custom' || VIEWER_GEOM_NAMES.indexOf(g) !== -1 ? g : 'shaderball-scene';
+  });
   const geomRef = React.useRef(geom);
   geomRef.current = geom;
   // Reports the INITIAL geometry/transparent resolution once: an
@@ -269,6 +277,7 @@ function MaterialViewerApp({
   // flushed by the hashchange effect below once visible again.
   const pendingCustomGeomRef = React.useRef(false);
   const pendingGlRestoredRef = React.useRef(false);
+  const pendingGlobalGeomRef = React.useRef(false);
   // A hidden ancestor (the shell's display:none wrapper) makes
   // offsetParent null regardless of which ancestor level it sits
   // at; always false in the embed/VS Code realm (no such wrapper).
@@ -288,6 +297,29 @@ function MaterialViewerApp({
     };
     window.addEventListener('mtlx-custom-geom', onCustomGeom);
     return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+  }, []);
+  // Adopts the shared global geometry pick from another tool.
+  // Chromeless owns its own geometry flow (URL/host message) and
+  // never participates; IN_VSCODE is not chromeless, so it does.
+  const applyGlobalGeom = () => {
+    let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
+    if (g == null) return;
+    if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+    if (g !== 'custom' && VIEWER_GEOM_NAMES.indexOf(g) === -1) return; // e.g. buffer2d, unsupported here
+    if (g === geomRef.current) return;
+    setGeom(g);
+  };
+  React.useEffect(() => {
+    if (chromeless) return undefined;
+    const onGlobalGeom = () => {
+      if (surfaceHidden()) {
+        pendingGlobalGeomRef.current = true;
+        return;
+      }
+      applyGlobalGeom();
+    };
+    window.addEventListener('mtlx-global-geom', onGlobalGeom);
+    return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
   }, []);
   // Restore re-inits GL state but not render-target contents
   // (PMREM bake, shadow map), so a glEpoch bump forces the build
@@ -320,6 +352,10 @@ function MaterialViewerApp({
         if (pendingGlRestoredRef.current) {
           pendingGlRestoredRef.current = false;
           setGlEpoch(n => n + 1);
+        }
+        if (pendingGlobalGeomRef.current) {
+          pendingGlobalGeomRef.current = false;
+          applyGlobalGeom();
         }
       });
     };
@@ -1008,15 +1044,13 @@ function MaterialViewerApp({
   // hidden HUD input below (VS Code, no sidebar). Mirrors the
   // Environment card's own import error state further down.
   const [modelError, setModelError] = React.useState(null);
-  const modelInputRef = React.useRef(null);
-  // Imports into the shared engine registry (js/mtlx-engine.js);
-  // the 'mtlx-custom-geom' event it fires is what flips hasCustom,
-  // here and in every other view subscribed to it.
+  // Imports into the shared engine registry (js/mtlx-engine.js).
+  // Does not select 'custom' itself: the registry's own
+  // setGlobalGeom('custom') call does that, via 'mtlx-global-geom'.
   const importModel = async f => {
     setModelError(null);
     try {
       await window.loadCustomPreviewGeomFromFile(f);
-      setGeom('custom');
     } catch (e) {
       setModelError(errMsg(e));
     }
@@ -1028,19 +1062,24 @@ function MaterialViewerApp({
     setModelError(null);
     window.clearCustomPreviewGeom();
   };
-  // HUD path for VS Code's geomFooterAction (hidden input below,
-  // by ref): same import as importModel, but there is no sidebar
-  // error line here, so a failure reports through notify() instead.
-  const onPickModelFile = async e => {
-    const f = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!f) return;
-    try {
-      await window.loadCustomPreviewGeomFromFile(f);
-      setGeom('custom');
-    } catch (e2) {
-      notify(errMsg(e2));
-    }
+  // Concrete picks are global; the embed/chromeless realm never
+  // broadcasts (it owns its own geometry flow, see applyGlobalGeom).
+  const pickGeom = g => {
+    setGeom(g);
+    if (!chromeless) window.setGlobalGeom(g);
+  };
+  // Shared by the sidebar's CustomModelTile and the VS Code HUD's
+  // geometry dropdown footer, one integrated model-picker now.
+  const geomModelFooter = {
+    name: customGeom ? customGeom.name : '',
+    selected: geom === 'custom',
+    accept: '.obj,.glb,.gltf',
+    onSelect: () => pickGeom('custom'),
+    onFiles: files => {
+      const f = files && files[0];
+      if (f) importModel(f);
+    },
+    onClear: clearModel
   };
 
   // Environment card state (browser only): the backdrop mode stays
@@ -1313,23 +1352,20 @@ function MaterialViewerApp({
     icon: GEOM_ICONS[g],
     selected: geom === g,
     onClick: () => {
-      setGeom(g);
+      pickGeom(g);
       if (!hasCustom) setCustomOpen(false);
     },
     badge: g === 'shaderball-scene' ? 'Default' : undefined
   })), /*#__PURE__*/React.createElement(CustomModelTile, {
     className: "col-span-2",
-    name: customGeom ? customGeom.name : '',
+    name: geomModelFooter.name,
     selected: geom === 'custom',
     expanded: customOpen,
     accept: ".obj,.glb,.gltf",
-    onSelect: () => setGeom('custom'),
+    onSelect: geomModelFooter.onSelect,
     onExpand: () => setCustomOpen(true),
-    onFiles: files => {
-      const f = files && files[0];
-      if (f) importModel(f);
-    },
-    onClear: clearModel
+    onFiles: geomModelFooter.onFiles,
+    onClear: geomModelFooter.onClear
   })), modelError && /*#__PURE__*/React.createElement("div", {
     className: "text-xs text-red-400"
   }, modelError)), /*#__PURE__*/React.createElement(SectionCard, {
@@ -1507,8 +1543,8 @@ function MaterialViewerApp({
     selectSize: "md",
     buttonClassName: hudChipClass,
     geom: geom,
-    onGeomChange: setGeom,
-    geomList: viewerGeomList,
+    onGeomChange: pickGeom,
+    geomList: VIEWER_GEOM_NAMES,
     geomBadges: {
       'shaderball-scene': 'Default'
     }
@@ -1516,17 +1552,10 @@ function MaterialViewerApp({
     // browser; VS Code has no sidebar, so it keeps the select.
     ,
     showGeomSelect: IN_VSCODE
-    // No sidebar to import a model from under VS Code, so
-    // the geometry dropdown's own footer row opens the
-    // hidden input above by ref instead.
+    // No sidebar to import a model from under VS Code, so the
+    // geometry dropdown's own integrated footer picks one instead.
     ,
-    geomFooterAction: {
-      label: 'Import Custom Model...',
-      icon: 'file-import',
-      onSelect: () => {
-        if (modelInputRef.current) modelInputRef.current.click();
-      }
-    },
+    geomModelFooter: geomModelFooter,
     rotating: rotating,
     onToggleRotating: toggleRotating
     // Engine no-ops auto-rotate for the full scene, and
@@ -1662,15 +1691,7 @@ function MaterialViewerApp({
     // js/shell.jsx's now-empty viewer wrapClass.
     React.createElement("div", {
       className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
-    }, /*#__PURE__*/React.createElement("input", {
-      ref: modelInputRef,
-      type: "file",
-      accept: ".obj,.glb,.gltf",
-      style: {
-        display: 'none'
-      },
-      onChange: onPickModelFile
-    }), dragOver && /*#__PURE__*/React.createElement("div", {
+    }, dragOver && /*#__PURE__*/React.createElement("div", {
       className: `fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`
     }, /*#__PURE__*/React.createElement("div", {
       className: "w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"

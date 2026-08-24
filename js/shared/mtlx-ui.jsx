@@ -1316,11 +1316,12 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
     };
     return (
         <div
-            className={'rounded-lg border overflow-hidden w-full transition-colors '
+            className={'relative rounded-lg border overflow-hidden w-full transition-colors '
                 + (selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')
                 + (className ? ' ' + className : '')}
         >
-            <button type="button" onClick={handleTopClick} className="w-full h-9 flex items-center gap-2 px-3">
+            <span className="absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300">Experimental</span>
+            <button type="button" onClick={handleTopClick} className="w-full h-9 flex items-center justify-center gap-2 pl-3 pr-16">
                 <MtlxIcon name={GEOM_ICONS['custom']} className="w-4 h-4 shrink-0" />
                 <span className="text-[11px] truncate">{GEOM_LABELS['custom']}</span>
             </button>
@@ -1459,9 +1460,9 @@ const ViewportControls = ({
     // (see MtlxSelect) — e.g. marking the docs previewer's Auto entry
     // as experimental.
     geomBadges,
-    // Optional pinned footer action for the geometry dropdown (see
-    // MtlxSelect's footerAction), e.g. an "Import model..." row.
-    geomFooterAction,
+    // Optional integrated model-picker footer for the geometry dropdown
+    // (see MtlxSelect's modelFooter), e.g. the custom-model row/picker.
+    geomModelFooter,
     showGeomSelect = true,
     rotating, onToggleRotating,
     showRotate = true,
@@ -1603,7 +1604,7 @@ const ViewportControls = ({
                         onChange={onGeomChange}
                         title="Preview geometry"
                         size={selectSize}
-                        footerAction={geomFooterAction}
+                        modelFooter={geomModelFooter}
                     />
                 ) : null;
             case 'rotate':
@@ -2162,9 +2163,10 @@ const MtlxSelect = ({
     size = 'sm', variant = 'toolbar', block, font,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
-    // Optional pinned row rendered last, below a divider, e.g. an
-    // "Import model..." action. Shape: { label, icon, onSelect, title }.
-    footerAction,
+    // Optional integrated model-picker footer: a selectable row once a
+    // model's loaded, else a bare filepicker-esque row. Shape: { name,
+    // selected, accept, onSelect, onFiles, onClear, label, icon, badge }.
+    modelFooter,
 }) => {
     // `defValue`: the value that's this select's real default, badged
     // automatically; pass `null` to declare no default exists. Omitting
@@ -2190,6 +2192,8 @@ const MtlxSelect = ({
     const popRef = React.useRef(null);
     const rowRefs = React.useRef([]);
     const typeAheadRef = React.useRef({ buf: '', t: 0 });
+    // modelFooter's hidden file input, opened by its "Choose" row.
+    const modelInputRef = React.useRef(null);
     const listboxId = React.useId();
 
     const normalized = React.useMemo(() => {
@@ -2200,14 +2204,16 @@ const MtlxSelect = ({
         const withEmpty = emptyOption
             ? [{ value: '', label: emptyLabel, icon: undefined, badge: null, dot: undefined, title: undefined, disabled: false }].concat(base)
             : base;
-        if (!footerAction) return withEmpty;
-        // Pinned footer row appended last; SELECT_FOOTER_VALUE keeps it
-        // out of the real value space so it can never look "selected".
+        // The model-picker's SELECTABLE row only exists once a model is
+        // actually loaded; the empty state has nothing keyboard-committable.
+        if (!modelFooter || !modelFooter.name) return withEmpty;
         return withEmpty.concat([{
-            value: SELECT_FOOTER_VALUE, label: footerAction.label, icon: footerAction.icon,
-            badge: null, dot: null, title: footerAction.title, disabled: false, isFooter: true,
+            value: SELECT_FOOTER_VALUE, label: modelFooter.label || 'Custom Model',
+            icon: modelFooter.icon || 'file',
+            badge: resolveSelectBadge(modelFooter.badge || 'Experimental'),
+            dot: null, title: undefined, disabled: false, isFooter: true,
         }]);
-    }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder, footerAction]);
+    }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder, modelFooter]);
 
     // Wider popover when badge pills share the rows with the labels,
     // unless the caller knows its content is narrower and overrides it.
@@ -2289,7 +2295,7 @@ const MtlxSelect = ({
         if (opt.isFooter) {
             setOpen(false);
             if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
-            footerAction.onSelect();
+            modelFooter.onSelect();
             return;
         }
         if (opt.disabled) return;
@@ -2372,7 +2378,7 @@ const MtlxSelect = ({
                 if (opt != null && opt.isFooter) {
                     setOpen(false);
                     if (commitFocus === 'none' && btnRef.current) btnRef.current.blur();
-                    footerAction.onSelect();
+                    modelFooter.onSelect();
                 } else {
                     if (opt != null && !opt.disabled) onChange(opt.value);
                     setOpen(false);
@@ -2381,7 +2387,7 @@ const MtlxSelect = ({
             } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
                 // Type-ahead: a short timestamped buffer, prefix-matched
                 // against resolved labels, skipping disabled rows and
-                // the pinned footer action (it isn't a value to jump to).
+                // the pinned footer row (it isn't a value to jump to).
                 const now = Date.now();
                 const ta = typeAheadRef.current;
                 ta.buf = (now - ta.t < 800 ? ta.buf : '') + e.key.toLowerCase();
@@ -2476,9 +2482,11 @@ const MtlxSelect = ({
         >
             {normalized.map((o, i) => {
                 const isHi = i === hi && !o.disabled;
-                const isSelected = o.value === value;
+                // A footer row's "selected" flag comes from modelFooter
+                // (it isn't part of the value space `value` lives in).
+                const rowSelected = o.isFooter ? !!(modelFooter && modelFooter.selected) : o.value === value;
                 const rowStyle = {
-                    color: o.disabled ? MXS_MUTED : (isHi ? MXS_ACCENT_TEXT : (isSelected ? MXS_TEXT_STRONG : MXS_TEXT)),
+                    color: o.disabled ? MXS_MUTED : (isHi ? MXS_ACCENT_TEXT : (rowSelected ? MXS_TEXT_STRONG : MXS_TEXT)),
                     background: isHi ? MXS_ACCENT_SOFT : undefined,
                 };
                 const row = (
@@ -2487,7 +2495,7 @@ const MtlxSelect = ({
                         ref={(el) => { rowRefs.current[i] = el; }}
                         type="button"
                         role="option"
-                        aria-selected={o.isFooter ? false : o.value === value}
+                        aria-selected={rowSelected}
                         title={o.title}
                         aria-disabled={o.disabled || undefined}
                         onMouseEnter={() => { if (!o.disabled) setHi(i); }}
@@ -2496,15 +2504,12 @@ const MtlxSelect = ({
                         className={'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors '
                             + (o.disabled ? 'cursor-default' : 'cursor-pointer')}
                     >
-                        {/* Fixed check gutter so labels align selected or not,
-                            disabled rows included; footer rows put their
-                            own icon here instead of a check. */}
+                        {/* Fixed check gutter so labels align selected or
+                            not, disabled and footer rows included. */}
                         <span className="w-3.5 flex-none">
-                            {o.isFooter
-                                ? (o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5" />)
-                                : (o.value === value && <MtlxIcon name="check" className="w-3.5 h-3.5" />)}
+                            {rowSelected && <MtlxIcon name="check" className="w-3.5 h-3.5" />}
                         </span>
-                        {o.icon && !o.isFooter && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
+                        {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5 flex-none" />}
                         {o.dot && (
                             <span
                                 className="w-2 h-2 rounded-full inline-block shrink-0"
@@ -2521,7 +2526,7 @@ const MtlxSelect = ({
                     </button>
                 );
                 if (!o.isFooter) return row;
-                // Divider sets the pinned footer action apart from the
+                // Divider sets the pinned model-picker row apart from the
                 // real options above it; row styling otherwise matches.
                 return (
                     <React.Fragment key={'wrap:' + o.value}>
@@ -2530,6 +2535,54 @@ const MtlxSelect = ({
                     </React.Fragment>
                 );
             })}
+            {modelFooter && (
+                <React.Fragment>
+                    {/* Loaded state: the divider above already separates the
+                        selectable row; empty state needs its own divider
+                        since there's no sentinel row in `normalized`. */}
+                    {!modelFooter.name && <div className="my-1 border-t" style={{ borderColor: MXS_BORDER }} />}
+                    <div className="h-7 flex items-center" style={{ color: MXS_MUTED }}>
+                        <div className="relative min-w-0 flex-1 flex items-center px-2.5">
+                            <span className={'truncate text-[11px]' + (modelFooter.name ? ' pr-5' : '')}>
+                                {modelFooter.name || 'No model loaded'}
+                            </span>
+                            {modelFooter.name && (
+                                <button
+                                    type="button"
+                                    title="Clear"
+                                    onClick={(e) => { e.stopPropagation(); modelFooter.onClear(); }}
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                                >
+                                    <MtlxIcon name="x" className="w-3 h-3" />
+                                </button>
+                            )}
+                        </div>
+                        <div className="border-l flex items-center px-2.5 shrink-0" style={{ borderColor: MXS_BORDER }}>
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); if (modelInputRef.current) modelInputRef.current.click(); }}
+                                className="inline-flex items-center gap-1 text-[11px] whitespace-nowrap hover:opacity-80"
+                                style={{ color: MXS_TEXT }}
+                            >
+                                <MtlxIcon name="file-import" className="w-3.5 h-3.5" />
+                                Choose
+                            </button>
+                        </div>
+                    </div>
+                    <input
+                        ref={modelInputRef}
+                        type="file"
+                        accept={modelFooter.accept}
+                        className="hidden"
+                        onChange={(e) => {
+                            if (modelFooter.onFiles) modelFooter.onFiles(e.target.files);
+                            // Clear so re-picking the SAME file still fires a change event.
+                            e.target.value = '';
+                            setOpen(false);
+                        }}
+                    />
+                </React.Fragment>
+            )}
         </div>
     ) : null;
 

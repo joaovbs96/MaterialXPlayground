@@ -1330,6 +1330,53 @@ const CUSTOM_GEOM = { geometry: null, name: '', epoch: 0 };
 let customGeomLoadSeq = 0;
 const getCustomPreviewGeom = () => (CUSTOM_GEOM.geometry ? CUSTOM_GEOM : null);
 
+// ---- Global geometry selection (shared across every tool) ----
+const GLOBAL_GEOM_KEY = 'mtlx_geom_global';
+const GLOBAL_GEOM_VALUES = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'custom'];
+// Old per-tool keys, read once as a seed when the global key has never been written.
+const LEGACY_GEOM_KEYS = ['mtlx_preview_geom_choice', 'mtlx_graph_preview_geom'];
+const LEGACY_GEOM_SKIP = ['custom', 'default', 'pernode'];
+
+let MTLX_GLOBAL_GEOM = null;
+
+// Runs once, on first getGlobalGeom/setGlobalGeom call.
+const initGlobalGeom = () => {
+    let stored = null;
+    try { stored = localStorage.getItem(GLOBAL_GEOM_KEY); } catch (e) { /* privacy mode */ }
+    if (stored && GLOBAL_GEOM_VALUES.includes(stored) && stored !== 'custom') {
+        MTLX_GLOBAL_GEOM = stored;
+        return;
+    }
+    if (!stored) {
+        for (const key of LEGACY_GEOM_KEYS) {
+            let legacy = null;
+            try { legacy = localStorage.getItem(key); } catch (e) { /* privacy mode */ }
+            if (legacy && GLOBAL_GEOM_VALUES.includes(legacy) && !LEGACY_GEOM_SKIP.includes(legacy)) {
+                MTLX_GLOBAL_GEOM = legacy;
+                return;
+            }
+        }
+    }
+    MTLX_GLOBAL_GEOM = 'shaderball-scene';
+};
+
+const getGlobalGeom = () => {
+    if (MTLX_GLOBAL_GEOM === null) initGlobalGeom();
+    return MTLX_GLOBAL_GEOM;
+};
+
+// Persists only from the top-realm page (embeds must not clobber the host's
+// choice) and only for concrete values (custom is registry-local, session-only).
+const setGlobalGeom = (value) => {
+    if (MTLX_GLOBAL_GEOM === null) initGlobalGeom();
+    if (!GLOBAL_GEOM_VALUES.includes(value) || value === MTLX_GLOBAL_GEOM) return;
+    MTLX_GLOBAL_GEOM = value;
+    if (window.self === window.top && value !== 'custom') {
+        try { localStorage.setItem(GLOBAL_GEOM_KEY, value); } catch (e) { /* privacy mode */ }
+    }
+    window.dispatchEvent(new CustomEvent('mtlx-global-geom', { detail: { value } }));
+};
+
 // Merges every mesh under `root` into one normalized BufferGeometry.
 // Extraction must use the accessor API only, never attribute.array.slice
 // or toNonIndexed: r128's toNonIndexed corrupts InterleavedBufferAttributes from GLTFLoader.
@@ -1509,6 +1556,7 @@ const commitCustomGeom = (root, label, seqId) => {
     // registry into their own local state, since their views never unmount
     // and so never get a natural remount hook to re-read CUSTOM_GEOM from.
     window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
+    setGlobalGeom('custom');
     return CUSTOM_GEOM;
 };
 
@@ -1553,6 +1601,7 @@ const clearCustomPreviewGeom = () => {
     CUSTOM_GEOM.name = '';
     CUSTOM_GEOM.epoch += 1;
     window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
+    if (getGlobalGeom() === 'custom') setGlobalGeom('shaderball-scene');
     if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
 };
 
@@ -5596,6 +5645,7 @@ Object.assign(window, {
     prepGeometry, normalizeGeometry, buildPreviewGeometry,
     loadCustomPreviewGeomFromFile, loadCustomPreviewGeomFromUrl,
     getCustomPreviewGeom, clearCustomPreviewGeom,
+    getGlobalGeom, setGlobalGeom,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
