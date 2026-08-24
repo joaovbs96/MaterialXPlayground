@@ -110,6 +110,29 @@
             + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
             + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
 
+        // Small blur/Enter-committing text field for the Interface metadata
+        // group (params panel, i: nodes), mirroring ParamRow's textField
+        // commit pattern since that pattern isn't exported standalone.
+        function IfaceMetaField({ value, placeholder, onCommit }) {
+            const [draft, setDraft] = React.useState(value || '');
+            React.useEffect(() => { setDraft(value || ''); }, [value]);
+            const commit = () => { if (draft !== (value || '')) onCommit(draft); };
+            return (
+                <input
+                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                    value={draft}
+                    placeholder={placeholder}
+                    spellCheck={false}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') { commit(); e.target.blur(); }
+                        if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); }
+                    }}
+                />
+            );
+        }
+
         // Right sidebar resize range and localStorage key. Max also never
         // exceeds ~70% of the editor width (see clampSidebarWidth).
         const SIDEBAR_MIN_WIDTH = 320; // narrow enough to be tidy, wide enough to read both dropdowns
@@ -1860,6 +1883,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     edges: prev.edges,
                     nodes: prev.nodes.map((n) => {
                         if (n.id !== nodeId) return n;
+                        if (nodeId.indexOf('i:') === 0) {
+                            // i: nodes store their scalar as flat data, not
+                            // an inputs array, so withPatchedInputs would be
+                            // a no-op here (see applyParamEdit's i: branch).
+                            return Object.assign({}, n, { data: Object.assign({}, n.data, { colorspace: cs || '' }) });
+                        }
                         const upd = (i) => i.name !== inputName ? i
                             : Object.assign({}, i, {
                                 colorspace: cs || '',
@@ -1868,6 +1897,37 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             });
                         return withPatchedInputs(n, upd);
                     }),
+                }));
+            };
+
+            // Interface-input pseudo node's UI metadata (uiname/uifolder/
+            // uimin/uimax/uiadvanced) has no codegen effect, so this skips
+            // setDocRev; markDirty still runs to push an undo snapshot.
+            const applyInterfaceMeta = (nodeId, patch) => {
+                if (!parsed || nodeId.indexOf('i:') !== 0) return;
+                const name = nodeId.slice(2);
+                const container = scopeContainer();
+                const target = container ? mxSafe(() => container.getInput(name), null) : null;
+                if (!target) {
+                    console.warn('node-graph: could not apply interface metadata on ' + nodeId);
+                    return;
+                }
+                Object.keys(patch).forEach((key) => {
+                    const value = patch[key];
+                    if (key === 'uiadvanced') {
+                        if (value) mxSetAttr(target, key, 'true');
+                        else mxRemoveAttr(target, key);
+                        return;
+                    }
+                    if (value) mxSetAttr(target, key, value);
+                    else mxRemoveAttr(target, key);
+                });
+                markDirty('ifacemeta:' + nodeId);
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => n.id === nodeId
+                        ? Object.assign({}, n, { data: Object.assign({}, n.data, patch) })
+                        : n),
                 }));
             };
 
@@ -2500,6 +2560,24 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 });
             };
 
+            // A connection from a still-bare `i:` pin onto an input that
+            // already carries a literal/colorspace would otherwise just
+            // discard it (writeConnSource strips the target); migrate it onto the pin first.
+            const migrateLiteralToIfacePin = (point, srcId) => {
+                if (!point || String(srcId).indexOf('i:') !== 0) return null;
+                const c = scopeContainer();
+                const pinName = srcId.slice(2);
+                const pin = c && (mxSafe(() => c.getInput(pinName), null) || mxSafe(() => c.getChild(pinName), null));
+                if (!pin) return null;
+                if (mxElAttr(pin, 'value') || mxElAttr(pin, 'colorspace')) return null;
+                const v = mxElAttr(point, 'value');
+                const cs = mxElAttr(point, 'colorspace');
+                if (!v && !cs) return null;
+                if (v) mxSafe(() => { mxWriteValue(pin, v, mxElType(point)); return true; }, false);
+                if (cs) { mxSetColorspace(pin, cs); mxRemoveAttr(point, 'colorspace'); }
+                return { value: v, colorspace: cs, colorManaged: ifaceColorManaged(mxElType(pin)) };
+            };
+
             // Write a connection SOURCE onto a connection point (shared
             // by onConnect and wirePendingConnection): sets interfacename/
             // nodegraph/nodename + output=, then stashes/strips any literal.
@@ -2532,9 +2610,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const outName = String(sourceHandle || '').replace(/^out:/, '');
                 const type = flowPortType(target, targetHandle, false)
                     || flowPortType(source, sourceHandle, true) || '';
+                let migrated = null;
                 if (parsed) {
                     const point = connectionPoint(target, targetHandle, true);
                     if (point) {
+                        // A node target's port can be an unauthored default
+                        // row; ensureTypedInput would then have synthesized
+                        // `point` from the nodedef default, not a real literal.
+                        const targetNode = flow.nodes.find((n) => n.id === target);
+                        const targetMeta = targetNode && (targetNode.data.allInputs || targetNode.data.inputs || []).find((i) => i.name === inputName);
+                        const targetAuthored = target.indexOf('n:') !== 0 || (targetMeta && targetMeta.authored);
+                        if (targetAuthored) migrated = migrateLiteralToIfacePin(point, source);
                         const srcNode = flow.nodes.find((n) => n.id === source);
                         writeConnSource(point, source, outName, srcNode && srcNode.data.outputs);
                         setDocRev((r) => r + 1);
@@ -2550,7 +2636,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             id: source + '.' + outName + '\u2192' + target + '.' + inputName,
                             source, sourceHandle, target, targetHandle, type,
                         })]),
-                    nodes: prev.nodes.map((n) => n.id === target ? patchInputConn(n, inputName, true) : n),
+                    nodes: prev.nodes.map((n) => {
+                        if (n.id === target) return patchInputConn(n, inputName, true);
+                        if (migrated && n.id === source) return Object.assign({}, n, { data: Object.assign({}, n.data, migrated) });
+                        return n;
+                    }),
                 }));
                 setSelectedEdgeId(null);
             };
@@ -3254,7 +3344,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             const wirePendingConnection = (created, pending) => {
                 if (!created || !pending || !parsed) return;
                 const doc = parsed.doc;
-                let point, srcId, srcOutName, targetFlowId, targetInputName;
+                let point, srcId, srcOutName, targetFlowId, targetInputName, migrated = null;
                 if (pending.dir === 'in') {
                     // The double-clicked port is an INPUT on an existing
                     // node (or collapsed nodegraph) — feed it from the new
@@ -3283,7 +3373,8 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     if (!point) return;
                     // A nodegraph interface input as source is a pin
                     // reference, not a node — same distinction onConnect
-                    // makes (writeConnSource above).
+                    // makes (writeConnSource above); authored-gated the same way too.
+                    if (inMatch.authored) migrated = migrateLiteralToIfacePin(point, pending.nodeId);
                     const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
                     writeConnSource(point, pending.nodeId, pending.port, srcNode && srcNode.data.outputs);
                     targetFlowId = created.id;
@@ -3302,7 +3393,11 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                             target: targetFlowId, targetHandle: 'in:' + targetInputName,
                             type: pending.portType,
                         })]),
-                    nodes: prev.nodes.map((n) => n.id === targetFlowId ? patchInputConn(n, targetInputName, true) : n),
+                    nodes: prev.nodes.map((n) => {
+                        if (n.id === targetFlowId) return patchInputConn(n, targetInputName, true);
+                        if (migrated && n.id === srcId) return Object.assign({}, n, { data: Object.assign({}, n.data, migrated) });
+                        return n;
+                    }),
                 }));
             };
 
@@ -3321,7 +3416,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             // Add an interface input or output (Tab palette's synthetic
             // rows, only while a nodegraph scope is open) — written into
             // the doc, then appended to the flow IN PLACE like addNodeFromCatalog.
-            const addInterfacePin = (kind, rawName, type) => {
+            const addInterfacePin = (kind, rawName, type, meta) => {
                 if (!parsed || !scope) return;
                 const g = scopeContainer();
                 if (!g) { setError('Cannot add an interface pin: scope "' + scope + '" was not found.'); return; }
@@ -3350,12 +3445,30 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     if (mxElType(el) !== type) mxSetAttr(el, 'type', type);
                 }
 
+                // Interface-input metadata from the Tab palette's "More
+                // options" disclosure: value/colorspace/ui* attrs, all
+                // optional. Outputs never carry meta.
+                if (kind === 'iface-input' && meta) {
+                    if (meta.value) mxWriteValue(el, meta.value, type);
+                    if (meta.colorspace && ifaceColorManaged(type)) mxSetColorspace(el, meta.colorspace);
+                    if (meta.uiname) mxSetAttr(el, 'uiname', meta.uiname);
+                    if (meta.uifolder) mxSetAttr(el, 'uifolder', meta.uifolder);
+                    if (meta.uimin) mxSetAttr(el, 'uimin', meta.uimin);
+                    if (meta.uimax) mxSetAttr(el, 'uimax', meta.uimax);
+                    if (meta.uiadvanced) mxSetAttr(el, 'uiadvanced', 'true');
+                }
+
                 const id = (kind === 'iface-input' ? 'i:' : 'o:') + name;
                 const data = kind === 'iface-input'
                     ? {
                         id, kind: 'input', name, category: 'interface input', type,
-                        inputs: [], allInputs: [], value: '',
+                        inputs: [], allInputs: [], value: (meta && meta.value) || '',
                         outputs: [{ name: 'out', type }], portMode: 'authored',
+                        colorspace: (meta && meta.colorspace) || '', colorManaged: ifaceColorManaged(type),
+                        uiname: (meta && meta.uiname) || '', uifolder: (meta && meta.uifolder) || '',
+                        uimin: (meta && meta.uimin) || '', uimax: (meta && meta.uimax) || '',
+                        uisoftmin: '', uisoftmax: '', defColorspace: '',
+                        uiadvanced: !!(meta && meta.uiadvanced),
                     }
                     : {
                         id, kind: 'output', name, category: 'output', type,
@@ -3602,7 +3715,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const target = mxSafe(() => container.addInput(name), null);
                 if (!target || !srcEl) return target;
                 const copied = mxSafe(() => { target.copyContentFrom(srcEl); return true; }, false);
-                if (!copied) mxSetAttr(target, 'type', mxElType(srcEl));
+                if (!copied) {
+                    mxSetAttr(target, 'type', mxElType(srcEl));
+                    const v = mxElAttr(srcEl, 'value');
+                    if (v) mxSafe(() => { mxWriteValue(target, v, mxElType(srcEl)); return true; }, false);
+                    const cs = mxElAttr(srcEl, 'colorspace');
+                    if (cs) mxSetColorspace(target, cs);
+                }
                 return target;
             };
 
@@ -3703,7 +3822,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 mxSetAttr(target, 'interfacename', pinName);
                                 continue;
                             }
-                            if (inp.value !== '' && inp.value != null) {
+                            if ((inp.value !== '' && inp.value != null) || inp.colorspace) {
                                 cloneInput(el, inp.name, inp.el);
                             }
                         }
@@ -3926,6 +4045,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 if (pin.nodename) mxSetAttr(point, 'nodename', pin.nodename);
                                 if (pin.nodegraph) mxSetAttr(point, 'nodegraph', pin.nodegraph);
                                 if (pin.output) mxSetAttr(point, 'output', pin.output);
+                                if (pin.colorspace) mxSetColorspace(point, pin.colorspace);
                             } else if (pin.value !== '' && pin.value != null) {
                                 mxSafe(() => { mxWriteValue(point, pin.value, pin.type); return true; }, false);
                                 if (pin.colorspace) {
@@ -4819,7 +4939,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const panelInputs = !displayNode ? [] :
                 (displayNode.id.indexOf('i:') === 0
                     ? [{ name: 'value', type: displayNode.data.type,
-                         value: displayNode.data.value || '', connected: false }]
+                         value: displayNode.data.value || '', connected: false,
+                         colorspace: displayNode.data.colorspace, colorManaged: displayNode.data.colorManaged,
+                         uimin: displayNode.data.uimin, uimax: displayNode.data.uimax,
+                         uisoftmin: displayNode.data.uisoftmin, uisoftmax: displayNode.data.uisoftmax,
+                         defColorspace: '' }]
                     : (displayNode.data.allInputs || displayNode.data.inputs || []));
             // Group panelInputs by uifolder (item F2.3): ungrouped inputs
             // render first; foldered ones bucket under a collapsible
@@ -4837,12 +4961,23 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const folderOrder = [];
                 const byFolder = new Map();
                 for (const inp of sortedInputs) {
-                    const folder = inp.uifolder;
+                    // Advanced-and-unfoldered inputs bucket into a synthetic
+                    // trailing "Advanced" folder instead of the ungrouped list.
+                    // A real uifolder literally named "Advanced" merges in too.
+                    const folder = inp.uifolder || (inp.uiadvanced ? 'Advanced' : '');
                     if (!folder) { ungrouped.push(inp); continue; }
                     if (!byFolder.has(folder)) { byFolder.set(folder, []); folderOrder.push(folder); }
                     byFolder.get(folder).push(inp);
                 }
-                return { ungrouped, folders: folderOrder.map((name) => ({ name, inputs: byFolder.get(name) })) };
+                return {
+                    ungrouped,
+                    folders: folderOrder.map((name) => ({
+                        name, inputs: byFolder.get(name),
+                        // Only the synthetic Advanced bucket defaults closed;
+                        // normal folders leave this undefined (open).
+                        defaultOpen: name === 'Advanced' ? false : undefined,
+                    })),
+                };
             }, [panelInputs]);
             // Open/closed state per folder name, default expanded (absent
             // reads as open, see `!== false` below). Reset per displayed
@@ -4852,7 +4987,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // reserved panelFoldersOpen key — a real uifolder named
             // "Downstream Connections" would collide), same per-node reset.
             const [downstreamOpen, setDownstreamOpen] = React.useState(true);
-            React.useEffect(() => { setPanelFoldersOpen({}); setDownstreamOpen(true); }, [displayNode && displayNode.id]);
+            // Interface metadata group (i: nodes only), same per-node reset.
+            const [ifaceMetaOpen, setIfaceMetaOpen] = React.useState(true);
+            React.useEffect(() => { setPanelFoldersOpen({}); setDownstreamOpen(true); setIfaceMetaOpen(true); }, [displayNode && displayNode.id]);
             // Edges leaving the displayed element — feeds the Downstream
             // Connections group. Empty for o: pseudo-nodes (no outputs)
             // and unconnected nodes, which hides the group entirely.
@@ -5843,12 +5980,72 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             </button>
                                         </div>
                                     ),
+                                    // Interface metadata (i: nodes only): uiname/uifolder/
+                                    // uimin/uimax/uiadvanced, shown above the value row.
+                                    displayNode.id.indexOf('i:') === 0 && (
+                                        <div key="ifacemeta" className="-mt-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => setIfaceMetaOpen((o) => !o)}
+                                                className={GROUP_HEADER_CLASS}
+                                            >
+                                                <MtlxIcon name={ifaceMetaOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                <span className="truncate">Interface</span>
+                                            </button>
+                                            {ifaceMetaOpen && (
+                                                <div className="pt-1.5 space-y-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uiname</span>
+                                                        <IfaceMetaField
+                                                            value={displayNode.data.uiname}
+                                                            placeholder="(none)"
+                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uiname: v })}
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uifolder</span>
+                                                        <IfaceMetaField
+                                                            value={displayNode.data.uifolder}
+                                                            placeholder="(none)"
+                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uifolder: v })}
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimin</span>
+                                                        <IfaceMetaField
+                                                            value={displayNode.data.uimin}
+                                                            placeholder="(none)"
+                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimax</span>
+                                                        <IfaceMetaField
+                                                            value={displayNode.data.uimax}
+                                                            placeholder="(none)"
+                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
+                                                        />
+                                                    </div>
+                                                    <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="h-3.5 w-3.5 accent-blue-500"
+                                                            checked={!!displayNode.data.uiadvanced}
+                                                            onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}
+                                                        />
+                                                        uiadvanced
+                                                    </label>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ),
                                     !panelInputs.length && (
                                         <div key="none" className="text-[11px] text-gray-500 py-2">This node has no parameters.</div>
                                     ),
                                     panelParamGroups.ungrouped.map(renderParamRow).concat(
                                         panelParamGroups.folders.map((f, fi) => {
-                                            const open = panelFoldersOpen[f.name] !== false;
+                                            const open = Object.prototype.hasOwnProperty.call(panelFoldersOpen, f.name)
+                                                ? panelFoldersOpen[f.name] : f.defaultOpen !== false;
                                             // The first group sits flush at the panel top: -mt-1
                                             // cancels the scroll body's py-1 so its rule reads as
                                             // the panel's own edge, not a floating band.
