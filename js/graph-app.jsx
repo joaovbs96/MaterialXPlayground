@@ -2488,6 +2488,24 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 });
             };
 
+            // A connection from a still-bare `i:` pin onto an input that
+            // already carries a literal/colorspace would otherwise just
+            // discard it (writeConnSource strips the target); migrate it onto the pin first.
+            const migrateLiteralToIfacePin = (point, srcId) => {
+                if (!point || String(srcId).indexOf('i:') !== 0) return null;
+                const c = scopeContainer();
+                const pinName = srcId.slice(2);
+                const pin = c && (mxSafe(() => c.getInput(pinName), null) || mxSafe(() => c.getChild(pinName), null));
+                if (!pin) return null;
+                if (mxElAttr(pin, 'value') || mxElAttr(pin, 'colorspace')) return null;
+                const v = mxElAttr(point, 'value');
+                const cs = mxElAttr(point, 'colorspace');
+                if (!v && !cs) return null;
+                if (v) mxSafe(() => { mxWriteValue(pin, v, mxElType(point)); return true; }, false);
+                if (cs) { mxSetColorspace(pin, cs); mxRemoveAttr(point, 'colorspace'); }
+                return { value: v, colorspace: cs, colorManaged: ifaceColorManaged(mxElType(pin)) };
+            };
+
             // Write a connection SOURCE onto a connection point (shared
             // by onConnect and wirePendingConnection): sets interfacename/
             // nodegraph/nodename + output=, then stashes/strips any literal.
@@ -2520,9 +2538,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const outName = String(sourceHandle || '').replace(/^out:/, '');
                 const type = flowPortType(target, targetHandle, false)
                     || flowPortType(source, sourceHandle, true) || '';
+                let migrated = null;
                 if (parsed) {
                     const point = connectionPoint(target, targetHandle, true);
                     if (point) {
+                        // A node target's port can be an unauthored default
+                        // row; ensureTypedInput would then have synthesized
+                        // `point` from the nodedef default, not a real literal.
+                        const targetNode = flow.nodes.find((n) => n.id === target);
+                        const targetMeta = targetNode && (targetNode.data.allInputs || targetNode.data.inputs || []).find((i) => i.name === inputName);
+                        const targetAuthored = target.indexOf('n:') !== 0 || (targetMeta && targetMeta.authored);
+                        if (targetAuthored) migrated = migrateLiteralToIfacePin(point, source);
                         const srcNode = flow.nodes.find((n) => n.id === source);
                         writeConnSource(point, source, outName, srcNode && srcNode.data.outputs);
                         setDocRev((r) => r + 1);
@@ -2538,7 +2564,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             id: source + '.' + outName + '\u2192' + target + '.' + inputName,
                             source, sourceHandle, target, targetHandle, type,
                         })]),
-                    nodes: prev.nodes.map((n) => n.id === target ? patchInputConn(n, inputName, true) : n),
+                    nodes: prev.nodes.map((n) => {
+                        if (n.id === target) return patchInputConn(n, inputName, true);
+                        if (migrated && n.id === source) return Object.assign({}, n, { data: Object.assign({}, n.data, migrated) });
+                        return n;
+                    }),
                 }));
                 setSelectedEdgeId(null);
             };
@@ -3242,7 +3272,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             const wirePendingConnection = (created, pending) => {
                 if (!created || !pending || !parsed) return;
                 const doc = parsed.doc;
-                let point, srcId, srcOutName, targetFlowId, targetInputName;
+                let point, srcId, srcOutName, targetFlowId, targetInputName, migrated = null;
                 if (pending.dir === 'in') {
                     // The double-clicked port is an INPUT on an existing
                     // node (or collapsed nodegraph) — feed it from the new
@@ -3271,7 +3301,8 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     if (!point) return;
                     // A nodegraph interface input as source is a pin
                     // reference, not a node — same distinction onConnect
-                    // makes (writeConnSource above).
+                    // makes (writeConnSource above); authored-gated the same way too.
+                    if (inMatch.authored) migrated = migrateLiteralToIfacePin(point, pending.nodeId);
                     const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
                     writeConnSource(point, pending.nodeId, pending.port, srcNode && srcNode.data.outputs);
                     targetFlowId = created.id;
@@ -3290,7 +3321,11 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                             target: targetFlowId, targetHandle: 'in:' + targetInputName,
                             type: pending.portType,
                         })]),
-                    nodes: prev.nodes.map((n) => n.id === targetFlowId ? patchInputConn(n, targetInputName, true) : n),
+                    nodes: prev.nodes.map((n) => {
+                        if (n.id === targetFlowId) return patchInputConn(n, targetInputName, true);
+                        if (migrated && n.id === srcId) return Object.assign({}, n, { data: Object.assign({}, n.data, migrated) });
+                        return n;
+                    }),
                 }));
             };
 
@@ -3608,7 +3643,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const target = mxSafe(() => container.addInput(name), null);
                 if (!target || !srcEl) return target;
                 const copied = mxSafe(() => { target.copyContentFrom(srcEl); return true; }, false);
-                if (!copied) mxSetAttr(target, 'type', mxElType(srcEl));
+                if (!copied) {
+                    mxSetAttr(target, 'type', mxElType(srcEl));
+                    const v = mxElAttr(srcEl, 'value');
+                    if (v) mxSafe(() => { mxWriteValue(target, v, mxElType(srcEl)); return true; }, false);
+                    const cs = mxElAttr(srcEl, 'colorspace');
+                    if (cs) mxSetColorspace(target, cs);
+                }
                 return target;
             };
 
@@ -3709,7 +3750,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 mxSetAttr(target, 'interfacename', pinName);
                                 continue;
                             }
-                            if (inp.value !== '' && inp.value != null) {
+                            if ((inp.value !== '' && inp.value != null) || inp.colorspace) {
                                 cloneInput(el, inp.name, inp.el);
                             }
                         }
@@ -3932,6 +3973,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 if (pin.nodename) mxSetAttr(point, 'nodename', pin.nodename);
                                 if (pin.nodegraph) mxSetAttr(point, 'nodegraph', pin.nodegraph);
                                 if (pin.output) mxSetAttr(point, 'output', pin.output);
+                                if (pin.colorspace) mxSetColorspace(point, pin.colorspace);
                             } else if (pin.value !== '' && pin.value != null) {
                                 mxSafe(() => { mxWriteValue(point, pin.value, pin.type); return true; }, false);
                                 if (pin.colorspace) {
