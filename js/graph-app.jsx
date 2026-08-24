@@ -2026,20 +2026,43 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const unresolved = [];
                 if (!parsed) return { resolved, unresolved };
                 const seenRefs = new Set();
-                const allNodes = vecToArray(mxSafe(() => parsed.doc.getNodes(), [])).slice();
-                for (const g of vecToArray(mxSafe(() => parsed.doc.getNodeGraphs(), []))) {
-                    allNodes.push.apply(allNodes, vecToArray(mxSafe(() => g.getNodes(), [])));
-                }
-                for (const n of allNodes) {
-                    const ports = collectPorts(n, { authoredOnly: true });
-                    for (const i of ports.inputs) {
-                        if (i.type !== 'filename' || !i.value) continue;
-                        if (seenRefs.has(i.value)) continue;
-                        seenRefs.add(i.value);
-                        const hit = findFileForRef(fileMapRef.current, i.value);
-                        if (hit) resolved.push({ ref: i.value, key: hit.key });
-                        else unresolved.push(i.value);
+                const docPrefix = mxElAttr(parsed.doc, 'fileprefix') || '';
+                const refOf = (el, prefix) => {
+                    if (el && typeof el.getResolvedValueString === 'function') {
+                        const r = mxSafe(() => el.getResolvedValueString(), '');
+                        if (r) return r;
                     }
+                    const v = mxSafe(() => (el && el.getValueString ? el.getValueString() : ''), '');
+                    return v ? prefix + v : '';
+                };
+                const note = (ref) => {
+                    if (!ref || seenRefs.has(ref)) return;
+                    seenRefs.add(ref);
+                    const hit = findFileForRef(fileMapRef.current, ref);
+                    if (hit) resolved.push({ ref, key: hit.key });
+                    else unresolved.push(ref);
+                };
+                const scanNode = (n, prefix, pinByName) => {
+                    for (const i of collectPorts(n, { authoredOnly: true }).inputs) {
+                        if (i.type !== 'filename') continue;
+                        if (i.interfacename) {
+                            const pin = pinByName ? pinByName[i.interfacename] : null;
+                            if (pin) note(refOf(pin, prefix));
+                        } else if (i.value) {
+                            note(refOf(i.el, prefix));
+                        }
+                    }
+                };
+                for (const n of vecToArray(mxSafe(() => parsed.doc.getNodes(), []))) scanNode(n, docPrefix, null);
+                for (const g of vecToArray(mxSafe(() => parsed.doc.getNodeGraphs(), []))) {
+                    if (mxElAttr(g, 'nodedef') || (parsed.implGraphNames && parsed.implGraphNames.has(mxElName(g)))) continue;
+                    const prefix = docPrefix + (mxElAttr(g, 'fileprefix') || '');
+                    const pinByName = {};
+                    for (const pin of vecToArray(mxSafe(() => g.getInputs(), []))) {
+                        pinByName[mxElName(pin)] = pin;
+                        if (mxElType(pin) === 'filename') note(refOf(pin, prefix));
+                    }
+                    for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) scanNode(n, prefix, pinByName);
                 }
                 return { resolved, unresolved };
             };
