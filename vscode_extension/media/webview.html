@@ -144,11 +144,12 @@
             var last = 0;
             var pending = null;
             var FRESH = { stale: false, serverId: null };
-            // Skipped in the VS Code webview (it updates via the
-            // Marketplace), in embed mode, and on file: (offline zip
-            // opened directly). An unstamped 'dev' tree is never stale.
+            // Skipped in the VS Code webview and the Electron shell (both
+            // update via their own channels), in embed mode, and on
+            // file: (offline zip opened directly). Never stale on a dev tree.
             function skip() {
                 return !!window.__MTLX_VSCODE__
+                    || !!window.__MTLX_ELECTRON__
                     || window.__MTLX_BUILD === 'dev'
                     || location.protocol === 'file:'
                     || document.documentElement.classList.contains('embed-mode');

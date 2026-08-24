@@ -272,7 +272,11 @@ const fetchRemoteDocumentFiles = async (docUrl) => {
         if (!origin) return false;
         try {
             const u = new URL(url);
-            return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === origin;
+            if (u.protocol === 'http:' || u.protocol === 'https:') return u.origin === origin;
+            // Electron serves the site over its own app:// scheme, where
+            // location.protocol isn't http(s); accept same-origin refs
+            // under that scheme too, or ?src= documents load untextured.
+            return u.protocol === location.protocol && u.origin === window.location.origin;
         } catch (e) { return false; }
     };
     const rootKey = remoteDocBaseName(absUrl);
@@ -761,11 +765,15 @@ const downloadXml = (xml, filename) => {
 // keeps a slow or never-settling lookup from blocking an export.
 const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
 
+// Electron never fetches source facts (site-header.js bails), so awaiting
+// them would just burn the full 1.5s on every export; skip the wait.
+const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
+
 const exportAttributionLine = async () => {
     const NL = String.fromCharCode(10);
     let version = '';
     try {
-        const facts = await Promise.race([
+        const facts = IN_ELECTRON ? null : await Promise.race([
             Promise.resolve(window.mtlxSourceFacts),
             new Promise((r) => setTimeout(() => r(null), 1500)),
         ]);

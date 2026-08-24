@@ -44,9 +44,25 @@ const BUILDER_CHECKERBOARD_STYLE = {
     backgroundColor: '#27272a',
 };
 
+// True when hosted inside the Electron desktop shell (set by its preload).
+const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
+
+// Same literal + canonical-link lookup js/shared/mtlx-ui.jsx's
+// exportAttributionLine uses, duplicated here since each lazy view script
+// is its own scope. Falls back to the literal when no canonical link ships.
+const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
+function builderPublicSiteBase() {
+    try {
+        const link = document.querySelector('link[rel="canonical"]');
+        if (link && link.href) return link.href;
+    } catch (e) { /* keep the literal */ }
+    return MTLX_SITE_URL;
+}
+
 // The directory index.html lives in, e.g. "https://host/MaterialXPlayground/".
 // Both snippet types resolve embed/* against this, same as a real host page.
-const BUILDER_SITE_BASE = new URL('.', window.location.href).href;
+// Under Electron, the page's own app:// origin is swapped for the public one.
+const BUILDER_SITE_BASE = IN_ELECTRON ? builderPublicSiteBase() : new URL('.', window.location.href).href;
 
 const builderNorm = (s) => String(s == null ? '' : s).trim().toLowerCase();
 const builderEscAttr = (s) => String(s).replace(/"/g, '&quot;');
@@ -1209,7 +1225,10 @@ function BuilderApp({ active } = {}) {
         const qs = buildShareParams(settings).toString();
         const hash = '#!builder' + (qs ? '?' + qs : '');
         try { history.replaceState(null, '', hash); } catch (e) { window.location.hash = hash; }
-        const url = window.location.origin + window.location.pathname + window.location.search + hash;
+        // Under Electron, window.location is the app:// origin, meaningless
+        // outside the app; share the public site URL instead (BUILDER_SITE_BASE).
+        const base = IN_ELECTRON ? BUILDER_SITE_BASE : window.location.origin + window.location.pathname;
+        const url = base + window.location.search + hash;
         await copySnippet('share', url);
     };
 

@@ -13,8 +13,8 @@
 
     // True in every real context: the old standalone pages (material-viewer,
     // node-graph) are gone, so this script only ever loads inside the shell
-    // (index.html, or the VS Code webview via window.__MTLX_VSCODE__).
-    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__;
+    // (index.html, or a hosted webview via __MTLX_VSCODE__/__MTLX_ELECTRON__).
+    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__ || !!window.__MTLX_ELECTRON__;
 
     // The site name. Change it here and it changes everywhere
     // (header, and — via window.SITE_TITLE — anything React renders).
@@ -697,6 +697,9 @@
         // (webview.html's connect-src disallows it) — stay a plain link
         // there. Also skip the fetch outright in embed mode, not just via CSS.
         if (window.__MTLX_VSCODE__) { resolveFacts(null); return; }
+        // Same for the Electron shell: offline-first, and the app:// origin
+        // has no reason to hit a live GitHub API.
+        if (window.__MTLX_ELECTRON__) { resolveFacts(null); return; }
         if (document.documentElement.classList.contains('embed-mode')) { resolveFacts(null); return; }
 
         var CACHE_KEY = 'mtlx_source_facts_v3';
@@ -843,6 +846,7 @@
         // guard on the build-check contract itself (may not be defined,
         // e.g. an older cached index.html without it).
         if (window.__MTLX_VSCODE__) return;
+        if (window.__MTLX_ELECTRON__) return;
         if (document.documentElement.classList.contains('embed-mode')) return;
         if (!window.__MTLX_BUILD_CHECK) return;
 

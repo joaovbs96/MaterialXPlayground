@@ -279,6 +279,10 @@
             // its bootstrap before any script runs); bound to a single
             // opened .mtlx file, so browser-only affordances are hidden.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            // True when hosted in the Electron desktop shell (set by its
+            // preload before any script runs). Unlike VS Code, this keeps
+            // autosave, file-drop and the in-app File menu.
+            const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
@@ -1353,10 +1357,10 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    // Under VS Code the .mtlx file is the source of truth
-                    // (resent on every edit), so this bypasses the confirm
-                    // dialog; first payload ingest()s, later edits use externalReload.
-                    if (window.__MTLX_VSCODE__) {
+                    // Under VS Code or Electron the .mtlx file is the source
+                    // of truth (resent per edit, or watched on disk), so this
+                    // bypasses the confirm dialog; first ingest()s, then externalReload.
+                    if (IN_VSCODE || IN_ELECTRON) {
                         if (parsedRef.current) externalReloadRef.current(map);
                         else ingestRef.current(map);
                     } else {

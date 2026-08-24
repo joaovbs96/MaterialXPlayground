@@ -16,6 +16,10 @@ const EMBED = !!window.__MTLX_EMBED;
 // only to tighten the viewer view's layout into a full-bleed viewport.
 const IN_VSCODE = !!window.__MTLX_VSCODE__;
 
+// IN_ELECTRON is set by the desktop shell's preload script before any site
+// script runs, when this page is hosted inside the Electron app.
+const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
+
 // ------------------------------------------------------------------
 // WebGL2 capability probe, cached — a page's WebGL2 support is static.
 // ------------------------------------------------------------------
@@ -270,6 +274,9 @@ let __selfHealDone = false;
 async function maybeSelfHeal() {
     if (__selfHealDone) return;
     __selfHealDone = true;
+    // The desktop shell never serves a stale cached index.html alongside
+    // fresh view files, so there is nothing to self-heal from.
+    if (IN_ELECTRON) return;
     if (!window.__MTLX_BUILD_CHECK) return;
     let result = null;
     try {
