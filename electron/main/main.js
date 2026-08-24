@@ -392,6 +392,43 @@ function clearRecents() {
     rebuildMenu();
 }
 
+// Sibling to mtlx-recents.json, same tolerant JSON-store pattern; holds
+// menu-toggled preferences (currently just openInNewWindow).
+function getSettingsPath() {
+    return path.join(app.getPath('userData'), 'mtlx-settings.json');
+}
+
+// Current behavior: every OS-level open (file association, second launch)
+// gets its own new window. false routes those into the existing window.
+let openInNewWindow = true;
+
+// Tolerant of a missing/corrupt file: any failure just means defaults,
+// same as a fresh install.
+function loadSettings() {
+    try {
+        const parsed = JSON.parse(fsSync.readFileSync(getSettingsPath(), 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveSettings() {
+    try {
+        fsSync.writeFileSync(getSettingsPath(), JSON.stringify({ openInNewWindow }), 'utf8');
+    } catch (e) {
+        console.error('[main] failed to save settings: ' + errMsg(e));
+    }
+}
+
+// Wired to the File menu's checkbox item; persists and rebuilds the menu
+// immediately so the checkbox reflects the new state.
+function setOpenInNewWindow(value) {
+    openInNewWindow = !!value;
+    saveSettings();
+    rebuildMenu();
+}
+
 // Forwards a command string to a window's renderer, for menu items with
 // no main-process business logic of their own (New/Export/Undo/Redo).
 function sendMenuCommand(win, cmd) {
@@ -472,6 +509,12 @@ function buildMenuTemplate() {
                     },
                 },
                 { label: 'Open Recent', submenu: buildRecentSubmenu() },
+                {
+                    label: 'Open Files in New Window',
+                    type: 'checkbox',
+                    checked: openInNewWindow,
+                    click: (menuItem) => setOpenInNewWindow(menuItem.checked),
+                },
                 { type: 'separator' },
                 { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (menuItem, win) => saveFromMenu(win, false) },
                 {
@@ -568,6 +611,34 @@ function rebuildMenu() {
     Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()));
 }
 
+// Updated by every window's own 'focus'/'closed' handlers (see
+// createWindow below); the single-window routing target for openMtlxRouted.
+let lastFocusedWindow = null;
+
+// The existing window an openInNewWindow:false open should land in: the
+// most recently focused still-open window, else the first remaining one,
+// else null (nothing open yet).
+function getRoutingTargetWindow() {
+    const wins = BrowserWindow.getAllWindows();
+    if (wins.length === 0) return null;
+    if (lastFocusedWindow && wins.includes(lastFocusedWindow)) return lastFocusedWindow;
+    return wins[0];
+}
+
+// OS-driven opens (file association, second launch) funnel through here:
+// a new window when the preference says so, otherwise the routing target
+// above, focused either way so the user sees where the file landed.
+function openMtlxRouted(filePath) {
+    if (openInNewWindow) {
+        openMtlxFromDisk(filePath, createWindow(), false);
+        return;
+    }
+    const target = getRoutingTargetWindow() || createWindow();
+    if (target.isMinimized()) target.restore();
+    target.focus();
+    openMtlxFromDisk(filePath, target, false);
+}
+
 function createWindow() {
     const win = new BrowserWindow({
         width: 1440,
@@ -591,6 +662,13 @@ function createWindow() {
     // 'closed' cleanup (watcher teardown, map entry removal) must be in
     // place from the start.
     getWindowState(win);
+
+    // Tracks the single-window routing target (openMtlxRouted below):
+    // the most recently focused window, cleared again once it closes.
+    win.on('focus', () => { lastFocusedWindow = win; });
+    win.on('closed', () => {
+        if (lastFocusedWindow === win) lastFocusedWindow = null;
+    });
 
     win.once('ready-to-show', () => win.show());
 
@@ -663,8 +741,7 @@ if (!gotLock) {
     app.on('second-instance', (event, argv) => {
         const filePath = getMtlxArg(argv);
         if (filePath) {
-            const win = createWindow();
-            openMtlxFromDisk(filePath, win, false);
+            openMtlxRouted(filePath);
         } else if (BrowserWindow.getAllWindows().length === 0) {
             createWindow();
         } else {
@@ -682,8 +759,7 @@ if (!gotLock) {
             pendingOpenFilePath = path.resolve(filePath);
             return;
         }
-        const win = BrowserWindow.getAllWindows()[0] || createWindow();
-        openMtlxFromDisk(path.resolve(filePath), win, false);
+        openMtlxRouted(path.resolve(filePath));
     });
 
     app.whenReady().then(() => {
@@ -698,6 +774,7 @@ if (!gotLock) {
         });
 
         recentFiles = loadRecents();
+        openInNewWindow = loadSettings().openInNewWindow !== false;
         rebuildMenu();
 
         if (process.env.MTLX_SMOKE_OPEN) {
