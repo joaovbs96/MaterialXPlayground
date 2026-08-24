@@ -502,17 +502,73 @@
                 const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
                 return c ? { epoch: c.epoch, name: c.name } : null;
             });
+            // GL context restore epoch: bumped when mtlx-engine.js reports
+            // this view's canvas restored, forcing the build effect below
+            // to dispose and fully rebuild (render-target contents are
+            // never re-baked by three's own restore handler).
+            const [glEpoch, setGlEpoch] = React.useState(0);
+            // Stashed work for a hidden view: applied once visible again
+            // (hashchange flush effect below), never while offscreen.
+            const pendingCustomGeomRef = React.useRef(false);
+            const pendingGlRestoredRef = React.useRef(false);
+            // A hidden ancestor (the shell's display:none wrapper) makes
+            // offsetParent null regardless of which level it's applied at.
+            const surfaceHidden = () => {
+                const el = canvasRef.current;
+                return !!el && el.offsetParent === null;
+            };
+            const applyCustomGeom = () => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+                if (!c && geomModeRef.current === 'custom') setGeomMode('shaderball-scene');
+            };
             // Registry changes broadcast here regardless of which app/tool
             // triggered them. Falls the CURRENT mode back to the default
             // when 'custom' empties out from under it.
             React.useEffect(() => {
+                // Rebuilding an invisible view's geometry on someone else's
+                // import churns GPU contexts, which is exactly what evicts
+                // visible ones elsewhere.
                 const onCustomGeom = () => {
-                    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
-                    setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
-                    if (!c && geomModeRef.current === 'custom') setGeomMode('shaderball-scene');
+                    if (surfaceHidden()) { pendingCustomGeomRef.current = true; return; }
+                    applyCustomGeom();
                 };
                 window.addEventListener('mtlx-custom-geom', onCustomGeom);
                 return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            // Restore re-inits GL state but not render-target contents, so
+            // a glEpoch bump forces the build effect to dispose and fully
+            // rebuild this view's shell.
+            React.useEffect(() => {
+                const onGlContext = (e) => {
+                    const d = e.detail || {};
+                    if (d.canvas !== canvasRef.current) return;
+                    if (d.state === 'lost') {
+                        if (!surfaceHidden()) {
+                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+                        }
+                    } else if (d.state === 'restored') {
+                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
+                        else setGlEpoch((n) => n + 1);
+                    }
+                };
+                window.addEventListener('mtlx-gl-context', onGlContext);
+                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+            }, []);
+            // Flushes stashed geometry/restore work once this view becomes
+            // visible again (docked view switch via the shell's hashchange).
+            React.useEffect(() => {
+                const flush = () => {
+                    // hashchange fires before/around the shell's display:none
+                    // class flip, so re-check visibility a tick later.
+                    requestAnimationFrame(() => {
+                        if (surfaceHidden()) return;
+                        if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
+                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
+                    });
+                };
+                window.addEventListener('hashchange', flush);
+                return () => window.removeEventListener('hashchange', flush);
             }, []);
             const hasCustom = !!customGeom;
             // Imported model's file-picker error, shown as its own chip:
@@ -853,7 +909,7 @@
                 return () => {
                     mounted = false;
                 };
-            }, [parsed, target, docRev, fileMap, geomMode, customGeomEpochKey]);
+            }, [parsed, target, docRev, fileMap, geomMode, customGeomEpochKey, glEpoch]);
 
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
             // built-in slot) so it's the single geometry control for the

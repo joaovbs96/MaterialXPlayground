@@ -216,7 +216,7 @@ const useCompareSlot = () => {
 // (Re)builds one slot's render view whenever its chosen document/material
 // or the shared geometry changes — mirrors viewer-app.jsx's render effect,
 // called once per slot from the app component below.
-const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey) => {
+const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch) => {
     React.useEffect(() => {
         const loaded = slot.loadedRef.current;
         if (!loaded || !loaded.renderables.length) return undefined;
@@ -308,7 +308,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [slot.renderables, slot.chosenMat, geom, customKey]);
+    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch]);
 };
 
 // Window-wide drag & drop, split into two zones (Document A / Document B)
@@ -473,11 +473,13 @@ function MaterialCompareApp({ active = true } = {}) {
     // Registry changes broadcast here regardless of which app triggered
     // them. Falls `geom` back to the default when it empties out from
     // under 'custom' (geomRef kept fresh above).
+    // Rebuilding an invisible view's geometry on someone else's import
+    // churns GPU contexts and is what evicts visible ones elsewhere, so a
+    // hidden page defers the reaction until it becomes visible again.
     React.useEffect(() => {
         const onCustomGeom = () => {
-            const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
-            setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
-            if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+            if (surfaceHidden()) { pendingCustomGeomRef.current = true; return; }
+            applyCustomGeom();
         };
         window.addEventListener('mtlx-custom-geom', onCustomGeom);
         return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
@@ -537,12 +539,76 @@ function MaterialCompareApp({ active = true } = {}) {
 
     const slotA = useCompareSlot();
     const slotB = useCompareSlot();
+    // Bumped when a lost-then-restored GL context needs a full dispose+
+    // rebuild (render-target contents like PMREM/VSM never come back on
+    // their own); see the mtlx-gl-context subscription below.
+    const [glEpochA, setGlEpochA] = React.useState(0);
+    const [glEpochB, setGlEpochB] = React.useState(0);
+    const pendingCustomGeomRef = React.useRef(false);
+    const pendingGlRestoredARef = React.useRef(false);
+    const pendingGlRestoredBRef = React.useRef(false);
+    function surfaceHidden() {
+        // Both slots share one view container, hidden together by the
+        // shell; slotA's canvas is always mounted once Compare loads,
+        // so it stands in for "is this whole page hidden".
+        const el = slotA.canvasRef.current;
+        return !!el && el.offsetParent === null;
+    }
+    function applyCustomGeom() {
+        const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+        setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+        if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+    }
     // Only the custom mesh actually changing (a re-import while 'custom' is
     // on screen) should rebuild either slot; imports made while some OTHER
     // geom is selected must not, so this stays 0 unless geom is 'custom'.
     const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey);
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB);
+
+    // Restore re-inits GL state but not render-target contents, so a
+    // glEpoch bump forces that slot's build effect to dispose and fully
+    // rebuild (fresh PMREM bake, shadow map, etc).
+    React.useEffect(() => {
+        const onGlContext = (e) => {
+            const d = e.detail || {};
+            let which = null;
+            if (d.canvas === slotA.canvasRef.current) which = 'A';
+            else if (d.canvas === slotB.canvasRef.current) which = 'B';
+            if (!which) return;
+            const slot = which === 'A' ? slotA : slotB;
+            if (d.state === 'lost') {
+                if (!surfaceHidden()) {
+                    slot.setError('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+                }
+            } else if (d.state === 'restored') {
+                if (surfaceHidden()) {
+                    if (which === 'A') pendingGlRestoredARef.current = true; else pendingGlRestoredBRef.current = true;
+                } else if (which === 'A') {
+                    setGlEpochA((n) => n + 1);
+                } else {
+                    setGlEpochB((n) => n + 1);
+                }
+            }
+        };
+        window.addEventListener('mtlx-gl-context', onGlContext);
+        return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+    }, []);
+
+    // hashchange fires before/around the shell's display:none class flip,
+    // so re-check visibility a tick later before flushing stashed work.
+    React.useEffect(() => {
+        const flush = () => {
+            requestAnimationFrame(() => {
+                if (surfaceHidden()) return;
+                if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
+                if (pendingGlRestoredARef.current) { pendingGlRestoredARef.current = false; setGlEpochA((n) => n + 1); }
+                if (pendingGlRestoredBRef.current) { pendingGlRestoredBRef.current = false; setGlEpochB((n) => n + 1); }
+            });
+        };
+        window.addEventListener('hashchange', flush);
+        return () => window.removeEventListener('hashchange', flush);
+    }, []);
 
     // Curated-preset pick per slot (mirrors viewer-app.jsx's presetPick),
     // plus a busy flag covering the fetch phase only: ingest()/loadDocument

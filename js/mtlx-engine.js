@@ -3399,6 +3399,9 @@ const createMtlxRenderView = async ({
     );
     let reqId = null;
     let renderer = null;
+    // Declared here (not inside the try block below) so disposePartial,
+    // defined outside that block, can still remove them on every teardown path.
+    let onGlLost = null, onGlRestored = null;
     let resizeObs = null;
     // While true the canvas keeps its current drawing buffer and the
     // browser scales it to the CSS box. Lets a pane drag rescale the
@@ -3593,6 +3596,10 @@ const createMtlxRenderView = async ({
         // declaration further down) — this view's OWN GPU resources,
         // same disposal rationale as pmremRT immediately above.
         try { if (peel) freePeelFn && freePeelFn(); } catch (e) { /* already disposed/invalid */ }
+        if (canvas) {
+            canvas.removeEventListener('webglcontextlost', onGlLost);
+            canvas.removeEventListener('webglcontextrestored', onGlRestored);
+        }
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -3634,6 +3641,13 @@ const createMtlxRenderView = async ({
                 // renderer, but fresh r128 state caches assume defaults, so
                 // leaked blending corrupts the PMREM bake below; resync both.
                 renderer.resetState();
+                // restored re-inits three's GL state but not render-target
+                // contents (PMREM bake, shadow map), so owners of this view
+                // must fully rebuild on restore, not just resume.
+                onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost' } })); };
+                onGlRestored = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'restored' } })); };
+                canvas.addEventListener('webglcontextlost', onGlLost);
+                canvas.addEventListener('webglcontextrestored', onGlRestored);
                 // GLOBAL flag keying every lit material's program cache, so set
                 // ONCE here, before any material or PMREM work, and left at the
                 // default (off) for views that never build a studio bowl.
@@ -5309,7 +5323,7 @@ const createMtlxRenderView = async ({
                 renderFrame();
                 if (!__snapshotCanvas) {
                     __snapshotCanvas = document.createElement('canvas');
-                    __snapshotCtx = __snapshotCanvas.getContext('2d');
+                    __snapshotCtx = __snapshotCanvas.getContext('2d', { willReadFrequently: true });
                 }
                 if (__snapshotCanvas.width !== w || __snapshotCanvas.height !== h) {
                     __snapshotCanvas.width = w; __snapshotCanvas.height = h;

@@ -182,17 +182,61 @@
                 const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
                 return c ? { epoch: c.epoch, name: c.name } : null;
             });
+            const [glEpoch, setGlEpoch] = React.useState(0);
+            const pendingCustomGeomRef = React.useRef(false);
+            const pendingGlRestoredRef = React.useRef(false);
+            // canvasRef (target) is always mounted, unlike sourceCanvasRef
+            // which only exists in compare mode, so it's the right check.
+            const surfaceHidden = () => { const el = canvasRef.current; return !!el && el.offsetParent === null; };
             // Registry changes broadcast here regardless of which app/tool
             // triggered them. Falls the CURRENT choice back to the default
             // when 'custom' empties out from under it.
+            const applyCustomGeom = () => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+                if (!c && geomChoiceRef.current === 'custom') setGeomChoice('shaderball-scene');
+            };
             React.useEffect(() => {
+                // Rebuilding an invisible view's geometry on someone else's
+                // import churns GPU contexts and is what evicts visible ones.
                 const onCustomGeom = () => {
-                    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
-                    setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
-                    if (!c && geomChoiceRef.current === 'custom') setGeomChoice('shaderball-scene');
+                    if (surfaceHidden()) { pendingCustomGeomRef.current = true; return; }
+                    applyCustomGeom();
                 };
                 window.addEventListener('mtlx-custom-geom', onCustomGeom);
                 return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            // Restore re-inits GL state but not render-target contents, so a
+            // glEpoch bump forces the build effect to dispose and fully
+            // rebuild both views.
+            React.useEffect(() => {
+                const onGlContext = (e) => {
+                    const d = e.detail || {};
+                    if (d.canvas !== canvasRef.current && d.canvas !== sourceCanvasRef.current) return;
+                    if (d.state === 'lost') {
+                        if (!surfaceHidden()) {
+                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+                        }
+                    } else if (d.state === 'restored') {
+                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
+                        else setGlEpoch((n) => n + 1);
+                    }
+                };
+                window.addEventListener('mtlx-gl-context', onGlContext);
+                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+            }, []);
+            React.useEffect(() => {
+                const flush = () => {
+                    // hashchange fires before/around the shell's display:none class
+                    // flip, so re-check visibility a tick later before flushing.
+                    requestAnimationFrame(() => {
+                        if (surfaceHidden()) return;
+                        if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
+                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
+                    });
+                };
+                window.addEventListener('hashchange', flush);
+                return () => window.removeEventListener('hashchange', flush);
             }, []);
             const hasCustom = !!customGeom;
             // Imported model's file-picker error, shown as its own chip:
@@ -1442,7 +1486,7 @@
                         deleteMxHandles([ed.instance, ...(ed.created || []), ed.doc]);
                     });
                 };
-            }, [identKey, enabled, geom, overrides, compareOn, customGeomEpochKey]);
+            }, [identKey, enabled, geom, overrides, compareOn, customGeomEpochKey, glEpoch]);
 
             // Groups params by uifolder: un-foldered render first; foldered
             // ones bucket under a collapsible header, in first-appearance

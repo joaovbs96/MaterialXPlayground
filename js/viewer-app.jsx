@@ -218,14 +218,64 @@
             // Registry changes broadcast here regardless of which app
             // triggered them. Falls the CURRENT geom (geomRef, kept fresh
             // above) back to the default when 'custom' empties out.
+            const applyCustomGeom = () => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+                if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+            };
+            // Bumped to force the view-build effect to dispose and fully
+            // rebuild after a WebGL context restore (PMREM bake, shadow
+            // map contents are lost even though GL state itself recovers).
+            const [glEpoch, setGlEpoch] = React.useState(0);
+            // Work stashed while this surface is hidden (shell display:none),
+            // flushed by the hashchange effect below once visible again.
+            const pendingCustomGeomRef = React.useRef(false);
+            const pendingGlRestoredRef = React.useRef(false);
+            // A hidden ancestor (the shell's display:none wrapper) makes
+            // offsetParent null regardless of which ancestor level it sits
+            // at; always false in the embed/VS Code realm (no such wrapper).
+            const surfaceHidden = () => { const el = canvasRef.current; return !!el && el.offsetParent === null; };
             React.useEffect(() => {
+                // Rebuilding an invisible view's geometry on someone else's
+                // import churns GPU contexts and is what evicts visible ones.
                 const onCustomGeom = () => {
-                    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
-                    setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
-                    if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+                    if (surfaceHidden()) { pendingCustomGeomRef.current = true; return; }
+                    applyCustomGeom();
                 };
                 window.addEventListener('mtlx-custom-geom', onCustomGeom);
                 return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            // Restore re-inits GL state but not render-target contents
+            // (PMREM bake, shadow map), so a glEpoch bump forces the build
+            // effect to dispose and fully rebuild.
+            React.useEffect(() => {
+                const onGlContext = (e) => {
+                    const d = e.detail || {};
+                    if (d.canvas !== canvasRef.current) return;
+                    if (d.state === 'lost') {
+                        if (!surfaceHidden()) {
+                            notify('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+                        }
+                    } else if (d.state === 'restored') {
+                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
+                        else setGlEpoch((n) => n + 1);
+                    }
+                };
+                window.addEventListener('mtlx-gl-context', onGlContext);
+                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+            }, []);
+            React.useEffect(() => {
+                const flush = () => {
+                    // hashchange fires before/around the shell's display:none class
+                    // flip, so re-check visibility a tick later before flushing.
+                    requestAnimationFrame(() => {
+                        if (surfaceHidden()) return;
+                        if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
+                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
+                    });
+                };
+                window.addEventListener('hashchange', flush);
+                return () => window.removeEventListener('hashchange', flush);
             }, []);
             const hasCustom = !!customGeom;
             // Custom Model tile's expanded/collapsed state: starts open only
@@ -869,7 +919,7 @@
                         if (onViewRef.current) onViewRef.current(null);
                     }
                 };
-            }, [renderables, chosenMat, geom, customKey]);
+            }, [renderables, chosenMat, geom, customKey, glEpoch]);
 
             // Backs the Scene card's transparency-forcing toggle (browser
             // only): local mirror of the engine's persisted value, replacing
