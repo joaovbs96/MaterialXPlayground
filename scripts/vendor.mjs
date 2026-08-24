@@ -74,6 +74,8 @@ const COPIES = [
 
   { pkg: "jszip", src: "dist/jszip.min.js", dest: "jszip/jszip.min.js" },
 
+  { pkg: "utif", src: "UTIF.js", dest: "utif/UTIF.js" },
+
   { pkg: "reactflow", src: "dist/style.css", dest: "reactflow/style.css" },
   { pkg: "reactflow", src: "dist/umd/index.js", dest: "reactflow/index.js" },
 
@@ -95,6 +97,7 @@ const COPIES = [
   { pkg: "three", src: "LICENSE", dest: "three/LICENSE.txt" },
   { pkg: "katex", src: "LICENSE", dest: "katex/LICENSE.txt" },
   { pkg: "jszip", src: "LICENSE.markdown", dest: "jszip/LICENSE.markdown" },
+  { pkg: "utif", src: "LICENSE", dest: "utif/LICENSE.txt" },
   { pkg: "reactflow", src: "LICENSE", dest: "reactflow/LICENSE.txt" },
   { pkg: "dagre", src: "LICENSE", dest: "dagre/LICENSE.txt" },
   { pkg: "@highlightjs/cdn-assets", src: "LICENSE", dest: "highlightjs/LICENSE.txt" },

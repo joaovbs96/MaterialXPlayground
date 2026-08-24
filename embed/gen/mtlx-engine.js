@@ -1047,6 +1047,29 @@ const loadHdrTexture = async blob => {
   }
 };
 
+// Parses a dropped .tif/.tiff Blob via UTIF.js into an 8bpc RGBA texture.
+// Baseline decode only (8/16-bit, common compressions); exotic TIFFs fall
+// back to null like the loaders above, keeping the node default color.
+const loadTifTexture = async blob => {
+  if (typeof UTIF === 'undefined') {
+    console.warn('mtlx-engine: UTIF unavailable (script blocked/offline); .tif textures keep the node default color.');
+    return null;
+  }
+  try {
+    const buf = await blob.arrayBuffer();
+    const ifds = UTIF.decode(buf);
+    if (!ifds || !ifds.length) return null;
+    UTIF.decodeImage(buf, ifds[0]);
+    const rgba = UTIF.toRGBA8(ifds[0]);
+    const tex = new THREE.DataTexture(new Uint8Array(rgba), ifds[0].width, ifds[0].height, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    return tex;
+  } catch (e) {
+    console.warn('mtlx-engine: failed to parse dropped .tif texture, keeping the node default color:', e);
+    return null;
+  }
+};
+
 // Binds dropped textures onto the shader's filename sampler uniforms.
 // Cache hits assign synchronously; misses load async (TextureLoader, or
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
@@ -1075,8 +1098,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
       if (onBound) onBound();
     } else {
       const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
-      if (ext === 'exr' || ext === 'hdr') {
-        const parsePromise = ext === 'exr' ? loadExrTexture(blob) : loadHdrTexture(blob);
+      if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
+        const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
         parsePromise.then(tex => {
           if (!tex) return; // unsupported/corrupt, the node default color stands
           configureLoadedTexture(tex);
@@ -6486,6 +6509,9 @@ Object.assign(window, {
   TEXTURE_CACHE,
   textureCacheKey,
   bindDroppedTextures,
+  loadExrTexture,
+  loadHdrTexture,
+  loadTifTexture,
   collectMxUniforms,
   mxValueToThreeUniform,
   linToSrgb,

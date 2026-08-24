@@ -130,7 +130,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '74ad2cf36c53f668';</script>
+    <script>window.__MTLX_BUILD = '8a969f8039046879';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -249,6 +249,9 @@
          from. -->
     <script src="vendor/three/fflate.min.js"></script>
     <script src="js/vendor/EXRLoader.js"></script>
+    <!-- UTIF.js: baseline TIFF decoder (photopea/UTIF.js, MIT), used by
+         loadTifTexture in js/mtlx-engine.js for dropped .tif/.tiff textures. -->
+    <script src="vendor/utif/UTIF.js"></script>
     <script src="vendor/three/GLTFLoader.js"></script>
     <script src="vendor/three/OBJLoader.js"></script>
     <script src="vendor/three/OrbitControls.js"></script>
