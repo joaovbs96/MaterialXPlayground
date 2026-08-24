@@ -44,7 +44,8 @@
     "react-dom": "18.3.1",
     "reactflow": "11.11.4",
     "three": "0.128.0",
-    "three-147": "npm:three@0.147.0"
+    "three-147": "npm:three@0.147.0",
+    "utif": "3.1.0"
   },
   "categories": [
     "Visualization"

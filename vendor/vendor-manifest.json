@@ -282,6 +282,18 @@
       "source": "three@0.128.0",
       "sha256": "9274bbcec8d96168626c732b5d31c775aa8cfb7eaa0599bec0c175908a2c1ce2",
       "bytes": 603445
+    },
+    {
+      "path": "utif/LICENSE.txt",
+      "source": "utif@3.1.0",
+      "sha256": "c1fb8861eca211bf5aea574358aba7039396c0c1824c2a1477cc126d398efd89",
+      "bytes": 1065
+    },
+    {
+      "path": "utif/UTIF.js",
+      "source": "utif@3.1.0",
+      "sha256": "e3e76115f49571e39624c3316a76b3c4c5b2c5ca518dfec4b66a9f7af8c6d059",
+      "bytes": 58271
     }
   ]
 }
