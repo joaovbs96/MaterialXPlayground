@@ -149,6 +149,7 @@ const VIEW_DEPS = {
     graph: {
         css: [
             'vendor/reactflow/style.css',
+            'js/graph/graph-preview.css',
         ],
         scripts: [
             'vendor/jszip/jszip.min.js',
@@ -159,6 +160,7 @@ const VIEW_DEPS = {
             // even if the vendored build's "common languages" drops xml.
             'vendor/highlightjs/highlight.min.js',
             'vendor/highlightjs/xml.min.js',
+            'embed/mtlx-viewer.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -166,6 +168,7 @@ const VIEW_DEPS = {
             'js/graph/style.jsx',
             'js/graph/legend.jsx',
             'js/graph/node-component.jsx',
+            'js/graph/graph-preview.jsx',
             'js/graph/preview.jsx',
             'js/graph/catalog.jsx',
             'js/graph/dialogs.jsx',
