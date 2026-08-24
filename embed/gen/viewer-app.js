@@ -273,10 +273,10 @@ function MaterialViewerApp({
   // rebuild after a WebGL context restore (PMREM bake, shadow
   // map contents are lost even though GL state itself recovers).
   const [glEpoch, setGlEpoch] = React.useState(0);
-  // Global display transform ('aces'|'srgb', js/mtlx-engine.js).
+  // Global display transform ('srgb'|'aces'|'lin_rec709', js/mtlx-engine.js).
   // encodeDisplay bakes it into shader source, so it's a
   // dependency of the view-build effect below, same as geom: a change forces a full dispose+regenerate, not a live tweak.
-  const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'aces');
+  const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
   const displayTransformRef = React.useRef(displayTransform);
   displayTransformRef.current = displayTransform;
   // Work stashed while this surface is hidden (shell display:none),
@@ -1443,21 +1443,6 @@ function MaterialViewerApp({
     className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-medium text-gray-400"
-  }, "Display"), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: displayTransform,
-    options: ['aces', 'srgb'],
-    labels: {
-      aces: 'ACES',
-      srgb: 'sRGB (MaterialXView)'
-    },
-    onChange: pickDisplayTransform,
-    defValue: "aces",
-    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).",
-    size: "sm"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-xs font-medium text-gray-400"
   }, "Backdrop"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: backdropMode,
     options: ['studio', 'studio-dark', 'environment', 'none'],
@@ -1492,7 +1477,23 @@ function MaterialViewerApp({
     title: "Rendering",
     summary: forceTransparency ? 'Transparency forced' : 'Default',
     defaultOpen: true
-  }, /*#__PURE__*/React.createElement("label", {
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "View Transform"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: displayTransform,
+    options: ['srgb', 'aces', 'lin_rec709'],
+    labels: {
+      srgb: 'sRGB',
+      aces: 'ACES',
+      lin_rec709: 'lin_rec709'
+    },
+    onChange: pickDisplayTransform,
+    defValue: "srgb",
+    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).",
+    size: "sm"
+  })), /*#__PURE__*/React.createElement("label", {
     className: "flex items-center justify-between cursor-pointer",
     title: forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'
   }, /*#__PURE__*/React.createElement("span", {

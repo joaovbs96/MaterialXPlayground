@@ -235,11 +235,11 @@
             // rebuild after a WebGL context restore (PMREM bake, shadow
             // map contents are lost even though GL state itself recovers).
             const [glEpoch, setGlEpoch] = React.useState(0);
-            // Global display transform ('aces'|'srgb', js/mtlx-engine.js).
+            // Global display transform ('srgb'|'aces'|'lin_rec709', js/mtlx-engine.js).
             // encodeDisplay bakes it into shader source, so it's a
             // dependency of the view-build effect below, same as geom: a change forces a full dispose+regenerate, not a live tweak.
             const [displayTransform, setDisplayTransformState] = React.useState(
-                () => (window.getDisplayTransform ? window.getDisplayTransform() : 'aces')
+                () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
             );
             const displayTransformRef = React.useRef(displayTransform);
             displayTransformRef.current = displayTransform;
@@ -1359,18 +1359,6 @@
                             onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                         />
                         <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-medium text-gray-400">Display</span>
-                            <MtlxSelect
-                                value={displayTransform}
-                                options={['aces', 'srgb']}
-                                labels={{ aces: 'ACES', srgb: 'sRGB (MaterialXView)' }}
-                                onChange={pickDisplayTransform}
-                                defValue="aces"
-                                title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
-                                size="sm"
-                            />
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
                             <span className="text-xs font-medium text-gray-400">Backdrop</span>
                             <MtlxSelect
                                 value={backdropMode}
@@ -1407,6 +1395,18 @@
                     </SectionCard>
 
                     <SectionCard icon="settings-cog" title="Rendering" summary={forceTransparency ? 'Transparency forced' : 'Default'} defaultOpen>
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-gray-400">View Transform</span>
+                            <MtlxSelect
+                                value={displayTransform}
+                                options={['srgb', 'aces', 'lin_rec709']}
+                                labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
+                                onChange={pickDisplayTransform}
+                                defValue="srgb"
+                                title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+                                size="sm"
+                            />
+                        </div>
                         <label
                             className="flex items-center justify-between cursor-pointer"
                             title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}

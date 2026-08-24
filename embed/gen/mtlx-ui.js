@@ -455,11 +455,10 @@ const fullscreenPortalRoot = () => document.fullscreenElement || document.body;
 
 // Approx SettingsDialog popover footprint (px) for the edge-clamp/flip
 // math below. Height is a safe over-estimate covering the built-in
-// Force Transparency block plus one caller-supplied `children` block;
-// the cog sits at the top of the strip so the flip branch effectively
-// never fires.
+// Display + Force Transparency blocks plus one caller-supplied `children`
+// block; the cog sits at the top of the strip so the flip branch effectively never fires.
 const SETTINGS_DIALOG_W = 288,
-  SETTINGS_DIALOG_H = 260;
+  SETTINGS_DIALOG_H = 300;
 
 // Settings popover (cogwheel button in ViewportControls): mounted once
 // there so it's shared across docs/viewer/graph with zero per-app wiring.
@@ -478,6 +477,24 @@ function SettingsDialog({
   React.useEffect(() => {
     if (open) setForceT(!!(window.getForceTransparency && window.getForceTransparency()));
   }, [open]);
+  // Display transform: same resync-on-open as forceT, plus a live
+  // listener (unlike forceT, other open dialogs/tools can change this
+  // and broadcast it) so every mounted popover stays in step.
+  const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+  React.useEffect(() => {
+    if (open && window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
+  }, [open]);
+  React.useEffect(() => {
+    const onDisplayTransform = () => {
+      if (window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
+    };
+    window.addEventListener('mtlx-display-transform', onDisplayTransform);
+    return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+  }, []);
+  const pickDisplayTransform = mode => {
+    setDisplayTransformState(mode);
+    if (window.setDisplayTransform) window.setDisplayTransform(mode);
+  };
   const popRef = React.useRef(null);
   const [pos, setPos] = React.useState(null);
 
@@ -523,6 +540,22 @@ function SettingsDialog({
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-3 py-3 space-y-3 text-[12px]"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-200"
+  }, "View Transform"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: displayTransform,
+    options: ['srgb', 'aces', 'lin_rec709'],
+    labels: {
+      srgb: 'sRGB',
+      aces: 'ACES',
+      lin_rec709: 'lin_rec709'
+    },
+    onChange: pickDisplayTransform,
+    defValue: "srgb",
+    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).",
+    size: "sm"
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "inline-flex items-center gap-1.5 text-gray-200"
