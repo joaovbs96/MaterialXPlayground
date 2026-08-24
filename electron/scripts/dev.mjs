@@ -32,8 +32,11 @@ const require = createRequire(import.meta.url);
 const electronPath = require(path.join(ELECTRON_DIR, 'node_modules', 'electron'));
 
 const smoke = process.argv.includes('--smoke');
+const smokeOpenIndex = process.argv.indexOf('--smoke-open');
+const smokeOpenFile = smokeOpenIndex !== -1 ? process.argv[smokeOpenIndex + 1] : null;
 const env = Object.assign({}, process.env, { MTLX_SITE_ROOT: REPO_ROOT });
 if (smoke) env.MTLX_SMOKE = '1';
+if (smokeOpenFile) env.MTLX_SMOKE_OPEN = path.resolve(smokeOpenFile);
 // A leaked ELECTRON_RUN_AS_NODE=1 from the parent shell would make the
 // binary boot as plain Node instead of the full Electron runtime.
 delete env.ELECTRON_RUN_AS_NODE;

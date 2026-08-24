@@ -1,7 +1,65 @@
 // preload.js: context-isolated bridge between the main process and the
-// site. Only sets the host flag for now; phase 4 adds the open/save API.
+// site. Sets the host flag, buffers open-file/save-request payloads, and
+// exposes mtlxDesktop plus installs glue.js into the page's main world.
 'use strict';
 
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
 
 contextBridge.exposeInMainWorld('__MTLX_ELECTRON__', true);
+
+// Buffered like the site's own window.__mtlxPendingImport pattern: main
+// may send 'mtlx-open-file' before the page registers onOpenFile, so the
+// payload is held until a callback shows up.
+let openFileCallback = null;
+let pendingOpenFilePayload = null;
+ipcRenderer.on('mtlx-open-file', (event, payload) => {
+    if (openFileCallback) openFileCallback(payload);
+    else pendingOpenFilePayload = payload;
+});
+
+// Renderer answering a future main-initiated save request (phase 5's
+// native Save menu); 'graph view is not open' mirrors bootstrap.js's own
+// silent no-op reasoning when no callback has been registered yet.
+let requestSaveCallback = null;
+ipcRenderer.on('mtlx-request-save', async () => {
+    if (!requestSaveCallback) {
+        ipcRenderer.send('mtlx-request-save-reply', { error: 'graph view is not open' });
+        return;
+    }
+    try {
+        const xml = await requestSaveCallback();
+        ipcRenderer.send('mtlx-request-save-reply', { xml });
+    } catch (e) {
+        ipcRenderer.send('mtlx-request-save-reply', { error: e && e.message ? e.message : String(e) });
+    }
+});
+let saveCommittedCallback = null;
+ipcRenderer.on('mtlx-save-committed', () => { if (saveCommittedCallback) saveCommittedCallback(); });
+
+const api = {
+    saveMtlx: (opts) => ipcRenderer.invoke('mtlx-save', opts),
+    notifyEdit: (dirty) => ipcRenderer.send('mtlx-notify-edit', !!dirty),
+    onOpenFile: (callback) => {
+        openFileCallback = callback;
+        if (pendingOpenFilePayload) {
+            const payload = pendingOpenFilePayload;
+            pendingOpenFilePayload = null;
+            callback(payload);
+        }
+    },
+    onRequestSave: (callback) => { requestSaveCallback = callback; },
+    onSaveCommitted: (callback) => { saveCommittedCallback = callback; },
+};
+contextBridge.exposeInMainWorld('mtlxDesktop', api);
+
+// Install glue.js into the page's main world (preload runs before the
+// page's own scripts, so webFrame's main-world context already exists).
+// The DOMContentLoaded call is belt-and-suspenders; glue.js is idempotent.
+const glueSource = fs.readFileSync(path.join(__dirname, 'glue.js'), 'utf8');
+function installGlue() {
+    webFrame.executeJavaScript(glueSource).catch((e) => console.error('[preload] glue install failed:', e));
+}
+installGlue();
+document.addEventListener('DOMContentLoaded', installGlue);
