@@ -27,7 +27,10 @@
             // Second step for the two synthetic "interface input"/"output"
             // rows below — picking one doesn't add anything yet, it swaps
             // the palette body to this small name+type form.
-            const [ifaceDraft, setIfaceDraft] = React.useState(null); // { kind, name, type }
+            const [ifaceDraft, setIfaceDraft] = React.useState(null); // { kind, name, type, value, colorspace, uiname, uifolder, uimin, uimax, uiadvanced }
+            // "More options" disclosure (interface inputs only): collapsed
+            // by default so the quick name+type add flow stays unchanged.
+            const [ifaceMoreOpen, setIfaceMoreOpen] = React.useState(false);
             const nameRef = React.useRef(null);
             React.useEffect(() => {
                 const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0);
@@ -89,12 +92,25 @@
                 if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
             }, [hi, items]);
             const pick = (c) => {
-                if (c.synthetic) setIfaceDraft({ kind: c.synthetic, name: '', type: 'color3' });
+                if (c.synthetic) {
+                    setIfaceDraft({
+                        kind: c.synthetic, name: '', type: 'color3',
+                        value: '', colorspace: '', uiname: '', uifolder: '',
+                        uimin: '', uimax: '', uiadvanced: false,
+                    });
+                    setIfaceMoreOpen(false);
+                }
                 else onPick(c, typeFilter);
             };
             const confirmIface = () => {
                 if (!ifaceDraft) return;
-                onAddInterface(ifaceDraft.kind, ifaceDraft.name, ifaceDraft.type);
+                const meta = ifaceDraft.kind === 'iface-input' ? {
+                    value: ifaceDraft.value, colorspace: ifaceDraft.colorspace,
+                    uiname: ifaceDraft.uiname, uifolder: ifaceDraft.uifolder,
+                    uimin: ifaceDraft.uimin, uimax: ifaceDraft.uimax,
+                    uiadvanced: ifaceDraft.uiadvanced,
+                } : undefined;
+                onAddInterface(ifaceDraft.kind, ifaceDraft.name, ifaceDraft.type, meta);
                 onClose();
             };
             const onKeyDown = (e) => {
@@ -136,6 +152,89 @@
                                             <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
                                         ))}
                                     </select>
+                                    {ifaceDraft.kind === 'iface-input' && (
+                                        <div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIfaceMoreOpen((o) => !o)}
+                                                className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                                            >
+                                                <MtlxIcon name={ifaceMoreOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3 flex-none" />
+                                                More options
+                                            </button>
+                                            {ifaceMoreOpen && (
+                                                <div className="pt-1.5 space-y-1.5">
+                                                    <input
+                                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                        placeholder="uiname (optional)"
+                                                        value={ifaceDraft.uiname}
+                                                        spellCheck={false}
+                                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uiname: e.target.value }))}
+                                                    />
+                                                    <input
+                                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                        placeholder="uifolder (optional)"
+                                                        value={ifaceDraft.uifolder}
+                                                        spellCheck={false}
+                                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uifolder: e.target.value }))}
+                                                    />
+                                                    <input
+                                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                        placeholder="default value (optional)"
+                                                        value={ifaceDraft.value}
+                                                        spellCheck={false}
+                                                        onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { value: e.target.value }))}
+                                                    />
+                                                    {(ifaceDraft.type === 'float' || ifaceDraft.type === 'integer') && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <input
+                                                                className="w-1/2 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                                placeholder="uimin"
+                                                                value={ifaceDraft.uimin}
+                                                                spellCheck={false}
+                                                                onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uimin: e.target.value }))}
+                                                            />
+                                                            <input
+                                                                className="w-1/2 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                                placeholder="uimax"
+                                                                value={ifaceDraft.uimax}
+                                                                spellCheck={false}
+                                                                onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uimax: e.target.value }))}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 font-mono">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="h-3.5 w-3.5 accent-blue-500"
+                                                            checked={ifaceDraft.uiadvanced}
+                                                            onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uiadvanced: e.target.checked }))}
+                                                        />
+                                                        uiadvanced
+                                                    </label>
+                                                    {ifaceColorManaged(ifaceDraft.type) && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                                                            <MtlxSelect
+                                                                value={ifaceDraft.colorspace || ''}
+                                                                options={COLORSPACES}
+                                                                emptyOption={'(none)'}
+                                                                onChange={(v) => setIfaceDraft(Object.assign({}, ifaceDraft, { colorspace: v }))}
+                                                                defValue={null}
+                                                                size="sm"
+                                                                variant="field"
+                                                                icon="palette"
+                                                                font="mono"
+                                                                align="left"
+                                                                block
+                                                                className="flex-1 min-w-0"
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     <div className="flex items-center gap-2 pt-0.5">
                                         <button
                                             onClick={confirmIface}

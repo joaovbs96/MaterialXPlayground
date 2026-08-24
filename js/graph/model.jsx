@@ -381,6 +381,11 @@
             return t === 'multioutput' ? [] : [{ name: 'out', type: t }];
         };
 
+        // Interface pins (nodegraph <input>s) have no node output to check
+        // against, so colorManagedFor's isColorOutput rule doesn't apply;
+        // this standalone check covers the filename/color3/color4 cases.
+        const ifaceColorManaged = (t) => t === 'filename' || t === 'color3' || t === 'color4';
+
         // Builds descriptor + edge lists for one scope: '' = document root
         // (top-level nodes/nodegraphs/outputs), or a nodegraph name (its
         // nodes plus pseudo-nodes for interface inputs and outputs).
@@ -409,12 +414,21 @@
                     const outs = vecToArray(mxSafe(() => g.getOutputs(), []))
                         .filter((o) => !/^__pv_/.test(mxElName(o))) // transient preview tap
                         .map((o) => ({ name: mxElName(o), type: mxElType(o) }));
-                    const ins = vecToArray(mxSafe(() => g.getInputs(), [])).map((inp) => ({
-                        name: mxElName(inp), type: mxElType(inp),
-                        value: mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
-                        nodename: mxElAttr(inp, 'nodename'), nodegraph: mxElAttr(inp, 'nodegraph'),
-                        interfacename: null, output: mxElAttr(inp, 'output'),
-                    }));
+                    const ins = vecToArray(mxSafe(() => g.getInputs(), [])).map((inp) => {
+                        const type = mxElType(inp);
+                        return {
+                            name: mxElName(inp), type,
+                            value: mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
+                            nodename: mxElAttr(inp, 'nodename'), nodegraph: mxElAttr(inp, 'nodegraph'),
+                            interfacename: null, output: mxElAttr(inp, 'output'),
+                            colorspace: mxElAttr(inp, 'colorspace'), colorManaged: ifaceColorManaged(type),
+                            uiname: mxElAttr(inp, 'uiname'), uifolder: mxElAttr(inp, 'uifolder'),
+                            uimin: mxElAttr(inp, 'uimin'), uimax: mxElAttr(inp, 'uimax'),
+                            uisoftmin: mxElAttr(inp, 'uisoftmin'), uisoftmax: mxElAttr(inp, 'uisoftmax'),
+                            uiadvanced: mxElAttr(inp, 'uiadvanced') === 'true',
+                            defColorspace: '',
+                        };
+                    });
                     push({ id: 'g:' + mxElName(g), kind: 'nodegraph', name: mxElName(g),
                            category: 'nodegraph', type: '',
                            inputs: ins, outputs: outs.length ? outs : [{ name: 'out', type: '' }],
@@ -432,10 +446,17 @@
                 const g = mxSafe(() => doc.getNodeGraph(scope), null);
                 if (!g) throw new Error('Nodegraph "' + scope + '" not found in the document.');
                 for (const inp of vecToArray(mxSafe(() => g.getInputs(), []))) {
+                    const type = mxElType(inp);
                     push({ id: 'i:' + mxElName(inp), kind: 'input', name: mxElName(inp),
-                           category: 'interface input', type: mxElType(inp),
+                           category: 'interface input', type,
                            inputs: [], value: mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), ''),
-                           outputs: [{ name: 'out', type: mxElType(inp) }], pos: storedPos(inp) });
+                           outputs: [{ name: 'out', type }], pos: storedPos(inp),
+                           colorspace: mxElAttr(inp, 'colorspace'), colorManaged: ifaceColorManaged(type),
+                           uiname: mxElAttr(inp, 'uiname'), uifolder: mxElAttr(inp, 'uifolder'),
+                           uimin: mxElAttr(inp, 'uimin'), uimax: mxElAttr(inp, 'uimax'),
+                           uisoftmin: mxElAttr(inp, 'uisoftmin'), uisoftmax: mxElAttr(inp, 'uisoftmax'),
+                           uiadvanced: mxElAttr(inp, 'uiadvanced') === 'true',
+                           defColorspace: '' });
                 }
                 for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) {
                     const ports = collectPorts(n);
@@ -511,5 +532,5 @@
 Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef, signatureInputTypes, CLOSURE_TYPES, isClosureModifier,
-    collectPorts, storedPos, buildScope, MTLX_PERF_LOG,
+    collectPorts, storedPos, buildScope, MTLX_PERF_LOG, ifaceColorManaged,
 });
