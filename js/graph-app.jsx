@@ -2343,7 +2343,21 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     return false;
                 }
                 const base = nameOverride || defaultExportBase();
-                const blob = new Blob([await attributeExportedXml(xml)], { type: 'application/xml' });
+                const exportedXml = await attributeExportedXml(xml);
+                const blob = new Blob([exportedXml], { type: 'application/xml' });
+                if (IN_ELECTRON && window.mtlxDesktop) {
+                    try {
+                        const result = await window.mtlxDesktop.saveMtlx({ xml: exportedXml, suggestedName: base + '.mtlx' });
+                        if (result && result.ok) {
+                            markSaved();
+                            return true;
+                        }
+                        if (result && result.canceled) return false;
+                        // any other failure falls through to the picker/download path below
+                    } catch (e) {
+                        // bridge call itself failed, fall through the same way
+                    }
+                }
                 if (typeof window.showSaveFilePicker === 'function') {
                     let handle = null;
                     try {
