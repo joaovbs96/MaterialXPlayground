@@ -4765,6 +4765,27 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
+            // Native desktop menu commands (Electron only): New/Export/Undo/Redo
+            // forwarded from main.js via glue.js's onMenuCommand, routed to the
+            // exact same handlers the in-app File/Edit menu items already call.
+            const guardedNewDocumentRef = React.useRef(guardedNewDocument);
+            guardedNewDocumentRef.current = guardedNewDocument;
+            const openExportDialogRef = React.useRef(openExportDialog);
+            openExportDialogRef.current = openExportDialog;
+            React.useEffect(() => {
+                if (!IN_ELECTRON) return;
+                const onCommand = (e) => {
+                    if (!activeRef.current) return;
+                    const cmd = e.detail && e.detail.cmd;
+                    if (cmd === 'new') guardedNewDocumentRef.current();
+                    else if (cmd === 'export') openExportDialogRef.current();
+                    else if (cmd === 'undo') undoDocRef.current();
+                    else if (cmd === 'redo') redoDocRef.current();
+                };
+                window.addEventListener('mtlx-desktop-command', onCommand);
+                return () => window.removeEventListener('mtlx-desktop-command', onCommand);
+            }, [IN_ELECTRON]);
+
             // ReactFlow's `.dragging` class (grab cursor) sticks if the
             // mouseup happens OUTSIDE the window. Self-heal: strip it when
             // the pointer moves with no buttons held, or on window blur.
