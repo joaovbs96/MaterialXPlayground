@@ -832,10 +832,10 @@ function MaterialCompareApp({ active = true } = {}) {
     // Imports into the shared engine registry (js/mtlx-engine.js), fired
     // to every subscribed view. Does not select 'custom' itself: the
     // registry's own setGlobalGeom('custom') call does that instead.
-    const importModel = async (f) => {
+    const importModel = async (files) => {
         setModelImportError(null);
         try {
-            await window.loadCustomPreviewGeomFromFile(f);
+            await window.loadCustomPreviewGeomFromFile(files);
         } catch (e) {
             setModelImportError(errMsg(e));
         }
@@ -1616,12 +1616,11 @@ function MaterialCompareApp({ active = true } = {}) {
                                     name={customGeom ? customGeom.name : ''}
                                     selected={geom === 'custom'}
                                     expanded={customOpen}
-                                    accept=".obj,.glb,.gltf"
+                                    accept=".obj,.glb,.gltf,.bin"
                                     onSelect={() => pickGeom('custom')}
                                     onExpand={() => setCustomOpen(true)}
                                     onFiles={(files) => {
-                                        const f = files && files[0];
-                                        if (f) importModel(f);
+                                        if (files && files.length) importModel(files);
                                     }}
                                     onClear={clearModel}
                                 />

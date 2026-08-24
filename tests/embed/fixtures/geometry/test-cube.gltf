@@ -1,0 +1,58 @@
+{
+  "asset": { "version": "2.0", "generator": "hand-authored test fixture" },
+  "scene": 0,
+  "scenes": [
+    { "nodes": [0] }
+  ],
+  "nodes": [
+    { "mesh": 0 }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": { "POSITION": 0 },
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "pbrMetallicRoughness": {
+        "baseColorTexture": { "index": 0 }
+      }
+    }
+  ],
+  "textures": [
+    { "source": 0 }
+  ],
+  "images": [
+    { "uri": "missing-texture.png" }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "byteOffset": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [0, 0, 0],
+      "max": [1, 1, 0]
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 36,
+      "target": 34962
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "test-cube.bin",
+      "byteLength": 36
+    }
+  ]
+}

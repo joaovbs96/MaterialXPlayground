@@ -273,10 +273,9 @@
             // (modelFooter.onFiles). Only touches the registry: the
             // resulting 'mtlx-global-geom' event adopts 'custom' instead.
             const onModelFiles = async (files) => {
-                const f = files && files[0];
-                if (!f) return;
+                if (!files || !files.length) return;
                 try {
-                    await window.loadCustomPreviewGeomFromFile(f);
+                    await window.loadCustomPreviewGeomFromFile(files);
                     setModelError(null);
                 } catch (e2) {
                     setModelError(errMsg(e2));
@@ -1805,7 +1804,7 @@
             const geomModelFooter = {
                 name: customGeom ? customGeom.name : '',
                 selected: geomChoice === 'custom',
-                accept: '.obj,.glb,.gltf',
+                accept: '.obj,.glb,.gltf,.bin',
                 onSelect: () => pickGeom('custom'),
                 onFiles: onModelFiles,
                 onClear: () => window.clearCustomPreviewGeom(),

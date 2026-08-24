@@ -1047,10 +1047,10 @@ function MaterialViewerApp({
   // Imports into the shared engine registry (js/mtlx-engine.js).
   // Does not select 'custom' itself: the registry's own
   // setGlobalGeom('custom') call does that, via 'mtlx-global-geom'.
-  const importModel = async f => {
+  const importModel = async files => {
     setModelError(null);
     try {
-      await window.loadCustomPreviewGeomFromFile(f);
+      await window.loadCustomPreviewGeomFromFile(files);
     } catch (e) {
       setModelError(errMsg(e));
     }
@@ -1073,11 +1073,10 @@ function MaterialViewerApp({
   const geomModelFooter = {
     name: customGeom ? customGeom.name : '',
     selected: geom === 'custom',
-    accept: '.obj,.glb,.gltf',
+    accept: '.obj,.glb,.gltf,.bin',
     onSelect: () => pickGeom('custom'),
     onFiles: files => {
-      const f = files && files[0];
-      if (f) importModel(f);
+      if (files && files.length) importModel(files);
     },
     onClear: clearModel
   };
@@ -1361,7 +1360,7 @@ function MaterialViewerApp({
     name: geomModelFooter.name,
     selected: geom === 'custom',
     expanded: customOpen,
-    accept: ".obj,.glb,.gltf",
+    accept: ".obj,.glb,.gltf,.bin",
     onSelect: geomModelFooter.onSelect,
     onExpand: () => setCustomOpen(true),
     onFiles: geomModelFooter.onFiles,

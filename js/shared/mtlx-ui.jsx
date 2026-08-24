@@ -1374,6 +1374,7 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
                 ref={inputRef}
                 type="file"
                 accept={accept}
+                multiple
                 className="hidden"
                 onChange={(e) => {
                     if (onFiles) onFiles(e.target.files);
@@ -2589,6 +2590,7 @@ const MtlxSelect = ({
                         ref={modelInputRef}
                         type="file"
                         accept={modelFooter.accept}
+                        multiple
                         className="hidden"
                         onChange={(e) => {
                             if (modelFooter.onFiles) modelFooter.onFiles(e.target.files);

@@ -1501,10 +1501,45 @@ const buildCustomGeometryFromRoot = (root, fileName) => {
     return normalizeGeometry(merged);
 };
 
-// Parses model bytes (string for obj, ArrayBuffer for glb/gltf) into a root
-// Object3D via the extension-matched loader. Shared by the file and URL
-// entry points; `label` is only used for error messages.
-const parseModelRoot = async (ext, data, label) => {
+// 1x1 transparent PNG, served for every texture request while loading a
+// custom preview model: previews are geometry-only by design.
+const CUSTOM_GEOM_BLANK_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+// Lowercased basename of a URL or file name: strips query/fragment, then
+// everything up to the last slash.
+const lowerBasename = (s) => String(s || '').split('?')[0].split('#')[0].split(/[\\/]/).pop().toLowerCase();
+
+// Strips every texture reference from a parsed glTF JSON in place, so
+// GLTFLoader never requests an image. Leaves KHR_draco_mesh_compression
+// alone: nothing here matches "Texture"/"texture".
+const stripGltfTextures = (json) => {
+    delete json.images;
+    delete json.textures;
+    delete json.samplers;
+    (json.materials || []).forEach((mat) => {
+        delete mat.normalTexture;
+        delete mat.occlusionTexture;
+        delete mat.emissiveTexture;
+        if (mat.pbrMetallicRoughness) {
+            delete mat.pbrMetallicRoughness.baseColorTexture;
+            delete mat.pbrMetallicRoughness.metallicRoughnessTexture;
+        }
+        Object.keys(mat.extensions || {}).forEach((key) => {
+            const ext = mat.extensions[key];
+            if (!ext || typeof ext !== 'object') return;
+            Object.keys(ext).forEach((k) => { if (/Texture$/.test(k)) delete ext[k]; });
+        });
+    });
+    ['extensionsUsed', 'extensionsRequired'].forEach((key) => {
+        if (Array.isArray(json[key])) json[key] = json[key].filter((n) => !/texture/i.test(n));
+    });
+};
+
+// Parses model bytes (string for obj/gltf, ArrayBuffer for glb) into a root
+// Object3D. opts.sidecars (File map keyed by lowerBasename) and
+// opts.resourcePath resolve .bin/texture references; label is for errors.
+const parseModelRoot = async (ext, data, label, opts) => {
+    opts = opts || {};
     if (ext === 'obj') {
         if (typeof THREE.OBJLoader === 'undefined') {
             throw new Error('OBJLoader unavailable (script blocked/offline). Cannot load .obj models.');
@@ -1518,23 +1553,67 @@ const parseModelRoot = async (ext, data, label) => {
     if (typeof THREE.GLTFLoader === 'undefined') {
         throw new Error('GLTFLoader unavailable (script blocked/offline). Cannot load .glb/.gltf models.');
     }
+
+    const sidecars = opts.sidecars || {};
+    const hasSidecars = Object.keys(sidecars).length > 0;
+    const resourcePath = opts.resourcePath || '';
+    const objectUrls = [];
+    const sidecarUrls = {};
+    Object.keys(sidecars).forEach((key) => {
+        const u = URL.createObjectURL(sidecars[key]);
+        sidecarUrls[key] = u;
+        objectUrls.push(u);
+    });
+
+    // Redirects sidecar (.bin) requests to their object URL and swallows
+    // every texture request with a blank PNG; anything else (buffer
+    // fetches with no sidecar) passes through to fail into the triage below.
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier((url) => {
+        const base = lowerBasename(url);
+        let decoded = base;
+        try { decoded = decodeURIComponent(base); } catch (e) { /* not percent-encoded */ }
+        if (sidecarUrls[base]) return sidecarUrls[base];
+        if (sidecarUrls[decoded]) return sidecarUrls[decoded];
+        if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(decoded)) return CUSTOM_GEOM_BLANK_PNG;
+        return url;
+    });
+
     try {
-        const gltf = await new Promise((resolve, reject) => {
-            try { new THREE.GLTFLoader().parse(data, '', resolve, reject); } catch (e) { reject(e); }
-        });
-        return gltf.scene || (gltf.scenes && gltf.scenes[0]);
-    } catch (e) {
-        const msg = (e && e.message) || String(e);
-        if (/DRACOLoader/i.test(msg)) {
-            throw new Error('"' + label + '" uses Draco mesh compression, which is not supported here: re-export without Draco.');
-        }
-        if (/KTX2|basisu/i.test(msg)) {
-            throw new Error('"' + label + '" uses KTX2/Basis texture compression, which is not supported here: re-export without KTX2/Basis textures.');
-        }
+        let payload = data;
         if (ext === 'gltf') {
-            throw new Error('Could not load "' + label + '": ' + msg + '. .gltf files that reference external .bin or texture files cannot be imported this way; export a single-file .glb instead.');
+            let json;
+            try {
+                json = JSON.parse(data);
+            } catch (e) {
+                throw new Error('Could not parse "' + label + '": ' + e.message);
+            }
+            stripGltfTextures(json);
+            payload = JSON.stringify(json);
         }
-        throw new Error('Could not load "' + label + '": ' + msg);
+        try {
+            const gltf = await new Promise((resolve, reject) => {
+                try { new THREE.GLTFLoader(manager).parse(payload, resourcePath, resolve, reject); } catch (e) { reject(e); }
+            });
+            return gltf.scene || (gltf.scenes && gltf.scenes[0]);
+        } catch (e) {
+            const msg = (e && e.message) || String(e);
+            if (/DRACOLoader/i.test(msg)) {
+                throw new Error('"' + label + '" uses Draco mesh compression, which is not supported here: re-export without Draco.');
+            }
+            if (/KTX2|basisu/i.test(msg)) {
+                throw new Error('"' + label + '" uses KTX2/Basis texture compression, which is not supported here: re-export without KTX2/Basis textures.');
+            }
+            if (ext === 'gltf') {
+                const hint = (hasSidecars || !resourcePath)
+                    ? 'This .gltf references external data; select its .bin file(s) together with the .gltf.'
+                    : 'A file referenced by this .gltf could not be fetched (CORS or missing).';
+                throw new Error('Could not load "' + label + '": ' + msg + '. ' + hint);
+            }
+            throw new Error('Could not load "' + label + '": ' + msg);
+        }
+    } finally {
+        objectUrls.forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) { /* already revoked */ } });
     }
 };
 
@@ -1560,23 +1639,32 @@ const commitCustomGeom = (root, label, seqId) => {
     return CUSTOM_GEOM;
 };
 
-// Loads a user-dropped model file into the custom-geometry registry.
-// The latest call wins across both file and URL loads (customGeomLoadSeq).
-const loadCustomPreviewGeomFromFile = async (file) => {
+// Loads a user-dropped model: input is a File, FileList, or File[]. First
+// .obj/.glb/.gltf entry is primary; .bin entries become sidecars; other
+// files (textures, etc.) are dropped. Latest call wins (customGeomLoadSeq).
+const loadCustomPreviewGeomFromFile = async (input) => {
     const id = ++customGeomLoadSeq;
-    const name = ((file && file.name) || '').toLowerCase();
-    const ext = name.slice(name.lastIndexOf('.') + 1);
-    if (ext !== 'obj' && ext !== 'glb' && ext !== 'gltf') {
-        throw new Error('Unsupported model file "' + (file && file.name) + '": expected .obj, .glb, or .gltf.');
+    const files = input instanceof FileList ? Array.from(input)
+        : Array.isArray(input) ? input
+            : input ? [input] : [];
+    const primary = files.find((f) => f && /\.(obj|glb|gltf)$/i.test(f.name || ''));
+    if (!primary) {
+        throw new Error('Select a .obj, .glb or .gltf model file.');
     }
-    const data = ext === 'obj' ? await file.text() : await file.arrayBuffer();
-    const root = await parseModelRoot(ext, data, file.name);
-    return commitCustomGeom(root, file.name, id);
+    const primaryName = primary.name.toLowerCase();
+    const ext = primaryName.slice(primaryName.lastIndexOf('.') + 1);
+    const sidecars = {};
+    files.forEach((f) => {
+        if (f !== primary && f && /\.bin$/i.test(f.name || '')) sidecars[lowerBasename(f.name)] = f;
+    });
+    const data = ext === 'glb' ? await primary.arrayBuffer() : await primary.text();
+    const root = await parseModelRoot(ext, data, primary.name, { sidecars });
+    return commitCustomGeom(root, primary.name, id);
 };
 
-// Fetches and loads a model from a URL, same parse/commit pipeline as the
-// file picker. Extension is sniffed after stripping query/fragment,
-// mirroring the view handle's setEnvMap URL handling.
+// Fetches and loads a model from a URL, same pipeline as the file picker.
+// gltf/glb pass the model's directory as resourcePath so GLTFLoader can
+// fetch a sibling .bin; extension is sniffed after stripping query/fragment.
 const loadCustomPreviewGeomFromUrl = async (url) => {
     const id = ++customGeomLoadSeq;
     const clean = String(url || '').split('?')[0].split('#')[0];
@@ -1586,9 +1674,10 @@ const loadCustomPreviewGeomFromUrl = async (url) => {
     }
     const r = await fetch(url);
     if (!r.ok) throw new Error('Failed to fetch model "' + url + '" (HTTP ' + r.status + ').');
-    const data = ext === 'obj' ? await r.text() : await r.arrayBuffer();
+    const data = ext === 'glb' ? await r.arrayBuffer() : await r.text();
     const base = clean.slice(clean.lastIndexOf('/') + 1) || 'custom';
-    const root = await parseModelRoot(ext, data, base);
+    const opts = ext === 'obj' ? undefined : { resourcePath: clean.slice(0, clean.lastIndexOf('/') + 1) };
+    const root = await parseModelRoot(ext, data, base, opts);
     return commitCustomGeom(root, base, id);
 };
 
