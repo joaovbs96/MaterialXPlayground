@@ -23,7 +23,11 @@ const VIEWER_GEOM_NAMES = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 
 // back to 'shaderball' instead of refusing, and reports why.
 const TRANSPARENT_ROOM_GEOM = 'shaderball-scene';
 function resolveViewerGeom(requested, wantTransparent) {
-  const invalid = requested != null && VIEWER_GEOM_NAMES.indexOf(requested) === -1;
+  // 'custom' is only valid while the registry actually holds a
+  // model; every call site (mount, embed prop sync, Send to
+  // Viewer) funnels through here so that check lives in one place.
+  const isCustom = requested === 'custom' && !!(window.getCustomPreviewGeom && window.getCustomPreviewGeom());
+  const invalid = requested != null && !isCustom && VIEWER_GEOM_NAMES.indexOf(requested) === -1;
   const base = !invalid && requested ? requested : 'shaderball-scene';
   const fellBackForTransparency = !!wantTransparent && base === TRANSPARENT_ROOM_GEOM;
   return {
@@ -212,7 +216,15 @@ function MaterialViewerApp({
   // a geometry this component can render, else today's default —
   // undefined (the uncontrolled case, every existing caller)
   // always falls through to 'shaderball-scene' unchanged.
-  const [geom, setGeom] = React.useState(() => resolveViewerGeom(geometry, transparent).geom);
+  // Chromeless (embed) keeps today's geometry-prop resolution
+  // untouched; the shell realm instead seeds from the shared
+  // global geometry (same custom/unsupported fallback as below).
+  const [geom, setGeom] = React.useState(() => {
+    if (chromeless) return resolveViewerGeom(geometry, transparent).geom;
+    let g = window.getGlobalGeom ? window.getGlobalGeom() : 'shaderball-scene';
+    if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+    return g === 'custom' || VIEWER_GEOM_NAMES.indexOf(g) !== -1 ? g : 'shaderball-scene';
+  });
   const geomRef = React.useRef(geom);
   geomRef.current = geom;
   // Reports the INITIAL geometry/transparent resolution once: an
@@ -236,6 +248,128 @@ function MaterialViewerApp({
       setGeom('shaderball');
     }
   }, [transparent]);
+  // Imported custom model geometry (js/mtlx-engine.js registry):
+  // a COPY of { epoch, name }, never the live registry object,
+  // which mutates in place on every load/clear.
+  const [customGeom, setCustomGeom] = React.useState(() => {
+    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+    return c ? {
+      epoch: c.epoch,
+      name: c.name
+    } : null;
+  });
+  // Registry changes broadcast here regardless of which app
+  // triggered them. Falls the CURRENT geom (geomRef, kept fresh
+  // above) back to the default when 'custom' empties out.
+  const applyCustomGeom = () => {
+    const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+    setCustomGeom(c ? {
+      epoch: c.epoch,
+      name: c.name
+    } : null);
+    if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+  };
+  // Bumped to force the view-build effect to dispose and fully
+  // rebuild after a WebGL context restore (PMREM bake, shadow
+  // map contents are lost even though GL state itself recovers).
+  const [glEpoch, setGlEpoch] = React.useState(0);
+  // Work stashed while this surface is hidden (shell display:none),
+  // flushed by the hashchange effect below once visible again.
+  const pendingCustomGeomRef = React.useRef(false);
+  const pendingGlRestoredRef = React.useRef(false);
+  const pendingGlobalGeomRef = React.useRef(false);
+  // A hidden ancestor (the shell's display:none wrapper) makes
+  // offsetParent null regardless of which ancestor level it sits
+  // at; always false in the embed/VS Code realm (no such wrapper).
+  const surfaceHidden = () => {
+    const el = canvasRef.current;
+    return !!el && el.offsetParent === null;
+  };
+  React.useEffect(() => {
+    // Rebuilding an invisible view's geometry on someone else's
+    // import churns GPU contexts and is what evicts visible ones.
+    const onCustomGeom = () => {
+      if (surfaceHidden()) {
+        pendingCustomGeomRef.current = true;
+        return;
+      }
+      applyCustomGeom();
+    };
+    window.addEventListener('mtlx-custom-geom', onCustomGeom);
+    return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+  }, []);
+  // Adopts the shared global geometry pick from another tool.
+  // Chromeless owns its own geometry flow (URL/host message) and
+  // never participates; IN_VSCODE is not chromeless, so it does.
+  const applyGlobalGeom = () => {
+    let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
+    if (g == null) return;
+    if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+    if (g !== 'custom' && VIEWER_GEOM_NAMES.indexOf(g) === -1) return; // e.g. buffer2d, unsupported here
+    if (g === geomRef.current) return;
+    setGeom(g);
+  };
+  React.useEffect(() => {
+    if (chromeless) return undefined;
+    const onGlobalGeom = () => {
+      if (surfaceHidden()) {
+        pendingGlobalGeomRef.current = true;
+        return;
+      }
+      applyGlobalGeom();
+    };
+    window.addEventListener('mtlx-global-geom', onGlobalGeom);
+    return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
+  }, []);
+  // Restore re-inits GL state but not render-target contents
+  // (PMREM bake, shadow map), so a glEpoch bump forces the build
+  // effect to dispose and fully rebuild.
+  React.useEffect(() => {
+    const onGlContext = e => {
+      const d = e.detail || {};
+      if (d.canvas !== canvasRef.current) return;
+      if (d.state === 'lost') {
+        if (!surfaceHidden()) {
+          notify('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+        }
+      } else if (d.state === 'restored') {
+        if (surfaceHidden()) pendingGlRestoredRef.current = true;else setGlEpoch(n => n + 1);
+      }
+    };
+    window.addEventListener('mtlx-gl-context', onGlContext);
+    return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+  }, []);
+  React.useEffect(() => {
+    const flush = () => {
+      // hashchange fires before/around the shell's display:none class
+      // flip, so re-check visibility a tick later before flushing.
+      requestAnimationFrame(() => {
+        if (surfaceHidden()) return;
+        if (pendingCustomGeomRef.current) {
+          pendingCustomGeomRef.current = false;
+          applyCustomGeom();
+        }
+        if (pendingGlRestoredRef.current) {
+          pendingGlRestoredRef.current = false;
+          setGlEpoch(n => n + 1);
+        }
+        if (pendingGlobalGeomRef.current) {
+          pendingGlobalGeomRef.current = false;
+          applyGlobalGeom();
+        }
+      });
+    };
+    window.addEventListener('hashchange', flush);
+    return () => window.removeEventListener('hashchange', flush);
+  }, []);
+  const hasCustom = !!customGeom;
+  // Custom Model tile's expanded/collapsed state: starts open only
+  // if a model is loaded, then latches open once one loads (only
+  // clicking another tile while empty collapses it, below).
+  const [customOpen, setCustomOpen] = React.useState(() => hasCustom);
+  React.useEffect(() => {
+    if (hasCustom) setCustomOpen(true);
+  }, [hasCustom]);
   const [status, setStatus] = React.useState('Loading the default material…');
   const [error, setError] = React.useState(null);
   // Reports a failure both to the local error banner (unchanged
@@ -804,10 +938,22 @@ function MaterialViewerApp({
     }
   };
 
+  // A re-import while 'custom' is on screen should rebuild; one
+  // made while some OTHER geom is selected must not, so this
+  // stays 0 unless geom is actually 'custom'.
+  const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
+
   // (Re)render whenever the chosen material or geometry changes.
   React.useEffect(() => {
     const loaded = loadedRef.current;
     if (!loaded || !loaded.renderables.length) return undefined;
+    // The registry can empty out from under an already-selected
+    // 'custom' before this effect runs; bail instead of letting
+    // the engine silently fall back to a sphere.
+    if (geom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) {
+      setGeom('shaderball-scene');
+      return undefined;
+    }
     let mounted = true;
     const run = async () => {
       if (viewRef.current) {
@@ -887,12 +1033,53 @@ function MaterialViewerApp({
         if (onViewRef.current) onViewRef.current(null);
       }
     };
-  }, [renderables, chosenMat, geom]);
+  }, [renderables, chosenMat, geom, customKey, glEpoch]);
 
   // Backs the Scene card's transparency-forcing toggle (browser
   // only): local mirror of the engine's persisted value, replacing
   // the old HUD settings popover's only built-in block.
   const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+
+  // Scene card's custom-model import row (browser only) plus the
+  // hidden HUD input below (VS Code, no sidebar). Mirrors the
+  // Environment card's own import error state further down.
+  const [modelError, setModelError] = React.useState(null);
+  // Imports into the shared engine registry (js/mtlx-engine.js).
+  // Does not select 'custom' itself: the registry's own
+  // setGlobalGeom('custom') call does that, via 'mtlx-global-geom'.
+  const importModel = async files => {
+    setModelError(null);
+    try {
+      await window.loadCustomPreviewGeomFromFile(files);
+    } catch (e) {
+      setModelError(errMsg(e));
+    }
+  };
+  // Does not reset geom itself: the registry-change subscription
+  // above already falls 'custom' back to shaderball-scene once
+  // the registry actually empties.
+  const clearModel = () => {
+    setModelError(null);
+    window.clearCustomPreviewGeom();
+  };
+  // Concrete picks are global; the embed/chromeless realm never
+  // broadcasts (it owns its own geometry flow, see applyGlobalGeom).
+  const pickGeom = g => {
+    setGeom(g);
+    if (!chromeless) window.setGlobalGeom(g);
+  };
+  // Shared by the sidebar's CustomModelTile and the VS Code HUD's
+  // geometry dropdown footer, one integrated model-picker now.
+  const geomModelFooter = {
+    name: customGeom ? customGeom.name : '',
+    selected: geom === 'custom',
+    accept: '.obj,.glb,.gltf,.bin',
+    onSelect: () => pickGeom('custom'),
+    onFiles: files => {
+      if (files && files.length) importModel(files);
+    },
+    onClear: clearModel
+  };
 
   // Environment card state (browser only): the backdrop mode stays
   // the existing hook state above; rotation/exposure live here since
@@ -999,6 +1186,10 @@ function MaterialViewerApp({
   // REQUESTED control just stays hidden while that geometry is
   // active; it's the default, so reporting it would be noisy.
   const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
+  // Shared with both HUD flavors below (EmbedControls, then
+  // ViewportControls) so an import can be picked back after a
+  // geometryUrl embed load switched away from it.
+  const viewerGeomList = VIEWER_GEOM_NAMES.concat(hasCustom ? ['custom'] : []);
   // Per-control effective visibility, computed once so the mount
   // gate and each EmbedControls prop agree (a control can be
   // requested but still suppressed, e.g. rotate on the room geom).
@@ -1156,12 +1347,27 @@ function MaterialViewerApp({
     className: "grid grid-cols-2 gap-2"
   }, VIEWER_GEOM_NAMES.map(g => /*#__PURE__*/React.createElement(GeometryTile, {
     key: g,
-    label: GEOM_LABELS[g] || g,
+    label: geomTileLabel(g),
     icon: GEOM_ICONS[g],
     selected: geom === g,
-    onClick: () => setGeom(g),
+    onClick: () => {
+      pickGeom(g);
+      if (!hasCustom) setCustomOpen(false);
+    },
     badge: g === 'shaderball-scene' ? 'Default' : undefined
-  })))), /*#__PURE__*/React.createElement(SectionCard, {
+  })), /*#__PURE__*/React.createElement(CustomModelTile, {
+    className: "col-span-2",
+    name: geomModelFooter.name,
+    selected: geom === 'custom',
+    expanded: customOpen,
+    accept: ".obj,.glb,.gltf,.bin",
+    onSelect: geomModelFooter.onSelect,
+    onExpand: () => setCustomOpen(true),
+    onFiles: geomModelFooter.onFiles,
+    onClear: geomModelFooter.onClear
+  })), modelError && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-red-400"
+  }, modelError)), /*#__PURE__*/React.createElement(SectionCard, {
     icon: "sun",
     title: "Environment",
     summary: envSummary,
@@ -1300,7 +1506,7 @@ function MaterialViewerApp({
     // picking it back would just re-trigger the fallback
     // above, so don't offer it in the first place.
     ,
-    geomList: transparent ? VIEWER_GEOM_NAMES.filter(g => g !== TRANSPARENT_ROOM_GEOM) : VIEWER_GEOM_NAMES,
+    geomList: transparent ? viewerGeomList.filter(g => g !== TRANSPARENT_ROOM_GEOM) : viewerGeomList,
     onGeomChange: setGeom,
     showGeom: ctlFlags.geometry,
     materialList: renderables.map(r => r.name),
@@ -1336,14 +1542,19 @@ function MaterialViewerApp({
     selectSize: "md",
     buttonClassName: hudChipClass,
     geom: geom,
-    onGeomChange: setGeom,
+    onGeomChange: pickGeom,
+    geomList: VIEWER_GEOM_NAMES,
     geomBadges: {
       'shaderball-scene': 'Default'
     }
     // Geometry now lives in the sidebar's Scene card in the
     // browser; VS Code has no sidebar, so it keeps the select.
     ,
-    showGeomSelect: IN_VSCODE,
+    showGeomSelect: IN_VSCODE
+    // No sidebar to import a model from under VS Code, so the
+    // geometry dropdown's own integrated footer picks one instead.
+    ,
+    geomModelFooter: geomModelFooter,
     rotating: rotating,
     onToggleRotating: toggleRotating
     // Engine no-ops auto-rotate for the full scene, and

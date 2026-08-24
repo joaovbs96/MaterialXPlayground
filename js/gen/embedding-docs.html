@@ -60,6 +60,12 @@ in-page, for reference while you work.</p>
 <td>Preview geometry. <code>shaderball-scene</code> includes its own authored backdrop room baked into the model itself and is the heaviest option (1.86 MB GLB); it ignores the <code>backdrop</code> param entirely, see the row below. Every other geometry instead gets whichever backdrop <code>backdrop</code> selects. <code>sphere</code> and <code>cube</code> need no model download at all. An unrecognized value falls back to the default and is also reported through the <code>mtlx-error</code> event (see <a href="#events">Events</a>), so a typo doesn&#39;t fail silently.</td>
 </tr>
 <tr>
+<td><code>geometryUrl</code></td>
+<td>URL to a <code>.obj</code>, <code>.glb</code>, or <code>.gltf</code> model</td>
+<td><em>(none; uses the <code>geometry</code> param above)</em></td>
+<td>Custom preview model. Fetched by the iframe itself, under the same CORS requirement as <code>src</code>. A <code>.gltf</code> may reference a sibling <code>.bin</code>, fetched relative to the model URL under that same CORS requirement; texture references in the file are ignored, since previews use geometry only. On success the preview switches to the custom model, and the <code>geometry</code> HUD control (when shown) gains a &quot;Custom Model&quot; entry so a visitor can switch back to a built-in geometry. A fetch or parse failure keeps the configured geometry and is reported through <code>mtlx-error</code>. Draco and KTX2 compressed assets remain unsupported.</td>
+</tr>
+<tr>
 <td><code>material</code></td>
 <td>string: a renderable name, or an index</td>
 <td><em>(the first renderable)</em></td>
@@ -433,6 +439,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>geometryurl</code></td>
+<td><code>.geometryUrl</code></td>
+<td>URL string (<code>.obj</code>/<code>.glb</code>/<code>.gltf</code>)</td>
+<td>(none)</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>transparent</code></td>
 <td><code>.transparent</code></td>
 <td>boolean</td>
@@ -595,7 +608,7 @@ calling these.</p>
 <tr>
 <td><code>mtlx-error</code></td>
 <td><code>{ message: string }</code></td>
-<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code> value.</td>
+<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, a failed or unsupported <code>geometryUrl</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code> value.</td>
 </tr>
 </tbody></table>
 <pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);

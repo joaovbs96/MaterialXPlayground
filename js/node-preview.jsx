@@ -10,8 +10,9 @@
         // Geometry choices for the docs node preview (labels come from
         // the shared GEOM_LABELS map): the default list plus 'buffer2d',
         // which is deliberately absent from ViewportControls' default so
-        // the material viewer doesn't grow the option.
-        const PREVIEW_GEOM_LIST = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d'];
+        // the material viewer doesn't grow the option. Order matches the
+        // Graph Editor's GRAPH_GEOM_MODES.
+        const PREVIEW_GEOM_LIST = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d'];
         // ONE global geometry choice for every docs node preview, shared by
         // the preview dropdowns and the Settings popup, in one localStorage
         // slot. Whitelist-validated on read so a corrupt/stale value falls
@@ -24,16 +25,23 @@
         // stale values silently opt users into the experiment.
         const GEOM_CHOICE_KEY = 'mtlx_preview_geom_choice';
         const GEOM_LEGACY_KEYS = ['mtlx_preview_geom_override', 'mtlx_preview_geom_by_node', 'mtlx_preview_geom'];
-        const GEOM_CHOICES = ['default'].concat(PREVIEW_GEOM_LIST);
         // Row badges for every geometry dropdown instance: Auto is the
         // experimental part; the scene is the out-of-the-box default.
-        const GEOM_BADGES = { 'default': 'Experimental', 'shaderball-scene': 'Default' };
+        const GEOM_BADGES = { 'default': 'Experimental', 'shaderball-scene': 'Default', 'custom': 'Experimental' };
         const readGeomChoice = () => {
             try {
                 // Best-effort cleanup of the superseded slots.
                 for (const k of GEOM_LEGACY_KEYS) localStorage.removeItem(k);
-                const v = localStorage.getItem(GEOM_CHOICE_KEY);
-                return GEOM_CHOICES.indexOf(v) !== -1 ? v : 'shaderball-scene';
+                // The key now only ever stores the Auto flag; any concrete
+                // choice lives in the engine's global geometry key instead.
+                if (localStorage.getItem(GEOM_CHOICE_KEY) === 'default') return 'default';
+                const g = window.getGlobalGeom ? window.getGlobalGeom() : 'shaderball-scene';
+                // Registry is session-only, the global key is not: 'custom'
+                // only sticks when the registry still holds a model.
+                if (g === 'custom') {
+                    return (window.getCustomPreviewGeom && window.getCustomPreviewGeom()) ? 'custom' : 'shaderball-scene';
+                }
+                return g;
             } catch (e) { return 'shaderball-scene'; }
         };
         // Some heavy nodegraphs blow the wasm shadergen stack (deterministic
@@ -161,11 +169,126 @@
             // state). 'default' resolves per node type (experimental);
             // anything else applies as-is.
             const [geomChoice, setGeomChoiceState] = React.useState(readGeomChoice);
+            // Only the Auto flag persists here; a concrete pick is instead
+            // pushed to the engine's global geometry key by the caller.
             const setGeomChoice = (v) => {
                 setGeomChoiceState(v);
-                try { localStorage.setItem(GEOM_CHOICE_KEY, v); } catch (e) { /* best-effort */ }
+                try {
+                    if (v === 'default') localStorage.setItem(GEOM_CHOICE_KEY, v);
+                    else localStorage.removeItem(GEOM_CHOICE_KEY);
+                } catch (e) { /* best-effort */ }
             };
-            const geom = geomChoice === 'default' ? defaultGeomFor(nodegroup) : geomChoice;
+            // Ref mirror so the registry subscription below (mount-once)
+            // always reads the CURRENT choice without re-subscribing.
+            const geomChoiceRef = React.useRef(geomChoice);
+            geomChoiceRef.current = geomChoice;
+            // Imported custom model geometry (js/mtlx-engine.js registry):
+            // a COPY of { epoch, name }, never the live registry object,
+            // which mutates in place on every load/clear.
+            const [customGeom, setCustomGeom] = React.useState(() => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                return c ? { epoch: c.epoch, name: c.name } : null;
+            });
+            const [glEpoch, setGlEpoch] = React.useState(0);
+            const pendingCustomGeomRef = React.useRef(false);
+            const pendingGlRestoredRef = React.useRef(false);
+            const pendingGlobalGeomRef = React.useRef(false);
+            // canvasRef (target) is always mounted, unlike sourceCanvasRef
+            // which only exists in compare mode, so it's the right check.
+            const surfaceHidden = () => { const el = canvasRef.current; return !!el && el.offsetParent === null; };
+            // Registry changes broadcast here regardless of which app/tool
+            // triggered them. Falls the CURRENT choice back to the default
+            // when 'custom' empties out from under it.
+            const applyCustomGeom = () => {
+                const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+                setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+                if (!c && geomChoiceRef.current === 'custom') setGeomChoice('shaderball-scene');
+            };
+            React.useEffect(() => {
+                // Rebuilding an invisible view's geometry on someone else's
+                // import churns GPU contexts and is what evicts visible ones.
+                const onCustomGeom = () => {
+                    if (surfaceHidden()) { pendingCustomGeomRef.current = true; return; }
+                    applyCustomGeom();
+                };
+                window.addEventListener('mtlx-custom-geom', onCustomGeom);
+                return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+            }, []);
+            // Adopts the shared global geometry pick (any tool's tile or
+            // dropdown selection). A concrete value pulls this preview out
+            // of Auto; the same value already selected is a no-op.
+            const applyGlobalGeom = () => {
+                let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
+                if (g == null) return;
+                if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+                if (g === geomChoiceRef.current) return;
+                setGeomChoice(g);
+            };
+            React.useEffect(() => {
+                const onGlobalGeom = () => {
+                    if (surfaceHidden()) { pendingGlobalGeomRef.current = true; return; }
+                    applyGlobalGeom();
+                };
+                window.addEventListener('mtlx-global-geom', onGlobalGeom);
+                return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
+            }, []);
+            // Restore re-inits GL state but not render-target contents, so a
+            // glEpoch bump forces the build effect to dispose and fully
+            // rebuild both views.
+            React.useEffect(() => {
+                const onGlContext = (e) => {
+                    const d = e.detail || {};
+                    if (d.canvas !== canvasRef.current && d.canvas !== sourceCanvasRef.current) return;
+                    if (d.state === 'lost') {
+                        if (!surfaceHidden()) {
+                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+                        }
+                    } else if (d.state === 'restored') {
+                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
+                        else setGlEpoch((n) => n + 1);
+                    }
+                };
+                window.addEventListener('mtlx-gl-context', onGlContext);
+                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+            }, []);
+            React.useEffect(() => {
+                const flush = () => {
+                    // hashchange fires before/around the shell's display:none class
+                    // flip, so re-check visibility a tick later before flushing.
+                    requestAnimationFrame(() => {
+                        if (surfaceHidden()) return;
+                        if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
+                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
+                        if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
+                    });
+                };
+                window.addEventListener('hashchange', flush);
+                return () => window.removeEventListener('hashchange', flush);
+            }, []);
+            // Imported model's file-picker error, shown as its own chip:
+            // distinct from `error` (setError), which is reserved for
+            // shader build failures.
+            const [modelError, setModelError] = React.useState(null);
+            // Fed by the geometry dropdown's integrated model-picker footer
+            // (modelFooter.onFiles). Only touches the registry: the
+            // resulting 'mtlx-global-geom' event adopts 'custom' instead.
+            const onModelFiles = async (files) => {
+                if (!files || !files.length) return;
+                try {
+                    await window.loadCustomPreviewGeomFromFile(files);
+                    setModelError(null);
+                } catch (e2) {
+                    setModelError(errMsg(e2));
+                }
+            };
+            // Also clear the import-error chip on any later geometry pick.
+            React.useEffect(() => { setModelError(null); }, [geomChoice]);
+            const geom = geomChoice === 'default' ? defaultGeomFor(nodegroup)
+                : (geomChoice === 'custom' && !customGeom ? 'shaderball-scene' : geomChoice);
+            // Gates the build effect on a model REPLACEMENT while already
+            // on 'custom' (epoch bumps); 0 for every other pick, so no
+            // other tool's import ever reruns this effect.
+            const customGeomEpochKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
             // Fans rotate/env/reset out to both the target and source
             // views; screenshot/snapshot still delegate to the target
             // (primary) alone — see makeFanoutViewRef.
@@ -1388,7 +1511,7 @@
                         deleteMxHandles([ed.instance, ...(ed.created || []), ed.doc]);
                     });
                 };
-            }, [identKey, enabled, geom, overrides, compareOn]);
+            }, [identKey, enabled, geom, overrides, compareOn, customGeomEpochKey, glEpoch]);
 
             // Groups params by uifolder: un-foldered render first; foldered
             // ones bucket under a collapsible header, in first-appearance
@@ -1668,6 +1791,24 @@
             const isCompareActive = kindState === 'translation' && compareOn && sourceViewLive;
             const compareSourceCat = kindState === 'translation' ? nodeName.split('_to_')[0] : '';
             const compareTargetCat = kindState === 'translation' ? nodeName.split('_to_')[1] : '';
+            // Shared between both geometry dropdown instances below: the
+            // 'custom' entry only appears once the registry actually holds
+            // a model, and its footer row opens the hidden file input.
+            const geomList = PREVIEW_GEOM_LIST.concat(['default']);
+            // Concrete picks are global; Auto stays local-only, same rule
+            // the mtlx-global-geom listener above applies in reverse.
+            const pickGeom = (v) => {
+                setGeomChoice(v);
+                if (v !== 'default') window.setGlobalGeom(v);
+            };
+            const geomModelFooter = {
+                name: customGeom ? customGeom.name : '',
+                selected: geomChoice === 'custom',
+                accept: '.obj,.glb,.gltf,.bin',
+                onSelect: () => pickGeom('custom'),
+                onFiles: onModelFiles,
+                onClear: () => window.clearCustomPreviewGeom(),
+            };
             // Viewport controls (geometry picker, rotate pause, env
             // settings, screenshot, fullscreen), always overlaid on the
             // viewport. Fullscreen and no-params nodes get the default
@@ -1678,10 +1819,11 @@
             // geometry select is a separate top-LEFT element.
             const renderViewportControls = (compact) => (
                 <ViewportControls
-                    geomList={['default'].concat(PREVIEW_GEOM_LIST)}
+                    geomList={geomList}
                     geom={geomChoice}
-                    onGeomChange={setGeomChoice}
+                    onGeomChange={pickGeom}
                     geomBadges={GEOM_BADGES}
+                    geomModelFooter={geomModelFooter}
                     showGeomSelect={!compact}
                     rotating={rotating}
                     onToggleRotating={toggleRotating}
@@ -1840,6 +1982,11 @@
                         style={isFullscreen ? { height: '100%', width: '100%' } : undefined}
                     >
                         <LoadingOverlay show={loading} label="Generating 3D Preview..." />
+                        {modelError && (
+                            <div className="absolute top-10 left-2 z-30 text-[11px] text-red-400 bg-gray-900/85 rounded px-2 py-1">
+                                {modelError}
+                            </div>
+                        )}
                         {/* Controls overlay: default full strip when
                             fullscreen or no params exist; otherwise the
                             compact strip top-right (maximize last) with
@@ -1849,11 +1996,12 @@
                                 {renderViewportControls(true)}
                                 <MtlxSelect
                                     value={geomChoice}
-                                    options={['default'].concat(PREVIEW_GEOM_LIST)}
+                                    options={geomList}
                                     labels={GEOM_LABELS}
                                     badges={GEOM_BADGES}
+                                    modelFooter={geomModelFooter}
                                     defValue={null}
-                                    onChange={setGeomChoice}
+                                    onChange={pickGeom}
                                     title="Preview geometry"
                                     size="md" variant="plain" className="absolute top-2 left-2 z-20"
                                     theme={{

@@ -81,6 +81,13 @@
             const byType = {};
             groups.forEach((g) => { byType[g.type] = (byType[g.type] || 0) + 1; });
             groups.forEach((g) => { g.ambiguous = byType[g.type] > 1; });
+            // Sorted by output type then input summary, matching the docs
+            // Signature dropdown (js/docs-app.jsx's sigOptions) so both
+            // tools present the same order.
+            groups.sort((a, b) => {
+                const byOut = String(a.outLabel || a.type).localeCompare(String(b.outLabel || b.type));
+                return byOut !== 0 ? byOut : String(a.inSummary).localeCompare(String(b.inSummary));
+            });
             return groups;
         };
 

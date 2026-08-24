@@ -216,10 +216,14 @@ const useCompareSlot = () => {
 // (Re)builds one slot's render view whenever its chosen document/material
 // or the shared geometry changes — mirrors viewer-app.jsx's render effect,
 // called once per slot from the app component below.
-const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef) => {
+const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch) => {
     React.useEffect(() => {
         const loaded = slot.loadedRef.current;
         if (!loaded || !loaded.renderables.length) return undefined;
+        // The shared registry can empty out from under an already-selected
+        // 'custom' (either slot's own clear); skip this build, the
+        // component-level subscription resets `geom` asynchronously.
+        if (geom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) return undefined;
         let mounted = true;
         const run = async () => {
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
@@ -304,7 +308,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [slot.renderables, slot.chosenMat, geom]);
+    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch]);
 };
 
 // Window-wide drag & drop, split into two zones (Document A / Document B)
@@ -456,7 +460,64 @@ function MaterialCompareApp({ active = true } = {}) {
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
     const [statsHelpOpen, setStatsHelpOpen] = React.useState(false); // pinned Statistics panel's help popover
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
-    const [geom, setGeom] = React.useState('shaderball-scene');
+    // Seeded from the global geometry shared across the four tools,
+    // falling back the same way an unsupported/emptied 'custom' pick always
+    // has. Compare exists only in the shell, so it always participates.
+    const [geom, setGeom] = React.useState(() => {
+        let g = window.getGlobalGeom ? window.getGlobalGeom() : 'shaderball-scene';
+        if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+        return (g === 'custom' || GEOM_OPTIONS.indexOf(g) !== -1) ? g : 'shaderball-scene';
+    });
+    const geomRef = React.useRef(geom);
+    geomRef.current = geom;
+    // Imported custom model geometry (js/mtlx-engine.js registry): a COPY
+    // of { epoch, name }, never the live registry object, which mutates
+    // in place on every load/clear.
+    const [customGeom, setCustomGeom] = React.useState(() => {
+        const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+        return c ? { epoch: c.epoch, name: c.name } : null;
+    });
+    // Registry changes broadcast here regardless of which app triggered
+    // them. Falls `geom` back to the default when it empties out from
+    // under 'custom' (geomRef kept fresh above).
+    // Rebuilding an invisible view's geometry on someone else's import
+    // churns GPU contexts and is what evicts visible ones elsewhere, so a
+    // hidden page defers the reaction until it becomes visible again.
+    React.useEffect(() => {
+        const onCustomGeom = () => {
+            if (surfaceHidden()) { pendingCustomGeomRef.current = true; return; }
+            applyCustomGeom();
+        };
+        window.addEventListener('mtlx-custom-geom', onCustomGeom);
+        return () => window.removeEventListener('mtlx-custom-geom', onCustomGeom);
+    }, []);
+    // Adopts the shared global geometry pick from any other tool's tile or
+    // dropdown selection. Same hidden-surface deferral as onCustomGeom above.
+    function applyGlobalGeom() {
+        let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
+        if (g == null) return;
+        if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
+        if (g !== 'custom' && GEOM_OPTIONS.indexOf(g) === -1) return; // e.g. buffer2d, unsupported here
+        if (g === geomRef.current) return;
+        setGeom(g);
+    }
+    React.useEffect(() => {
+        const onGlobalGeom = () => {
+            if (surfaceHidden()) { pendingGlobalGeomRef.current = true; return; }
+            applyGlobalGeom();
+        };
+        window.addEventListener('mtlx-global-geom', onGlobalGeom);
+        return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
+    }, []);
+    const hasCustom = !!customGeom;
+    // Custom Model tile's expanded/collapsed state: starts open only if a
+    // model is already loaded, then latches open whenever one loads (never
+    // auto-collapses -- only clicking another tile while empty does, below).
+    const [customOpen, setCustomOpen] = React.useState(() => hasCustom);
+    React.useEffect(() => {
+        if (hasCustom) setCustomOpen(true);
+    }, [hasCustom]);
+    const [modelImportError, setModelImportError] = React.useState(null);
     // 'studio' matches the sitewide default (js/viewer-app.jsx and
     // EnvDialog); the room geometry above disables the picker anyway.
     const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'studio' });
@@ -503,8 +564,78 @@ function MaterialCompareApp({ active = true } = {}) {
 
     const slotA = useCompareSlot();
     const slotB = useCompareSlot();
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef);
+    // Bumped when a lost-then-restored GL context needs a full dispose+
+    // rebuild (render-target contents like PMREM/VSM never come back on
+    // their own); see the mtlx-gl-context subscription below.
+    const [glEpochA, setGlEpochA] = React.useState(0);
+    const [glEpochB, setGlEpochB] = React.useState(0);
+    const pendingCustomGeomRef = React.useRef(false);
+    const pendingGlRestoredARef = React.useRef(false);
+    const pendingGlRestoredBRef = React.useRef(false);
+    const pendingGlobalGeomRef = React.useRef(false);
+    function surfaceHidden() {
+        // Both slots share one view container, hidden together by the
+        // shell; slotA's canvas is always mounted once Compare loads,
+        // so it stands in for "is this whole page hidden".
+        const el = slotA.canvasRef.current;
+        return !!el && el.offsetParent === null;
+    }
+    function applyCustomGeom() {
+        const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+        setCustomGeom(c ? { epoch: c.epoch, name: c.name } : null);
+        if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
+    }
+    // Only the custom mesh actually changing (a re-import while 'custom' is
+    // on screen) should rebuild either slot; imports made while some OTHER
+    // geom is selected must not, so this stays 0 unless geom is 'custom'.
+    const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB);
+
+    // Restore re-inits GL state but not render-target contents, so a
+    // glEpoch bump forces that slot's build effect to dispose and fully
+    // rebuild (fresh PMREM bake, shadow map, etc).
+    React.useEffect(() => {
+        const onGlContext = (e) => {
+            const d = e.detail || {};
+            let which = null;
+            if (d.canvas === slotA.canvasRef.current) which = 'A';
+            else if (d.canvas === slotB.canvasRef.current) which = 'B';
+            if (!which) return;
+            const slot = which === 'A' ? slotA : slotB;
+            if (d.state === 'lost') {
+                if (!surfaceHidden()) {
+                    slot.setError('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
+                }
+            } else if (d.state === 'restored') {
+                if (surfaceHidden()) {
+                    if (which === 'A') pendingGlRestoredARef.current = true; else pendingGlRestoredBRef.current = true;
+                } else if (which === 'A') {
+                    setGlEpochA((n) => n + 1);
+                } else {
+                    setGlEpochB((n) => n + 1);
+                }
+            }
+        };
+        window.addEventListener('mtlx-gl-context', onGlContext);
+        return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+    }, []);
+
+    // hashchange fires before/around the shell's display:none class flip,
+    // so re-check visibility a tick later before flushing stashed work.
+    React.useEffect(() => {
+        const flush = () => {
+            requestAnimationFrame(() => {
+                if (surfaceHidden()) return;
+                if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
+                if (pendingGlRestoredARef.current) { pendingGlRestoredARef.current = false; setGlEpochA((n) => n + 1); }
+                if (pendingGlRestoredBRef.current) { pendingGlRestoredBRef.current = false; setGlEpochB((n) => n + 1); }
+                if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
+            });
+        };
+        window.addEventListener('hashchange', flush);
+        return () => window.removeEventListener('hashchange', flush);
+    }, []);
 
     // Curated-preset pick per slot (mirrors viewer-app.jsx's presetPick),
     // plus a busy flag covering the fetch phase only: ingest()/loadDocument
@@ -697,6 +828,29 @@ function MaterialCompareApp({ active = true } = {}) {
         setEnvImportError(null);
         setEnvFileName('');
         statsDirtyRef.current = true; diffDirtyRef.current = true;
+    };
+    // Imports into the shared engine registry (js/mtlx-engine.js), fired
+    // to every subscribed view. Does not select 'custom' itself: the
+    // registry's own setGlobalGeom('custom') call does that instead.
+    const importModel = async (files) => {
+        setModelImportError(null);
+        try {
+            await window.loadCustomPreviewGeomFromFile(files);
+        } catch (e) {
+            setModelImportError(errMsg(e));
+        }
+    };
+    // Does not reset geom itself: the registry-change subscription above
+    // already falls 'custom' back to shaderball-scene once the registry
+    // actually empties.
+    const clearModel = () => {
+        setModelImportError(null);
+        window.clearCustomPreviewGeom();
+    };
+    // Concrete geometry picks are global across the four tools.
+    const pickGeom = (g) => {
+        setGeom(g);
+        window.setGlobalGeom(g);
     };
     const resetEnv = () => {
         setEnvOverride(null);
@@ -1447,14 +1601,31 @@ function MaterialCompareApp({ active = true } = {}) {
                                 {GEOM_OPTIONS.map((g) => (
                                     <GeometryTile
                                         key={g}
-                                        label={GEOM_LABELS[g] || g}
+                                        label={geomTileLabel(g)}
                                         icon={GEOM_ICONS[g]}
                                         selected={geom === g}
-                                        onClick={() => setGeom(g)}
+                                        onClick={() => {
+                                            pickGeom(g);
+                                            if (!hasCustom) setCustomOpen(false);
+                                        }}
                                         badge={g === 'shaderball-scene' ? 'Default' : undefined}
                                     />
                                 ))}
+                                <CustomModelTile
+                                    className="col-span-2"
+                                    name={customGeom ? customGeom.name : ''}
+                                    selected={geom === 'custom'}
+                                    expanded={customOpen}
+                                    accept=".obj,.glb,.gltf,.bin"
+                                    onSelect={() => pickGeom('custom')}
+                                    onExpand={() => setCustomOpen(true)}
+                                    onFiles={(files) => {
+                                        if (files && files.length) importModel(files);
+                                    }}
+                                    onClear={clearModel}
+                                />
                             </div>
+                            {modelImportError && <div className="text-xs text-red-400">{modelImportError}</div>}
                         </SectionCard>
 
                         <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>

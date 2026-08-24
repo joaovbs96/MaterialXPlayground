@@ -1322,6 +1322,378 @@ const normalizeGeometry = (geometry) => {
     return geometry;
 };
 
+// ---- Custom preview geometry (experimental) ----
+// Session-wide registry shared by the docs previewer and graph preview, in-memory only.
+// The graph editor's DocsDialog iframe has its own separate registry; callers guard for this.
+const CUSTOM_GEOM = { geometry: null, name: '', epoch: 0 };
+// Latest loadCustomPreviewGeomFromFile/Url call wins; bumped by both and by clearCustomPreviewGeom.
+let customGeomLoadSeq = 0;
+const getCustomPreviewGeom = () => (CUSTOM_GEOM.geometry ? CUSTOM_GEOM : null);
+
+// ---- Global geometry selection (shared across every tool) ----
+const GLOBAL_GEOM_KEY = 'mtlx_geom_global';
+const GLOBAL_GEOM_VALUES = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'custom'];
+// Old per-tool keys, read once as a seed when the global key has never been written.
+const LEGACY_GEOM_KEYS = ['mtlx_preview_geom_choice', 'mtlx_graph_preview_geom'];
+const LEGACY_GEOM_SKIP = ['custom', 'default', 'pernode'];
+
+let MTLX_GLOBAL_GEOM = null;
+
+// Runs once, on first getGlobalGeom/setGlobalGeom call.
+const initGlobalGeom = () => {
+    let stored = null;
+    try { stored = localStorage.getItem(GLOBAL_GEOM_KEY); } catch (e) { /* privacy mode */ }
+    if (stored && GLOBAL_GEOM_VALUES.includes(stored) && stored !== 'custom') {
+        MTLX_GLOBAL_GEOM = stored;
+        return;
+    }
+    if (!stored) {
+        for (const key of LEGACY_GEOM_KEYS) {
+            let legacy = null;
+            try { legacy = localStorage.getItem(key); } catch (e) { /* privacy mode */ }
+            if (legacy && GLOBAL_GEOM_VALUES.includes(legacy) && !LEGACY_GEOM_SKIP.includes(legacy)) {
+                MTLX_GLOBAL_GEOM = legacy;
+                return;
+            }
+        }
+    }
+    MTLX_GLOBAL_GEOM = 'shaderball-scene';
+};
+
+const getGlobalGeom = () => {
+    if (MTLX_GLOBAL_GEOM === null) initGlobalGeom();
+    return MTLX_GLOBAL_GEOM;
+};
+
+// Persists only from the top-realm page (embeds must not clobber the host's
+// choice) and only for concrete values (custom is registry-local, session-only).
+const setGlobalGeom = (value) => {
+    if (MTLX_GLOBAL_GEOM === null) initGlobalGeom();
+    if (!GLOBAL_GEOM_VALUES.includes(value) || value === MTLX_GLOBAL_GEOM) return;
+    MTLX_GLOBAL_GEOM = value;
+    if (window.self === window.top && value !== 'custom') {
+        try { localStorage.setItem(GLOBAL_GEOM_KEY, value); } catch (e) { /* privacy mode */ }
+    }
+    window.dispatchEvent(new CustomEvent('mtlx-global-geom', { detail: { value } }));
+};
+
+// Merges every mesh under `root` into one normalized BufferGeometry.
+// Extraction must use the accessor API only, never attribute.array.slice
+// or toNonIndexed: r128's toNonIndexed corrupts InterleavedBufferAttributes from GLTFLoader.
+const buildCustomGeometryFromRoot = (root, fileName) => {
+    root.updateMatrixWorld(true);
+    const meshes = [];
+    root.traverse((o) => {
+        if (o.isMesh && o.geometry && o.geometry.getAttribute('position')) meshes.push(o);
+    });
+    if (!meshes.length) {
+        throw new Error('No mesh geometry found in "' + fileName + '".');
+    }
+    const single = meshes.length === 1;
+    const parts = meshes.map((mesh) => {
+        const src = mesh.geometry;
+        const posAttr = src.getAttribute('position');
+        const normAttr = src.getAttribute('normal');
+        const uvAttr = src.getAttribute('uv');
+        const hasNormal = !!normAttr;
+        const hasUv = !!uvAttr;
+        const index = src.getIndex();
+        // keepIndex only when single, indexed, and has uv: prepGeometry zero-fills
+        // a missing uv before its tangent precheck, so an indexed mesh with an
+        // all-zero uv would reach computeTangents and divide by zero, NaN tangents.
+        const keepIndex = single && !!index && hasUv;
+
+        const g = new THREE.BufferGeometry();
+        if (keepIndex) {
+            const vcount = posAttr.count;
+            const position = new Float32Array(vcount * 3);
+            const normal = hasNormal ? new Float32Array(vcount * 3) : null;
+            const uv = new Float32Array(vcount * 2);
+            for (let i = 0; i < vcount; i++) {
+                position[i * 3] = posAttr.getX(i); position[i * 3 + 1] = posAttr.getY(i); position[i * 3 + 2] = posAttr.getZ(i);
+                if (normal) { normal[i * 3] = normAttr.getX(i); normal[i * 3 + 1] = normAttr.getY(i); normal[i * 3 + 2] = normAttr.getZ(i); }
+                uv[i * 2] = uvAttr.getX(i); uv[i * 2 + 1] = uvAttr.getY(i);
+            }
+            g.setAttribute('position', new THREE.BufferAttribute(position, 3));
+            if (normal) g.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+            g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+            g.setIndex(index.clone());
+        } else {
+            const vcount = index ? index.count : posAttr.count;
+            const position = new Float32Array(vcount * 3);
+            const normal = hasNormal ? new Float32Array(vcount * 3) : null;
+            const uv = new Float32Array(vcount * 2); // zero-filled when the source has no uv
+            for (let k = 0; k < vcount; k++) {
+                const i = index ? index.getX(k) : k;
+                position[k * 3] = posAttr.getX(i); position[k * 3 + 1] = posAttr.getY(i); position[k * 3 + 2] = posAttr.getZ(i);
+                if (normal) { normal[k * 3] = normAttr.getX(i); normal[k * 3 + 1] = normAttr.getY(i); normal[k * 3 + 2] = normAttr.getZ(i); }
+                if (hasUv) { uv[k * 2] = uvAttr.getX(i); uv[k * 2 + 1] = uvAttr.getY(i); }
+            }
+            g.setAttribute('position', new THREE.BufferAttribute(position, 3));
+            if (normal) g.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+            g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        }
+
+        // r128 BufferGeometry.applyMatrix4 derives the normal matrix from
+        // this transform internally, so non-uniform scale on `normal` is
+        // handled correctly without a manual inverse-transpose here.
+        g.applyMatrix4(mesh.matrixWorld);
+
+        if (mesh.matrixWorld.determinant() < 0) {
+            // Winding flip when matrixWorld.determinant() < 0: mirrored transforms
+            // invert triangle winding, and computeVertexNormals is winding-derived,
+            // so reverse each triangle here (rendering itself stays DoubleSide).
+            if (keepIndex) {
+                const idx = g.getIndex().array;
+                for (let t = 0; t < idx.length; t += 3) {
+                    const tmp = idx[t + 1]; idx[t + 1] = idx[t + 2]; idx[t + 2] = tmp;
+                }
+                g.getIndex().needsUpdate = true;
+            } else {
+                const swapTriples = (attr) => {
+                    const arr = attr.array;
+                    const n = attr.itemSize;
+                    for (let t = 0; t + 2 < attr.count; t += 3) {
+                        for (let c = 0; c < n; c++) {
+                            const a = (t + 1) * n + c, b = (t + 2) * n + c;
+                            const tmp = arr[a]; arr[a] = arr[b]; arr[b] = tmp;
+                        }
+                    }
+                    attr.needsUpdate = true;
+                };
+                swapTriples(g.getAttribute('position'));
+                if (g.getAttribute('normal')) swapTriples(g.getAttribute('normal'));
+                swapTriples(g.getAttribute('uv'));
+            }
+        }
+
+        if (!hasNormal) g.computeVertexNormals();
+
+        return g;
+    });
+
+    let merged;
+    if (single) {
+        merged = parts[0];
+    } else {
+        // Concatenate the per-mesh non-indexed position/normal/uv arrays
+        // into one non-indexed BufferGeometry (multi-mesh never keeps an
+        // index: keepIndex above requires a lone mesh).
+        let totalVerts = 0;
+        parts.forEach((g) => { totalVerts += g.getAttribute('position').count; });
+        const position = new Float32Array(totalVerts * 3);
+        const normal = new Float32Array(totalVerts * 3);
+        const uv = new Float32Array(totalVerts * 2);
+        let vOff = 0;
+        parts.forEach((g) => {
+            const p = g.getAttribute('position');
+            position.set(p.array, vOff * 3);
+            normal.set(g.getAttribute('normal').array, vOff * 3);
+            uv.set(g.getAttribute('uv').array, vOff * 2);
+            vOff += p.count;
+        });
+        merged = new THREE.BufferGeometry();
+        merged.setAttribute('position', new THREE.BufferAttribute(position, 3));
+        merged.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+        merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    }
+
+    return normalizeGeometry(merged);
+};
+
+// 1x1 transparent PNG, served for every texture request while loading a
+// custom preview model: previews are geometry-only by design.
+const CUSTOM_GEOM_BLANK_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+// Lowercased basename of a URL or file name: strips query/fragment, then
+// everything up to the last slash.
+const lowerBasename = (s) => String(s || '').split('?')[0].split('#')[0].split(/[\\/]/).pop().toLowerCase();
+
+// Strips every texture reference from a parsed glTF JSON in place, so
+// GLTFLoader never requests an image. Leaves KHR_draco_mesh_compression
+// alone: nothing here matches "Texture"/"texture".
+const stripGltfTextures = (json) => {
+    delete json.images;
+    delete json.textures;
+    delete json.samplers;
+    (json.materials || []).forEach((mat) => {
+        delete mat.normalTexture;
+        delete mat.occlusionTexture;
+        delete mat.emissiveTexture;
+        if (mat.pbrMetallicRoughness) {
+            delete mat.pbrMetallicRoughness.baseColorTexture;
+            delete mat.pbrMetallicRoughness.metallicRoughnessTexture;
+        }
+        Object.keys(mat.extensions || {}).forEach((key) => {
+            const ext = mat.extensions[key];
+            if (!ext || typeof ext !== 'object') return;
+            Object.keys(ext).forEach((k) => { if (/Texture$/.test(k)) delete ext[k]; });
+        });
+    });
+    ['extensionsUsed', 'extensionsRequired'].forEach((key) => {
+        if (Array.isArray(json[key])) json[key] = json[key].filter((n) => !/texture/i.test(n));
+    });
+};
+
+// Parses model bytes (string for obj/gltf, ArrayBuffer for glb) into a root
+// Object3D. opts.sidecars (File map keyed by lowerBasename) and
+// opts.resourcePath resolve .bin/texture references; label is for errors.
+const parseModelRoot = async (ext, data, label, opts) => {
+    opts = opts || {};
+    if (ext === 'obj') {
+        if (typeof THREE.OBJLoader === 'undefined') {
+            throw new Error('OBJLoader unavailable (script blocked/offline). Cannot load .obj models.');
+        }
+        try {
+            return new THREE.OBJLoader().parse(data);
+        } catch (e) {
+            throw new Error('Could not parse "' + label + '": ' + e.message);
+        }
+    }
+    if (typeof THREE.GLTFLoader === 'undefined') {
+        throw new Error('GLTFLoader unavailable (script blocked/offline). Cannot load .glb/.gltf models.');
+    }
+
+    const sidecars = opts.sidecars || {};
+    const hasSidecars = Object.keys(sidecars).length > 0;
+    const resourcePath = opts.resourcePath || '';
+    const objectUrls = [];
+    const sidecarUrls = {};
+    Object.keys(sidecars).forEach((key) => {
+        const u = URL.createObjectURL(sidecars[key]);
+        sidecarUrls[key] = u;
+        objectUrls.push(u);
+    });
+
+    // Redirects sidecar (.bin) requests to their object URL and swallows
+    // every texture request with a blank PNG; anything else (buffer
+    // fetches with no sidecar) passes through to fail into the triage below.
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier((url) => {
+        const base = lowerBasename(url);
+        let decoded = base;
+        try { decoded = decodeURIComponent(base); } catch (e) { /* not percent-encoded */ }
+        if (sidecarUrls[base]) return sidecarUrls[base];
+        if (sidecarUrls[decoded]) return sidecarUrls[decoded];
+        if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(decoded)) return CUSTOM_GEOM_BLANK_PNG;
+        return url;
+    });
+
+    try {
+        let payload = data;
+        if (ext === 'gltf') {
+            let json;
+            try {
+                json = JSON.parse(data);
+            } catch (e) {
+                throw new Error('Could not parse "' + label + '": ' + e.message);
+            }
+            stripGltfTextures(json);
+            payload = JSON.stringify(json);
+        }
+        try {
+            const gltf = await new Promise((resolve, reject) => {
+                try { new THREE.GLTFLoader(manager).parse(payload, resourcePath, resolve, reject); } catch (e) { reject(e); }
+            });
+            return gltf.scene || (gltf.scenes && gltf.scenes[0]);
+        } catch (e) {
+            const msg = (e && e.message) || String(e);
+            if (/DRACOLoader/i.test(msg)) {
+                throw new Error('"' + label + '" uses Draco mesh compression, which is not supported here: re-export without Draco.');
+            }
+            if (/KTX2|basisu/i.test(msg)) {
+                throw new Error('"' + label + '" uses KTX2/Basis texture compression, which is not supported here: re-export without KTX2/Basis textures.');
+            }
+            if (ext === 'gltf') {
+                const hint = (hasSidecars || !resourcePath)
+                    ? 'This .gltf references external data; select its .bin file(s) together with the .gltf.'
+                    : 'A file referenced by this .gltf could not be fetched (CORS or missing).';
+                throw new Error('Could not load "' + label + '": ' + msg + '. ' + hint);
+            }
+            throw new Error('Could not load "' + label + '": ' + msg);
+        }
+    } finally {
+        objectUrls.forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) { /* already revoked */ } });
+    }
+};
+
+// Builds `root` into a geometry and, if this call is still the latest
+// (seqId === customGeomLoadSeq), swaps it into CUSTOM_GEOM and dispatches
+// mtlx-custom-geom. A stale winner's geometry is disposed instead.
+const commitCustomGeom = (root, label, seqId) => {
+    const built = buildCustomGeometryFromRoot(root, label);
+    if (seqId !== customGeomLoadSeq) {
+        try { built.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ }
+        return null;
+    }
+    const prev = CUSTOM_GEOM.geometry;
+    CUSTOM_GEOM.geometry = built;
+    CUSTOM_GEOM.name = String(label || 'custom');
+    CUSTOM_GEOM.epoch += 1;
+    if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
+    // Keep-alive hidden preview tools subscribe to this event to mirror the
+    // registry into their own local state, since their views never unmount
+    // and so never get a natural remount hook to re-read CUSTOM_GEOM from.
+    window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
+    setGlobalGeom('custom');
+    return CUSTOM_GEOM;
+};
+
+// Loads a user-dropped model: input is a File, FileList, or File[]. First
+// .obj/.glb/.gltf entry is primary; .bin entries become sidecars; other
+// files (textures, etc.) are dropped. Latest call wins (customGeomLoadSeq).
+const loadCustomPreviewGeomFromFile = async (input) => {
+    const id = ++customGeomLoadSeq;
+    const files = input instanceof FileList ? Array.from(input)
+        : Array.isArray(input) ? input
+            : input ? [input] : [];
+    const primary = files.find((f) => f && /\.(obj|glb|gltf)$/i.test(f.name || ''));
+    if (!primary) {
+        throw new Error('Select a .obj, .glb or .gltf model file.');
+    }
+    const primaryName = primary.name.toLowerCase();
+    const ext = primaryName.slice(primaryName.lastIndexOf('.') + 1);
+    const sidecars = {};
+    files.forEach((f) => {
+        if (f !== primary && f && /\.bin$/i.test(f.name || '')) sidecars[lowerBasename(f.name)] = f;
+    });
+    const data = ext === 'glb' ? await primary.arrayBuffer() : await primary.text();
+    const root = await parseModelRoot(ext, data, primary.name, { sidecars });
+    return commitCustomGeom(root, primary.name, id);
+};
+
+// Fetches and loads a model from a URL, same pipeline as the file picker.
+// gltf/glb pass the model's directory as resourcePath so GLTFLoader can
+// fetch a sibling .bin; extension is sniffed after stripping query/fragment.
+const loadCustomPreviewGeomFromUrl = async (url) => {
+    const id = ++customGeomLoadSeq;
+    const clean = String(url || '').split('?')[0].split('#')[0];
+    const ext = clean.slice(clean.lastIndexOf('.') + 1).toLowerCase();
+    if (ext !== 'obj' && ext !== 'glb' && ext !== 'gltf') {
+        throw new Error('Unsupported model URL "' + url + '": expected .obj, .glb, or .gltf.');
+    }
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('Failed to fetch model "' + url + '" (HTTP ' + r.status + ').');
+    const data = ext === 'glb' ? await r.arrayBuffer() : await r.text();
+    const base = clean.slice(clean.lastIndexOf('/') + 1) || 'custom';
+    const opts = ext === 'obj' ? undefined : { resourcePath: clean.slice(0, clean.lastIndexOf('/') + 1) };
+    const root = await parseModelRoot(ext, data, base, opts);
+    return commitCustomGeom(root, base, id);
+};
+
+// Clears the custom-geometry registry. Bumps customGeomLoadSeq FIRST so an
+// in-flight load that resolves after this is discarded, not installed.
+const clearCustomPreviewGeom = () => {
+    ++customGeomLoadSeq;
+    const prev = CUSTOM_GEOM.geometry;
+    CUSTOM_GEOM.geometry = null;
+    CUSTOM_GEOM.name = '';
+    CUSTOM_GEOM.epoch += 1;
+    window.dispatchEvent(new CustomEvent('mtlx-custom-geom', { detail: { epoch: CUSTOM_GEOM.epoch, name: CUSTOM_GEOM.name } }));
+    if (getGlobalGeom() === 'custom') setGlobalGeom('shaderball-scene');
+    if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
+};
+
 // Shaderball: two GLB exports of the ASWF/USD-WG Standard Shader Ball
 // under models/ (see models/LICENSE_shaderball.txt). glbSceneCache holds the raw
 // GLTFLoader result per URL; consumers clone() rather than mutate/dispose it.
@@ -1537,6 +1909,11 @@ const buildPreviewGeometry = async (which) => {
         // the camera; positions and UVs get refit to the canvas aspect
         // by fitQuadToAspect (screen-proportional Shadertoy convention).
         return new THREE.PlaneGeometry(2, 2);
+    }
+    if (which === 'custom' && CUSTOM_GEOM.geometry) {
+        // Per-view clone: prepGeometry mutates and disposePartial() disposes the
+        // view's geometry at teardown; the registry copy must survive both.
+        return CUSTOM_GEOM.geometry.clone();
     }
     return new THREE.SphereGeometry(1, 64, 64);
 };
@@ -3160,6 +3537,9 @@ const createMtlxRenderView = async ({
     );
     let reqId = null;
     let renderer = null;
+    // Declared here (not inside the try block below) so disposePartial,
+    // defined outside that block, can still remove them on every teardown path.
+    let onGlLost = null, onGlRestored = null;
     let resizeObs = null;
     // While true the canvas keeps its current drawing buffer and the
     // browser scales it to the CSS box. Lets a pane drag rescale the
@@ -3354,6 +3734,10 @@ const createMtlxRenderView = async ({
         // declaration further down) — this view's OWN GPU resources,
         // same disposal rationale as pmremRT immediately above.
         try { if (peel) freePeelFn && freePeelFn(); } catch (e) { /* already disposed/invalid */ }
+        if (canvas) {
+            canvas.removeEventListener('webglcontextlost', onGlLost);
+            canvas.removeEventListener('webglcontextrestored', onGlRestored);
+        }
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -3395,6 +3779,13 @@ const createMtlxRenderView = async ({
                 // renderer, but fresh r128 state caches assume defaults, so
                 // leaked blending corrupts the PMREM bake below; resync both.
                 renderer.resetState();
+                // restored re-inits three's GL state but not render-target
+                // contents (PMREM bake, shadow map), so owners of this view
+                // must fully rebuild on restore, not just resume.
+                onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost' } })); };
+                onGlRestored = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'restored' } })); };
+                canvas.addEventListener('webglcontextlost', onGlLost);
+                canvas.addEventListener('webglcontextrestored', onGlRestored);
                 // GLOBAL flag keying every lit material's program cache, so set
                 // ONCE here, before any material or PMREM work, and left at the
                 // default (off) for views that never build a studio bowl.
@@ -5070,7 +5461,7 @@ const createMtlxRenderView = async ({
                 renderFrame();
                 if (!__snapshotCanvas) {
                     __snapshotCanvas = document.createElement('canvas');
-                    __snapshotCtx = __snapshotCanvas.getContext('2d');
+                    __snapshotCtx = __snapshotCanvas.getContext('2d', { willReadFrequently: true });
                 }
                 if (__snapshotCanvas.width !== w || __snapshotCanvas.height !== h) {
                     __snapshotCanvas.width = w; __snapshotCanvas.height = h;
@@ -5341,6 +5732,9 @@ Object.assign(window, {
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
     getFilenameDefaultTexture, rebindFilenameDefault, configureLoadedTexture,
     prepGeometry, normalizeGeometry, buildPreviewGeometry,
+    loadCustomPreviewGeomFromFile, loadCustomPreviewGeomFromUrl,
+    getCustomPreviewGeom, clearCustomPreviewGeom,
+    getGlobalGeom, setGlobalGeom,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,

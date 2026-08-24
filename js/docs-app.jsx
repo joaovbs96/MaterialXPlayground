@@ -547,6 +547,22 @@
                 sigGroups.forEach((g, i) => { map[i] = typeColor(g.type); });
                 return map;
             }, [sigGroups]);
+            // Signature dropdown options: sorted by output type then input
+            // summary for scannability (same order as the Graph Editor's
+            // signature picker); values stay the original sigGroups index
+            // so sigIndex/sigDots/autoDoc.tables keep working unchanged.
+            const sigOptions = React.useMemo(() => {
+                return sigGroups
+                    .map((g, i) => ({ g, i }))
+                    .sort((a, b) => {
+                        const byOut = String(a.g.outLabel || a.g.type).localeCompare(String(b.g.outLabel || b.g.type));
+                        return byOut !== 0 ? byOut : String(a.g.inSummary).localeCompare(String(b.g.inSummary));
+                    })
+                    .map(({ g, i }) => {
+                        const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
+                        return { value: i, label: l || String(i + 1) };
+                    });
+            }, [sigGroups]);
             // Which table(s) to render — see resolveDisplayTables above
             // for the full selection rules.
             const displayTables = React.useMemo(
@@ -805,10 +821,7 @@
                                                                 </label>
                                                                 <MtlxSelect
                                                                     value={sig}
-                                                                    options={sigGroups.map((g, i) => {
-                                                                        const l = g.type + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '');
-                                                                        return { value: i, label: (i + 1) + ' / ' + sigCount + (l ? ' - ' + l : '') };
-                                                                    })}
+                                                                    options={sigOptions}
                                                                     dots={sigDots}
                                                                     onChange={setSigIndex}
                                                                     defValue={null}

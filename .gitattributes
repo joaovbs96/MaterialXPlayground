@@ -71,6 +71,11 @@ js/materialx/** -text
 # keeps git's binary detection for images/fonts under tutorials/assets/.
 tutorials/** text=auto eol=lf
 
+# Raw Float32Array vertex data for the geometry-url-gltf embed test's
+# .gltf fixture. Same CRLF-smudging risk as the .data note above: force
+# binary handling so a Windows checkout can't corrupt the packed floats.
+tests/embed/fixtures/**/*.bin binary
+
 # scripts/build-webview.mjs reads index.html (matching LF-terminated anchors)
 # and byte-compares vscode_extension/media/webview.html against a fresh splice.
 # Force LF so a Windows checkout's autocrlf=true can't CRLF-convert them and

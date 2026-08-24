@@ -90,6 +90,7 @@ const BUILDER_DEFAULTS = {
     env: '',
     exposure: '',
     envmap: '',
+    geometryUrl: '',
     accent: BUILDER_THEME_DEFAULTS.accent,
     surface: BUILDER_THEME_DEFAULTS.surface,
     text: BUILDER_THEME_DEFAULTS.text,
@@ -202,6 +203,7 @@ const parseBuilderHashSettings = () => {
     if (params.has('env')) patch.env = params.get('env');
     if (params.has('exposure')) patch.exposure = params.get('exposure');
     if (params.has('envmap')) patch.envmap = params.get('envmap');
+    if (params.has('geometryUrl')) patch.geometryUrl = params.get('geometryUrl');
     if (params.has('autorotate')) patch.autorotate = builderParseBool(params.get('autorotate'));
     if (params.has('controls')) patch.controls = controlsObjFromStr(params.get('controls'));
     if (params.has('backdrop') && ['studio', 'studio-dark', 'environment', 'none'].includes(params.get('backdrop'))) {
@@ -238,6 +240,7 @@ const buildShareParams = (s) => {
     if (s.env.trim() !== '') params.set('env', s.env.trim());
     if (s.exposure.trim() !== '') params.set('exposure', s.exposure.trim());
     if (s.envmap.trim()) params.set('envmap', s.envmap.trim());
+    if (s.geometryUrl.trim()) params.set('geometryUrl', s.geometryUrl.trim());
     if (s.autorotate) params.set('autorotate', '1');
     const cs = controlsStrFrom(s.controls);
     if (cs) params.set('controls', cs);
@@ -337,6 +340,35 @@ function ColorField({ label, value, onChange, placeholder }) {
                     className={TEXT_INPUT_CLS + ' min-w-0 px-1.5'}
                 />
             </div>
+        </div>
+    );
+}
+
+// A text input with a small x button at its right edge, shown only once
+// there's a value to clear. Mirrors FilePickerField's own clear-x
+// (js/shared/mtlx-ui.jsx) so every URL field in the builder matches.
+function ClearableTextField({ value, onChange, onBlur, onKeyDown, placeholder, onClear }) {
+    return (
+        <div className="relative">
+            <input
+                type="text"
+                value={value}
+                onChange={onChange}
+                onBlur={onBlur}
+                onKeyDown={onKeyDown}
+                placeholder={placeholder}
+                className={TEXT_INPUT_CLS + (value ? ' pr-7' : '')}
+            />
+            {value && (
+                <button
+                    type="button"
+                    title="Clear"
+                    onClick={onClear}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                >
+                    <MtlxIcon name="x" className="w-3 h-3" />
+                </button>
+            )}
         </div>
     );
 }
@@ -921,8 +953,8 @@ function BuilderApp({ active } = {}) {
     const patch = (values) => setSettings((s) => ({ ...s, ...values }));
     const {
         src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
-        accent, surface, text, radius, width, height, sizing, material, camera, wheelZoom,
-        version, poster, eager,
+        geometryUrl, accent, surface, text, radius, width, height, sizing, material, camera,
+        wheelZoom, version, poster, eager,
     } = settings;
 
     const [presetPick, setPresetPick] = React.useState(''); // selected MTLX_PRESETS URL, or '' (placeholder)
@@ -1005,6 +1037,7 @@ function BuilderApp({ active } = {}) {
         if (version) el.version = version;
         if (poster.trim()) el.poster = poster.trim();
         if (envmap.trim()) el.envmap = envmap.trim();
+        if (geometryUrl.trim()) el.geometryUrl = geometryUrl.trim();
         const handleError = (e) => {
             const message = (e && e.detail && e.detail.message) || 'Unknown error';
             // The Scene/Look cards keep transparent + shaderball-scene
@@ -1102,6 +1135,17 @@ function BuilderApp({ active } = {}) {
     };
     const commitEnvmap = () => commitEnvmapValue(envmap);
 
+    // geometryUrl mirrors envmap: LIVE, but every change fetches inside the
+    // iframe, so commit on blur/Enter only. Empty commits a removal via the
+    // element's own reflection, restoring the configured/default geometry.
+    const commitGeometryUrlValue = (raw) => {
+        if (!previewElRef.current) return;
+        const next = String(raw == null ? '' : raw).trim();
+        if (previewElRef.current.geometryUrl === next) return;
+        previewElRef.current.geometryUrl = next;
+    };
+    const commitGeometryUrl = () => commitGeometryUrlValue(geometryUrl);
+
     // Picking a preset fills the src field and commits it immediately,
     // same as typing a URL then pressing Enter. Typing in the src field
     // afterwards resets this select back to its placeholder (see below).
@@ -1130,6 +1174,7 @@ function BuilderApp({ active } = {}) {
         setPresetPick('');
         commitSrcValue(next.src);
         commitEnvmapValue(next.envmap);
+        commitGeometryUrlValue(next.geometryUrl);
     };
     const handleReset = () => applySettings({});
     const handleTemplate = (t) => applySettings(t.values);
@@ -1176,6 +1221,7 @@ function BuilderApp({ active } = {}) {
         if (env.trim() !== '') entries.push(['env', env.trim()]);
         if (exposure.trim() !== '') entries.push(['exposure', exposure.trim()]);
         if (envmap.trim()) entries.push(['envmap', envmap.trim()]);
+        if (geometryUrl.trim()) entries.push(['geometryUrl', geometryUrl.trim()]);
         if (autorotate) entries.push(['autorotate', '1']);
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
@@ -1219,6 +1265,7 @@ function BuilderApp({ active } = {}) {
         if (env.trim() !== '') attrs.push(`env="${env.trim()}"`);
         if (exposure.trim() !== '') attrs.push(`exposure="${exposure.trim()}"`);
         if (envmap.trim()) attrs.push(`envmap="${builderEscAttr(envmap.trim())}"`);
+        if (geometryUrl.trim()) attrs.push(`geometryurl="${builderEscAttr(geometryUrl.trim())}"`);
         if (autorotate) attrs.push('autorotate');
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
@@ -1337,13 +1384,13 @@ function BuilderApp({ active } = {}) {
         <SectionCard key="doc" icon="file-text" title="Document" pill={<ReloadsPill />} summary={docSummary} defaultOpen={defaultOpen}>
             <div>
                 <FieldLabel label="Document URL (src)" />
-                <input
-                    type="text" value={src}
+                <ClearableTextField
+                    value={src}
                     onChange={(e) => { patch({ src: e.target.value }); setPresetPick(''); }}
                     onBlur={commitSrc}
                     onKeyDown={(e) => { if (e.key === 'Enter') { commitSrc(); e.currentTarget.blur(); } }}
                     placeholder="https://example.com/materials/brushed_steel.mtlx"
-                    className={TEXT_INPUT_CLS}
+                    onClear={() => { patch({ src: '' }); setPresetPick(''); commitSrcValue(''); }}
                 />
                 <p className="text-[11px] text-gray-500 mt-1">Applies on Enter or when the field loses focus.</p>
             </div>
@@ -1406,29 +1453,50 @@ function BuilderApp({ active } = {}) {
                         return (
                             <GeometryTile
                                 key={g}
-                                label={(window.GEOM_LABELS && window.GEOM_LABELS[g]) || g}
+                                label={window.geomTileLabel ? window.geomTileLabel(g) : ((window.GEOM_LABELS && window.GEOM_LABELS[g]) || g)}
                                 icon={GEOM_ICONS[g]}
                                 selected={geometry === g}
                                 disabled={geomDisabled}
                                 title={geomDisabled ? 'Not available with a transparent page background' : undefined}
-                                onClick={() => patch({ geometry: g })}
+                                onClick={() => {
+                                    // Picking a tile while a model URL is active clears the
+                                    // URL as part of the pick, and pushes the clear through
+                                    // the preview element itself (state alone won't commit it).
+                                    if (geometryUrl.trim()) {
+                                        patch({ geometry: g, geometryUrl: '' });
+                                        commitGeometryUrlValue('');
+                                    } else {
+                                        patch({ geometry: g });
+                                    }
+                                }}
                             />
                         );
                     })}
                 </div>
+            </div>
+            <div>
+                <FieldLabel label="Custom model URL (.obj / .glb / .gltf)" />
+                <ClearableTextField
+                    value={geometryUrl}
+                    onChange={(e) => patch({ geometryUrl: e.target.value })}
+                    onBlur={commitGeometryUrl}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { commitGeometryUrl(); e.currentTarget.blur(); } }}
+                    placeholder="https://example.com/models/prop.glb"
+                    onClear={() => { patch({ geometryUrl: '' }); commitGeometryUrlValue(''); }}
+                />
             </div>
         </SectionCard>,
 
         <SectionCard key="lighting" icon="sun" title="Lighting" summary={builderLightingSummary(env, exposure)} defaultOpen={defaultOpen}>
             <div>
                 <FieldLabel label="Environment map URL (.hdr / .exr)" />
-                <input
-                    type="text" value={envmap}
+                <ClearableTextField
+                    value={envmap}
                     onChange={(e) => patch({ envmap: e.target.value })}
                     onBlur={commitEnvmap}
                     onKeyDown={(e) => { if (e.key === 'Enter') { commitEnvmap(); e.currentTarget.blur(); } }}
                     placeholder="(default environment)"
-                    className={TEXT_INPUT_CLS}
+                    onClear={() => { patch({ envmap: '' }); commitEnvmapValue(''); }}
                 />
             </div>
             <SliderField
