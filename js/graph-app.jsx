@@ -100,6 +100,116 @@
             );
         }
 
+        // Multi-session recovery browser (item 14). Copies PortPickerPopover's
+        // ArrowUp/ArrowDown/Enter + scrollIntoView idiom for its session
+        // list; the render column hosts one never-re-keyed MtlxGraphPreview.
+        function AutosaveRestoreDialog({ offers, onRestore, onDiscard, onDiscardAll, onClose }) {
+            const [hi, setHi] = React.useState(0);
+            const listRef = React.useRef(null);
+            const panelRef = React.useRef(null);
+            const blobCacheRef = React.useRef(new Map()); // session id -> textures map
+            const tokenRef = React.useRef(0);
+            const [shown, setShown] = React.useState(null); // { xml, textures, name }
+
+            useEscapeToClose(onClose, true);
+            React.useEffect(() => { if (panelRef.current) panelRef.current.focus(); }, []);
+            React.useEffect(() => {
+                if (hi >= offers.length) setHi(Math.max(0, offers.length - 1));
+            }, [offers.length, hi]);
+            React.useEffect(() => { // keep the highlighted row in view
+                const el = listRef.current && listRef.current.children[hi];
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+            }, [hi]);
+
+            // Loads the highlighted offer's textures, cached per session
+            // id; a stale resolve (highlight moved on) is dropped, keeping
+            // the PREVIOUS `shown` so the viewer is never loaded twice.
+            React.useEffect(() => {
+                const record = offers[hi];
+                if (!record) return;
+                const cache = blobCacheRef.current;
+                if (cache.has(record.id)) {
+                    setShown({ xml: record.xml, textures: cache.get(record.id), name: record.name });
+                    return;
+                }
+                const token = ++tokenRef.current;
+                window.MtlxAutosave.getBlobs(record.id).then((blobs) => {
+                    if (tokenRef.current !== token) return; // highlight moved on
+                    cache.set(record.id, blobs);
+                    setShown({ xml: record.xml, textures: blobs, name: record.name });
+                });
+            }, [hi, offers]);
+
+            const onKeyDown = (e) => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(offers.length - 1, 0))); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+                else if (e.key === 'Enter') { e.preventDefault(); if (offers[hi]) onRestore(offers[hi]); }
+                // Escape: handled by the window-level useEscapeToClose above.
+            };
+
+            return (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
+                    <div
+                        ref={panelRef}
+                        tabIndex={-1}
+                        onKeyDown={onKeyDown}
+                        className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-[60rem] max-w-[95%] p-4 outline-none"
+                    >
+                        <div className="text-sm font-semibold text-gray-100 mb-1">Restore a previous session?</div>
+                        <div className="text-[12px] text-gray-400 mb-3">
+                            One or more editing sessions ended with unsaved changes. Pick one below, then restore or discard it.
+                        </div>
+                        <div className="flex gap-3">
+                            <div ref={listRef} className="w-[13rem] flex-none max-h-80 overflow-y-auto custom-scrollbar border border-gray-700 rounded-md">
+                                {offers.map((o, i) => (
+                                    <button
+                                        key={o.id}
+                                        type="button"
+                                        onClick={() => setHi(i)}
+                                        className={'w-full text-left px-2 py-1.5 border-b border-gray-700 last:border-b-0 transition-colors '
+                                            + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                    >
+                                        <div className="text-[11px] font-mono truncate">{o.name || 'untitled'}</div>
+                                        <div className="text-[10px] text-gray-500">
+                                            {formatDraftAge(o.closedAt || Math.max(o.savedAt || 0, o.beat || 0))}
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="flex-1 min-w-0 rounded-md overflow-hidden border border-gray-700 bg-gray-900" style={{ height: 320 }}>
+                                {shown ? (
+                                    <MtlxGraphPreview
+                                        xml={shown.xml}
+                                        preview="right"
+                                        previewTextures={shown.textures}
+                                        previewName={shown.name}
+                                        lazy={false}
+                                        interactive={false}
+                                        chrome="none"
+                                        controls="none"
+                                        autoFocus="fit"
+                                        height={320}
+                                    />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-[11px] text-gray-500">
+                                        {'Loading preview' + '\u2026'}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 mt-3">
+                            {offers.length > 1 && (
+                                <button type="button" onClick={onDiscardAll} className={BTN_SECONDARY}>Discard all</button>
+                            )}
+                            <button type="button" onClick={() => offers[hi] && onDiscard(offers[hi])} className={BTN_SECONDARY}>Discard</button>
+                            <button type="button" onClick={onClose} className={BTN_SECONDARY}>Not now</button>
+                            <button type="button" onClick={() => offers[hi] && onRestore(offers[hi])} className={BTN_PRIMARY}>Restore</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // Collapsible parameter-group header (folders + Downstream
         // Connections). Negative margins matching the panel's own px-2.5
         // pull the border edge-to-edge instead of sitting inset.
@@ -286,8 +396,8 @@
             // what gets selected afterward (item 10's pin toggle) — same
             // { scope, id } shape as previewSel, reset alongside it.
             const [pinnedTarget, setPinnedTarget] = React.useState(null);
-            // Crash-recovery modal (item 14): a queue of orphaned
-            // autosave drafts (most-recent-first) offered one at a time;
+            // Session recovery browser (item 14): a queue of orphaned
+            // autosave drafts (most-recent-first), all offered at once;
             // null/empty means nothing to offer right now.
             const [restoreOffer, setRestoreOffer] = React.useState(null);
             const [catalog, setCatalog] = React.useState(null);
@@ -1258,24 +1368,26 @@
                     pendingAdoptRef.current = record.id;
                     pendingRestoreDirtyRef.current = true;
                     ingestRef.current(map);
+                    if (opts && opts.onCommit) opts.onCommit();
                 };
                 // Auto path: no confirm needed, nothing is loaded yet.
                 // Modal path: confirmReplace DIRECTLY, not the event path,
-                // so a cancelled dialog never leaves the refs above set.
+                // so a cancelled dialog never runs onCommit at all.
                 if (opts && opts.auto) commit();
                 else confirmReplace(true, commit);
             };
-            const onRestoreDraft = () => {
-                const current = restoreOffer && restoreOffer[0];
-                if (!current) return;
-                restoreDraft(current, { auto: false });
-                setRestoreOffer((q) => (q && q.length > 1) ? q.slice(1) : null);
+            // AutosaveRestoreDialog wiring: onCommit only fires once
+            // confirmReplace accepts, so a cancelled confirm keeps the
+            // dialog open and every offered session untouched.
+            const onRestoreDraft = (record) => {
+                restoreDraft(record, { onCommit: () => setRestoreOffer(null) });
             };
-            const onDiscardDraft = () => {
-                const current = restoreOffer && restoreOffer[0];
-                if (!current) return;
-                window.MtlxAutosave.removeSession(current.id);
-                setRestoreOffer((q) => (q && q.length > 1) ? q.slice(1) : null);
+            const onDiscardDraft = (record) => {
+                window.MtlxAutosave.removeSession(record.id);
+                setRestoreOffer((q) => {
+                    const next = (q || []).filter((r) => r.id !== record.id);
+                    return next.length ? next : null;
+                });
             };
             const onDiscardAllDrafts = () => {
                 const queue = restoreOffer;
@@ -6196,47 +6308,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         </div>
                     )}
 
-                    {/* Crash-recovery modal (item 14): blocking, forced
-                        choice. No dismiss X, no escape-close, no backdrop-
-                        click-close. Restore/Discard advance the queue. */}
+                    {/* Session recovery browser (item 14): every orphaned
+                        autosave draft at once, with a graph + render
+                        preview of whichever one is highlighted. */}
                     {restoreOffer && restoreOffer.length > 0 && (
-                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
-                            <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-96 max-w-[90%] p-4">
-                                <div className="text-sm font-semibold text-gray-100 mb-2">Restore previous session?</div>
-                                <div className="text-[12px] text-gray-300 mb-1 break-words">
-                                    {'“'}{restoreOffer[0].name || 'untitled'}{'”'}
-                                    {' '}({formatDraftAge(restoreOffer[0].closedAt || Math.max(restoreOffer[0].savedAt || 0, restoreOffer[0].beat || 0))})
-                                </div>
-                                <div className="text-[12px] text-gray-400 mb-1">
-                                    A previous editing session ended with unsaved changes.
-                                    Restore it, or discard it permanently?
-                                </div>
-                                {restoreOffer.length > 1 && (
-                                    <div className="text-[11px] text-gray-500 mb-1">
-                                        ({restoreOffer.length - 1} more session{restoreOffer.length - 1 === 1 ? '' : 's'} waiting)
-                                    </div>
-                                )}
-                                <div className="flex justify-end gap-2 mt-3">
-                                    {restoreOffer.length > 1 && (
-                                        <button
-                                            type="button"
-                                            onClick={onDiscardAllDrafts}
-                                            className={BTN_SECONDARY}
-                                        >Discard all</button>
-                                    )}
-                                    <button
-                                        type="button"
-                                        onClick={onDiscardDraft}
-                                        className={BTN_SECONDARY}
-                                    >{restoreOffer.length > 1 ? 'Discard this' : 'Discard'}</button>
-                                    <button
-                                        type="button"
-                                        onClick={onRestoreDraft}
-                                        className={BTN_PRIMARY}
-                                    >Restore</button>
-                                </div>
-                            </div>
-                        </div>
+                        <AutosaveRestoreDialog
+                            offers={restoreOffer}
+                            onRestore={onRestoreDraft}
+                            onDiscard={onDiscardDraft}
+                            onDiscardAll={onDiscardAllDrafts}
+                            onClose={() => setRestoreOffer(null)}
+                        />
                     )}
 
                     {/* Full-stage drop indicator */}
