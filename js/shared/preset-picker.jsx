@@ -284,6 +284,22 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [ready]);
 
+    // ---- Preview column height: MtlxGraphPreview needs a literal px
+    // number, so measure the column's real height instead of guessing.
+    // Deps=[open]: the picker stays mounted, so the ref is null pre-open.
+    const previewColRef = React.useRef(null);
+    const [previewHeight, setPreviewHeight] = React.useState(420);
+    React.useEffect(() => {
+        const el = previewColRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        const ro = new ResizeObserver((entries) => {
+            const h = (entries[0] && entries[0].contentRect) ? entries[0].contentRect.height : el.clientHeight;
+            if (h > 0) setPreviewHeight(Math.round(h));
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [open]);
+
     // ---- Keyboard: ArrowUp/Down move the highlight, Enter confirms,
     // Esc cancels (bubbles to useEscapeToClose below). Same idiom as
     // js/graph-app.jsx's PortPickerPopover.
@@ -382,7 +398,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
                         ))}
                     </div>
                 </div>
-                <div className="flex-1 min-w-0 relative h-full">
+                <div ref={previewColRef} className="flex-1 min-w-0 relative h-full">
                     {!doc ? (
                         <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
                             {filtered.length ? 'Loading material...' : 'No material to preview.'}
@@ -400,7 +416,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
                                 autoFocus="fit"
                                 chrome="none"
                                 transparent={false}
-                                height={420}
+                                height={previewHeight}
                             />
                             {!ready && docStatus === 'loading' && (
                                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/70 text-gray-300 text-sm">
