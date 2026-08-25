@@ -423,6 +423,69 @@ function parseShellHash() {
     return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
 }
 
+// Styled stand-in for the native close-confirm dialog (main.js's
+// requestCloseConfirmation), shown here so it stays visible even if
+// the dirty view is hidden behind Home. Inert on web (event never fires).
+function DesktopCloseConfirmDialog() {
+    const [open, setOpen] = React.useState(false);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onRequest = () => setOpen(true);
+        window.addEventListener('mtlx-desktop-close-confirm', onRequest);
+        return () => window.removeEventListener('mtlx-desktop-close-confirm', onRequest);
+    }, []);
+
+    const respond = (choice) => {
+        setOpen(false);
+        window.__mtlxRespondCloseConfirm(choice);
+    };
+
+    // Esc = Cancel, matching the graph editor's own dialogs.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') respond('cancel'); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    if (!open) return null;
+    return (
+        // fixed + z-[70], above the header's own z-60: the window itself
+        // is closing here, so the usual below-header scrim convention
+        // does not apply.
+        <div
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-950/70"
+            onMouseDown={() => respond('cancel')}
+        >
+            <div
+                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="text-sm font-semibold text-gray-100 mb-1">This document has unsaved changes.</div>
+                <div className="text-[12px] text-gray-400 mb-4">
+                    Do you want to save the changes before closing?
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                        onClick={() => respond('cancel')}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    >Cancel</button>
+                    <button
+                        onClick={() => respond('discard')}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    >Discard</button>
+                    <button
+                        autoFocus
+                        onClick={() => respond('save')}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                    >Save and Close</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
@@ -670,6 +733,7 @@ function Shell() {
             {renderView('vscode')}
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
+            <DesktopCloseConfirmDialog />
         </div>
     );
 }
