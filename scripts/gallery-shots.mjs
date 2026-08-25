@@ -75,8 +75,7 @@ async function captureOne(context, baseURL, outDir, material) {
       {
         eager: true,
         src: docUrlFor(baseURL, material),
-        geometry: "shaderball",
-        backdrop: "studio-dark",
+        geometry: "shaderball-scene",
         controls: "none",
         style: "width:512px;height:512px;display:block;",
       }
