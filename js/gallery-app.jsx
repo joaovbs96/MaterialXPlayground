@@ -388,15 +388,17 @@ function MtlxGalleryApp({ active } = {}) {
     };
 
     // Grid extent resolved against the shell's view wrapper (HeroGrid's own
-    // contract); fades across the header block, same idiom as what-is.
+    // contract). No naturally tall block to fade across here, so this is an
+    // invisible extent sized to fade across roughly card row 1 instead.
     const rootRef = React.useRef(null);
     const fadeRef = React.useRef(null);
 
     return (
         <div ref={rootRef} className="relative">
-            <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="top" />
+            <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="middle" />
+            <div ref={fadeRef} aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[640px]" />
             <div className="relative space-y-6">
-                <div ref={fadeRef} className="space-y-2">
+                <div className="space-y-2">
                     <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
                         Learn <span className="text-gray-600">/</span> <span className="text-gray-400">Material Gallery</span>
                     </div>
