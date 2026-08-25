@@ -5634,6 +5634,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     label: 'View .mtlx XML', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
                     title: 'View the raw MaterialX XML for the current document',
                 },
+                IN_ELECTRON && { separator: true },
+                IN_ELECTRON && {
+                    label: 'Close Window', icon: 'x', onSelect: () => window.close(),
+                    title: 'Close this window',
+                },
             ];
 
             // Group/ungroup mirror the sidebar buttons' own gates, so a row
