@@ -243,6 +243,15 @@ ipcMain.on('mtlx-notify-edit', (event, dirty) => {
 // through this instead of the unreachable native menu checkbox.
 ipcMain.handle('mtlx-get-settings', () => ({ openInNewWindow }));
 
+// Renderer-side About dialog (js/shell.jsx's DesktopAboutDialog) reads
+// these instead of the unreachable native menu's About item.
+ipcMain.handle('mtlx-get-about', () => ({
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+}));
+
 // Reuses setOpenInNewWindow so persistence and the native checkbox's
 // rebuildMenu() stay in sync with whatever the dialog set.
 ipcMain.on('mtlx-set-open-in-new-window', (event, value) => setOpenInNewWindow(value));

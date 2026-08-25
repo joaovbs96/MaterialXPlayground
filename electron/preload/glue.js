@@ -82,4 +82,10 @@
     window.__mtlxSetOpenInNewWindow = function (value) {
         window.mtlxDesktop.setOpenInNewWindow(value);
     };
+
+    // Shell-level About dialog (js/shell.jsx's DesktopAboutDialog),
+    // opened from the header help button (js/site-header.js).
+    window.__mtlxGetAbout = function () {
+        return window.mtlxDesktop.getAbout();
+    };
 })();

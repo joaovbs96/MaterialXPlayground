@@ -12,7 +12,7 @@ const REPO_ROOT = path.resolve(ELECTRON_DIR, '..');
 const DEST = path.join(ELECTRON_DIR, 'dist-site');
 
 // Top-level files copied as-is.
-const ROOT_FILES = ['index.html', 'favicon.ico', 'environment_map.mtlx', 'apple-touch-icon.png'];
+const ROOT_FILES = ['index.html', 'favicon.ico', 'environment_map.mtlx', 'apple-touch-icon.png', 'LICENSE'];
 // Top-level directories copied, each filtered through shouldSkip.
 const ROOT_DIRS = ['js', 'vendor', 'models', 'env_maps', 'materials', 'examples', 'embed', 'images'];
 
