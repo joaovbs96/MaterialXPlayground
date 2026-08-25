@@ -80,6 +80,14 @@
             '<path d="M12 12l0 4" />' +
         '</svg>';
 
+    // Electron-only header cog (Tabler outline "settings"), same
+    // viewBox/stroke/normalization convention as the icons above.
+    var ICON_SETTINGS =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z" />' +
+            '<path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
+        '</svg>';
+
     // Update-banner icon (alert-triangle), paths only, hand-copied from
     // window.MTLX_ICON_PATHS in js/shared/ui-commons.js, same
     // paths-only convention as ICON_OCTOCAT below (svg tag/class set below).
@@ -353,6 +361,14 @@
     // electron/main/main.js's titleBarOverlay); native buttons overlay its edge.
     var DESKTOP_TITLEBAR_CLASS = window.__MTLX_ELECTRON__ ? ' mtlx-desktop-titlebar' : '';
 
+    // Same Electron gate as DESKTOP_TITLEBAR_CLASS above (window.__MTLX_ELECTRON__
+    // is set synchronously by preload.js's contextBridge call, before this
+    // script ever runs, so it's safe to read at markup-build time here too).
+    var IS_ELECTRON = !!window.__MTLX_ELECTRON__;
+    // Compacts the GitHub widget to an icon-only button in Electron (site-header.css
+    // hides .mtlx-source-meta and squares the pill off when this class is present).
+    var SOURCE_COMPACT_CLASS = IS_ELECTRON ? ' mtlx-icon-btn' : '';
+
     // Markup below is styled entirely by js/site-header.css (`mtlx-`
     // prefixed classes, no Tailwind utilities), so it renders identically
     // whether or not Tailwind Play is loaded on the page.
@@ -391,10 +407,14 @@
                         '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // GitHub repo widget (mkdocs-material style): octocat +
-                    // repo slug + async facts row, filled in below.
+                    // repo slug + async facts row, filled in below. In
+                    // Electron this compacts to an icon-only button (CSS,
+                    // SOURCE_COMPACT_CLASS above); the meta span stays in the
+                    // DOM (just hidden) so initSourceFacts' lookups below
+                    // never see a missing node.
                     // LINKS.issues stays defined too (About dialog, footer).
                     '<a id="mtlx-source-widget" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
-                        ' title="View the source code on GitHub" class="mtlx-source">' +
+                        ' title="View the source code on GitHub" class="mtlx-source' + SOURCE_COMPACT_CLASS + '">' +
                         '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             ICON_OCTOCAT +
                         '</svg>' +
@@ -403,6 +423,16 @@
                             '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
+                    // Electron-only settings cog, rightmost in the cluster.
+                    // Dispatches an event for js/shell.jsx's
+                    // DesktopSettingsDialog to pick up (same "just a
+                    // CustomEvent" contract as the mobile menu links).
+                    (IS_ELECTRON ?
+                        '<button type="button" id="mtlx-settings-btn" class="mtlx-icon-btn"' +
+                            ' title="Settings" aria-label="Settings">' +
+                            ICON_SETTINGS +
+                        '</button>'
+                    : '') +
                 '</div>' +
 
                 // Hamburger: mobile only, toggles #mtlx-mobile-menu below.
@@ -454,6 +484,14 @@
 
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
+
+    // Electron-only settings cog: opens js/shell.jsx's DesktopSettingsDialog.
+    var settingsBtn = document.getElementById('mtlx-settings-btn');
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', function () {
+            window.dispatchEvent(new CustomEvent('mtlx-desktop-settings'));
+        });
+    }
 
     // Publishes the header's rendered height as --mtlx-header-h on <html>,
     // so fixed modal scrims elsewhere can stop short of it. Re-published

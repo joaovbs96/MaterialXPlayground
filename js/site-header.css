@@ -150,6 +150,14 @@
     app-region: no-drag;
 }
 
+/* Electron's right cluster is icon-only (GitHub + settings cog), no reason
+   to also show the MaterialX version pill; the id selector's extra
+   specificity here beats the plain #mtlx-header-version media-query rule
+   below regardless of source order. */
+.mtlx-header-bar.mtlx-desktop-titlebar #mtlx-header-version {
+    display: none;
+}
+
 /* Brand: logo mark + site title. Color lives on the outer element
    (anchor in the SPA/tutorials, a plain span under VS Code — same class
    either way) and cascades to the icon/title via normal CSS
@@ -510,6 +518,41 @@
 .mtlx-source-fact svg {
     width: 12px;
     height: 12px;
+}
+
+/* Electron-only icon buttons: the compacted GitHub widget and the new
+   settings cog, sized/shaped as a matched pair (site-header.js applies
+   this class to both). Sits after .mtlx-source above so its square
+   sizing wins over that pill's own padding/gap for the GitHub button. */
+.mtlx-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 6px;
+    gap: 0;
+    border-radius: 8px;
+    border: 1px solid var(--site-gray-600);
+    background-color: var(--site-gray-800);
+    color: var(--site-gray-200);
+    cursor: pointer;
+    transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-icon-btn:hover {
+    background-color: var(--site-gray-700);
+}
+.mtlx-icon-btn svg {
+    width: 20px;
+    height: 20px;
+}
+/* The GitHub button keeps its .mtlx-source-meta node in the DOM (repo
+   name + facts row) so initSourceFacts' lookups never see a missing
+   target; icon-only mode just hides it. */
+.mtlx-source.mtlx-icon-btn .mtlx-source-meta {
+    display: none;
 }
 
 /* Hamburger: mobile only (measure() can also force this to an inline

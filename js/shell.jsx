@@ -507,6 +507,85 @@ function DesktopCloseConfirmDialog() {
     );
 }
 
+// Settings dialog opened from the header cog (js/site-header.js). Unlike
+// DesktopCloseConfirmDialog above, this is a normal below-header popup, and
+// its only setting so far is the same preference the native menu checkbox
+// toggles (main.js's setOpenInNewWindow); more rows can be added here later.
+function DesktopSettingsDialog() {
+    const [open, setOpen] = React.useState(false);
+    const [openInNewWindow, setOpenInNewWindowState] = React.useState(true);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onOpen = () => {
+            setOpen(true);
+            // Read fresh every time: a second window's own preference read
+            // stays independent from what this dialog last showed.
+            if (typeof window.__mtlxGetDesktopSettings === 'function') {
+                window.__mtlxGetDesktopSettings().then((settings) => {
+                    if (settings && typeof settings.openInNewWindow === 'boolean') {
+                        setOpenInNewWindowState(settings.openInNewWindow);
+                    }
+                });
+            }
+        };
+        window.addEventListener('mtlx-desktop-settings', onOpen);
+        return () => window.removeEventListener('mtlx-desktop-settings', onOpen);
+    }, []);
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    const toggleOpenInNewWindow = (checked) => {
+        setOpenInNewWindowState(checked);
+        if (typeof window.__mtlxSetOpenInNewWindow === 'function') {
+            window.__mtlxSetOpenInNewWindow(checked);
+        }
+    };
+
+    if (!open) return null;
+    return (
+        // top: header height (not inset-0/z-[70]): a normal popup, not the
+        // window-closing dialog above, so it stops below the header.
+        <div
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
+            style={{ top: 'var(--mtlx-header-h, 0px)' }}
+            onMouseDown={() => setOpen(false)}
+        >
+            <div
+                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="text-sm font-semibold text-gray-100 mb-3">Settings</div>
+                <label className="flex items-start gap-2 mb-4 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={openInNewWindow}
+                        onChange={(e) => toggleOpenInNewWindow(e.target.checked)}
+                    />
+                    <span>
+                        <span className="block text-[12px] text-gray-200">Open Files in New Window</span>
+                        <span className="block text-[11px] text-gray-400">
+                            Open documents from the OS in a new window instead of the current one.
+                        </span>
+                    </span>
+                </label>
+                <div className="flex justify-end">
+                    <button
+                        onClick={() => setOpen(false)}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    >Close</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
@@ -755,6 +834,7 @@ function Shell() {
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
             <DesktopCloseConfirmDialog />
+            <DesktopSettingsDialog />
         </div>
     );
 }
