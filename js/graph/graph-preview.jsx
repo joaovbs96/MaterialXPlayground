@@ -64,6 +64,32 @@
         };
         const boundsAspect = (b) => (b && b.width > 0 && b.height > 0) ? b.width / b.height : null;
 
+        // Downstream-only walk (edge source -> target) from a clicked node to
+        // the material renderable it feeds. Visited guard blocks fan-out
+        // loops; a dead end or unknown id returns null ("do nothing").
+        const resolveMaterialForNode = (nodeId, nodes, edges) => {
+            const nodeById = new Map(nodes.map((n) => [n.id, n]));
+            const outIds = new Map();
+            for (const e of edges) {
+                if (!outIds.has(e.source)) outIds.set(e.source, []);
+                outIds.get(e.source).push(e.target);
+            }
+            const visited = new Set();
+            const walk = (id) => {
+                if (visited.has(id)) return null;
+                visited.add(id);
+                const n = nodeById.get(id);
+                if (!n) return null;
+                if (n.data && n.data.kind === 'material') return n.data.name;
+                for (const nextId of (outIds.get(id) || [])) {
+                    const found = walk(nextId);
+                    if (found) return found;
+                }
+                return null;
+            };
+            return walk(nodeId);
+        };
+
         const fetchGraphText = async (url) => {
             const res = await fetch(url);
             if (!res.ok) throw new Error('MtlxGraphPreview: failed to fetch "' + url + '" (HTTP ' + res.status + ').');
@@ -93,7 +119,7 @@
         // through the embed's queued, promise-returning load() call (the
         // same postMessage path embed-boot.js's 'load' handler answers, and
         // js/viewer-app.jsx's "Send to Viewer" button also uses).
-        function GraphPreviewViewer({ src, xml, geometry, textures, docName }) {
+        function GraphPreviewViewer({ src, xml, geometry, textures, docName, materialRequest }) {
             const mountRef = React.useRef(null);
             const elRef = React.useRef(null);
             const loadedRef = React.useRef(false);
@@ -183,6 +209,16 @@
             React.useEffect(() => {
                 setMaterial((m) => (m && !renderables.some((r) => r.name === m)) ? '' : m);
             }, [renderables]);
+
+            // Bridged in from MtlxGraphPreview's onNodeClick (fresh object
+            // every click, so a repeat click re-applies). A single-renderable
+            // doc has nothing to switch between, same threshold as the dropdown.
+            React.useEffect(() => {
+                if (!materialRequest || renderables.length <= 1) return;
+                if (renderables.some((r) => r.name === materialRequest.name)) {
+                    setMaterial(materialRequest.name);
+                }
+            }, [materialRequest]);
 
             return failed ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center px-3">
@@ -364,6 +400,11 @@
             // later collapses hide it with CSS instead of unmounting it, so
             // <materialx-viewer> and its iframe survive every toggle.
             const [previewEverLoaded, setPreviewEverLoaded] = React.useState(false);
+            // Resolved material name for the preview column, from the
+            // graph's own onNodeClick below; { name, seq } so a repeat
+            // click on the same material still re-applies (seq breaks the tie).
+            const [previewMaterialRequest, setPreviewMaterialRequest] = React.useState(null);
+            const materialRequestSeqRef = React.useRef(0);
 
             const prefersReducedMotion = React.useMemo(() => {
                 try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
@@ -527,6 +568,17 @@
                 if (!sel.length) return;
                 setFlow((prev) => ({ ...prev, edges: applyEdgeChanges(sel, prev.edges) }));
             }, []);
+
+            // Clicking a node switches the render pane to whatever material
+            // it feeds (resolveMaterialForNode above). A nodegraph's "open"
+            // chip stops its own click, so drilling never reaches this.
+            const onNodeClick = React.useCallback((evt, node) => {
+                if (!interactive || !previewSupported) return;
+                const name = resolveMaterialForNode(node.id, flow.nodes, flow.edges);
+                if (!name) return;
+                materialRequestSeqRef.current += 1;
+                setPreviewMaterialRequest({ name, seq: materialRequestSeqRef.current });
+            }, [interactive, previewSupported, flow]);
 
             // Node width/height arrive async via RF's ResizeObserver, so fitView
             // silently no-ops until every node is measured. Retry across frames,
@@ -712,6 +764,7 @@
                             style={{ width: '100%', height: '100%' }}
                             nodes={flow.nodes} edges={flow.edges} nodeTypes={NODE_TYPES}
                             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+                            onNodeClick={onNodeClick}
                             onInit={(inst) => { rfInstRef.current = inst; }}
 
                             /* wheel: plain wheel scrolls the host page, Ctrl and pinch zoom the canvas */
@@ -815,7 +868,7 @@
                         <div className={'relative flex-none w-64 sm:w-72' + (previewCollapsed ? ' hidden' : '')}>
                             {!previewCollapsed && previewToggleBtn}
                             {previewEverLoaded && (
-                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} />
+                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} materialRequest={previewMaterialRequest} />
                             )}
                         </div>
                     )}
