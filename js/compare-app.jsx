@@ -1434,8 +1434,11 @@ function MaterialCompareApp({ active = true } = {}) {
                 <div style={styleFor('A')} className="overflow-hidden bg-gray-900">
                     <canvas ref={slotA.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
                     {renderSlotOverlays(slotA)}
+                    {/* top-12 clears the ViewportControls pills (top-2,
+                        h-7) at the stage's top-right, so this chip can
+                        never sit under them at any pane width. */}
                     {displayMode === 'side' && (
-                        <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
+                        <div className="absolute top-12 inset-x-0 flex justify-center pointer-events-none z-20">
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
                                 <SlotDot color={SLOT_COLORS.A} />
                                 {docName(slotA, 'Document A')}
@@ -1447,8 +1450,9 @@ function MaterialCompareApp({ active = true } = {}) {
                 <div style={styleFor('B')} className="overflow-hidden bg-gray-900">
                     <canvas ref={slotB.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
                     {renderSlotOverlays(slotB)}
+                    {/* Same top-12 clearance as slot A's chip above. */}
                     {displayMode === 'side' && (
-                        <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20">
+                        <div className="absolute top-12 inset-x-0 flex justify-center pointer-events-none z-20">
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">
                                 <SlotDot color={SLOT_COLORS.B} />
                                 {docName(slotB, 'Document B')}
@@ -1487,7 +1491,8 @@ function MaterialCompareApp({ active = true } = {}) {
                         className="absolute pointer-events-none"
                         style={{ inset: sideDiffPos === 'middle' ? '0 33.333% 0 33.333%' : '0 0 0 66.667%' }}
                     >
-                        <div className="absolute top-2 inset-x-0 flex justify-center z-20">
+                        {/* Same top-12 clearance as the pane chips above. */}
+                        <div className="absolute top-12 inset-x-0 flex justify-center z-20">
                             <span className="px-2 py-0.5 rounded-full text-[11px] bg-black/60 text-white/90">Difference</span>
                         </div>
                     </div>
