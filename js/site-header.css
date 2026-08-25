@@ -64,7 +64,10 @@
 .mtlx-header {
     position: sticky;
     top: 0;
-    z-index: 40;
+    /* Above the site's fixed z-50 modal scrims (gallery/preset-picker),
+       so the header + its dropdown menus stay usable while one is open;
+       those two overlays stop short of the header instead of dimming it. */
+    z-index: 60;
     border-bottom: 1px solid var(--site-gray-800);
     background-color: rgba(17, 24, 39, 0.95); /* gray-900/95 */
     -webkit-backdrop-filter: blur(8px);

@@ -455,6 +455,17 @@
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
 
+    // Publishes the header's rendered height as --mtlx-header-h on <html>,
+    // so fixed modal scrims elsewhere can stop short of it. Re-published
+    // below wherever that height can change (measure, mobile menu, banner).
+    var headerRoot = document.querySelector('.mtlx-header');
+    var publishHeaderHeight = function () {
+        if (!headerRoot) return;
+        var h = Math.round(headerRoot.getBoundingClientRect().height);
+        document.documentElement.style.setProperty('--mtlx-header-h', h + 'px');
+    };
+    publishHeaderHeight();
+
     // Mobile hamburger + dropdown panel (plain JS, no framework — this
     // file isn't Babel-transformed). Both only exist in the innerHTML
     // built above, so querying them here always finds them.
@@ -465,6 +476,7 @@
         mobileMenu.classList.remove('is-open');
         mobileMenu.style.display = 'none';
         navToggle.setAttribute('aria-expanded', 'false');
+        publishHeaderHeight();
     };
     if (navToggle && mobileMenu) {
         navToggle.addEventListener('click', function () {
@@ -475,6 +487,7 @@
             // site-header.css's own >=768px rule or the panel stays hidden.
             mobileMenu.style.display = willOpen ? 'block' : 'none';
             navToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+            publishHeaderHeight();
         });
         // Any link inside the mobile panel (nav item or source/version
         // link) closes the panel once activated.
@@ -674,6 +687,7 @@
                 // a now-hidden hamburger.
                 closeMobileMenu();
             }
+            publishHeaderHeight();
         };
         measure();
         // rAF-debounced re-measure, reassigned onto the hoisted no-op
@@ -968,6 +982,7 @@
             }
             setState(state, reasonText);
             banner.classList.add('is-visible');
+            publishHeaderHeight();
         }
 
         // Dismissal is ephemeral (no storage), same choice as the footer
@@ -975,6 +990,7 @@
         // true so the re-check listeners below never fire again.
         dismissEl.addEventListener('click', function () {
             banner.classList.remove('is-visible');
+            publishHeaderHeight();
         });
 
         function handleCheck(result) {

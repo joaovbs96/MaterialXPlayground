@@ -334,7 +334,10 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
             title={title || 'Presets'}
             onClose={onClose}
             overlayClassName={overlayClassName}
-            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-full max-w-[70rem] max-h-[calc(100vh-4rem)] overflow-hidden flex flex-col"
+            // Also subtracts --mtlx-header-h, matching the fixed-overlay
+            // callers' own header carve-out, so this panel never grows as
+            // tall as the header band when a caller passes that overlay.
+            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-full max-w-[70rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-4rem)] overflow-hidden flex flex-col"
         >
             <div className="flex h-[440px]">
                 <div
