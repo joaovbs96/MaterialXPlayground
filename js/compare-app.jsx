@@ -1836,12 +1836,14 @@ function MaterialCompareApp({ active = true } = {}) {
                     <span className="max-w-[6rem] truncate">Compare</span>
                 </button>
             )}
+            {/* fixed + header carve-out, same reasoning as the Viewer's
+                own preset picker call (js/viewer-app.jsx) */}
             <MtlxPresetPicker
                 open={!!presetPickerSlot}
                 onClose={() => setPresetPickerSlot(null)}
                 onSelect={loadPickedIntoSlot}
                 title={presetPickerSlot === 'B' ? 'Load into Document B' : 'Load into Document A'}
-                overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-gray-950/70"
             />
         </div>
     );

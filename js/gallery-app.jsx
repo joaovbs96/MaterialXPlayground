@@ -315,14 +315,18 @@ function GalleryDetailOverlay({
     const ready = docStatus === 'ready' && !!doc && doc.id === shown.id;
     const hasCompanions = ready && Object.keys(doc.map).some((k) => k !== doc.rootKey);
     return (
+        // Scrim now stops at the header's bottom edge (--mtlx-header-h)
+        // instead of covering it; .mtlx-header's raised z-index (60) keeps
+        // it and its dropdowns usable/visible while this popup is open.
         <div
-            className={'fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70 p-4' + (isOpen ? '' : ' hidden')}
+            className={'fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70 p-4' + (isOpen ? '' : ' hidden')}
+            style={{ top: 'var(--mtlx-header-h, 0px)' }}
             onMouseDown={isOpen ? onClose : undefined}
             aria-hidden={!isOpen}
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full max-w-[64rem] max-h-[calc(100vh-2rem)] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-[64rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col"
             >
                 <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
                     <div className="min-w-0">

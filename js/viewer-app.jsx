@@ -1712,17 +1712,17 @@
                         </div>
                     )}
 
-                    {/* Both dialogs use the `fixed` overlay variant (not
-                        DialogFrame's `absolute` default) so the backdrop covers
-                        the whole window, including the shared header/footer.
-                        Not rendered in embed mode: they assume they own the
-                        window, and there's no trigger button to reach them
-                        from anyway (both live in the HUD's slots, above). */}
+                    {/* `fixed`, not DialogFrame's `absolute` default, so the
+                        backdrop still covers the footer; it now stops below
+                        the header (--mtlx-header-h) instead of dimming it. */}
                     {!chromeless && (
                     <MtlxPresetPicker open={presetPickerOpen} onClose={() => setPresetPickerOpen(false)}
                         onSelect={handlePresetPickerSelect}
-                        overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70" />
+                        overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-gray-950/70" />
                     )}
+                    {/* Same `fixed` escape hatch as the preset picker above,
+                        but intentionally left covering the header too; this
+                        dialog wasn't in scope for the header/scrim fix. */}
                     {!chromeless && shaderExportOpen && loadedRef.current && (
                         <ShaderExportDialog open={true} onClose={() => setShaderExportOpen(false)}
                             renderables={renderables} initialIndex={chosenMat}
