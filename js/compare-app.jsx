@@ -691,6 +691,30 @@ function MaterialCompareApp({ active = true } = {}) {
         }
     };
 
+    // Unified preset picker (js/shared/preset-picker.jsx): one dialog
+    // shared by both slots. `presetPickerSlot` is which slot ('A'|'B')
+    // opened it, or null while closed.
+    const [presetPickerSlot, setPresetPickerSlot] = React.useState(null);
+    const openPresetPickerForSlot = async (slotKey) => {
+        await window.mtlxLoadViewDeps('galleryDetail');
+        setPresetPickerSlot(slotKey);
+    };
+    // Picker onSelect ({ xml, name, files }): same map-building recipe as
+    // viewer-app.jsx's handleImport, routed into whichever slot opened it.
+    const loadPickedIntoSlot = (picked) => {
+        const slotKey = presetPickerSlot;
+        setPresetPickerSlot(null);
+        if (!slotKey) return;
+        const slot = slotKey === 'A' ? slotA : slotB;
+        const safeName = (picked.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+        const rootKey = safeName + '.mtlx';
+        const map = Object.assign({}, picked.files || {}, {
+            [rootKey]: new Blob([picked.xml], { type: 'application/xml' }),
+        });
+        setPresetPick((s) => ({ ...s, [slotKey]: '' }));
+        slot.ingest(map, rootKey);
+    };
+
     // Fetches a repo-local .mtlx (not a curated preset, no manifest crawl)
     // and hands it to the slot the same way a single-file drop would.
     const loadLocalIntoSlot = async (slot, url) => {
@@ -1323,27 +1347,18 @@ function MaterialCompareApp({ active = true } = {}) {
                         block
                     />
                 )}
-                {window.MTLX_PRESETS && window.presetKey && (
-                    <div>
-                        <FieldLabel label="Or pick a curated example" />
-                        <MtlxSelect
-                            value={presetPick[slotKey]}
-                            options={window.MTLX_PRESETS.map((p) => ({ value: presetKey(p), label: p.label }))}
-                            placeholder="Choose a curated example"
-                            disabled={presetBusy[slotKey] || slot.busy}
-                            onChange={(path) => {
-                                setPresetPick((s) => ({ ...s, [slotKey]: path }));
-                                if (!path) return;
-                                const preset = window.MTLX_PRESETS.find((p) => presetKey(p) === path);
-                                if (preset) loadPresetIntoSlot(slot, slotKey, preset);
-                            }}
-                            defValue={null}
-                            size="lg"
-                            variant="field"
-                            block
-                        />
-                    </div>
-                )}
+                <div>
+                    <FieldLabel label="Or pick a preset" />
+                    <button
+                        type="button"
+                        onClick={() => openPresetPickerForSlot(slotKey)}
+                        disabled={presetBusy[slotKey] || slot.busy}
+                        className={BTN_SECONDARY + ' w-full justify-start gap-1.5'}
+                    >
+                        <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                        Presets
+                    </button>
+                </div>
                 {slot.renderables.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMat}
@@ -1821,6 +1836,13 @@ function MaterialCompareApp({ active = true } = {}) {
                     <span className="max-w-[6rem] truncate">Compare</span>
                 </button>
             )}
+            <MtlxPresetPicker
+                open={!!presetPickerSlot}
+                onClose={() => setPresetPickerSlot(null)}
+                onSelect={loadPickedIntoSlot}
+                title={presetPickerSlot === 'B' ? 'Load into Document B' : 'Load into Document A'}
+                overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+            />
         </div>
     );
 }

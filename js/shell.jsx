@@ -142,6 +142,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/preset-picker.jsx',
         ],
         app: 'js/viewer-app.jsx',
         globalName: 'MaterialViewerApp',
@@ -237,7 +238,7 @@ const VIEW_DEPS = {
     compare: {
         css: [],
         scripts: ['vendor/jszip/jszip.min.js', 'js/shared/image-metrics.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/compare-ui.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/compare-ui.jsx', 'js/shared/preset-picker.jsx'],
         app: 'js/compare-app.jsx',
         globalName: 'MaterialCompareApp',
     },
