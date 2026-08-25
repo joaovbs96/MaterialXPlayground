@@ -295,12 +295,14 @@
         // Export dialog: pick a filename and format (.mtlx, or .zip
         // bundling resolved textures) before writing. `onExport` returns
         // a promise; the dialog stays open (retryable) until it resolves.
-        function ExportDialog({ open, onClose, defaultName, textures, onExport }) {
+        function ExportDialog({ open, onClose, defaultName, textures, onExport, overlayClassName, coveredByConfirm }) {
             const [name, setName] = React.useState(defaultName || '');
             const [format, setFormat] = React.useState('mtlx');
             const [convertTo, setConvertTo] = React.useState('keep');
             const [busy, setBusy] = React.useState(false);
-            useEscapeToClose(onClose, open && !busy);
+            // Suspended while the unsaved-changes confirm sits on top of
+            // this dialog, so Esc there closes only that confirm.
+            useEscapeToClose(onClose, open && !busy && !coveredByConfirm);
 
             // Reset local state to the caller's defaults each time the
             // dialog (re)opens, so a stale name/format from the last
@@ -347,6 +349,7 @@
                     onClose={onClose}
                     closeDisabled={busy}
                     backdropCloseDisabled={busy}
+                    overlayClassName={overlayClassName}
                     panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 space-y-3 text-[12px]">
