@@ -326,6 +326,10 @@
                 // (default 1); false/'none' disables auto framing entirely.
                 autoFocus = 'fit',
                 focusZoom,
+                // Floor under fitView's own computed zoom (undefined keeps
+                // today's behavior: only the ReactFlow instance's minZoom=0.1
+                // below applies), so a caller can keep a large graph legible.
+                focusMinZoom,
                 wheel = 'scroll',
                 pan = true,
                 interactive = true,
@@ -599,9 +603,11 @@
                     inst.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, { zoom });
                 } else {
                     const maxZoom = focusZoom === undefined ? 1.2 : focusZoom;
-                    inst.fitView({ padding: 0.15, maxZoom });
+                    const fitOpts = { padding: 0.15, maxZoom };
+                    if (focusMinZoom !== undefined) fitOpts.minZoom = focusMinZoom;
+                    inst.fitView(fitOpts);
                 }
-            }, [focusMode, focusZoom]);
+            }, [focusMode, focusZoom, focusMinZoom]);
 
             // Keyed on graphVersion (bumped only by a real rebuild above), not
             // `flow`, so a selection-only flow update from onNodesChange never
@@ -777,7 +783,11 @@
                             panOnDrag={effPanOnDrag} zoomOnDoubleClick={false}
                             minZoom={0.1} maxZoom={2}
                             fitView={focusMode !== 'none'}
-                            fitViewOptions={{ padding: 0.15, maxZoom: focusZoom === undefined ? 1.2 : focusZoom }}
+                            fitViewOptions={{
+                                padding: 0.15,
+                                maxZoom: focusZoom === undefined ? 1.2 : focusZoom,
+                                ...(focusMinZoom === undefined ? null : { minZoom: focusMinZoom }),
+                            }}
 
                             /* left-drag rubber-band selects, middle-drag pans; RF
                                ignores selectionOnDrag unless panOnDrag !== true,
