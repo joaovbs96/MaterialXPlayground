@@ -586,6 +586,137 @@ function DesktopSettingsDialog() {
     );
 }
 
+// About dialog opened from the header help button (js/site-header.js),
+// replacing the native menu's unreachable "About MaterialX Playground"
+// item. Same popup language as DesktopSettingsDialog above, just taller
+// and wider to hold the license text (which is the part that scrolls).
+let __licenseCache = null;
+let __vendorEntriesCache = null;
+function DesktopAboutDialog() {
+    const [open, setOpen] = React.useState(false);
+    const [about, setAbout] = React.useState(null);
+    const [license, setLicense] = React.useState(__licenseCache);
+    const [licenseError, setLicenseError] = React.useState(false);
+    const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onOpen = () => {
+            setOpen(true);
+            if (typeof window.__mtlxGetAbout === 'function') {
+                window.__mtlxGetAbout().then((info) => { if (info) setAbout(info); });
+            }
+            if (__licenseCache === null) {
+                fetch('LICENSE')
+                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); })
+                    .then((text) => { __licenseCache = text; setLicense(text); })
+                    .catch(() => setLicenseError(true));
+            }
+            if (__vendorEntriesCache === null) {
+                fetch('vendor/vendor-manifest.json')
+                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.json(); })
+                    .then((manifest) => {
+                        const names = (manifest.entries || []).map((e) => String(e.source).replace(/@.*$/, ''));
+                        const unique = names.filter((n, i) => names.indexOf(n) === i).sort();
+                        __vendorEntriesCache = unique;
+                        setVendorEntries(unique);
+                    })
+                    .catch(() => { /* silently skip the third-party list */ });
+            }
+        };
+        window.addEventListener('mtlx-desktop-about', onOpen);
+        return () => window.removeEventListener('mtlx-desktop-about', onOpen);
+    }, []);
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    if (!open) return null;
+
+    const verEl = document.querySelector('#mtlx-header-version [data-role="ver"]');
+    const mtlxVersion = verEl ? verEl.textContent : null;
+    const buildId = window.__MTLX_BUILD;
+    const links = window.SITE_LINKS || {};
+    const logoPaths = window.SITE_LOGO_PATHS || '';
+    const title = window.SITE_TITLE || 'MaterialX Playground';
+
+    return (
+        <div
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
+            style={{ top: 'var(--mtlx-header-h, 0px)' }}
+            onMouseDown={() => setOpen(false)}
+        >
+            <div
+                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="flex items-center gap-3 mb-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24"
+                        fill="currentColor" className="mtlx-brand-icon" dangerouslySetInnerHTML={{ __html: logoPaths }} />
+                    <div className="text-base font-semibold text-gray-100">{title}</div>
+                </div>
+
+                <div className="text-[12px] text-gray-300 leading-relaxed mb-3">
+                    {about ? (
+                        <div>
+                            <div>Version {about.appVersion}</div>
+                            <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
+                        </div>
+                    ) : (
+                        <div className="text-gray-500">Loading version info&hellip;</div>
+                    )}
+                    {mtlxVersion ? <div>MaterialX {mtlxVersion}</div> : null}
+                    {buildId ? <div>Build {buildId}</div> : null}
+                </div>
+
+                <div className="flex flex-wrap gap-3 text-[12px] mb-3">
+                    {links.site ? (
+                        <a href={links.site} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">Website</a>
+                    ) : null}
+                    {links.repo ? (
+                        <a href={links.repo} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">GitHub Repository</a>
+                    ) : null}
+                    {links.issues ? (
+                        <a href={links.issues} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">Issues</a>
+                    ) : null}
+                </div>
+
+                {vendorEntries && vendorEntries.length ? (
+                    <div className="text-[11px] text-gray-400 mb-3">
+                        <span className="text-gray-300">Third-party libraries: </span>
+                        {vendorEntries.join(', ')}
+                    </div>
+                ) : null}
+
+                <div className="text-[11px] text-gray-400 mb-1">License</div>
+                <div className="flex-1 min-h-0 overflow-y-auto bg-gray-900/60 border border-gray-700 rounded-md p-2 mb-3">
+                    {license ? (
+                        <pre className="text-[10.5px] text-gray-300 whitespace-pre-wrap font-mono">{license}</pre>
+                    ) : licenseError ? (
+                        <div className="text-[11px] text-gray-500">License text could not be loaded.</div>
+                    ) : (
+                        <div className="text-[11px] text-gray-500">Loading license&hellip;</div>
+                    )}
+                </div>
+
+                <div className="flex justify-end">
+                    <button
+                        onClick={() => setOpen(false)}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    >Close</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
@@ -835,6 +966,7 @@ function Shell() {
             {renderView('gallery')}
             <DesktopCloseConfirmDialog />
             <DesktopSettingsDialog />
+            <DesktopAboutDialog />
         </div>
     );
 }

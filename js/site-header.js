@@ -51,6 +51,8 @@
     // Split for the desktop widget's owner/name styling (D below).
     var REPO_OWNER = REPO_SLUG.split('/')[0];
     var REPO_NAME = REPO_SLUG.split('/').slice(1).join('/');
+    // Public GitHub Pages URL, derived the same way (About dialog).
+    LINKS.site = 'https://' + REPO_OWNER + '.github.io/' + REPO_NAME + '/';
 
     // Logo mark paths, shared verbatim with home-app.jsx (rendered via
     // dangerouslySetInnerHTML) so the brand mark can't drift. The two
@@ -86,6 +88,15 @@
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
             '<path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z" />' +
             '<path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
+        '</svg>';
+
+    // Electron-only header help button (Tabler outline "help"), same
+    // viewBox/stroke/normalization convention as ICON_SETTINGS above.
+    var ICON_ABOUT =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />' +
+            '<path d="M12 17l0 .01" />' +
+            '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
         '</svg>';
 
     // Update-banner icon (alert-triangle), paths only, hand-copied from
@@ -423,6 +434,16 @@
                             '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
+                    // Electron-only help button, between the GitHub icon and
+                    // the settings cog. Dispatches an event for js/shell.jsx's
+                    // DesktopAboutDialog to pick up (same "just a
+                    // CustomEvent" contract as the settings cog below).
+                    (IS_ELECTRON ?
+                        '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
+                            ' title="About" aria-label="About">' +
+                            ICON_ABOUT +
+                        '</button>'
+                    : '') +
                     // Electron-only settings cog, rightmost in the cluster.
                     // Dispatches an event for js/shell.jsx's
                     // DesktopSettingsDialog to pick up (same "just a
@@ -484,6 +505,14 @@
 
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
+
+    // Electron-only help button: opens js/shell.jsx's DesktopAboutDialog.
+    var aboutBtn = document.getElementById('mtlx-about-btn');
+    if (aboutBtn) {
+        aboutBtn.addEventListener('click', function () {
+            window.dispatchEvent(new CustomEvent('mtlx-desktop-about'));
+        });
+    }
 
     // Electron-only settings cog: opens js/shell.jsx's DesktopSettingsDialog.
     var settingsBtn = document.getElementById('mtlx-settings-btn');
