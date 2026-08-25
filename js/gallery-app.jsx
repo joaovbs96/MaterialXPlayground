@@ -20,9 +20,16 @@ const GALLERY_EXAMPLES_PREFIX = 'resources/Materials/Examples/';
 // Gray "micro pill" tag idiom, copied from vscode-app.jsx's TAG_PILL_CLASS.
 const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px] py-px rounded-full border border-gray-600 text-gray-400';
 const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-gray-200 bg-gray-700/50 border border-gray-700 rounded px-1 py-px';
-// Filter-chip idiom, shared by the family chips and the numbered page pills.
+// Filter-chip idiom, shared by the family chips, the tag chips and the
+// numbered page pills.
 const GALLERY_CHIP_ACTIVE = 'border-blue-500 bg-blue-500/[0.12] text-blue-300';
 const GALLERY_CHIP_IDLE = 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100';
+// Multi-select AND tag chips shown next to the single-select family chips;
+// the manifest's other tags (familyLabel, shader) aren't chip-worthy.
+const GALLERY_TAG_FILTERS = [
+    { id: 'Textured', label: 'Textured' },
+    { id: 'Procedural', label: 'Procedural' },
+];
 
 // Page-size options for the grid, persisted across reloads.
 const GALLERY_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
@@ -63,8 +70,9 @@ function useGalleryDebounced(value, delay) {
     return debounced;
 }
 
-// Reads q/family/m/page off "#!gallery?..." (builder's hash-param pattern);
-// {} when the current hash isn't a gallery route or carries no query.
+// Reads q/family/tag/m/page off "#!gallery?..." (builder's hash-param
+// pattern); {} when the current hash isn't a gallery route or carries no
+// query. Repeated tag= params become patch.tags (unknown ids dropped).
 function parseGalleryHash() {
     const hash = window.location.hash || '';
     const qIdx = hash.indexOf('?');
@@ -75,6 +83,8 @@ function parseGalleryHash() {
     if (params.has('family')) patch.family = params.get('family');
     if (params.has('m')) patch.m = params.get('m');
     if (params.has('page')) patch.page = params.get('page');
+    const tagList = params.getAll('tag').filter((t) => GALLERY_TAG_FILTERS.some((f) => f.id === t));
+    if (tagList.length) patch.tags = tagList;
     return patch;
 }
 
@@ -452,12 +462,13 @@ function MtlxGalleryApp({ active } = {}) {
             .catch(() => setManifest('error'));
     }, [active]);
 
-    // Deep-link state (q/family/m/page), parsed once at mount (this
+    // Deep-link state (q/family/tag/m/page), parsed once at mount (this
     // component only mounts once, per the shell's keep-alive contract)
     // and kept in sync by the hashchange listener below.
     const initialHashState = React.useState(parseGalleryHash)[0];
     const [query, setQuery] = React.useState(initialHashState.q || '');
     const [family, setFamily] = React.useState(initialHashState.family || 'all');
+    const [tags, setTags] = React.useState(initialHashState.tags || []);
     const [openId, setOpenId] = React.useState(initialHashState.m || null);
     const [pageSize, setPageSize] = React.useState(readGalleryPageSize);
     const [page, setPage] = React.useState(() => {
@@ -466,7 +477,7 @@ function MtlxGalleryApp({ active } = {}) {
     });
     const debouncedQuery = useGalleryDebounced(query, 150);
 
-    // Reparses q/family/m/page whenever the hash lands on a gallery route
+    // Reparses q/family/tag/m/page whenever the hash lands on a gallery route
     // (guarded so navigating away never clobbers this). Sets `page` from
     // the hash directly, so back/forward restores the exact page it left on.
     React.useEffect(() => {
@@ -476,6 +487,7 @@ function MtlxGalleryApp({ active } = {}) {
             const patch = parseGalleryHash();
             setQuery(patch.q || '');
             setFamily(patch.family || 'all');
+            setTags(patch.tags || []);
             setOpenId(patch.m || null);
             const n = parseInt(patch.page, 10);
             setPage(Number.isFinite(n) && n >= 1 ? n : 1);
@@ -490,6 +502,7 @@ function MtlxGalleryApp({ active } = {}) {
         const params = new URLSearchParams();
         if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
         if (family !== 'all') params.set('family', family);
+        GALLERY_TAG_FILTERS.forEach((t) => { if (tags.indexOf(t.id) !== -1) params.append('tag', t.id); });
         if (openId) params.set('m', openId);
         if (page > 1) params.set('page', String(page));
         const qs = params.toString();
@@ -497,7 +510,7 @@ function MtlxGalleryApp({ active } = {}) {
         if (window.location.hash !== hash) {
             try { history.replaceState(null, '', hash); } catch (e) { /* best-effort */ }
         }
-    }, [debouncedQuery, family, openId, page]);
+    }, [debouncedQuery, family, tags, openId, page]);
 
     const materials = manifest && manifest.materials ? manifest.materials : null;
     const tag = (manifest && manifest.source && manifest.source.tag)
@@ -514,12 +527,14 @@ function MtlxGalleryApp({ active } = {}) {
         const q = debouncedQuery.trim().toLowerCase();
         return materials.filter((m) => {
             if (family !== 'all' && m.family !== family) return false;
+            // AND semantics: every active tag must be present on the material.
+            if (tags.length && !tags.every((t) => (m.tags || []).indexOf(t) !== -1)) return false;
             if (!q) return true;
             if (m.name.toLowerCase().indexOf(q) !== -1) return true;
             if (m.familyLabel.toLowerCase().indexOf(q) !== -1) return true;
             return (m.tags || []).some((t) => t.toLowerCase().indexOf(q) !== -1);
         });
-    }, [materials, family, debouncedQuery]);
+    }, [materials, family, tags, debouncedQuery]);
 
     const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
     const pagedMaterials = React.useMemo(
@@ -538,6 +553,11 @@ function MtlxGalleryApp({ active } = {}) {
 
     const changeFamily = (id) => { setFamily(id); setPage(1); };
     const changeQuery = (v) => { setQuery(v); setPage(1); };
+    const toggleTag = (id) => {
+        setTags((prev) => prev.indexOf(id) !== -1 ? prev.filter((t) => t !== id) : [...prev, id]);
+        setPage(1);
+    };
+    const clearFilters = () => { setQuery(''); setFamily('all'); setTags([]); setPage(1); };
     const changePageSize = (v) => {
         setPageSize(v);
         try { localStorage.setItem(GALLERY_PAGE_SIZE_KEY, String(v)); } catch (e) { /* best-effort */ }
@@ -555,7 +575,7 @@ function MtlxGalleryApp({ active } = {}) {
         if (gridRef.current) gridRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }, [page]);
 
-    const isFiltered = family !== 'all' || debouncedQuery.trim() !== '';
+    const isFiltered = family !== 'all' || tags.length > 0 || debouncedQuery.trim() !== '';
     const pageSuffix = pageCount > 1 ? ', page ' + page + ' of ' + pageCount : '';
     const countLabel = !materials ? '' : !isFiltered
         ? materials.length + ' material' + (materials.length === 1 ? '' : 's') + pageSuffix
@@ -701,7 +721,7 @@ function MtlxGalleryApp({ active } = {}) {
                                 aria-label="Search materials"
                                 className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-700 bg-gray-900 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                             />
-                            <div className="flex flex-wrap gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                                 {chips.map((c) => {
                                     const isActive = family === c.id;
                                     return (
@@ -717,11 +737,40 @@ function MtlxGalleryApp({ active } = {}) {
                                         </button>
                                     );
                                 })}
+                                {/* Subtle divider: reads as a related but distinct
+                                    filter group from the single-select family chips. */}
+                                <span className="w-px h-5 bg-gray-700" aria-hidden="true" />
+                                {GALLERY_TAG_FILTERS.map((t) => {
+                                    const isActive = tags.indexOf(t.id) !== -1;
+                                    return (
+                                        <button
+                                            key={t.id}
+                                            type="button"
+                                            aria-pressed={isActive}
+                                            onClick={() => toggleTag(t.id)}
+                                            className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
+                                                + (isActive ? GALLERY_CHIP_ACTIVE : GALLERY_CHIP_IDLE)}
+                                        >
+                                            {t.label}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
 
                         <div className="flex items-center justify-between gap-3">
-                            <p className="text-xs text-gray-500">{countLabel}</p>
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                                <span>{countLabel}</span>
+                                {isFiltered && (
+                                    <button
+                                        type="button"
+                                        onClick={clearFilters}
+                                        className="text-blue-400 hover:text-blue-300 transition-colors"
+                                    >
+                                        Clear filters
+                                    </button>
+                                )}
+                            </div>
                             <div className="flex items-center gap-1.5 text-xs text-gray-500 shrink-0">
                                 <span>Per page</span>
                                 <MtlxSelect
@@ -738,7 +787,7 @@ function MtlxGalleryApp({ active } = {}) {
 
                         {filtered.length === 0 ? (
                             <div className="flex items-center justify-center py-16 text-sm text-gray-500 text-center">
-                                No materials match this search.
+                                No materials match these filters.
                             </div>
                         ) : (
                             <>
