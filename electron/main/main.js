@@ -330,9 +330,9 @@ async function confirmCloseWindow(win) {
 let closeConfirmTokenSeq = 0;
 const CLOSE_CONFIRM_TIMEOUT_MS = 4000;
 
-// Resolves with the renderer's choice, or rejects on timeout. A reply
-// for any OTHER token (a stale one after the fallback took over) is
-// silently ignored below.
+// Resolves with the renderer's choice. Rejects on timeout (after telling
+// the renderer to withdraw a late dialog) or if the renderer process
+// dies; a 'shown' ack just cancels the timeout while the user decides.
 function requestStyledCloseConfirm(win, token) {
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -340,17 +340,32 @@ function requestStyledCloseConfirm(win, token) {
             if (settled) return;
             if (BrowserWindow.fromWebContents(event.sender) !== win) return;
             if (!payload || payload.token !== token) return;
+            if (payload.choice === 'shown') {
+                clearTimeout(timer);
+                return;
+            }
             settled = true;
             clearTimeout(timer);
             ipcMain.removeListener('mtlx-close-confirm-response', listener);
+            try { win.webContents.removeListener('render-process-gone', onGone); } catch (e) {}
             resolve(payload.choice);
+        };
+        const onGone = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            ipcMain.removeListener('mtlx-close-confirm-response', listener);
+            reject(new Error('renderer process gone'));
         };
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
             ipcMain.removeListener('mtlx-close-confirm-response', listener);
+            try { win.webContents.removeListener('render-process-gone', onGone); } catch (e) {}
+            try { win.webContents.send('mtlx-close-confirm-request', { withdraw: true }); } catch (e) {}
             reject(new Error('timed out'));
         }, CLOSE_CONFIRM_TIMEOUT_MS);
+        win.webContents.once('render-process-gone', onGone);
         ipcMain.on('mtlx-close-confirm-response', listener);
         win.webContents.send('mtlx-close-confirm-request', { token: token });
     });
