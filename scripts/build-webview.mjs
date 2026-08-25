@@ -70,8 +70,9 @@ const BANNER = `    <!-- =======================================================
          edit it there and regenerate; webview-only insertions (this CSP
          meta tag, the <base> tag, the bootstrap script tag, and the
          focus-outline CSS near the bottom) are fragments defined in
-         scripts/build-webview.mjs — edit them there instead. Contains
-         five \${...} placeholders substituted at runtime by
+         scripts/build-webview.mjs — edit them there instead. Loaders:
+         RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
+         Contains five \${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->`;
 
@@ -122,6 +123,8 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          see js/mtlx-assets.js). blob:/data: cover the
                          object-URL and inline-asset fetches issued
                          against the img-src sources above.
+           worker-src  blob:  DRACOLoader (r128) decodes in a blob-URL
+                       Worker; script-src alone (no blob:) blocks it here.
          TRADEOFF: 'unsafe-inline' is in script-src (not just style-src)
          because index.html's inline scripts (embed-mode detection, the
          ReactDOM.createRoot(...) boot call) and this template's own
@@ -135,6 +138,7 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
         font-src \${cspSource};
         img-src \${cspSource} https: blob: data:;
         connect-src \${cspSource} https://raw.githubusercontent.com blob: data:;
+        worker-src blob:;
     ">`;
 
 // <base href="${baseUri}">: every relative URL in the document resolves

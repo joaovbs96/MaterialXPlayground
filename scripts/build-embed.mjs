@@ -40,12 +40,11 @@ const INTENTIONALLY_EXCLUDED = {
 };
 
 // Matches `<script ... src="PATH">` tags where PATH starts with
-// `vendor/three/` or `js/vendor/` — the two script families this guard
-// tracks (three.js core + its loaders, precisely finding 3's "THREE is a
-// last-wins UMD global" surface). Deliberately narrow: index.html also
-// loads vendor/react/**, vendor/tailwind/**, vendor/babel/**, etc., none
-// of which this guard is about.
-const TRACKED_SCRIPT_RE = /<script\b[^>]*\bsrc\s*=\s*"((?:vendor\/three|js\/vendor)\/[^"]+)"[^>]*>/g;
+// `vendor/three/`, `vendor/utif/` or `js/vendor/`, the script families this
+// guard tracks (three.js core + its loaders, plus the UTIF.js TIFF decoder).
+// Deliberately narrow: index.html also loads vendor/react/**,
+// vendor/tailwind/**, vendor/babel/**, etc., none of which this guard is about.
+const TRACKED_SCRIPT_RE = /<script\b[^>]*\bsrc\s*=\s*"((?:vendor\/three|vendor\/utif|js\/vendor)\/[^"]+)"[^>]*>/g;
 
 function extractTrackedScripts(html) {
   const found = new Set();

@@ -51,6 +51,19 @@ const EmbedControls = ({
         () => (typeof initialEnvExposure === 'number' ? initialEnvExposure : 1.0));
     const [forceT, setForceT] = React.useState(
         () => !!(window.getForceTransparency && window.getForceTransparency()));
+    const [displayTransform, setDisplayTransformState] = React.useState(
+        () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb'));
+
+    // Adopts a display transform change made elsewhere (e.g. this same
+    // embed reloaded in another tab sharing localStorage), same event
+    // viewer-app.jsx/compare-app.jsx already listen for.
+    React.useEffect(() => {
+        const onDisplayTransform = () => {
+            if (window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
+        };
+        window.addEventListener('mtlx-display-transform', onDisplayTransform);
+        return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+    }, []);
 
     // Re-apply rotation/exposure whenever the view is rebuilt (geometry or
     // material change), mirroring ViewportControls' identical effect.
@@ -82,6 +95,10 @@ const EmbedControls = ({
         const next = !forceT;
         setForceT(next);
         if (window.setForceTransparency) window.setForceTransparency(next);
+    };
+    const pickDisplayTransform = (mode) => {
+        setDisplayTransformState(mode);
+        if (window.setDisplayTransform) window.setDisplayTransform(mode);
     };
 
     // Reset camera and, if the host provided preset env values, restore
@@ -224,6 +241,19 @@ const EmbedControls = ({
             )}
             {openPanel === 'settings' && (
                 <div className="mtlx-ec-panel">
+                    <div className="mtlx-ec-panel-row">
+                        <span>View Transform</span>
+                        <select
+                            className="mtlx-ec-select"
+                            value={displayTransform}
+                            onChange={(e) => pickDisplayTransform(e.target.value)}
+                            title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+                        >
+                            <option value="srgb">sRGB</option>
+                            <option value="aces">ACES</option>
+                            <option value="lin_rec709">lin_rec709</option>
+                        </select>
+                    </div>
                     <div className="mtlx-ec-panel-row">
                         <span>Force Transparency</span>
                         <button

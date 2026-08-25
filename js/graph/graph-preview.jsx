@@ -93,7 +93,7 @@
         // through the embed's queued, promise-returning load() call (the
         // same postMessage path embed-boot.js's 'load' handler answers, and
         // js/viewer-app.jsx's "Send to Viewer" button also uses).
-        function GraphPreviewViewer({ src, xml, geometry }) {
+        function GraphPreviewViewer({ src, xml, geometry, textures, docName }) {
             const mountRef = React.useRef(null);
             const elRef = React.useRef(null);
             const loadedRef = React.useRef(false);
@@ -145,12 +145,13 @@
                 if (src) {
                     elRef.current.src = src;
                 } else if (xml) {
-                    elRef.current.load(xml).catch((e) => {
+                    const opts = (textures || docName) ? { textures: textures || undefined, name: docName || undefined } : undefined;
+                    elRef.current.load(xml, opts).catch((e) => {
                         console.warn('[mtlx] MtlxGraphPreview: preview failed to load: ' + ((e && e.message) || e));
                     });
                 }
                 return undefined;
-            }, [failed, src, xml]);
+            }, [failed, src, xml, textures, docName]);
 
             React.useEffect(() => {
                 if (failed && elRef.current) elRef.current.remove();
@@ -258,6 +259,8 @@
                 // geometry attribute passed straight to that element.
                 preview = false,
                 previewGeometry = 'shaderball-scene',
+                previewTextures,
+                previewName,
                 label,
                 onReady,
                 onError,
@@ -770,7 +773,7 @@
                         <div className={'relative flex-none w-64 sm:w-72' + (previewCollapsed ? ' hidden' : '')}>
                             {!previewCollapsed && previewToggleBtn}
                             {previewEverLoaded && (
-                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} />
+                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} />
                             )}
                         </div>
                     )}

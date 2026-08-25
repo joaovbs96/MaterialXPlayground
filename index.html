@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = 'c5928ab97fac857b';</script>
+    <script>window.__MTLX_BUILD = 'f28ec3ece1c2af00';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -155,7 +155,15 @@
          from. -->
     <script src="vendor/three/fflate.min.js"></script>
     <script src="js/vendor/EXRLoader.js"></script>
+    <!-- UTIF.js: baseline TIFF decoder (photopea/UTIF.js, MIT), used by
+         loadTifTexture in js/mtlx-engine.js for dropped .tif/.tiff textures. -->
+    <script src="vendor/utif/UTIF.js"></script>
     <script src="vendor/three/GLTFLoader.js"></script>
+    <!-- DRACOLoader: decodes KHR_draco_mesh_compression meshes in custom
+         preview models. Decoder files (vendor/three/draco/) are the WASM
+         build bundled with three@0.128.0, licensed separately (Apache-2.0,
+         Google) from the rest of three. -->
+    <script src="vendor/three/DRACOLoader.js"></script>
     <script src="vendor/three/OBJLoader.js"></script>
     <script src="vendor/three/OrbitControls.js"></script>
     <script src="js/mtlx-assets.js"></script>
@@ -214,6 +222,10 @@
          reload that picks up a new build. Eager and plain JS, so a view
          can register with it the moment that view's bundle runs. -->
     <script src="js/shared/mtlx-handoff.js"></script>
+    <!-- Autosave: persists the graph editor's session continuously so
+         crashes and tab closes lose no work, not just app-driven
+         reloads. Eager and plain JS, alongside the handoff module. -->
+    <script src="js/shared/mtlx-autosave.js"></script>
     <script type="text/babel" data-presets="react" src="js/mtlx-engine.js"></script>
     <script type="text/babel" data-presets="react" src="js/shell.jsx"></script>
     <script type="text/babel" data-presets="react">

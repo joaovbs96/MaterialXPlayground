@@ -64,6 +64,18 @@ const EmbedControls = ({
   const [envRotation, setEnvRotationState] = React.useState(() => typeof initialEnvRotation === 'number' ? initialEnvRotation : 0);
   const [envExposure, setEnvExposureState] = React.useState(() => typeof initialEnvExposure === 'number' ? initialEnvExposure : 1.0);
   const [forceT, setForceT] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+  const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+
+  // Adopts a display transform change made elsewhere (e.g. this same
+  // embed reloaded in another tab sharing localStorage), same event
+  // viewer-app.jsx/compare-app.jsx already listen for.
+  React.useEffect(() => {
+    const onDisplayTransform = () => {
+      if (window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
+    };
+    window.addEventListener('mtlx-display-transform', onDisplayTransform);
+    return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+  }, []);
 
   // Re-apply rotation/exposure whenever the view is rebuilt (geometry or
   // material change), mirroring ViewportControls' identical effect.
@@ -91,6 +103,10 @@ const EmbedControls = ({
     const next = !forceT;
     setForceT(next);
     if (window.setForceTransparency) window.setForceTransparency(next);
+  };
+  const pickDisplayTransform = mode => {
+    setDisplayTransformState(mode);
+    if (window.setDisplayTransform) window.setDisplayTransform(mode);
   };
 
   // Reset camera and, if the host provided preset env values, restore
@@ -208,6 +224,19 @@ const EmbedControls = ({
   }))), openPanel === 'settings' && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel"
   }, /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-ec-panel-row"
+  }, /*#__PURE__*/React.createElement("span", null, "View Transform"), /*#__PURE__*/React.createElement("select", {
+    className: "mtlx-ec-select",
+    value: displayTransform,
+    onChange: e => pickDisplayTransform(e.target.value),
+    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "srgb"
+  }, "sRGB"), /*#__PURE__*/React.createElement("option", {
+    value: "aces"
+  }, "ACES"), /*#__PURE__*/React.createElement("option", {
+    value: "lin_rec709"
+  }, "lin_rec709"))), /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel-row"
   }, /*#__PURE__*/React.createElement("span", null, "Force Transparency"), /*#__PURE__*/React.createElement("button", {
     type: "button",

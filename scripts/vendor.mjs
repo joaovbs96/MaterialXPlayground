@@ -65,6 +65,13 @@ const COPIES = [
   // three@0.147.0 tree is unused and intentionally left uncollected.
   { pkg: "three-147", src: "examples/js/libs/fflate.min.js", dest: "three/fflate.min.js" },
 
+  { pkg: "three", src: "examples/js/loaders/DRACOLoader.js", dest: "three/DRACOLoader.js" },
+  { pkg: "three", src: "examples/js/libs/draco/gltf/draco_wasm_wrapper.js", dest: "three/draco/draco_wasm_wrapper.js" },
+  // WASM-only, like the KaTeX woff2-only filter above: the app hard-requires
+  // WebAssembly anyway, so the 548KB draco_decoder.js JS fallback is never
+  // vendored.
+  { pkg: "three", src: "examples/js/libs/draco/gltf/draco_decoder.wasm", dest: "three/draco/draco_decoder.wasm" },
+
   { pkg: "katex", src: "dist/katex.min.css", dest: "katex/katex.min.css" },
   { pkg: "katex", src: "dist/katex.min.js", dest: "katex/katex.min.js" },
   // katex.min.css references url(fonts/...) relative to itself, so
@@ -73,6 +80,8 @@ const COPIES = [
   { pkg: "katex", src: "dist/fonts", dest: "katex/fonts", recursive: true, filter: /\.woff2$/ },
 
   { pkg: "jszip", src: "dist/jszip.min.js", dest: "jszip/jszip.min.js" },
+
+  { pkg: "utif", src: "UTIF.js", dest: "utif/UTIF.js" },
 
   { pkg: "reactflow", src: "dist/style.css", dest: "reactflow/style.css" },
   { pkg: "reactflow", src: "dist/umd/index.js", dest: "reactflow/index.js" },
@@ -95,6 +104,7 @@ const COPIES = [
   { pkg: "three", src: "LICENSE", dest: "three/LICENSE.txt" },
   { pkg: "katex", src: "LICENSE", dest: "katex/LICENSE.txt" },
   { pkg: "jszip", src: "LICENSE.markdown", dest: "jszip/LICENSE.markdown" },
+  { pkg: "utif", src: "LICENSE", dest: "utif/LICENSE.txt" },
   { pkg: "reactflow", src: "LICENSE", dest: "reactflow/LICENSE.txt" },
   { pkg: "dagre", src: "LICENSE", dest: "dagre/LICENSE.txt" },
   { pkg: "@highlightjs/cdn-assets", src: "LICENSE", dest: "highlightjs/LICENSE.txt" },
@@ -118,6 +128,14 @@ const DOWNLOADS = [
     url: "https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE",
     dest: "tailwind/LICENSE.txt",
     sha256: "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985",
+  },
+  // The Draco decoder files above come bundled inside three@0.128.0, but
+  // Draco itself is Google's project under a separate Apache-2.0 license,
+  // not on npm, so its LICENSE is fetched from a pinned google/draco tag.
+  {
+    url: "https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE",
+    dest: "three/draco/LICENSE.txt",
+    sha256: "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4",
   },
 ];
 

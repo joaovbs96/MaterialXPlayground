@@ -182,6 +182,8 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 
 **Shader Ball.** `models/shaderball.glb` and `models/shaderball_simple.glb` are GLB conversions of the ["Standard Shader Ball"](https://github.com/usd-wg/assets) by Chris Rydalch and André Mazzone (USD Working Group; original scene concept by Thomas Anagnostou), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE_shaderball.txt`](models/LICENSE_shaderball.txt) for the full attribution and modification notice.
 
+**MaterialX Shader Ball.** `models/shaderball_mtlx.glb` is an unmodified copy of [`Geometry/shaderball.glb`](https://github.com/AcademySoftwareFoundation/MaterialX/tree/gh-pages/Geometry) from the [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) project's gh-pages branch, licensed [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [`models/LICENSE_shaderball_mtlx.txt`](models/LICENSE_shaderball_mtlx.txt).
+
 **Cloth mesh.** `models/cloth_base_mesh.glb` is ["Cloth base mesh"](https://sketchfab.com/3d-models/cloth-base-mesh-3892a25754c7452eabe772ff691e4c6f) by Javier.Herrera, via Sketchfab, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE_cloth.txt`](models/LICENSE_cloth.txt).
 
 **HDRI.** The default environment lighting (`env_maps/standard_shader_ball_env_512.exr`) is a studio environment built to match the Standard Shader Ball scene's geometry, see license above. The repo also ships ["Studio Kontrast 04"](https://polyhaven.com/a/studio_kontrast_04) by Grzegorz Wronkowski, via [Poly Haven](https://polyhaven.com/), licensed [CC0](https://polyhaven.com/license). See [`env_maps/LICENSE.txt`](env_maps/LICENSE.txt).
@@ -193,6 +195,8 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 **MaterialX logo.** `images/materialx-logo.svg` is the official MaterialX project logo, © the Academy Software Foundation, from [AcademySoftwareFoundation/artwork](https://github.com/AcademySoftwareFoundation/artwork). It is used here only to identify the MaterialX project; see [Trademarks](#trademarks).
 
 **Patchwork rug material.** `materials/Motley_Patchwork_Rug/` is the Motley Patchwork Rug material from the [AMD GPU Open](https://gpuopen.com/) material library, licensed [MIT](materials/Motley_Patchwork_Rug/LICENSE.txt), copyright 2022 AMD.
+
+**Draco decoder.** `vendor/three/DRACOLoader.js` and `vendor/three/draco/` are the [Draco](https://github.com/google/draco) mesh-compression decoder bundled with three.js@0.128.0, © Google, licensed [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [`vendor/three/draco/LICENSE.txt`](vendor/three/draco/LICENSE.txt).
 
 ## License
 

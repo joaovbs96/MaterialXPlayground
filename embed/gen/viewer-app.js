@@ -273,11 +273,18 @@ function MaterialViewerApp({
   // rebuild after a WebGL context restore (PMREM bake, shadow
   // map contents are lost even though GL state itself recovers).
   const [glEpoch, setGlEpoch] = React.useState(0);
+  // Global display transform ('srgb'|'aces'|'lin_rec709', js/mtlx-engine.js).
+  // encodeDisplay bakes it into shader source, so it's a
+  // dependency of the view-build effect below, same as geom: a change forces a full dispose+regenerate, not a live tweak.
+  const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+  const displayTransformRef = React.useRef(displayTransform);
+  displayTransformRef.current = displayTransform;
   // Work stashed while this surface is hidden (shell display:none),
   // flushed by the hashchange effect below once visible again.
   const pendingCustomGeomRef = React.useRef(false);
   const pendingGlRestoredRef = React.useRef(false);
   const pendingGlobalGeomRef = React.useRef(false);
+  const pendingDisplayTransformRef = React.useRef(false);
   // A hidden ancestor (the shell's display:none wrapper) makes
   // offsetParent null regardless of which ancestor level it sits
   // at; always false in the embed/VS Code realm (no such wrapper).
@@ -321,6 +328,25 @@ function MaterialViewerApp({
     window.addEventListener('mtlx-global-geom', onGlobalGeom);
     return () => window.removeEventListener('mtlx-global-geom', onGlobalGeom);
   }, []);
+  // Adopts the shared display transform pick from any realm; unlike
+  // geometry there is no per-instance/embed resolution to defer to,
+  // so this listens unconditionally (chromeless included).
+  const applyDisplayTransform = () => {
+    const v = window.getDisplayTransform ? window.getDisplayTransform() : null;
+    if (!v || v === displayTransformRef.current) return;
+    setDisplayTransformState(v);
+  };
+  React.useEffect(() => {
+    const onDisplayTransform = () => {
+      if (surfaceHidden()) {
+        pendingDisplayTransformRef.current = true;
+        return;
+      }
+      applyDisplayTransform();
+    };
+    window.addEventListener('mtlx-display-transform', onDisplayTransform);
+    return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+  }, []);
   // Restore re-inits GL state but not render-target contents
   // (PMREM bake, shadow map), so a glEpoch bump forces the build
   // effect to dispose and fully rebuild.
@@ -356,6 +382,10 @@ function MaterialViewerApp({
         if (pendingGlobalGeomRef.current) {
           pendingGlobalGeomRef.current = false;
           applyGlobalGeom();
+        }
+        if (pendingDisplayTransformRef.current) {
+          pendingDisplayTransformRef.current = false;
+          applyDisplayTransform();
         }
       });
     };
@@ -1033,7 +1063,7 @@ function MaterialViewerApp({
         if (onViewRef.current) onViewRef.current(null);
       }
     };
-  }, [renderables, chosenMat, geom, customKey, glEpoch]);
+  }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform]);
 
   // Backs the Scene card's transparency-forcing toggle (browser
   // only): local mirror of the engine's persisted value, replacing
@@ -1067,6 +1097,12 @@ function MaterialViewerApp({
   const pickGeom = g => {
     setGeom(g);
     if (!chromeless) window.setGlobalGeom(g);
+  };
+  // Same global pick pattern as pickGeom, no chromeless guard: the
+  // control never renders there (no sidebar), so it's unreachable.
+  const pickDisplayTransform = mode => {
+    setDisplayTransformState(mode);
+    if (window.setDisplayTransform) window.setDisplayTransform(mode);
   };
   // Shared by the sidebar's CustomModelTile and the VS Code HUD's
   // geometry dropdown footer, one integrated model-picker now.
@@ -1441,7 +1477,23 @@ function MaterialViewerApp({
     title: "Rendering",
     summary: forceTransparency ? 'Transparency forced' : 'Default',
     defaultOpen: true
-  }, /*#__PURE__*/React.createElement("label", {
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "View Transform"), /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: displayTransform,
+    options: ['srgb', 'aces', 'lin_rec709'],
+    labels: {
+      srgb: 'sRGB',
+      aces: 'ACES',
+      lin_rec709: 'lin_rec709'
+    },
+    onChange: pickDisplayTransform,
+    defValue: "srgb",
+    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).",
+    size: "sm"
+  })), /*#__PURE__*/React.createElement("label", {
     className: "flex items-center justify-between cursor-pointer",
     title: forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'
   }, /*#__PURE__*/React.createElement("span", {

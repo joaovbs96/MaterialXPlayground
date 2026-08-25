@@ -100,6 +100,116 @@
             );
         }
 
+        // Multi-session recovery browser (item 14). Copies PortPickerPopover's
+        // ArrowUp/ArrowDown/Enter + scrollIntoView idiom for its session
+        // list; the render column hosts one never-re-keyed MtlxGraphPreview.
+        function AutosaveRestoreDialog({ offers, onRestore, onDiscard, onDiscardAll, onClose }) {
+            const [hi, setHi] = React.useState(0);
+            const listRef = React.useRef(null);
+            const panelRef = React.useRef(null);
+            const blobCacheRef = React.useRef(new Map()); // session id -> textures map
+            const tokenRef = React.useRef(0);
+            const [shown, setShown] = React.useState(null); // { xml, textures, name }
+
+            useEscapeToClose(onClose, true);
+            React.useEffect(() => { if (panelRef.current) panelRef.current.focus(); }, []);
+            React.useEffect(() => {
+                if (hi >= offers.length) setHi(Math.max(0, offers.length - 1));
+            }, [offers.length, hi]);
+            React.useEffect(() => { // keep the highlighted row in view
+                const el = listRef.current && listRef.current.children[hi];
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+            }, [hi]);
+
+            // Loads the highlighted offer's textures, cached per session
+            // id; a stale resolve (highlight moved on) is dropped, keeping
+            // the PREVIOUS `shown` so the viewer is never loaded twice.
+            React.useEffect(() => {
+                const record = offers[hi];
+                if (!record) return;
+                const cache = blobCacheRef.current;
+                if (cache.has(record.id)) {
+                    setShown({ xml: record.xml, textures: cache.get(record.id), name: record.name });
+                    return;
+                }
+                const token = ++tokenRef.current;
+                window.MtlxAutosave.getBlobs(record.id).then((blobs) => {
+                    if (tokenRef.current !== token) return; // highlight moved on
+                    cache.set(record.id, blobs);
+                    setShown({ xml: record.xml, textures: blobs, name: record.name });
+                });
+            }, [hi, offers]);
+
+            const onKeyDown = (e) => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(offers.length - 1, 0))); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+                else if (e.key === 'Enter') { e.preventDefault(); if (offers[hi]) onRestore(offers[hi]); }
+                // Escape: handled by the window-level useEscapeToClose above.
+            };
+
+            return (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
+                    <div
+                        ref={panelRef}
+                        tabIndex={-1}
+                        onKeyDown={onKeyDown}
+                        className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-[60rem] max-w-[95%] p-4 outline-none"
+                    >
+                        <div className="text-sm font-semibold text-gray-100 mb-1">Restore a previous session?</div>
+                        <div className="text-[12px] text-gray-400 mb-3">
+                            One or more editing sessions ended with unsaved changes. Pick one below, then restore or discard it.
+                        </div>
+                        <div className="flex gap-3">
+                            <div ref={listRef} className="w-[13rem] flex-none max-h-80 overflow-y-auto custom-scrollbar border border-gray-700 rounded-md">
+                                {offers.map((o, i) => (
+                                    <button
+                                        key={o.id}
+                                        type="button"
+                                        onClick={() => setHi(i)}
+                                        className={'w-full text-left px-2 py-1.5 border-b border-gray-700 last:border-b-0 transition-colors '
+                                            + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                    >
+                                        <div className="text-[11px] font-mono truncate">{o.name || 'untitled'}</div>
+                                        <div className="text-[10px] text-gray-500">
+                                            {formatDraftAge(o.closedAt || Math.max(o.savedAt || 0, o.beat || 0))}
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="flex-1 min-w-0 rounded-md overflow-hidden border border-gray-700 bg-gray-900" style={{ height: 320 }}>
+                                {shown ? (
+                                    <MtlxGraphPreview
+                                        xml={shown.xml}
+                                        preview="right"
+                                        previewTextures={shown.textures}
+                                        previewName={shown.name}
+                                        lazy={false}
+                                        interactive={false}
+                                        chrome="none"
+                                        controls="none"
+                                        autoFocus="fit"
+                                        height={320}
+                                    />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-[11px] text-gray-500">
+                                        {'Loading preview' + '\u2026'}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 mt-3">
+                            {offers.length > 1 && (
+                                <button type="button" onClick={onDiscardAll} className={BTN_SECONDARY}>Discard all</button>
+                            )}
+                            <button type="button" onClick={() => offers[hi] && onDiscard(offers[hi])} className={BTN_SECONDARY}>Discard</button>
+                            <button type="button" onClick={onClose} className={BTN_SECONDARY}>Not now</button>
+                            <button type="button" onClick={() => offers[hi] && onRestore(offers[hi])} className={BTN_PRIMARY}>Restore</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // Collapsible parameter-group header (folders + Downstream
         // Connections). Negative margins matching the panel's own px-2.5
         // pull the border edge-to-edge instead of sitting inset.
@@ -109,6 +219,29 @@
         const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
             + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
             + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
+
+        // Small blur/Enter-committing text field for the Interface metadata
+        // group (params panel, i: nodes), mirroring ParamRow's textField
+        // commit pattern since that pattern isn't exported standalone.
+        function IfaceMetaField({ value, placeholder, onCommit }) {
+            const [draft, setDraft] = React.useState(value || '');
+            React.useEffect(() => { setDraft(value || ''); }, [value]);
+            const commit = () => { if (draft !== (value || '')) onCommit(draft); };
+            return (
+                <input
+                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                    value={draft}
+                    placeholder={placeholder}
+                    spellCheck={false}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') { commit(); e.target.blur(); }
+                        if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); }
+                    }}
+                />
+            );
+        }
 
         // Right sidebar resize range and localStorage key. Max also never
         // exceeds ~70% of the editor width (see clampSidebarWidth).
@@ -123,6 +256,20 @@
             const n = isFinite(w) ? w : SIDEBAR_DEFAULT_WIDTH;
             return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, n));
         };
+
+        // Relative-age copy for the crash-recovery modal (item 14),
+        // e.g. "5 min ago", "2 h ago", "yesterday". No component state
+        // needed, so it lives at module scope like the pieces above.
+        function formatDraftAge(ts) {
+            if (!ts) return 'a while ago';
+            const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + ' min ago';
+            const hours = Math.round(mins / 60);
+            if (hours < 24) return hours + ' h ago';
+            if (hours < 48) return 'yesterday';
+            return Math.round(hours / 24) + ' days ago';
+        }
 
         // ---- App ---------------------------------------------------------------
 
@@ -272,6 +419,10 @@
             // what gets selected afterward (item 10's pin toggle) — same
             // { scope, id } shape as previewSel, reset alongside it.
             const [pinnedTarget, setPinnedTarget] = React.useState(null);
+            // Session recovery browser (item 14): a queue of orphaned
+            // autosave drafts (most-recent-first), all offered at once;
+            // null/empty means nothing to offer right now.
+            const [restoreOffer, setRestoreOffer] = React.useState(null);
             const [catalog, setCatalog] = React.useState(null);
             // Bumped on every committed edit that reached the MaterialX
             // document — the material preview regenerates from the live doc.
@@ -299,9 +450,53 @@
             // that moment, regardless of which render's closure it runs in.
             const dirtyRevRef = React.useRef(0);
             dirtyRevRef.current = dirtyRev;
+            // Same trampoline, for autosaveNote/writeFinal's clean-vs-
+            // dirty check (item 6/11): whether the last autosave flush
+            // already covers the current edit.
+            const savedRevRef = React.useRef(0);
+            savedRevRef.current = savedRev;
+            // ---- Autosave (js/shared/mtlx-autosave.js): disabled under
+            // VS Code, where the on-disk file is the source of truth and
+            // __mtlxNotifyEdit already syncs every debounced edit.
+            const AUTOSAVE_ON = !IN_VSCODE && !!(window.MtlxAutosave && window.MtlxAutosave.available());
+            // Mirrors mtlx-autosave.js's own XML_MAX (not exposed on its
+            // public surface) so canSave() can pre-check the same cap.
+            const AUTOSAVE_XML_MAX = 2 * 1024 * 1024;
+            // This tab's current autosave session id, set by adoptSession()
+            // in the mount effect below.
+            const autosaveIdRef = React.useRef(null);
+            // This tab's PREVIOUS rotation of that id (adoptSession's
+            // prevId), for File > Restore Autosaved's offerable() call.
+            const prevSessionIdRef = React.useRef(null);
+            // Texture fileMap keys already confirmed stored in IndexedDB,
+            // diffed on every dirty flush so only new/changed keys are
+            // re-put.
+            const lastPersistedKeysRef = React.useRef(new Set());
+            // Set to an orphan session id while a restored draft hasn't
+            // been re-saved under the current id yet (crash-safe adoption:
+            // the orphan is only deleted once that first flush lands).
+            const pendingAdoptRef = React.useRef(null);
+            // Set synchronously by the adopt/GC/offer effect when a
+            // continue-marker restore is pending, so the default-doc
+            // fetch effect can't win the race on a warm cache.
+            const draftPendingRef = React.useRef(false);
+            // ref-trampoline for autosaveNote (item 6), same idiom as
+            // resolveDocXmlRef: always calls THIS render's implementation
+            // from the debounced flush closures below.
+            const autosaveNoteRef = React.useRef(null);
             const markSaved = () => {
                 setSavedRev(dirtyRevRef.current);
                 undoStateRef.current.savedIndex = undoStateRef.current.index;
+                if (AUTOSAVE_ON) window.MtlxAutosave.clearCurrent();
+            };
+
+            // File > Restore Autosaved's disabled state (below): a cheap
+            // probe refreshed at a few chosen moments, not every render,
+            // since offerable() itself GCs stale records as a side effect.
+            const [restorableCount, setRestorableCount] = React.useState(0);
+            const refreshRestorable = () => {
+                if (!AUTOSAVE_ON) return;
+                setRestorableCount(window.MtlxAutosave.offerableCount(autosaveIdRef.current));
             };
 
             // ---- Undo / redo: coarse XML-snapshot history --------------
@@ -439,6 +634,9 @@
                     }
                     u.index = u.stack.length - 1;
                 }
+                // Autosave (item 3): every debounced flush is a dirty
+                // edit, so note it after the stack ops settle.
+                autosaveNoteRef.current(xml);
             };
 
             const pushUndoSnapshot = (tag) => {
@@ -477,7 +675,13 @@
                     noteDocXml(entry.xml);
                     const u = undoStateRef.current;
                     if (u.index === u.savedIndex) markSaved();
-                    else setDirtyRev((r) => r + 1);
+                    else {
+                        setDirtyRev((r) => r + 1);
+                        // Autosave (item 4): forceDirty because dirtyRevRef
+                        // hasn't re-rendered yet (restoringRef excludes
+                        // undo/redo from the flushUndoSnapshot note above).
+                        autosaveNoteRef.current(entry.xml, true);
+                    }
                 } catch (e) {
                     console.error('undo restore failed', e);
                 } finally {
@@ -946,6 +1150,13 @@
                     setFlow({ nodes: [], edges: [] });
                     if (snapshotTimerRef.current) { clearTimeout(snapshotTimerRef.current); snapshotTimerRef.current = null; }
                     undoStateRef.current = { stack: [], index: -1, savedIndex: -1 };
+                    // Autosave (item 5): covers loadDocument failing
+                    // before its markSaved, which would otherwise leave
+                    // the OLD document's draft claiming this session id.
+                    if (AUTOSAVE_ON) {
+                        window.MtlxAutosave.clearCurrent();
+                        lastPersistedKeysRef.current = new Set();
+                    }
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
                 }
@@ -1176,18 +1387,75 @@
             // still-unsaved document looking clean).
             const pendingRestoreDirtyRef = React.useRef(false);
 
-            // ---- Restore a session captured by js/shared/mtlx-handoff.js
-            // just before a self-triggered reload (new build). Routed
-            // through the SAME 'mtlx-load-document' event the handoff
-            // listener above already handles, instead of a parallel path.
-            React.useEffect(() => {
-                if (!window.MtlxHandoff) return;
-                window.MtlxHandoff.consume('graph').then((payload) => {
-                    if (!payload) return;
+            // ---- Restore a session captured by js/shared/mtlx-autosave.js
+            // (item 8): builds the fileMap like handleImport does, xml
+            // overlaid LAST so no texture with the same key can clobber it.
+            const restoreDraft = async (record, opts) => {
+                if (!record || !record.id) return;
+                const blobs = await window.MtlxAutosave.getBlobs(record.id);
+                const map = Object.assign({}, blobs);
+                const safeName = (record.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                map[safeName + '.mtlx'] = new Blob([record.xml || ''], { type: 'application/xml' });
+                const commit = () => {
+                    // Crash-safe adoption: the orphan is only removed once
+                    // the restored doc has been re-saved under this tab's
+                    // own session id (autosaveNote, item 6).
+                    pendingAdoptRef.current = record.id;
                     pendingRestoreDirtyRef.current = true;
-                    window.__mtlxPendingImport = { xml: payload.xml, name: payload.name, files: payload.files };
-                    window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
+                    ingestRef.current(map);
+                    if (opts && opts.onCommit) opts.onCommit();
+                };
+                // Auto path: no confirm needed, nothing is loaded yet.
+                // Modal path: confirmReplace DIRECTLY, not the event path,
+                // so a cancelled dialog never runs onCommit at all.
+                if (opts && opts.auto) commit();
+                else confirmReplace(true, commit);
+            };
+            // AutosaveRestoreDialog wiring: onCommit only fires once
+            // confirmReplace accepts, so a cancelled confirm keeps the
+            // dialog open and every offered session untouched.
+            const onRestoreDraft = (record) => {
+                restoreDraft(record, { onCommit: () => { setRestoreOffer(null); refreshRestorable(); } });
+            };
+            const onDiscardDraft = (record) => {
+                window.MtlxAutosave.removeSession(record.id);
+                setRestoreOffer((q) => {
+                    const next = (q || []).filter((r) => r.id !== record.id);
+                    return next.length ? next : null;
                 });
+                refreshRestorable();
+            };
+            const onDiscardAllDrafts = () => {
+                const queue = restoreOffer;
+                if (!queue) return;
+                queue.forEach((s) => window.MtlxAutosave.removeSession(s.id));
+                setRestoreOffer(null);
+                refreshRestorable();
+            };
+
+            // ---- Adopt this tab's autosave session, GC stale drafts, and
+            // either silently continue a marked draft (explicit continue-
+            // intent) or queue orphaned sessions for the modal (item 7).
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                const auto = window.MtlxAutosave.adoptSession();
+                autosaveIdRef.current = auto.id;
+                prevSessionIdRef.current = auto.prevId;
+                const continueRecord = auto.continueId ? window.MtlxAutosave.readRecord(auto.continueId) : null;
+                // Set BEFORE anything async: closes the default-doc fetch
+                // race on a warm cache (localStorage reads are sync).
+                if (continueRecord) draftPendingRef.current = true;
+                window.MtlxAutosave.gcSweep(auto.id);
+                if (continueRecord) {
+                    restoreDraft(continueRecord, { auto: true });
+                } else {
+                    const offers = window.MtlxAutosave.offerable(auto.id, auto.prevId);
+                    if (offers.length) setRestoreOffer(offers);
+                }
+                refreshRestorable();
+                // Mount-time only: a modal popping over active editing
+                // mid-session would be hostile. Orphans from a late-crashed
+                // sibling tab surface on the next reload instead.
             }, []);
             React.useEffect(() => {
                 if (pendingRestoreDirtyRef.current && parsed && !isDirty) {
@@ -1226,7 +1494,9 @@
                     .then((xml) => {
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
-                        if (hasSession) return;
+                        // draftPendingRef (item 9): an async autosave
+                        // restore may still be in flight, don't stomp it.
+                        if (hasSession || draftPendingRef.current) return;
                         ingestRef.current({
                             'standard_surface_marble_solid.mtlx': new Blob([xml], { type: 'application/xml' }),
                         });
@@ -1235,7 +1505,7 @@
                         setBusy(false);
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
-                        if (!hasSession && !IN_VSCODE) {
+                        if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
                             setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
@@ -1468,6 +1738,103 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 window.addEventListener('beforeunload', onBeforeUnload);
                 return () => window.removeEventListener('beforeunload', onBeforeUnload);
             }, [isDirty]);
+
+            // Autosave final write (item 11): pagehide stamps closedAt
+            // (tab is actually going away); a hidden tab is still alive,
+            // so visibilitychange->hidden doesn't.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                const onPagehide = () => { writeFinalRef.current(true); };
+                const onVisibility = () => {
+                    if (document.visibilityState === 'hidden') writeFinalRef.current(false);
+                };
+                window.addEventListener('pagehide', onPagehide);
+                document.addEventListener('visibilitychange', onVisibility);
+                return () => {
+                    window.removeEventListener('pagehide', onPagehide);
+                    document.removeEventListener('visibilitychange', onVisibility);
+                };
+            }, []);
+
+            // Autosave heartbeat (item 12): bumps `beat` every 20s while
+            // dirty, so a background-throttled tab's staleness clock
+            // (offerable's STALE_MS) doesn't fire while it's actually alive.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                const id = setInterval(() => {
+                    if (dirtyRevRef.current !== savedRevRef.current) window.MtlxAutosave.beat();
+                }, window.MtlxAutosave.BEAT_MS);
+                return () => clearInterval(id);
+            }, []);
+
+            // Refresh File > Restore Autosaved's count on a sibling tab's
+            // autosave write ('storage' fires only in OTHER tabs, exactly
+            // the crashed-tab case) and when the user refocuses this one.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON) return;
+                let timer = null;
+                const scheduleRefresh = () => {
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(() => { timer = null; refreshRestorable(); }, 200);
+                };
+                const onStorage = (e) => {
+                    if (e.key != null && e.key.indexOf(window.MtlxAutosave.LS_PREFIX) !== 0) return;
+                    scheduleRefresh();
+                };
+                window.addEventListener('storage', onStorage);
+                window.addEventListener('focus', scheduleRefresh);
+                return () => {
+                    window.removeEventListener('storage', onStorage);
+                    window.removeEventListener('focus', scheduleRefresh);
+                    if (timer) clearTimeout(timer);
+                };
+            }, []);
+
+            // Autosave producer registration (item 13): the missing half
+            // of the handoff contract. save() reuses writeFinal, then
+            // arms the continue marker so next mount auto-restores.
+            React.useEffect(() => {
+                if (!AUTOSAVE_ON || !window.MtlxHandoff) return;
+                window.MtlxHandoff.register('graph', {
+                    hasWork: () => !!parsedRef.current && dirtyRevRef.current !== savedRevRef.current,
+                    canSave: () => {
+                        if (!window.MtlxAutosave.available()) {
+                            return { ok: false, reason: 'Autosave storage is unavailable in this browser.', bytes: 0 };
+                        }
+                        const resolved = scanExportTexturesRef.current().resolved;
+                        let bytes = 0;
+                        for (const t of resolved) {
+                            const blob = fileMapRef.current[t.key];
+                            if (blob) bytes += blob.size || 0;
+                        }
+                        if (resolved.length) {
+                            const probe = window.MtlxAutosave.probeStorageSync();
+                            if (!probe.ok) {
+                                return { ok: false, reason: 'Texture storage is unavailable, likely private browsing.', bytes };
+                            }
+                        }
+                        if (bytes > window.MtlxAutosave.BYTES_BUDGET) {
+                            return { ok: false, reason: 'Dropped textures exceed the 100MB autosave budget.', bytes };
+                        }
+                        const xml = docXmlRef.current.xml;
+                        if (typeof xml === 'string' && xml.length > AUTOSAVE_XML_MAX) {
+                            return { ok: false, reason: 'The document is too large to autosave.', bytes };
+                        }
+                        return { ok: true, reason: null, bytes };
+                    },
+                    save: () => {
+                        const ok = writeFinalRef.current(false);
+                        if (ok) window.MtlxAutosave.setContinueMarker();
+                        return ok;
+                    },
+                    exportForUser: () => {
+                        const p = parsedRef.current;
+                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+                        const resolved = scanExportTexturesRef.current().resolved;
+                        exportZipRef.current(name, resolved);
+                    },
+                });
+            }, []);
 
             // Sidebar-aware replacement for inst.fitView(opts): the params
             // panel is a docked flex sibling of the canvas host, not an
@@ -1817,6 +2184,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 fileMapRef.current = merged;
                 setFileMap(merged);
                 pickedFileNamesRef.current.add(file.name);
+                // Autosave (item 10): eager single-blob put, closing the
+                // pick-then-wire race under the 350ms undo debounce.
+                if (AUTOSAVE_ON && autosaveIdRef.current) {
+                    window.MtlxAutosave.putBlobs(autosaveIdRef.current, [{ key: file.name, blob: file }])
+                        .then((storedKeys) => { storedKeys.forEach((k) => lastPersistedKeysRef.current.add(k)); });
+                }
             };
 
             // Tag an input with a COLORSPACE (or clear it) — a codegen
@@ -1860,6 +2233,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     edges: prev.edges,
                     nodes: prev.nodes.map((n) => {
                         if (n.id !== nodeId) return n;
+                        if (nodeId.indexOf('i:') === 0) {
+                            // i: nodes store their scalar as flat data, not
+                            // an inputs array, so withPatchedInputs would be
+                            // a no-op here (see applyParamEdit's i: branch).
+                            return Object.assign({}, n, { data: Object.assign({}, n.data, { colorspace: cs || '' }) });
+                        }
                         const upd = (i) => i.name !== inputName ? i
                             : Object.assign({}, i, {
                                 colorspace: cs || '',
@@ -1868,6 +2247,37 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             });
                         return withPatchedInputs(n, upd);
                     }),
+                }));
+            };
+
+            // Interface-input pseudo node's UI metadata (uiname/uifolder/
+            // uimin/uimax/uiadvanced) has no codegen effect, so this skips
+            // setDocRev; markDirty still runs to push an undo snapshot.
+            const applyInterfaceMeta = (nodeId, patch) => {
+                if (!parsed || nodeId.indexOf('i:') !== 0) return;
+                const name = nodeId.slice(2);
+                const container = scopeContainer();
+                const target = container ? mxSafe(() => container.getInput(name), null) : null;
+                if (!target) {
+                    console.warn('node-graph: could not apply interface metadata on ' + nodeId);
+                    return;
+                }
+                Object.keys(patch).forEach((key) => {
+                    const value = patch[key];
+                    if (key === 'uiadvanced') {
+                        if (value) mxSetAttr(target, key, 'true');
+                        else mxRemoveAttr(target, key);
+                        return;
+                    }
+                    if (value) mxSetAttr(target, key, value);
+                    else mxRemoveAttr(target, key);
+                });
+                markDirty('ifacemeta:' + nodeId);
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => n.id === nodeId
+                        ? Object.assign({}, n, { data: Object.assign({}, n.data, patch) })
+                        : n),
                 }));
             };
 
@@ -1963,7 +2373,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // Same document packaged as a .zip alongside every matched
             // texture (`resolvedTextures`, from scanExportTextures). Stored
             // under its authored ref path so re-dropping the zip resolves normally.
-            const doExportZip = async (name, resolvedTextures) => {
+            const doExportZip = async (name, resolvedTextures, convertTo = 'keep') => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
                 if (xml == null) {
@@ -1975,15 +2385,63 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     return false;
                 }
                 const zip = new JSZip();
-                zip.file(name + '.mtlx', await attributeExportedXml(xml));
-                const seenPaths = new Set();
-                for (const t of (resolvedTextures || [])) {
-                    const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                    if (!zipPath || seenPaths.has(zipPath)) continue;
-                    seenPaths.add(zipPath);
-                    const blob = fileMapRef.current[t.key];
-                    if (blob) zip.file(zipPath, blob);
+                let keptNote = null;
+
+                if (!convertTo || convertTo === 'keep') {
+                    zip.file(name + '.mtlx', await attributeExportedXml(xml));
+                    const seenPaths = new Set();
+                    for (const t of (resolvedTextures || [])) {
+                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
+                        if (!zipPath || seenPaths.has(zipPath)) continue;
+                        seenPaths.add(zipPath);
+                        const blob = fileMapRef.current[t.key];
+                        if (blob) zip.file(zipPath, blob);
+                    }
+                } else {
+                    // Experimental: swap every texture to convertTo's format.
+                    // Pass 1 converts each source; pass 2 writes kept/failed
+                    // originals first, then converted files, falling back to
+                    // the original path+bytes on a collision with one of those.
+                    const seenPaths = new Set();
+                    const convertedByRef = {};
+                    const kept = [];
+                    const entries = [];
+                    for (const t of (resolvedTextures || [])) {
+                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
+                        if (!zipPath || seenPaths.has(zipPath)) continue;
+                        seenPaths.add(zipPath);
+                        const blob = fileMapRef.current[t.key];
+                        if (!blob) continue;
+                        const srcExt = (t.key.split('.').pop() || t.ref.split('.').pop() || '').toLowerCase();
+                        const result = await convertTextureBlob(blob, srcExt, convertTo);
+                        entries.push({ zipPath, blob, result });
+                    }
+                    const writtenPaths = new Set();
+                    for (const { zipPath, blob, result } of entries) {
+                        if (result.keep || !result.ok) {
+                            zip.file(zipPath, blob);
+                            writtenPaths.add(zipPath);
+                            if (!result.ok) kept.push(zipPath);
+                        }
+                    }
+                    for (const { zipPath, blob, result } of entries) {
+                        if (result.keep || !result.ok) continue;
+                        const swappedPath = zipPath.replace(/\.[A-Za-z0-9]+$/, '.' + result.ext);
+                        if (writtenPaths.has(swappedPath)) {
+                            zip.file(zipPath, blob);
+                            kept.push(zipPath);
+                            continue;
+                        }
+                        zip.file(swappedPath, result.blob);
+                        writtenPaths.add(swappedPath);
+                        convertedByRef[zipPath] = result.ext;
+                    }
+                    zip.file(name + '.mtlx', await attributeExportedXml(rewriteFilenameRefs(xml, (ref) => convertedByRef[ref])));
+                    if (kept.length > 0) {
+                        keptNote = kept.length + ' texture(s) could not be converted and were packaged unchanged.';
+                    }
                 }
+
                 let blob;
                 try {
                     blob = await zip.generateAsync({ type: 'blob' });
@@ -1993,6 +2451,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 }
                 downloadBlob(blob, name + '.zip');
                 markSaved(); // the just-downloaded zip's document matches the current one
+                if (keptNote) setStatus(keptNote);
                 return true;
             };
             // A second picker opening mid-export would race the first —
@@ -2008,15 +2467,20 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     exportBusyRef.current = false;
                 }
             };
-            const exportZip = async (name, resolvedTextures) => {
+            const exportZip = async (name, resolvedTextures, convertTo = 'keep') => {
                 if (exportBusyRef.current) return false;
                 exportBusyRef.current = true;
                 try {
-                    return await doExportZip(name, resolvedTextures);
+                    return await doExportZip(name, resolvedTextures, convertTo);
                 } finally {
                     exportBusyRef.current = false;
                 }
             };
+            // ref-trampoline (item 13): the handoff's exportForUser hook
+            // is registered once at mount, so it must call THIS render's
+            // exportZip, not the first render's (parsed was null then).
+            const exportZipRef = React.useRef(exportZip);
+            exportZipRef.current = exportZip;
 
             // Scan the WHOLE document (root + every nodegraph's nodes)
             // for authored `filename` inputs and resolve each against
@@ -2026,23 +2490,130 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const unresolved = [];
                 if (!parsed) return { resolved, unresolved };
                 const seenRefs = new Set();
-                const allNodes = vecToArray(mxSafe(() => parsed.doc.getNodes(), [])).slice();
-                for (const g of vecToArray(mxSafe(() => parsed.doc.getNodeGraphs(), []))) {
-                    allNodes.push.apply(allNodes, vecToArray(mxSafe(() => g.getNodes(), [])));
-                }
-                for (const n of allNodes) {
-                    const ports = collectPorts(n, { authoredOnly: true });
-                    for (const i of ports.inputs) {
-                        if (i.type !== 'filename' || !i.value) continue;
-                        if (seenRefs.has(i.value)) continue;
-                        seenRefs.add(i.value);
-                        const hit = findFileForRef(fileMapRef.current, i.value);
-                        if (hit) resolved.push({ ref: i.value, key: hit.key });
-                        else unresolved.push(i.value);
+                const docPrefix = mxElAttr(parsed.doc, 'fileprefix') || '';
+                const refOf = (el, prefix) => {
+                    if (el && typeof el.getResolvedValueString === 'function') {
+                        const r = mxSafe(() => el.getResolvedValueString(), '');
+                        if (r) return r;
                     }
+                    const v = mxSafe(() => (el && el.getValueString ? el.getValueString() : ''), '');
+                    return v ? prefix + v : '';
+                };
+                const note = (ref) => {
+                    if (!ref || seenRefs.has(ref)) return;
+                    seenRefs.add(ref);
+                    const hit = findFileForRef(fileMapRef.current, ref);
+                    if (hit) resolved.push({ ref, key: hit.key });
+                    else unresolved.push(ref);
+                };
+                const scanNode = (n, prefix, pinByName) => {
+                    for (const i of collectPorts(n, { authoredOnly: true }).inputs) {
+                        if (i.type !== 'filename') continue;
+                        if (i.interfacename) {
+                            const pin = pinByName ? pinByName[i.interfacename] : null;
+                            if (pin) note(refOf(pin, prefix));
+                        } else if (i.value) {
+                            note(refOf(i.el, prefix));
+                        }
+                    }
+                };
+                for (const n of vecToArray(mxSafe(() => parsed.doc.getNodes(), []))) scanNode(n, docPrefix, null);
+                for (const g of vecToArray(mxSafe(() => parsed.doc.getNodeGraphs(), []))) {
+                    if (mxElAttr(g, 'nodedef') || (parsed.implGraphNames && parsed.implGraphNames.has(mxElName(g)))) continue;
+                    const prefix = docPrefix + (mxElAttr(g, 'fileprefix') || '');
+                    const pinByName = {};
+                    for (const pin of vecToArray(mxSafe(() => g.getInputs(), []))) {
+                        pinByName[mxElName(pin)] = pin;
+                        if (mxElType(pin) === 'filename') note(refOf(pin, prefix));
+                    }
+                    for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) scanNode(n, prefix, pinByName);
                 }
                 return { resolved, unresolved };
             };
+            // ref-trampoline (item 13): canSave()/exportForUser are wired
+            // once at mount, so they must call THIS render's scan, not the
+            // first render's (parsed was null then).
+            const scanExportTexturesRef = React.useRef(scanExportTextures);
+            scanExportTexturesRef.current = scanExportTextures;
+
+            // Autosave dirty-flush (item 6): ref-trampoline idiom like
+            // resolveDocXmlRef, so a stale debounce closure always notes
+            // THIS render's parsed/fileMap via autosaveNoteRef.
+            const autosaveNote = (xml, forceDirty) => {
+                if (!AUTOSAVE_ON) return;
+                const dirty = forceDirty || dirtyRevRef.current !== savedRevRef.current;
+                if (!dirty) {
+                    window.MtlxAutosave.clearCurrent();
+                    return;
+                }
+                const ok = window.MtlxAutosave.writeRecord({
+                    name: defaultExportBase(),
+                    xml,
+                    closedAt: null, // a flush proves the tab is alive
+                    textureKeys: Array.from(lastPersistedKeysRef.current),
+                });
+                if (!ok) return; // xml over cap or no session id, nothing more to persist
+                const finishAdoption = () => {
+                    if (!pendingAdoptRef.current) return;
+                    const orphanId = pendingAdoptRef.current;
+                    pendingAdoptRef.current = null;
+                    window.MtlxAutosave.removeSession(orphanId);
+                    refreshRestorable();
+                };
+                const { resolved } = scanExportTextures();
+                const missing = [];
+                for (const t of resolved) {
+                    if (lastPersistedKeysRef.current.has(t.key)) continue;
+                    const blob = fileMapRef.current[t.key];
+                    if (blob) missing.push({ key: t.key, blob });
+                }
+                if (!missing.length) {
+                    finishAdoption();
+                    return;
+                }
+                const id = autosaveIdRef.current;
+                window.MtlxAutosave.putBlobs(id, missing).then((storedKeys) => {
+                    storedKeys.forEach((k) => lastPersistedKeysRef.current.add(k));
+                    window.MtlxAutosave.writeRecord({ textureKeys: Array.from(lastPersistedKeysRef.current) });
+                    finishAdoption();
+                });
+            };
+            autosaveNoteRef.current = autosaveNote;
+
+            // Final autosave write (item 11), shared by the handoff's
+            // save() hook (item 13). Sync only (no await at pagehide):
+            // fresh serializeDocXml, else docXmlRef, else the undo top.
+            const writeFinal = (isPagehide) => {
+                if (!AUTOSAVE_ON || !autosaveIdRef.current) return false;
+                const dirty = dirtyRevRef.current !== savedRevRef.current;
+                if (!dirty) {
+                    window.MtlxAutosave.clearCurrent();
+                    return true;
+                }
+                let xml = null;
+                if (parsedRef.current) {
+                    try { xml = serializeDocXml(parsedRef.current); } catch (e) { xml = null; }
+                }
+                if (xml == null) xml = docXmlRef.current.xml;
+                if (xml == null) {
+                    const u = undoStateRef.current;
+                    const top = u.stack[u.index];
+                    xml = top ? top.xml : null;
+                }
+                if (xml == null) return false;
+                const fields = {
+                    name: defaultExportBase(),
+                    xml,
+                    textureKeys: Array.from(lastPersistedKeysRef.current),
+                };
+                if (isPagehide) fields.closedAt = Date.now();
+                return window.MtlxAutosave.writeRecord(fields);
+            };
+            // ref-trampoline: both the pagehide/visibility effect (item 11,
+            // declared earlier in this file) and the handoff registration
+            // (item 13) call THIS render's writeFinal via the ref.
+            const writeFinalRef = React.useRef(writeFinal);
+            writeFinalRef.current = writeFinal;
 
             // Toolbar "Presets" button: fetches a curated example .mtlx
             // (crawl lives in fetchPresetFiles) and hands it to ingest(),
@@ -2095,9 +2666,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
-            const handleExportDialogSubmit = async ({ name, format }) => {
+            const handleExportDialogSubmit = async ({ name, format, convertTo }) => {
                 const ok = format === 'zip'
-                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [])
+                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [], convertTo)
                     : await exportMtlx(name);
                 if (!ok) throw new Error('export failed');
             };
@@ -2428,6 +2999,24 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 });
             };
 
+            // A connection from a still-bare `i:` pin onto an input that
+            // already carries a literal/colorspace would otherwise just
+            // discard it (writeConnSource strips the target); migrate it onto the pin first.
+            const migrateLiteralToIfacePin = (point, srcId) => {
+                if (!point || String(srcId).indexOf('i:') !== 0) return null;
+                const c = scopeContainer();
+                const pinName = srcId.slice(2);
+                const pin = c && (mxSafe(() => c.getInput(pinName), null) || mxSafe(() => c.getChild(pinName), null));
+                if (!pin) return null;
+                if (mxElAttr(pin, 'value') || mxElAttr(pin, 'colorspace')) return null;
+                const v = mxElAttr(point, 'value');
+                const cs = mxElAttr(point, 'colorspace');
+                if (!v && !cs) return null;
+                if (v) mxSafe(() => { mxWriteValue(pin, v, mxElType(point)); return true; }, false);
+                if (cs) { mxSetColorspace(pin, cs); mxRemoveAttr(point, 'colorspace'); }
+                return { value: v, colorspace: cs, colorManaged: ifaceColorManaged(mxElType(pin)) };
+            };
+
             // Write a connection SOURCE onto a connection point (shared
             // by onConnect and wirePendingConnection): sets interfacename/
             // nodegraph/nodename + output=, then stashes/strips any literal.
@@ -2460,9 +3049,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const outName = String(sourceHandle || '').replace(/^out:/, '');
                 const type = flowPortType(target, targetHandle, false)
                     || flowPortType(source, sourceHandle, true) || '';
+                let migrated = null;
                 if (parsed) {
                     const point = connectionPoint(target, targetHandle, true);
                     if (point) {
+                        // A node target's port can be an unauthored default
+                        // row; ensureTypedInput would then have synthesized
+                        // `point` from the nodedef default, not a real literal.
+                        const targetNode = flow.nodes.find((n) => n.id === target);
+                        const targetMeta = targetNode && (targetNode.data.allInputs || targetNode.data.inputs || []).find((i) => i.name === inputName);
+                        const targetAuthored = target.indexOf('n:') !== 0 || (targetMeta && targetMeta.authored);
+                        if (targetAuthored) migrated = migrateLiteralToIfacePin(point, source);
                         const srcNode = flow.nodes.find((n) => n.id === source);
                         writeConnSource(point, source, outName, srcNode && srcNode.data.outputs);
                         setDocRev((r) => r + 1);
@@ -2478,7 +3075,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             id: source + '.' + outName + '\u2192' + target + '.' + inputName,
                             source, sourceHandle, target, targetHandle, type,
                         })]),
-                    nodes: prev.nodes.map((n) => n.id === target ? patchInputConn(n, inputName, true) : n),
+                    nodes: prev.nodes.map((n) => {
+                        if (n.id === target) return patchInputConn(n, inputName, true);
+                        if (migrated && n.id === source) return Object.assign({}, n, { data: Object.assign({}, n.data, migrated) });
+                        return n;
+                    }),
                 }));
                 setSelectedEdgeId(null);
             };
@@ -3182,7 +3783,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             const wirePendingConnection = (created, pending) => {
                 if (!created || !pending || !parsed) return;
                 const doc = parsed.doc;
-                let point, srcId, srcOutName, targetFlowId, targetInputName;
+                let point, srcId, srcOutName, targetFlowId, targetInputName, migrated = null;
                 if (pending.dir === 'in') {
                     // The double-clicked port is an INPUT on an existing
                     // node (or collapsed nodegraph) — feed it from the new
@@ -3211,7 +3812,8 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     if (!point) return;
                     // A nodegraph interface input as source is a pin
                     // reference, not a node — same distinction onConnect
-                    // makes (writeConnSource above).
+                    // makes (writeConnSource above); authored-gated the same way too.
+                    if (inMatch.authored) migrated = migrateLiteralToIfacePin(point, pending.nodeId);
                     const srcNode = flow.nodes.find((n) => n.id === pending.nodeId);
                     writeConnSource(point, pending.nodeId, pending.port, srcNode && srcNode.data.outputs);
                     targetFlowId = created.id;
@@ -3230,7 +3832,11 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                             target: targetFlowId, targetHandle: 'in:' + targetInputName,
                             type: pending.portType,
                         })]),
-                    nodes: prev.nodes.map((n) => n.id === targetFlowId ? patchInputConn(n, targetInputName, true) : n),
+                    nodes: prev.nodes.map((n) => {
+                        if (n.id === targetFlowId) return patchInputConn(n, targetInputName, true);
+                        if (migrated && n.id === srcId) return Object.assign({}, n, { data: Object.assign({}, n.data, migrated) });
+                        return n;
+                    }),
                 }));
             };
 
@@ -3249,7 +3855,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             // Add an interface input or output (Tab palette's synthetic
             // rows, only while a nodegraph scope is open) — written into
             // the doc, then appended to the flow IN PLACE like addNodeFromCatalog.
-            const addInterfacePin = (kind, rawName, type) => {
+            const addInterfacePin = (kind, rawName, type, meta) => {
                 if (!parsed || !scope) return;
                 const g = scopeContainer();
                 if (!g) { setError('Cannot add an interface pin: scope "' + scope + '" was not found.'); return; }
@@ -3278,12 +3884,31 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     if (mxElType(el) !== type) mxSetAttr(el, 'type', type);
                 }
 
+                // Interface-input metadata from the Tab palette's "More
+                // options" disclosure: value/colorspace/ui* attrs, all
+                // optional. Outputs never carry meta.
+                if (kind === 'iface-input' && meta) {
+                    if (meta.value && ifaceLiteralType(type)) mxWriteValue(el, meta.value, type);
+                    if (meta.colorspace && ifaceColorManaged(type)) mxSetColorspace(el, meta.colorspace);
+                    if (meta.uiname) mxSetAttr(el, 'uiname', meta.uiname);
+                    if (meta.uifolder) mxSetAttr(el, 'uifolder', meta.uifolder);
+                    if (meta.uimin && ifaceNumericType(type)) mxSetAttr(el, 'uimin', meta.uimin);
+                    if (meta.uimax && ifaceNumericType(type)) mxSetAttr(el, 'uimax', meta.uimax);
+                    if (meta.uiadvanced) mxSetAttr(el, 'uiadvanced', 'true');
+                }
+
                 const id = (kind === 'iface-input' ? 'i:' : 'o:') + name;
                 const data = kind === 'iface-input'
                     ? {
                         id, kind: 'input', name, category: 'interface input', type,
-                        inputs: [], allInputs: [], value: '',
+                        inputs: [], allInputs: [], value: (ifaceLiteralType(type) && meta && meta.value) || '',
                         outputs: [{ name: 'out', type }], portMode: 'authored',
+                        colorspace: (meta && meta.colorspace) || '', colorManaged: ifaceColorManaged(type),
+                        uiname: (meta && meta.uiname) || '', uifolder: (meta && meta.uifolder) || '',
+                        uimin: (ifaceNumericType(type) && meta && meta.uimin) || '',
+                        uimax: (ifaceNumericType(type) && meta && meta.uimax) || '',
+                        uisoftmin: '', uisoftmax: '', defColorspace: '',
+                        uiadvanced: !!(meta && meta.uiadvanced),
                     }
                     : {
                         id, kind: 'output', name, category: 'output', type,
@@ -3530,7 +4155,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const target = mxSafe(() => container.addInput(name), null);
                 if (!target || !srcEl) return target;
                 const copied = mxSafe(() => { target.copyContentFrom(srcEl); return true; }, false);
-                if (!copied) mxSetAttr(target, 'type', mxElType(srcEl));
+                if (!copied) {
+                    mxSetAttr(target, 'type', mxElType(srcEl));
+                    const v = mxElAttr(srcEl, 'value');
+                    if (v) mxSafe(() => { mxWriteValue(target, v, mxElType(srcEl)); return true; }, false);
+                    const cs = mxElAttr(srcEl, 'colorspace');
+                    if (cs) mxSetColorspace(target, cs);
+                }
                 return target;
             };
 
@@ -3631,7 +4262,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 mxSetAttr(target, 'interfacename', pinName);
                                 continue;
                             }
-                            if (inp.value !== '' && inp.value != null) {
+                            if ((inp.value !== '' && inp.value != null) || inp.colorspace) {
                                 cloneInput(el, inp.name, inp.el);
                             }
                         }
@@ -3854,6 +4485,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 if (pin.nodename) mxSetAttr(point, 'nodename', pin.nodename);
                                 if (pin.nodegraph) mxSetAttr(point, 'nodegraph', pin.nodegraph);
                                 if (pin.output) mxSetAttr(point, 'output', pin.output);
+                                if (pin.colorspace) mxSetColorspace(point, pin.colorspace);
                             } else if (pin.value !== '' && pin.value != null) {
                                 mxSafe(() => { mxWriteValue(point, pin.value, pin.type); return true; }, false);
                                 if (pin.colorspace) {
@@ -4746,8 +5378,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const panelReadOnly = !!displayNode && displayNode.id.indexOf('o:') === 0;
             const panelInputs = !displayNode ? [] :
                 (displayNode.id.indexOf('i:') === 0
-                    ? [{ name: 'value', type: displayNode.data.type,
-                         value: displayNode.data.value || '', connected: false }]
+                    ? (ifaceLiteralType(displayNode.data.type)
+                        ? [{ name: 'value', type: displayNode.data.type,
+                             value: displayNode.data.value || '', connected: false,
+                             colorspace: displayNode.data.colorspace, colorManaged: displayNode.data.colorManaged,
+                             uimin: displayNode.data.uimin, uimax: displayNode.data.uimax,
+                             uisoftmin: displayNode.data.uisoftmin, uisoftmax: displayNode.data.uisoftmax,
+                             defColorspace: '' }]
+                        : [])
                     : (displayNode.data.allInputs || displayNode.data.inputs || []));
             // Group panelInputs by uifolder (item F2.3): ungrouped inputs
             // render first; foldered ones bucket under a collapsible
@@ -4765,12 +5403,23 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const folderOrder = [];
                 const byFolder = new Map();
                 for (const inp of sortedInputs) {
-                    const folder = inp.uifolder;
+                    // Advanced-and-unfoldered inputs bucket into a synthetic
+                    // trailing "Advanced" folder instead of the ungrouped list.
+                    // A real uifolder literally named "Advanced" merges in too.
+                    const folder = inp.uifolder || (inp.uiadvanced ? 'Advanced' : '');
                     if (!folder) { ungrouped.push(inp); continue; }
                     if (!byFolder.has(folder)) { byFolder.set(folder, []); folderOrder.push(folder); }
                     byFolder.get(folder).push(inp);
                 }
-                return { ungrouped, folders: folderOrder.map((name) => ({ name, inputs: byFolder.get(name) })) };
+                return {
+                    ungrouped,
+                    folders: folderOrder.map((name) => ({
+                        name, inputs: byFolder.get(name),
+                        // Only the synthetic Advanced bucket defaults closed;
+                        // normal folders leave this undefined (open).
+                        defaultOpen: name === 'Advanced' ? false : undefined,
+                    })),
+                };
             }, [panelInputs]);
             // Open/closed state per folder name, default expanded (absent
             // reads as open, see `!== false` below). Reset per displayed
@@ -4780,7 +5429,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // reserved panelFoldersOpen key — a real uifolder named
             // "Downstream Connections" would collide), same per-node reset.
             const [downstreamOpen, setDownstreamOpen] = React.useState(true);
-            React.useEffect(() => { setPanelFoldersOpen({}); setDownstreamOpen(true); }, [displayNode && displayNode.id]);
+            // Interface metadata group (i: nodes only), same per-node reset.
+            const [ifaceMetaOpen, setIfaceMetaOpen] = React.useState(true);
+            React.useEffect(() => { setPanelFoldersOpen({}); setDownstreamOpen(true); setIfaceMetaOpen(true); }, [displayNode && displayNode.id]);
             // Edges leaving the displayed element — feeds the Downstream
             // Connections group. Empty for o: pseudo-nodes (no outputs)
             // and unconnected nodes, which hides the group entirely.
@@ -4926,6 +5577,18 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
                     title: 'Load a curated official MaterialX example document',
+                },
+                AUTOSAVE_ON && {
+                    label: 'Restore Autosaved…', icon: 'restore',
+                    disabled: restorableCount === 0,
+                    onSelect: () => {
+                        const offers = window.MtlxAutosave.offerable(autosaveIdRef.current, prevSessionIdRef.current);
+                        if (offers.length) setRestoreOffer(offers);
+                        else setStatus('No autosaved sessions to restore.');
+                    },
+                    title: restorableCount === 0
+                        ? 'No autosaved sessions to restore.'
+                        : 'Browse and restore a previous editing session recovered from autosave',
                 },
                 !IN_VSCODE && { separator: true },
                 {
@@ -5771,12 +6434,76 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             </button>
                                         </div>
                                     ),
+                                    // Interface metadata (i: nodes only): uiname/uifolder/
+                                    // uimin/uimax/uiadvanced, shown above the value row.
+                                    displayNode.id.indexOf('i:') === 0 && (
+                                        <div key="ifacemeta" className="-mt-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => setIfaceMetaOpen((o) => !o)}
+                                                className={GROUP_HEADER_CLASS}
+                                            >
+                                                <MtlxIcon name={ifaceMetaOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                <span className="truncate">Interface</span>
+                                            </button>
+                                            {ifaceMetaOpen && (
+                                                <div className="pt-1.5 space-y-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uiname</span>
+                                                        <IfaceMetaField
+                                                            value={displayNode.data.uiname}
+                                                            placeholder="(none)"
+                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uiname: v })}
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uifolder</span>
+                                                        <IfaceMetaField
+                                                            value={displayNode.data.uifolder}
+                                                            placeholder="(none)"
+                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uifolder: v })}
+                                                        />
+                                                    </div>
+                                                    {ifaceNumericType(displayNode.data.type) && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimin</span>
+                                                            <IfaceMetaField
+                                                                value={displayNode.data.uimin}
+                                                                placeholder="(none)"
+                                                                onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                    {ifaceNumericType(displayNode.data.type) && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimax</span>
+                                                            <IfaceMetaField
+                                                                value={displayNode.data.uimax}
+                                                                placeholder="(none)"
+                                                                onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                    <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="h-3.5 w-3.5 accent-blue-500"
+                                                            checked={!!displayNode.data.uiadvanced}
+                                                            onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}
+                                                        />
+                                                        uiadvanced
+                                                    </label>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ),
                                     !panelInputs.length && (
                                         <div key="none" className="text-[11px] text-gray-500 py-2">This node has no parameters.</div>
                                     ),
                                     panelParamGroups.ungrouped.map(renderParamRow).concat(
                                         panelParamGroups.folders.map((f, fi) => {
-                                            const open = panelFoldersOpen[f.name] !== false;
+                                            const open = Object.prototype.hasOwnProperty.call(panelFoldersOpen, f.name)
+                                                ? panelFoldersOpen[f.name] : f.defaultOpen !== false;
                                             // The first group sits flush at the panel top: -mt-1
                                             // cancels the scroll body's py-1 so its rule reads as
                                             // the panel's own edge, not a floating band.
@@ -5907,6 +6634,19 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 </div>
                             </div>
                         </div>
+                    )}
+
+                    {/* Session recovery browser (item 14): every orphaned
+                        autosave draft at once, with a graph + render
+                        preview of whichever one is highlighted. */}
+                    {restoreOffer && restoreOffer.length > 0 && (
+                        <AutosaveRestoreDialog
+                            offers={restoreOffer}
+                            onRestore={onRestoreDraft}
+                            onDiscard={onDiscardDraft}
+                            onDiscardAll={onDiscardAllDrafts}
+                            onClose={() => setRestoreOffer(null)}
+                        />
                     )}
 
                     {/* Full-stage drop indicator */}
