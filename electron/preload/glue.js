@@ -73,4 +73,13 @@
     window.__mtlxRespondCloseConfirm = function (choice) {
         window.mtlxDesktop.respondCloseConfirm({ token: pendingCloseConfirmToken, choice: choice });
     };
+
+    // Shell-level settings dialog (js/shell.jsx's DesktopSettingsDialog),
+    // opened from the header cog (js/site-header.js).
+    window.__mtlxGetDesktopSettings = function () {
+        return window.mtlxDesktop.getSettings();
+    };
+    window.__mtlxSetOpenInNewWindow = function (value) {
+        window.mtlxDesktop.setOpenInNewWindow(value);
+    };
 })();

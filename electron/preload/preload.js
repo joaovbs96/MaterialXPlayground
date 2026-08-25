@@ -67,6 +67,8 @@ const api = {
     onMenuCommand: (callback) => { menuCommandCallback = callback; },
     onCloseConfirmRequest: (callback) => { closeConfirmCallback = callback; },
     respondCloseConfirm: (payload) => ipcRenderer.send('mtlx-close-confirm-response', payload),
+    getSettings: () => ipcRenderer.invoke('mtlx-get-settings'),
+    setOpenInNewWindow: (value) => ipcRenderer.send('mtlx-set-open-in-new-window', !!value),
 };
 contextBridge.exposeInMainWorld('mtlxDesktop', api);
 

@@ -239,6 +239,14 @@ ipcMain.on('mtlx-notify-edit', (event, dirty) => {
     updateWindowTitle(win);
 });
 
+// Renderer-side settings dialog (js/shell.jsx's DesktopSettingsDialog) reads
+// through this instead of the unreachable native menu checkbox.
+ipcMain.handle('mtlx-get-settings', () => ({ openInNewWindow }));
+
+// Reuses setOpenInNewWindow so persistence and the native checkbox's
+// rebuildMenu() stay in sync with whatever the dialog set.
+ipcMain.on('mtlx-set-open-in-new-window', (event, value) => setOpenInNewWindow(value));
+
 // Asks a window's renderer to hand back its current graph XML; used by
 // saveFromMenu (the native Save/Save As menu items) below.
 function requestSaveFromRenderer(win) {
