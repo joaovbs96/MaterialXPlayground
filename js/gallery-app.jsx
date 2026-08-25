@@ -19,6 +19,9 @@ const GALLERY_FAMILY_ORDER = [
 const GALLERY_EXAMPLES_PREFIX = 'resources/Materials/Examples/';
 // Gray "micro pill" tag idiom, copied from vscode-app.jsx's TAG_PILL_CLASS.
 const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px] py-px rounded-full border border-gray-600 text-gray-400';
+// Same idiom, but clickable: the overlay's family/Textured/Procedural
+// pills, which apply a filter and need an obvious hover affordance.
+const GALLERY_TAG_CLASS_LINK = GALLERY_TAG_CLASS + ' cursor-pointer transition-colors hover:border-blue-500/60 hover:text-gray-100';
 const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-gray-200 bg-gray-700/50 border border-gray-700 rounded px-1 py-px';
 // Filter-chip idiom, shared by the family chips, the tag chips and the
 // numbered page pills.
@@ -296,7 +299,7 @@ function GalleryPagination({ page, pageCount, onChange }) {
 // CSS class instead) so MtlxGraphPreview's <materialx-viewer> never rebuilds.
 function GalleryDetailOverlay({
     material, tag, doc, docStatus, docError, actionBusy, linkCopied,
-    onOpenIn, onDownload, onCopyLink, onClose,
+    onOpenIn, onDownload, onCopyLink, onClose, onFilterFamily, onFilterTag,
 }) {
     const isOpen = !!material;
     // Remembers the last-opened material so this keeps rendering while
@@ -324,7 +327,24 @@ function GalleryDetailOverlay({
                 <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
                     <div className="min-w-0">
                         <span className="block text-sm font-semibold text-gray-100 truncate">{shown.name}</span>
-                        <span className="block text-[11px] text-gray-500">{shown.familyLabel}</span>
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                            <button
+                                type="button"
+                                onClick={() => onFilterFamily(shown.family)}
+                                title={'Filter by ' + shown.familyLabel}
+                                className={GALLERY_TAG_CLASS_LINK}
+                            >
+                                {shown.familyLabel}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onFilterTag(shown.textured ? 'Textured' : 'Procedural')}
+                                title={'Filter by ' + (shown.textured ? 'Textured' : 'Procedural')}
+                                className={GALLERY_TAG_CLASS_LINK}
+                            >
+                                {shown.textured ? 'Textured' : 'Procedural'}
+                            </button>
+                        </div>
                     </div>
                     <button type="button" onClick={onClose} className={PILL_ACTION}>
                         <MtlxIcon name="x" className="w-3.5 h-3.5" />
@@ -558,6 +578,14 @@ function MtlxGalleryApp({ active } = {}) {
         setPage(1);
     };
     const clearFilters = () => { setQuery(''); setFamily('all'); setTags([]); setPage(1); };
+    // Overlay pill handoff: close the overlay, then layer that label on top
+    // of the current filters instead of replacing them.
+    const applyFamilyFilter = (id) => { setOpenId(null); setFamily(id); setPage(1); };
+    const applyTagFilter = (id) => {
+        setOpenId(null);
+        setTags((prev) => prev.indexOf(id) !== -1 ? prev : [...prev, id]);
+        setPage(1);
+    };
     const changePageSize = (v) => {
         setPageSize(v);
         try { localStorage.setItem(GALLERY_PAGE_SIZE_KEY, String(v)); } catch (e) { /* best-effort */ }
@@ -812,6 +840,8 @@ function MtlxGalleryApp({ active } = {}) {
                     onDownload={downloadDoc}
                     onCopyLink={copyLink}
                     onClose={() => setOpenId(null)}
+                    onFilterFamily={applyFamilyFilter}
+                    onFilterTag={applyTagFilter}
                 />
             </div>
         </div>
