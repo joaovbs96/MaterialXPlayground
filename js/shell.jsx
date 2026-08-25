@@ -431,14 +431,28 @@ function DesktopCloseConfirmDialog() {
 
     React.useEffect(() => {
         if (!window.__MTLX_ELECTRON__) return undefined;
-        const onRequest = () => setOpen(true);
+        const onRequest = (e) => {
+            if (e.detail && e.detail.withdraw) {
+                setOpen(false);
+                return;
+            }
+            setOpen(true);
+            // Tell main the dialog is showing: cancels its native-dialog
+            // fallback timer so a slow decision here doesn't stack a
+            // native dialog on top.
+            if (typeof window.__mtlxRespondCloseConfirm === 'function') {
+                window.__mtlxRespondCloseConfirm('shown');
+            }
+        };
         window.addEventListener('mtlx-desktop-close-confirm', onRequest);
         return () => window.removeEventListener('mtlx-desktop-close-confirm', onRequest);
     }, []);
 
     const respond = (choice) => {
         setOpen(false);
-        window.__mtlxRespondCloseConfirm(choice);
+        if (typeof window.__mtlxRespondCloseConfirm === 'function') {
+            window.__mtlxRespondCloseConfirm(choice);
+        }
     };
 
     // Esc = Cancel, matching the graph editor's own dialogs.
