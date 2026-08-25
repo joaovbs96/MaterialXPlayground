@@ -1,4 +1,4 @@
-// embed/embed-boot.js — postMessage adapter between embed/viewer.html and
+// embed/embed-boot.js, postMessage adapter between embed/viewer.html and
 // whatever page iframes it. Hand-written, no build step (unlike
 // embed/gen/*.js). Mounts MaterialViewerApp with the controlled props
 // (js/viewer-app.jsx) driven by the query string and by inbound
@@ -28,14 +28,14 @@
     // `?origin=<https://host.example>` names the ONE parent origin this
     // embed expects. When present: inbound messages from any OTHER origin
     // are dropped outright, and every outbound postMessage targets that
-    // exact origin (never '*') — this is the safe, verifiable
+    // exact origin (never '*'). This is the safe, verifiable
     // configuration, and the one a production embed should use.
     //
     // When ABSENT: inbound messages are accepted from any origin (there is
     // no way to know the right one), and outbound messages target '*'.
     // TRADEOFF, spelled out rather than left implicit: an embed with no
     // `origin` param is discoverable by any other frame/window that can
-    // reach this iframe (e.g. a malicious sibling frame) — it can send
+    // reach this iframe (e.g. a malicious sibling frame). It can send
     // this page commands (load a different document, change geometry) and
     // observe the replies. This is acceptable ONLY because the protocol
     // never carries anything secret: no auth tokens, no user data, nothing
@@ -49,7 +49,7 @@
         return EXPECTED_ORIGIN || '*';
     }
 
-    // No-op when not actually embedded (viewer.html opened directly) —
+    // No-op when not actually embedded (viewer.html opened directly),
     // avoids posting to (and looping messages back from) ourselves.
     var embedded = window.parent && window.parent !== window;
 
@@ -59,13 +59,13 @@
         try {
             window.parent.postMessage(msg, targetOrigin());
         } catch (e) {
-            // Structured-clone failure or a torn-down parent frame — never
+            // Structured-clone failure or a torn-down parent frame: never
             // let a bad outbound payload break the viewer itself.
             console.error('[embed] postMessage failed:', e);
         }
     }
 
-    // Echoes the inbound message's `id` (if any) onto an outbound payload —
+    // Echoes the inbound message's `id` (if any) onto an outbound payload,
     // the request/response correlation scheme 'snapshot' needs when a host
     // fires several requests in flight. Mirrors the `id` field on
     // vscode_extension/media/bootstrap.js's pendingFetches entries.
@@ -279,8 +279,8 @@
     applyPageBackground(props.transparent);
 
     // `forcetransparency` drives the shared engine "Force Transparency" flag
-    // (js/mtlx-engine.js) directly, not a viewer-app.jsx prop. Absent leaves
-    // the visitor's persisted localStorage default untouched (docs/EMBEDDING.md).
+    // (js/mtlx-engine.js) for this tab only, not a viewer-app.jsx prop. Absent
+    // leaves, and present never touches, the visitor's own persisted default.
     function parseForceTransparency(v) {
         if (v == null || v === '') return undefined;
         var s = String(v).trim().toLowerCase();
@@ -294,12 +294,12 @@
     // globals via window) before this script loads.
     var initialForceTransparency = parseForceTransparency(qs.get('forcetransparency'));
     if (initialForceTransparency !== undefined && typeof window.setForceTransparency === 'function') {
-        window.setForceTransparency(initialForceTransparency);
+        window.setForceTransparency(initialForceTransparency, { persist: false });
     }
 
     // Live env state, tracked here (not just handed to the engine once) so
     // it survives a view REBUILD (a geometry/material change disposes the
-    // old handle and creates a new one — see js/viewer-app.jsx's render
+    // old handle and creates a new one, see js/viewer-app.jsx's render
     // effect). This mirrors ViewportControls' own viewEpoch-driven
     // reapply effect (js/shared/mtlx-ui.jsx), which solves the identical
     // problem for the in-app HUD; embed-boot.js needs its own copy because
@@ -324,7 +324,7 @@
     function onView(handle) {
         currentHandle = handle;
         if (!handle) return;
-        // Reapply tracked env state to the freshly (re)built view — see
+        // Reapply tracked env state to the freshly (re)built view, see
         // the envState comment above.
         if (typeof envState.rotationDeg === 'number' && handle.setEnvRotation) {
             handle.setEnvRotation(envState.rotationDeg * Math.PI / 180);
@@ -376,7 +376,7 @@
     }
 
     function onReady(version) {
-        // Posted once — later reloads/renders don't repeat it. A host
+        // Posted once, later reloads/renders don't repeat it. A host
         // waiting on the FIRST 'ready' (before ever sending 'load') is the
         // documented contract; a subsequent 'load' is followed by its own
         // 'renderables' (and 'error' on failure), which is what a host
@@ -420,7 +420,7 @@
     // { relPath: Blob } shape js/viewer-app.jsx's ingest()/handleImport
     // expect (the same shape drag-and-drop and the VS Code bridge already
     // produce). Each entry may be a real Blob/File (postMessage structured-
-    // clones those natively between same-page realms — no base64 hop
+    // clones those natively between same-page realms, no base64 hop
     // needed here, unlike bootstrap.js's extension-host boundary), a raw
     // ArrayBuffer, or a base64 string (for hosts whose own postMessage
     // wrapper only carries JSON-safe values).
@@ -454,7 +454,7 @@
         if (msg.id !== undefined) pendingLoadId = msg.id;
         // Routes through the SAME contract the VS Code webview and the
         // site's own "Send to Viewer" button use (js/shared/mtlx-ui.jsx's
-        // openInViewer(), consumed by js/viewer-app.jsx:326-354) — not a
+        // openInViewer(), consumed by js/viewer-app.jsx:326-354), not a
         // parallel loading path. See vscode_extension/media/bootstrap.js's
         // 'mtlx-open'/mode:'viewer' handling for the precedent this mirrors.
         var payload = { xml: msg.xml, name: msg.name || 'material', files: decodeTextures(msg.textures) };
@@ -585,11 +585,11 @@
         render();
     }
 
-    // Live `forceTransparency` update (LIVE_ATTRS): drives the shared
-    // engine flag directly (js/mtlx-engine.js), which refreshes every
-    // live view itself, so no render() call is needed here.
+    // Live `forceTransparency` update (LIVE_ATTRS): drives the shared engine
+    // flag for this tab only (same persist:false as the query-param above),
+    // which refreshes every live view itself, so no render() call is needed.
     function handleSetForceTransparency(msg) {
-        if (typeof window.setForceTransparency === 'function') window.setForceTransparency(!!msg.on);
+        if (typeof window.setForceTransparency === 'function') window.setForceTransparency(!!msg.on, { persist: false });
     }
 
     // Live theme update (LIVE_ATTRS): re-validates before applying, same
@@ -639,7 +639,7 @@
 
     // Snapshot: handle.snapshot() (js/mtlx-engine.js) returns a synchronous
     // data: URL (renderer.domElement.toDataURL). Converted to a Blob before
-    // posting — a Blob structured-clones over postMessage without the ~33%
+    // posting, a Blob structured-clones over postMessage without the ~33%
     // base64 size penalty a data: URL string would carry in the message.
     function handleSnapshot(msg) {
         if (!currentHandle || !currentHandle.snapshot) {
