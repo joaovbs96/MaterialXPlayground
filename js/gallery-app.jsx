@@ -664,7 +664,7 @@ function MtlxGalleryApp({ active } = {}) {
     return (
         <div ref={rootRef} className="relative">
             <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="middle" />
-            <div ref={fadeRef} aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[560px]" />
+            <div ref={fadeRef} aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[528px]" />
             <div className="relative max-w-7xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-6">
                 {/* Breadcrumb */}
                 <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-gray-500">
@@ -676,9 +676,6 @@ function MtlxGalleryApp({ active } = {}) {
                 </nav>
 
                 <div className="space-y-2">
-                    <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
-                        Learn <span className="text-gray-600">/</span> <span className="text-gray-400">Material Gallery</span>
-                    </div>
                     <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-gray-100 text-balance">
                         Material Gallery
                     </h1>
