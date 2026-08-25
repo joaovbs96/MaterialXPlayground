@@ -309,9 +309,9 @@ function GalleryDetailOverlay({
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full max-w-[64rem] max-h-[calc(100vh-2rem)] bg-gray-800 border border-gray-700 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-[64rem] max-h-[calc(100vh-2rem)] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col"
             >
-                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-700 bg-gray-900/70">
+                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
                     <div className="min-w-0">
                         <span className="block text-sm font-semibold text-gray-100 truncate">{shown.name}</span>
                         <span className="block text-[11px] text-gray-500">{shown.familyLabel}</span>
@@ -664,8 +664,17 @@ function MtlxGalleryApp({ active } = {}) {
     return (
         <div ref={rootRef} className="relative">
             <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="middle" />
-            <div ref={fadeRef} aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[640px]" />
-            <div className="relative space-y-6">
+            <div ref={fadeRef} aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[560px]" />
+            <div className="relative max-w-7xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-6">
+                {/* Breadcrumb */}
+                <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <a href="#!home" className="hover:text-gray-300 transition-colors">Home</a>
+                    <MtlxIcon name="chevron-right" className="w-3 h-3" />
+                    <span>Learn</span>
+                    <MtlxIcon name="chevron-right" className="w-3 h-3" />
+                    <span className="text-gray-400">Material Gallery</span>
+                </nav>
+
                 <div className="space-y-2">
                     <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
                         Learn <span className="text-gray-600">/</span> <span className="text-gray-400">Material Gallery</span>
@@ -693,7 +702,7 @@ function MtlxGalleryApp({ active } = {}) {
                                 onChange={(e) => changeQuery(e.target.value)}
                                 placeholder="Search materials…"
                                 aria-label="Search materials"
-                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-600 bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-700 bg-gray-900 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                             />
                             <div className="flex flex-wrap gap-2">
                                 {chips.map((c) => {
