@@ -348,16 +348,16 @@
             '</a>';
     }).join('');
 
-    // Desktop shell only: marks the header bar as the WCO draggable title
-    // bar (js/site-header.css + electron/main/main.js's titleBarOverlay).
-    // Native min/max/close buttons render over its right edge, themed to match.
+    // Desktop shell only: marks the header strip (outer wrapper + inner
+    // bar) as the WCO draggable title bar (site-header.css +
+    // electron/main/main.js's titleBarOverlay); native buttons overlay its edge.
     var DESKTOP_TITLEBAR_CLASS = window.__MTLX_ELECTRON__ ? ' mtlx-desktop-titlebar' : '';
 
     // Markup below is styled entirely by js/site-header.css (`mtlx-`
     // prefixed classes, no Tailwind utilities), so it renders identically
     // whether or not Tailwind Play is loaded on the page.
     var html =
-        '<header class="mtlx-header">' +
+        '<header class="mtlx-header' + DESKTOP_TITLEBAR_CLASS + '">' +
             '<div id="mtlx-header-bar" class="mtlx-header-bar' + DESKTOP_TITLEBAR_CLASS + '">' +
 
                 // Brand: logo mark + site title, linking to the shell's

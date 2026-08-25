@@ -99,11 +99,17 @@
 }
 
 /* Window Controls Overlay (Electron shell, marker class in site-header.js):
-   drag region for the OS title bar; padding-right reserves the overlay
-   button corner via titlebar-area-x/width (absent means zero extra padding). */
+   drag region for the OS title bar, put on both the full-width outer strip
+   and the centered inner bar so the whole strip drags edge to edge. */
+.mtlx-header.mtlx-desktop-titlebar,
 .mtlx-header-bar.mtlx-desktop-titlebar {
     -webkit-app-region: drag;
     app-region: drag;
+}
+/* Reserves the overlay button corner via titlebar-area-x/width (absent
+   means zero extra padding); only the inner bar's own content needs to
+   clear the native buttons, so this stays scoped to it. */
+.mtlx-header-bar.mtlx-desktop-titlebar {
     padding-right: calc(12px + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
 }
 @media (min-width: 640px) {
@@ -111,15 +117,23 @@
         padding-right: calc(24px + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
     }
 }
+/* The mobile dropdown panel and the update banner are siblings of the bar
+   that can grow the outer strip taller (menu open, banner visible); carve
+   both out whole so nothing below the header strip is ever draggable. */
+.mtlx-header.mtlx-desktop-titlebar > .mtlx-mobile-menu,
+.mtlx-header.mtlx-desktop-titlebar > .mtlx-build-banner {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+}
 /* Every interactive descendant opts out of the drag region: nav links,
    group triggers plus their popover panels (.mtlx-menu, incl. disabled
    rows), the version/source pills, and the mobile hamburger toggle. */
-.mtlx-header-bar.mtlx-desktop-titlebar a,
-.mtlx-header-bar.mtlx-desktop-titlebar button,
-.mtlx-header-bar.mtlx-desktop-titlebar select,
-.mtlx-header-bar.mtlx-desktop-titlebar input,
-.mtlx-header-bar.mtlx-desktop-titlebar [role="button"],
-.mtlx-header-bar.mtlx-desktop-titlebar .mtlx-menu {
+.mtlx-header.mtlx-desktop-titlebar a,
+.mtlx-header.mtlx-desktop-titlebar button,
+.mtlx-header.mtlx-desktop-titlebar select,
+.mtlx-header.mtlx-desktop-titlebar input,
+.mtlx-header.mtlx-desktop-titlebar [role="button"],
+.mtlx-header.mtlx-desktop-titlebar .mtlx-menu {
     -webkit-app-region: no-drag;
     app-region: no-drag;
 }
