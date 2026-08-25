@@ -200,7 +200,23 @@ const VIEW_DEPS = {
         app: 'js/what-is-materialx.jsx',
         globalName: 'WhatIsMaterialXApp',
     },
+    // Eager deps only: mtlx-ui (MtlxSelect for the page-size control) and
+    // hero-grid. The overlay's graph/3D-viewer stack is deferred to
+    // 'galleryDetail' below, loaded only once a card is opened.
     gallery: {
+        css: [],
+        scripts: [],
+        babelScripts: [
+            'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
+        ],
+        app: 'js/gallery-app.jsx',
+        globalName: 'MtlxGalleryApp',
+    },
+    // Dependency-only bundle (no app/globalName): loaded on demand via
+    // mtlxLoadViewDeps('galleryDetail') on first overlay open. Never
+    // routed to directly, so it's absent from Shell's viewState/render tree.
+    galleryDetail: {
         css: [
             'vendor/reactflow/style.css',
             'js/graph/graph-preview.css',
@@ -211,16 +227,12 @@ const VIEW_DEPS = {
             'embed/mtlx-viewer.js',
         ],
         babelScripts: [
-            'js/shared/mtlx-ui.jsx',
-            'js/shared/hero-grid.jsx',
             'js/graph/model.jsx',
             'js/graph/style.jsx',
             'js/graph/legend.jsx',
             'js/graph/node-component.jsx',
             'js/graph/graph-preview.jsx',
         ],
-        app: 'js/gallery-app.jsx',
-        globalName: 'MtlxGalleryApp',
     },
     compare: {
         css: [],
@@ -292,6 +304,10 @@ async function loadViewDeps(viewName) {
         for (const href of dep.css) await loadCss(href);
         for (const src of dep.scripts) await loadScript(src);
         for (const src of dep.babelScripts) await loadJsxApp(src);
+        // Dependency-only bundles (e.g. 'galleryDetail') carry no app or
+        // globalName: they exist to be awaited for their scripts, not to
+        // be mounted as a view themselves.
+        if (!dep.app) return;
         await loadJsxApp(dep.app);
         if (!window[dep.globalName]) {
             throw new Error('View "' + viewName + '" loaded but window.' + dep.globalName + ' is missing — a script in its manifest likely failed to parse (see console).');

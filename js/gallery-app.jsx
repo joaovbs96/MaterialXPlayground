@@ -1,10 +1,6 @@
 // js/gallery-app.jsx - the Material Gallery view (hash route "#!gallery"),
-// reached from the home Learn group. Browse, search and preview every
-// example material shipped in the MaterialX repo plus a few playground
-// showcase materials, generated into gallery/manifest.json (gitignored,
-// see scripts/build-gallery.mjs and docs/local/GALLERY.md). Classic JSX
-// like the other view apps, no imports - the shell Babel-transforms it
-// on first activation and keeps it mounted (keep-alive shell).
+// reached from Home's Learn group; browses/searches gallery/manifest.json
+// (gitignored, see scripts/build-gallery.mjs). Shell-injected, no imports.
 
 // Chip order and display labels for the family filter; only families
 // actually present in the manifest are shown, in this fixed order.
@@ -388,18 +384,28 @@ function MtlxGalleryApp({ active } = {}) {
     React.useEffect(() => {
         if (!openMaterial) { setDoc(null); setDocStatus('idle'); setDocError(null); return undefined; }
         const cached = docCacheRef.current.get(openMaterial.id);
-        if (cached) { setDoc(cached); setDocStatus('ready'); setDocError(null); return undefined; }
         let cancelled = false;
         setDocStatus('loading'); setDoc(null); setDocError(null);
         (async () => {
             try {
-                const { map, rootKey } = await fetchGalleryDoc(openMaterial);
-                const xml = await map[rootKey].text();
-                const textures = window.looseFilesFrom(map);
-                const name = rootKey.replace(/\.mtlx$/i, '');
-                const result = { xml, textures, name, map, rootKey };
-                docCacheRef.current.set(openMaterial.id, result);
-                if (!cancelled) { setDoc(result); setDocStatus('ready'); }
+                // The overlay's graph/3D-viewer bundle loads concurrently
+                // with the doc fetch (a no-op once loaded - js/shell.jsx
+                // memoizes it), gated behind the same 'loading' status.
+                const [result] = await Promise.all([
+                    cached || (async () => {
+                        const { map, rootKey } = await fetchGalleryDoc(openMaterial);
+                        const xml = await map[rootKey].text();
+                        const textures = window.looseFilesFrom(map);
+                        const name = rootKey.replace(/\.mtlx$/i, '');
+                        const built = { xml, textures, name, map, rootKey };
+                        docCacheRef.current.set(openMaterial.id, built);
+                        return built;
+                    })(),
+                    window.mtlxLoadViewDeps('galleryDetail'),
+                ]);
+                if (cancelled) return;
+                setDoc(result);
+                setDocStatus('ready');
             } catch (e) {
                 if (!cancelled) { setDocStatus('error'); setDocError(window.errMsg(e)); }
             }
