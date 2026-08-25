@@ -103,7 +103,7 @@
         // Multi-session recovery browser (item 14). Copies PortPickerPopover's
         // ArrowUp/ArrowDown/Enter + scrollIntoView idiom for its session
         // list; the render column hosts one never-re-keyed MtlxGraphPreview.
-        function AutosaveRestoreDialog({ offers, onRestore, onDiscard, onDiscardAll, onClose }) {
+        function AutosaveRestoreDialog({ offers, onRestore, onDiscard, onDiscardAll, onClose, coveredByConfirm }) {
             const [hi, setHi] = React.useState(0);
             const listRef = React.useRef(null);
             const panelRef = React.useRef(null);
@@ -111,8 +111,15 @@
             const tokenRef = React.useRef(0);
             const [shown, setShown] = React.useState(null); // { xml, textures, name }
 
-            useEscapeToClose(onClose, true);
-            React.useEffect(() => { if (panelRef.current) panelRef.current.focus(); }, []);
+            // Suspended while the discard/continue confirm sits on top of
+            // this dialog, so Esc there closes only that confirm.
+            useEscapeToClose(onClose, !coveredByConfirm);
+            // Also runs on mount. Re-focuses on Cancel too: that confirm's
+            // own button just unmounted with focus, dropping it to <body>
+            // and stranding this panel's arrow-key/Enter nav.
+            React.useEffect(() => {
+                if (!coveredByConfirm && panelRef.current) panelRef.current.focus();
+            }, [coveredByConfirm]);
             React.useEffect(() => {
                 if (hi >= offers.length) setHi(Math.max(0, offers.length - 1));
             }, [offers.length, hi]);
@@ -1317,6 +1324,10 @@
                     action();
                 }
             };
+            // Shared cancel path (backdrop click, Cancel button, Escape):
+            // all three back out without running the pending action.
+            const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
+            useEscapeToClose(closeConfirm, confirmCloseOpen);
             const guardedIngest = (map) => {
                 const hasMtlx = Object.keys(map).some((k) => /\.mtlx$/i.test(k));
                 confirmReplace(hasMtlx, () => ingest(map));
@@ -6570,9 +6581,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         )}
                     </div>
 
-                    {/* Preset picker. Rendered BEFORE the unsaved-changes
-                        dialog below (same z-50 class, earlier in the DOM)
-                        so that dialog paints on top during a mid-select confirmReplace. */}
+                    {/* Preset picker. The unsaved-changes dialog below now
+                        outranks it via z-[55] (not DOM order), so it still
+                        paints on top during a mid-select confirmReplace. */}
                     <MtlxPresetPicker
                         open={presetPickerOpen}
                         onClose={() => setPresetPickerOpen(false)}
@@ -6591,12 +6602,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         />
                     )}
 
-                    {/* Unsaved-changes dialog: gates Open / drag-drop of a
-                        new .mtlx / switching documents while dirty (never
-                        the additive Import). See confirmReplace. */}
+                    {/* Unsaved-changes dialog: gates Open / drag-drop of a new
+                        .mtlx / switching documents while dirty (never the
+                        additive Import). See confirmReplace; z-[55] beats z-50 peers. */}
                     {confirmCloseOpen && (
-                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                            onMouseDown={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}>
+                        <div className="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
+                            onMouseDown={closeConfirm}>
                             <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                                 onMouseDown={(e) => e.stopPropagation()}>
                                 <div className="text-sm font-semibold text-gray-100 mb-1">Unsaved changes</div>
@@ -6606,7 +6617,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 </div>
                                 <div className="flex flex-wrap justify-end gap-2">
                                     <button
-                                        onClick={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}
+                                        onClick={closeConfirm}
                                         className={BTN_SECONDARY}
                                     >Cancel</button>
                                     <button
@@ -6644,6 +6655,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             onDiscard={onDiscardDraft}
                             onDiscardAll={onDiscardAllDrafts}
                             onClose={() => setRestoreOffer(null)}
+                            coveredByConfirm={confirmCloseOpen}
                         />
                     )}
 
