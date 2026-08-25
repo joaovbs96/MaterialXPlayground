@@ -20,6 +20,21 @@ const GALLERY_EXAMPLES_PREFIX = 'resources/Materials/Examples/';
 // Gray "micro pill" tag idiom, copied from vscode-app.jsx's TAG_PILL_CLASS.
 const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px] py-px rounded-full border border-gray-600 text-gray-400';
 const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-gray-200 bg-gray-700/50 border border-gray-700 rounded px-1 py-px';
+// Filter-chip idiom, shared by the family chips and the numbered page pills.
+const GALLERY_CHIP_ACTIVE = 'border-blue-500 bg-blue-500/[0.12] text-blue-300';
+const GALLERY_CHIP_IDLE = 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100';
+
+// Page-size options for the grid, persisted across reloads.
+const GALLERY_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const GALLERY_PAGE_SIZE_KEY = 'mtlx_gallery_page_size';
+const GALLERY_PAGE_SIZE_DEFAULT = 20;
+// Reads the stored page size, falling back to the default when unset or
+// when it no longer matches one of the selectable options.
+function readGalleryPageSize() {
+    let stored = null;
+    try { stored = parseInt(localStorage.getItem(GALLERY_PAGE_SIZE_KEY), 10); } catch (e) { /* best-effort */ }
+    return GALLERY_PAGE_SIZE_OPTIONS.indexOf(stored) !== -1 ? stored : GALLERY_PAGE_SIZE_DEFAULT;
+}
 
 // Debounces a fast-changing value (e.g. a search input) by `delay` ms.
 function useGalleryDebounced(value, delay) {
@@ -31,7 +46,7 @@ function useGalleryDebounced(value, delay) {
     return debounced;
 }
 
-// Reads q/family/m off "#!gallery?..." (builder's hash-param pattern);
+// Reads q/family/m/page off "#!gallery?..." (builder's hash-param pattern);
 // {} when the current hash isn't a gallery route or carries no query.
 function parseGalleryHash() {
     const hash = window.location.hash || '';
@@ -42,7 +57,26 @@ function parseGalleryHash() {
     if (params.has('q')) patch.q = params.get('q');
     if (params.has('family')) patch.family = params.get('family');
     if (params.has('m')) patch.m = params.get('m');
+    if (params.has('page')) patch.page = params.get('page');
     return patch;
+}
+
+// Which page numbers the pagination control shows: page 1, the last page,
+// and current-1/current/current+1, with a single missing page shown as a
+// number instead of an ellipsis (only a genuine multi-page gap gets one).
+function galleryPageList(current, total) {
+    const keep = new Set([1, total, current - 1, current, current + 1]);
+    const pages = Array.from(keep).filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+    const out = [];
+    pages.forEach((p, i) => {
+        if (i > 0) {
+            const gap = p - pages[i - 1];
+            if (gap === 2) out.push(p - 1);
+            else if (gap > 2) out.push('ellipsis-' + p);
+        }
+        out.push(p);
+    });
+    return out;
 }
 
 // docPath resolution differs by origin: a materialx example is repo-relative,
@@ -172,6 +206,50 @@ function GalleryCard({ m, onOpen }) {
                 </div>
             </div>
         </button>
+    );
+}
+
+// Numbered pagination below the grid: first/last, current +-1, and a
+// single missing page shown as a number instead of an ellipsis. Hidden
+// entirely when there's only one page.
+function GalleryPagination({ page, pageCount, onChange }) {
+    if (pageCount <= 1) return null;
+    const items = galleryPageList(page, pageCount);
+    const navBtn = 'h-8 min-w-[2rem] px-2.5 rounded-full border text-[13px] font-medium transition-colors flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed';
+    return (
+        <nav aria-label="Gallery pages" className="flex flex-wrap items-center justify-center gap-1.5 pt-2">
+            <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => onChange(page - 1)}
+                aria-label="Previous page"
+                className={navBtn + ' ' + GALLERY_CHIP_IDLE}
+            >
+                <MtlxIcon name="arrow-left" className="w-3.5 h-3.5" />
+            </button>
+            {items.map((p) => typeof p === 'number' ? (
+                <button
+                    key={p}
+                    type="button"
+                    aria-current={p === page ? 'page' : undefined}
+                    onClick={() => onChange(p)}
+                    className={navBtn + ' ' + (p === page ? GALLERY_CHIP_ACTIVE : GALLERY_CHIP_IDLE)}
+                >
+                    {p}
+                </button>
+            ) : (
+                <span key={p} className="px-1 text-gray-600 select-none">…</span>
+            ))}
+            <button
+                type="button"
+                disabled={page >= pageCount}
+                onClick={() => onChange(page + 1)}
+                aria-label="Next page"
+                className={navBtn + ' ' + GALLERY_CHIP_IDLE}
+            >
+                <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
+            </button>
+        </nav>
     );
 }
 
@@ -305,18 +383,23 @@ function MtlxGalleryApp({ active } = {}) {
             .catch(() => setManifest('error'));
     }, [active]);
 
-    // Deep-link state (q/family/m), parsed once at mount (this component
-    // only ever mounts once, exactly on first activation, per the shell's
-    // keep-alive contract) and kept in sync by the hashchange listener below.
+    // Deep-link state (q/family/m/page), parsed once at mount (this
+    // component only mounts once, per the shell's keep-alive contract)
+    // and kept in sync by the hashchange listener below.
     const initialHashState = React.useState(parseGalleryHash)[0];
     const [query, setQuery] = React.useState(initialHashState.q || '');
     const [family, setFamily] = React.useState(initialHashState.family || 'all');
     const [openId, setOpenId] = React.useState(initialHashState.m || null);
+    const [pageSize, setPageSize] = React.useState(readGalleryPageSize);
+    const [page, setPage] = React.useState(() => {
+        const n = parseInt(initialHashState.page, 10);
+        return Number.isFinite(n) && n >= 1 ? n : 1;
+    });
     const debouncedQuery = useGalleryDebounced(query, 150);
 
-    // The one document-level listener this view keeps subscribed even while
-    // hidden: reparses q/family/m whenever the hash lands on a gallery route
-    // (guarded so navigating away, e.g. to #!viewer, never clobbers this).
+    // Reparses q/family/m/page whenever the hash lands on a gallery route
+    // (guarded so navigating away never clobbers this). Sets `page` from
+    // the hash directly, so back/forward restores the exact page it left on.
     React.useEffect(() => {
         const onHashChange = () => {
             const hash = window.location.hash || '';
@@ -325,6 +408,8 @@ function MtlxGalleryApp({ active } = {}) {
             setQuery(patch.q || '');
             setFamily(patch.family || 'all');
             setOpenId(patch.m || null);
+            const n = parseInt(patch.page, 10);
+            setPage(Number.isFinite(n) && n >= 1 ? n : 1);
         };
         window.addEventListener('hashchange', onHashChange);
         return () => window.removeEventListener('hashchange', onHashChange);
@@ -337,12 +422,13 @@ function MtlxGalleryApp({ active } = {}) {
         if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
         if (family !== 'all') params.set('family', family);
         if (openId) params.set('m', openId);
+        if (page > 1) params.set('page', String(page));
         const qs = params.toString();
         const hash = '#!gallery' + (qs ? '?' + qs : '');
         if (window.location.hash !== hash) {
             try { history.replaceState(null, '', hash); } catch (e) { /* best-effort */ }
         }
-    }, [debouncedQuery, family, openId]);
+    }, [debouncedQuery, family, openId, page]);
 
     const materials = manifest && manifest.materials ? manifest.materials : null;
     const tag = (manifest && manifest.source && manifest.source.tag)
@@ -366,11 +452,46 @@ function MtlxGalleryApp({ active } = {}) {
         });
     }, [materials, family, debouncedQuery]);
 
+    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+    const pagedMaterials = React.useMemo(
+        () => filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize),
+        [filtered, page, pageSize]
+    );
+
+    // Clamps a deep-linked page number once the manifest loads and the
+    // real page count is known, so an out-of-range request just lands on
+    // the last page instead of showing an empty grid forever.
+    React.useEffect(() => {
+        if (!materials) return;
+        setPage((p) => Math.min(Math.max(p, 1), pageCount));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [materials]);
+
+    const changeFamily = (id) => { setFamily(id); setPage(1); };
+    const changeQuery = (v) => { setQuery(v); setPage(1); };
+    const changePageSize = (v) => {
+        setPageSize(v);
+        try { localStorage.setItem(GALLERY_PAGE_SIZE_KEY, String(v)); } catch (e) { /* best-effort */ }
+        const nextCount = Math.max(1, Math.ceil(filtered.length / v));
+        setPage((p) => Math.min(p, nextCount));
+    };
+
+    // Scrolls the grid back into view on every page change, skipping the
+    // very first (mount/deep-link) value so landing on page 3 never jumps
+    // the page before the user has scrolled anywhere.
+    const gridRef = React.useRef(null);
+    const skipPageScrollRef = React.useRef(true);
+    React.useEffect(() => {
+        if (skipPageScrollRef.current) { skipPageScrollRef.current = false; return; }
+        if (gridRef.current) gridRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, [page]);
+
     const isFiltered = family !== 'all' || debouncedQuery.trim() !== '';
+    const pageSuffix = pageCount > 1 ? ', page ' + page + ' of ' + pageCount : '';
     const countLabel = !materials ? '' : !isFiltered
-        ? materials.length + ' material' + (materials.length === 1 ? '' : 's')
+        ? materials.length + ' material' + (materials.length === 1 ? '' : 's') + pageSuffix
         : filtered.length + ' match' + (filtered.length === 1 ? '' : 'es')
-            + (debouncedQuery.trim() ? ' for "' + debouncedQuery.trim() + '"' : '');
+            + (debouncedQuery.trim() ? ' for "' + debouncedQuery.trim() + '"' : '') + pageSuffix;
 
     const openMaterial = materials ? materials.find((m) => m.id === openId) || null : null;
 
@@ -482,7 +603,7 @@ function MtlxGalleryApp({ active } = {}) {
                             <input
                                 type="text"
                                 value={query}
-                                onChange={(e) => setQuery(e.target.value)}
+                                onChange={(e) => changeQuery(e.target.value)}
                                 placeholder="Search materials…"
                                 aria-label="Search materials"
                                 className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-600 bg-gray-800 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500"
@@ -495,11 +616,9 @@ function MtlxGalleryApp({ active } = {}) {
                                             key={c.id}
                                             type="button"
                                             aria-pressed={isActive}
-                                            onClick={() => setFamily(c.id)}
+                                            onClick={() => changeFamily(c.id)}
                                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
-                                                + (isActive
-                                                    ? 'border-blue-500 bg-blue-500/[0.12] text-blue-300'
-                                                    : 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100')}
+                                                + (isActive ? GALLERY_CHIP_ACTIVE : GALLERY_CHIP_IDLE)}
                                         >
                                             {c.label}
                                         </button>
@@ -508,16 +627,33 @@ function MtlxGalleryApp({ active } = {}) {
                             </div>
                         </div>
 
-                        <p className="text-xs text-gray-500">{countLabel}</p>
+                        <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs text-gray-500">{countLabel}</p>
+                            <div className="flex items-center gap-1.5 text-xs text-gray-500 shrink-0">
+                                <span>Per page</span>
+                                <MtlxSelect
+                                    value={pageSize}
+                                    options={GALLERY_PAGE_SIZE_OPTIONS}
+                                    defValue={GALLERY_PAGE_SIZE_DEFAULT}
+                                    onChange={changePageSize}
+                                    ariaLabel="Materials per page"
+                                    size="sm"
+                                    variant="field"
+                                />
+                            </div>
+                        </div>
 
                         {filtered.length === 0 ? (
                             <div className="flex items-center justify-center py-16 text-sm text-gray-500 text-center">
                                 No materials match this search.
                             </div>
                         ) : (
-                            <div className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-4">
-                                {filtered.map((m) => <GalleryCard key={m.id} m={m} onOpen={setOpenId} />)}
-                            </div>
+                            <>
+                                <div ref={gridRef} className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-4">
+                                    {pagedMaterials.map((m) => <GalleryCard key={m.id} m={m} onOpen={setOpenId} />)}
+                                </div>
+                                <GalleryPagination page={page} pageCount={pageCount} onChange={setPage} />
+                            </>
                         )}
                     </>
                 )}
