@@ -406,12 +406,9 @@
             // when opened (openExportDialog below), or null while closed —
             // same "computed once, not per render" contract as xmlDialogXml.
             const [exportDialog, setExportDialog] = React.useState(null);
-            // Presets dialog: curated MaterialX examples (MTLX_PRESETS in
-            // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks which preset
-            // is fetching so only that row spins while all rows disable.
-            const [presetsOpen, setPresetsOpen] = React.useState(false);
-            const [presetsBusy, setPresetsBusy] = React.useState(false);
-            const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+            // Unified preset picker (js/shared/preset-picker.jsx), replacing
+            // the old PresetsDialog (MTLX_PRESETS in js/shared/mtlx-ui.jsx).
+            const [presetPickerOpen, setPresetPickerOpen] = React.useState(false);
             // Shader export dialog: holds { renderables } computed once
             // when opened (openShaderExport below), null while closed —
             // same one-shot-computed contract as exportDialog above.
@@ -1125,8 +1122,8 @@
             };
 
             // `rootKey` (optional): when the caller already knows which
-            // .mtlx is the document (loadPreset's map may hold .mtlx-
-            // suffixed includes too), skip the ambiguous-drop heuristic below.
+            // .mtlx is the document (a crawled map may hold .mtlx-suffixed
+            // includes too), skip the ambiguous-drop heuristic below.
             // `additive` (File > Import): never replaces the session, new
             // .mtlx files join the mtlxPaths candidates list instead of
             // loading; textures still merge and rebind live previews.
@@ -2616,26 +2613,18 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const writeFinalRef = React.useRef(writeFinal);
             writeFinalRef.current = writeFinal;
 
-            // Toolbar "Presets" button: fetches a curated example .mtlx
-            // (crawl lives in fetchPresetFiles) and hands it to ingest(),
-            // gated behind confirmReplace like every other doc-replacing action.
-            const loadPreset = (preset) => {
+            // Picker onSelect ({ xml, name, files }, already fetched by the
+            // picker itself): gated behind confirmReplace like every other
+            // doc-replacing action, same map-building recipe as the
+            // 'mtlx-load-document' handoff's handleImport above.
+            const handlePresetPickerSelect = (picked) => {
                 confirmReplace(true, () => {
-                    (async () => {
-                        setPresetsBusy(true);
-                        setPresetsBusyPath(presetKey(preset));
-                        setError(null);
-                        try {
-                            const { map, rootKey } = await fetchPresetFiles(preset);
-                            ingestRef.current(map, rootKey);
-                            setPresetsOpen(false);
-                        } catch (e) {
-                            setError('Could not load preset: ' + errMsg(e));
-                        } finally {
-                            setPresetsBusy(false);
-                            setPresetsBusyPath(null);
-                        }
-                    })();
+                    const safeName = (picked.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                    const map = Object.assign({}, picked.files || {}, {
+                        [safeName + '.mtlx']: new Blob([picked.xml], { type: 'application/xml' }),
+                    });
+                    ingestRef.current(map);
+                    setPresetPickerOpen(false);
                 });
             };
 
@@ -5576,8 +5565,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     title: 'Add textures or more .mtlx documents to the session without replacing it',
                 },
                 !IN_VSCODE && {
-                    label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
-                    title: 'Load a curated official MaterialX example document',
+                    label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
+                    title: 'Load a preset from the Material Gallery',
                 },
                 AUTOSAVE_ON && {
                     label: 'Restore Autosaved…', icon: 'restore',
@@ -6571,15 +6560,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         )}
                     </div>
 
-                    {/* Presets dialog. Rendered BEFORE the unsaved-changes
+                    {/* Preset picker. Rendered BEFORE the unsaved-changes
                         dialog below (same z-50 class, earlier in the DOM)
-                        so that dialog paints on top during a mid-fetch confirmReplace. */}
-                    <PresetsDialog
-                        open={presetsOpen}
-                        onClose={() => setPresetsOpen(false)}
-                        onPick={loadPreset}
-                        busy={presetsBusy}
-                        busyPath={presetsBusyPath}
+                        so that dialog paints on top during a mid-select confirmReplace. */}
+                    <MtlxPresetPicker
+                        open={presetPickerOpen}
+                        onClose={() => setPresetPickerOpen(false)}
+                        onSelect={handlePresetPickerSelect}
                     />
 
                     {/* Shader Code export dialog ("Shader Code" button). */}

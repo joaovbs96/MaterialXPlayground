@@ -170,6 +170,7 @@ const VIEW_DEPS = {
             'js/graph/legend.jsx',
             'js/graph/node-component.jsx',
             'js/graph/graph-preview.jsx',
+            'js/shared/preset-picker.jsx',
             'js/graph/preview.jsx',
             'js/graph/catalog.jsx',
             'js/graph/dialogs.jsx',
