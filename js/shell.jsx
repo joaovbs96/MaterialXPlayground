@@ -395,11 +395,24 @@ class ViewErrorBoundary extends React.Component {
     }
 }
 
+// Hash -> view routing, shared between Shell's synchronous initial read
+// (so a direct #!gallery load never first mounts the hidden home view)
+// and its hashchange/popstate listeners below.
+function parseShellHash() {
+    if (EMBED) return 'docs';
+    // js/site-header.js is the source of truth for hash->view routing;
+    // this inline fallback is defensive-only and should never actually run.
+    return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
 function Shell() {
-    const [activeView, setActiveView] = React.useState('home');
+    // Initialized from the CURRENT hash, not a hardcoded 'home': site-header.js
+    // (which defines window.shellRouteFor) loads before this script runs, so
+    // a direct #!gallery load mounts gallery first render, never home.
+    const [activeView, setActiveView] = React.useState(parseShellHash);
     const [viewState, setViewState] = React.useState({
         home: { mounted: false, status: 'idle' },
         docs: { mounted: false, status: 'idle' },
@@ -419,16 +432,10 @@ function Shell() {
     // Hash router: '#!viewer'/'#!graph' select those views; '#!docs' or
     // any '#/...' (legacy permalink) means docs, left untouched for
     // docs-app.jsx's own hash logic; anything else means the home view.
+    // The initial value comes from the useState initializer above, so this
+    // effect only needs to react to LATER navigation.
     React.useEffect(() => {
-        const parseHash = () => {
-            if (EMBED) return 'docs';
-            // js/site-header.js is the source of truth for hash->view
-            // routing; this inline fallback is defensive-only and
-            // should never actually run.
-            return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
-        };
-        const onNav = () => setActiveView(parseHash());
-        setActiveView(parseHash());
+        const onNav = () => setActiveView(parseShellHash());
         window.addEventListener('hashchange', onNav);
         window.addEventListener('popstate', onNav);
         return () => {
