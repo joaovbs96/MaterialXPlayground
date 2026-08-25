@@ -551,6 +551,17 @@
     width: 20px;
     height: 20px;
 }
+/* The cog's outline artwork reads visually smaller than the octocat's
+   solid glyph at the same box, so give it a bigger svg and smaller
+   padding here, keeping the outer button at 32x32 like the GitHub one. */
+#mtlx-settings-btn.mtlx-icon-btn {
+    padding: 4px;
+}
+#mtlx-settings-btn.mtlx-icon-btn svg {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+}
 /* The GitHub button keeps its .mtlx-source-meta node in the DOM (repo
    name + facts row) so initSourceFacts' lookups never see a missing
    target; icon-only mode just hides it. */
