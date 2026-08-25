@@ -61,6 +61,30 @@ function parseGalleryHash() {
     return patch;
 }
 
+// docPath resolution differs by origin: a materialx example is repo-relative,
+// crawled the same way MTLX_PRESETS entries are; a playground entry is
+// site-relative, crawled as same-origin (its textures can live outside examples/).
+function fetchGalleryDoc(m) {
+    if (m.origin === 'materialx') {
+        const relPath = m.docPath.indexOf(GALLERY_EXAMPLES_PREFIX) === 0
+            ? m.docPath.slice(GALLERY_EXAMPLES_PREFIX.length)
+            : m.docPath;
+        return window.fetchPresetFiles({ path: relPath });
+    }
+    return window.fetchRemoteDocumentFiles(m.docPath);
+}
+
+// GitHub blob URL for a manifest entry's source: MaterialX-tagged for
+// 'materialx' origin entries (docPath is repo-relative there); our own
+// 'playground' entries link into this repo's main branch instead.
+function gallerySourceHref(m, tag) {
+    if (m.origin === 'materialx') {
+        return 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/' + tag + '/' + m.docPath;
+    }
+    const repo = (window.SITE_LINKS && window.SITE_LINKS.repo) || 'https://github.com/joaovbs96/MaterialXPlayground';
+    return repo + '/blob/main/' + m.docPath;
+}
+
 // Which page numbers the pagination control shows: page 1, the last page,
 // and current-1/current/current+1, with a single missing page shown as a
 // number instead of an ellipsis (only a genuine multi-page gap gets one).
@@ -77,19 +101,6 @@ function galleryPageList(current, total) {
         out.push(p);
     });
     return out;
-}
-
-// docPath resolution differs by origin: a materialx example is repo-relative,
-// crawled the same way MTLX_PRESETS entries are; a playground entry is
-// site-relative, crawled as same-origin (its textures can live outside examples/).
-function fetchGalleryDoc(m) {
-    if (m.origin === 'materialx') {
-        const relPath = m.docPath.indexOf(GALLERY_EXAMPLES_PREFIX) === 0
-            ? m.docPath.slice(GALLERY_EXAMPLES_PREFIX.length)
-            : m.docPath;
-        return window.fetchPresetFiles({ path: relPath });
-    }
-    return window.fetchRemoteDocumentFiles(m.docPath);
 }
 
 // Zip-safe path for a companion key: drops '.'/'..' segments (a zip entry
@@ -256,7 +267,10 @@ function GalleryPagination({ page, pageCount, onChange }) {
 // Detail overlay: matches DialogFrame's own chrome but is built by hand so
 // Close can be a labeled PILL_ACTION, not DialogFrame's bare "x" button.
 // Esc and a scrim click both close it (see useEscapeToClose).
-function GalleryDetailOverlay({ material, tag, doc, docStatus, docError, actionBusy, onOpenIn, onDownload, onClose }) {
+function GalleryDetailOverlay({
+    material, tag, doc, docStatus, docError, actionBusy, linkCopied,
+    onOpenIn, onDownload, onCopyLink, onClose,
+}) {
     useEscapeToClose(onClose, !!material);
     if (!material) return null;
     const ready = docStatus === 'ready' && !!doc;
@@ -361,6 +375,19 @@ function GalleryDetailOverlay({ material, tag, doc, docStatus, docError, actionB
                             <MtlxIcon name="download" className="w-3.5 h-3.5" />
                             {actionBusy === 'download' ? 'Downloading' : (hasCompanions ? 'Download .zip' : 'Download .mtlx')}
                         </button>
+                        <button type="button" onClick={onCopyLink} className={PILL_ACTION}>
+                            <MtlxIcon name={linkCopied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
+                            {linkCopied ? 'Copied' : 'Copy Link'}
+                        </button>
+                        <a
+                            href={gallerySourceHref(material, tag)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={PILL_ACTION}
+                        >
+                            <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
+                            View Source
+                        </a>
                     </div>
                 </div>
             </div>
@@ -568,6 +595,24 @@ function MtlxGalleryApp({ active } = {}) {
         }
     };
 
+    // Permalink copy: navigator.clipboard first, falling back to
+    // execCommand (window.copyTextToClipboard, js/shared/mtlx-ui.jsx);
+    // label swaps to "Copied" for ~1.5s (builder-app.jsx's copySnippet idiom).
+    const [linkCopied, setLinkCopied] = React.useState(false);
+    const linkCopiedTimerRef = React.useRef(null);
+    React.useEffect(() => () => clearTimeout(linkCopiedTimerRef.current), []);
+    React.useEffect(() => { setLinkCopied(false); }, [openId]);
+    const copyLink = async () => {
+        if (!openMaterial) return;
+        const url = window.location.origin + window.location.pathname + '#!gallery?m=' + encodeURIComponent(openMaterial.id);
+        const copy = window.copyTextToClipboard;
+        const ok = copy ? await copy(url) : false;
+        if (!ok) return;
+        setLinkCopied(true);
+        clearTimeout(linkCopiedTimerRef.current);
+        linkCopiedTimerRef.current = setTimeout(() => setLinkCopied(false), 1500);
+    };
+
     // Grid extent resolved against the shell's view wrapper (HeroGrid's own
     // contract). No naturally tall block to fade across here, so this is an
     // invisible extent sized to fade across roughly card row 1 instead.
@@ -665,8 +710,10 @@ function MtlxGalleryApp({ active } = {}) {
                     docStatus={docStatus}
                     docError={docError}
                     actionBusy={actionBusy}
+                    linkCopied={linkCopied}
                     onOpenIn={openIn}
                     onDownload={downloadDoc}
+                    onCopyLink={copyLink}
                     onClose={() => setOpenId(null)}
                 />
             </div>
