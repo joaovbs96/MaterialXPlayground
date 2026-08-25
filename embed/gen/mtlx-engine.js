@@ -491,10 +491,9 @@ const encodeDisplay = src => {
 // alpha-composited background. Tune here.
 const PEEL_REFRACTION_SCALE = 0.5;
 
-// Folds transmission into peel-pass alpha (ESSL only writes it to RGB) and
-// attenuates (rather than zeroes) the env-refraction term while peeling, so
-// transmission_color/transmission tint survives instead of washing out to
-// neutral gray. Fail-soft.
+// Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
+// then mixes toward a Schlick NdotV rim so grazing angles read as
+// reflective glass instead of a flat, view-independent haze. Fail-soft.
 const patchTransmissionAlpha = fs => {
   let weightName = null;
   if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';else if (/uniform\s+float\s+transmission\s*;/.test(fs)) weightName = 'transmission';
@@ -509,8 +508,19 @@ const patchTransmissionAlpha = fs => {
   if (!outAlphaMatch || outAlphaMatch.index <= returnIdx) return fs;
   const alphaInsertAt = outAlphaMatch.index + outAlphaMatch[0].length;
 
-  // T = (1-a) + a*tT => alpha' = a*(1-tT); 0.05 floor keeps clear-glass sheen above u_alphaThreshold (default 0.001).
-  const alphaFold = '\n    if (u_peelMode != 0) {\n' + '        float _tT = ' + weightName + ' * dot(' + colorExpr + ', vec3(0.3333));\n' + '        outAlpha = max(clamp(outAlpha * (1.0 - _tT), 0.0, 1.0), 0.05);\n' + '    }';
+  // Measured: raw outAlpha barely varies by view angle on its own, so a
+  // rim term needs the standard HW normal/position/eye varyings below.
+  // Fall back to the flat fold (still floored) when any is missing.
+  const hasFresnelVars = /\bin\s+vec3\s+normalWorld\s*;/.test(fs) && /\bin\s+vec3\s+positionWorld\s*;/.test(fs) && /uniform\s+vec3\s+u_viewPosition\s*;/.test(fs);
+
+  // Base fold: alpha' = a*(1-tT) (T = (1-a)+a*tT), floored at 0.05 for
+  // clear-glass sheen above u_alphaThreshold. A Schlick NdotV rim then
+  // mixes the base toward 1.0 near grazing angles for a reflective edge.
+  const alphaFold = hasFresnelVars ? '\n    if (u_peelMode != 0) {\n' + '        float _tT = ' + weightName + ' * dot(' + colorExpr + ', vec3(0.3333));\n' + '        float _base = outAlpha * (1.0 - _tT);\n' + '        vec3 _fN = normalize(normalWorld);\n' + '        vec3 _fV = normalize(u_viewPosition - positionWorld);\n' +
+  // abs(): DoubleSide peeling also hits inward-facing back walls,
+  // whose dot(N,V) is negative; a plain clamp would floor those to
+  // 0 and misread every back layer as maximally grazing.
+  '        float _fRim = pow(1.0 - abs(clamp(dot(_fN, _fV), -1.0, 1.0)), 5.0);\n' + '        outAlpha = max(clamp(mix(_base, 1.0, _fRim), 0.0, 1.0), 0.05);\n' + '    }' : '\n    if (u_peelMode != 0) {\n' + '        float _tT = ' + weightName + ' * dot(' + colorExpr + ', vec3(0.3333));\n' + '        outAlpha = max(clamp(outAlpha * (1.0 - _tT), 0.0, 1.0), 0.05);\n' + '    }';
   let out = fs.slice(0, alphaInsertAt) + alphaFold + fs.slice(alphaInsertAt);
   const gatedReturn = 'if (u_peelMode != 0) {\n' + '        return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * ' + PEEL_REFRACTION_SCALE + ';\n' + '    }\n    ' + returnAnchor;
   out = out.slice(0, returnIdx) + gatedReturn + out.slice(returnIdx + returnAnchor.length);
