@@ -43,6 +43,14 @@ ipcRenderer.on('mtlx-save-committed', () => { if (saveCommittedCallback) saveCom
 let menuCommandCallback = null;
 ipcRenderer.on('mtlx-menu-command', (event, cmd) => { if (menuCommandCallback) menuCommandCallback(cmd); });
 
+// Main asking this window to show the styled close-confirm dialog
+// (main.js's requestCloseConfirmation); glue.js echoes the token back
+// so a stale reply after the native fallback wins is dropped there.
+let closeConfirmCallback = null;
+ipcRenderer.on('mtlx-close-confirm-request', (event, payload) => {
+    if (closeConfirmCallback) closeConfirmCallback(payload);
+});
+
 const api = {
     saveMtlx: (opts) => ipcRenderer.invoke('mtlx-save', opts),
     notifyEdit: (dirty) => ipcRenderer.send('mtlx-notify-edit', !!dirty),
@@ -57,6 +65,8 @@ const api = {
     onRequestSave: (callback) => { requestSaveCallback = callback; },
     onSaveCommitted: (callback) => { saveCommittedCallback = callback; },
     onMenuCommand: (callback) => { menuCommandCallback = callback; },
+    onCloseConfirmRequest: (callback) => { closeConfirmCallback = callback; },
+    respondCloseConfirm: (payload) => ipcRenderer.send('mtlx-close-confirm-response', payload),
 };
 contextBridge.exposeInMainWorld('mtlxDesktop', api);
 

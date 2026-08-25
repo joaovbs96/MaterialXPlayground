@@ -144,7 +144,7 @@ const windowStates = new Map();
 function getWindowState(win) {
     let state = windowStates.get(win);
     if (!state) {
-        state = { currentPath: null, dirty: false, watcher: null, editDepth: 0, forceClose: false };
+        state = { currentPath: null, dirty: false, watcher: null, editDepth: 0, forceClose: false, closeConfirmToken: null };
         windowStates.set(win, state);
         win.on('closed', () => {
             if (state.watcher) state.watcher.close();
@@ -323,6 +323,109 @@ async function confirmCloseWindow(win) {
     win.webContents.send('mtlx-save-committed');
     state.forceClose = true;
     win.close();
+}
+
+// Correlates a styled close-confirm round trip; only a response
+// carrying this token is accepted (see requestStyledCloseConfirm).
+let closeConfirmTokenSeq = 0;
+const CLOSE_CONFIRM_TIMEOUT_MS = 4000;
+
+// Resolves with the renderer's choice, or rejects on timeout. A reply
+// for any OTHER token (a stale one after the fallback took over) is
+// silently ignored below.
+function requestStyledCloseConfirm(win, token) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const listener = (event, payload) => {
+            if (settled) return;
+            if (BrowserWindow.fromWebContents(event.sender) !== win) return;
+            if (!payload || payload.token !== token) return;
+            settled = true;
+            clearTimeout(timer);
+            ipcMain.removeListener('mtlx-close-confirm-response', listener);
+            resolve(payload.choice);
+        };
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            ipcMain.removeListener('mtlx-close-confirm-response', listener);
+            reject(new Error('timed out'));
+        }, CLOSE_CONFIRM_TIMEOUT_MS);
+        ipcMain.on('mtlx-close-confirm-response', listener);
+        win.webContents.send('mtlx-close-confirm-request', { token: token });
+    });
+}
+
+// Save-and-Close from the STYLED dialog, kept separate from
+// confirmCloseWindow's own branch below: that fallback must stay
+// byte-for-byte unchanged, so this duplicates it against the same helpers.
+async function performStyledSaveAndClose(win) {
+    const state = getWindowState(win);
+    let xml;
+    try {
+        xml = await withTimeout(requestSaveFromRenderer(win), SAVE_ON_CLOSE_TIMEOUT_MS);
+    } catch (e) {
+        console.error('[main] save-before-close failed: ' + errMsg(e));
+        const fallback = await dialog.showMessageBox(win, {
+            type: 'warning',
+            buttons: ['Discard', 'Cancel'],
+            defaultId: 1,
+            cancelId: 1,
+            title: 'MaterialX Playground',
+            message: 'Could not save this document.',
+            detail: 'Close it anyway and lose the unsaved changes?',
+        });
+        if (fallback.response === 0) {
+            state.forceClose = true;
+            win.close();
+        }
+        return;
+    }
+
+    const saveResult = await saveMtlxForWindow(win, { xml });
+    if (saveResult.canceled) return; // Save As dialog canceled: stay open.
+    if (!saveResult.ok) {
+        dialog.showErrorBox('MaterialX Playground', 'Could not save: ' + saveResult.error);
+        return;
+    }
+    win.webContents.send('mtlx-save-committed');
+    state.forceClose = true;
+    win.close();
+}
+
+// Primary close-guard entry (wired below): asks the renderer for its
+// styled dialog first, falling back to confirmCloseWindow's native one
+// only on timeout/IPC error; closeConfirmToken makes repeat clicks refocus.
+async function requestCloseConfirmation(win) {
+    const state = getWindowState(win);
+    if (state.closeConfirmToken !== null) {
+        win.focus();
+        return;
+    }
+    const token = ++closeConfirmTokenSeq;
+    state.closeConfirmToken = token;
+
+    try {
+        let choice;
+        try {
+            choice = await requestStyledCloseConfirm(win, token);
+        } catch (e) {
+            // Native dialog runs entirely in the main process, so it's
+            // the one path guaranteed to work regardless of renderer state.
+            await confirmCloseWindow(win);
+            return;
+        }
+
+        if (choice === 'discard') {
+            state.forceClose = true;
+            win.close();
+        } else if (choice === 'save') {
+            await performStyledSaveAndClose(win);
+        }
+        // 'cancel' (or anything unexpected): leave the window open.
+    } finally {
+        if (state.closeConfirmToken === token) state.closeConfirmToken = null;
+    }
 }
 
 // Reads filePath, scans it for xi:include/texture refs, and sends the
@@ -772,7 +875,7 @@ function createWindow() {
         const state = getWindowState(win);
         if (state.forceClose || !state.dirty) return;
         event.preventDefault();
-        confirmCloseWindow(win);
+        requestCloseConfirmation(win);
     });
 
     // The re-issued win.close() below re-runs the page's OWN beforeunload

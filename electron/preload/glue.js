@@ -61,4 +61,16 @@
         }
         window.dispatchEvent(new CustomEvent('mtlx-desktop-command', { detail: { cmd: cmd } }));
     });
+
+    // Shell-level styled close-confirm dialog (js/shell.jsx). Token is
+    // kept here, not exposed to shell.jsx, and echoed back so a stale
+    // response after the native fallback wins is a no-op in main.
+    var pendingCloseConfirmToken = null;
+    window.mtlxDesktop.onCloseConfirmRequest(function (payload) {
+        pendingCloseConfirmToken = payload && payload.token;
+        window.dispatchEvent(new CustomEvent('mtlx-desktop-close-confirm', { detail: payload }));
+    });
+    window.__mtlxRespondCloseConfirm = function (choice) {
+        window.mtlxDesktop.respondCloseConfirm({ token: pendingCloseConfirmToken, choice: choice });
+    };
 })();
