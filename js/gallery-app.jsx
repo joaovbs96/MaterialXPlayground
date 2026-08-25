@@ -36,6 +36,23 @@ function readGalleryPageSize() {
     return GALLERY_PAGE_SIZE_OPTIONS.indexOf(stored) !== -1 ? stored : GALLERY_PAGE_SIZE_DEFAULT;
 }
 
+// Doc cache cap: texture blob maps can be large (the chess set alone is
+// ~15MB), so bound the cache instead of letting it grow with every card
+// ever opened. Map insertion order doubles as recency once a hit re-inserts.
+const GALLERY_DOC_CACHE_MAX = 8;
+function galleryCacheGet(cache, key) {
+    if (!cache.has(key)) return null;
+    const v = cache.get(key);
+    cache.delete(key);
+    cache.set(key, v); // move to the "most recently used" end
+    return v;
+}
+function galleryCacheSet(cache, key, value) {
+    cache.delete(key);
+    cache.set(key, value);
+    if (cache.size > GALLERY_DOC_CACHE_MAX) cache.delete(cache.keys().next().value);
+}
+
 // Debounces a fast-changing value (e.g. a search input) by `delay` ms.
 function useGalleryDebounced(value, delay) {
     const [debounced, setDebounced] = React.useState(value);
@@ -264,23 +281,31 @@ function GalleryPagination({ page, pageCount, onChange }) {
     );
 }
 
-// Detail overlay: matches DialogFrame's own chrome but is built by hand so
-// Close can be a labeled PILL_ACTION, not DialogFrame's bare "x" button.
-// Esc and a scrim click both close it (see useEscapeToClose).
+// Detail overlay: matches DialogFrame's chrome but built by hand for a
+// labeled Close pill. Stays MOUNTED after its first open (hidden via a
+// CSS class instead) so MtlxGraphPreview's <materialx-viewer> never rebuilds.
 function GalleryDetailOverlay({
     material, tag, doc, docStatus, docError, actionBusy, linkCopied,
     onOpenIn, onDownload, onCopyLink, onClose,
 }) {
-    useEscapeToClose(onClose, !!material);
-    if (!material) return null;
-    const ready = docStatus === 'ready' && !!doc;
-    // The zip pill's label rule: only the root .mtlx (no textures, no
-    // xi:include siblings) keeps the plain-file download.
+    const isOpen = !!material;
+    // Remembers the last-opened material so this keeps rendering while
+    // hidden instead of unmounting; `doc` itself never resets to null
+    // either, so MtlxGraphPreview keeps the same instance across reopens.
+    const shownRef = React.useRef(null);
+    if (material) shownRef.current = material;
+    const shown = shownRef.current;
+    useEscapeToClose(onClose, isOpen);
+    if (!shown) return null; // never opened yet this session
+    // "Ready" means doc reflects THIS material, not a stale previous one
+    // still on display while a new fetch is in flight.
+    const ready = docStatus === 'ready' && !!doc && doc.id === shown.id;
     const hasCompanions = ready && Object.keys(doc.map).some((k) => k !== doc.rootKey);
     return (
         <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70 p-4"
-            onMouseDown={onClose}
+            className={'fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70 p-4' + (isOpen ? '' : ' hidden')}
+            onMouseDown={isOpen ? onClose : undefined}
+            aria-hidden={!isOpen}
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
@@ -288,8 +313,8 @@ function GalleryDetailOverlay({
             >
                 <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-700 bg-gray-900/70">
                     <div className="min-w-0">
-                        <span className="block text-sm font-semibold text-gray-100 truncate">{material.name}</span>
-                        <span className="block text-[11px] text-gray-500">{material.familyLabel}</span>
+                        <span className="block text-sm font-semibold text-gray-100 truncate">{shown.name}</span>
+                        <span className="block text-[11px] text-gray-500">{shown.familyLabel}</span>
                     </div>
                     <button type="button" onClick={onClose} className={PILL_ACTION}>
                         <MtlxIcon name="x" className="w-3.5 h-3.5" />
@@ -297,54 +322,71 @@ function GalleryDetailOverlay({
                     </button>
                 </div>
                 <div className="overflow-y-auto custom-scrollbar p-4 flex flex-col gap-4">
-                    {docStatus === 'loading' && (
+                    {!doc && docStatus === 'loading' && (
                         <div className="h-[400px] flex items-center justify-center text-gray-400 text-sm animate-pulse">
                             Loading material…
                         </div>
                     )}
-                    {docStatus === 'error' && (
+                    {!doc && docStatus === 'error' && (
                         <div className="h-[200px] flex flex-col items-center justify-center gap-2 text-center px-4">
                             <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
                             <span className="text-sm text-gray-300">Could not load this material.</span>
                             <span className="text-xs text-gray-500">{docError}</span>
                         </div>
                     )}
-                    {ready && (
-                        <MtlxGraphPreview
-                            xml={doc.xml}
-                            preview="right"
-                            previewTextures={doc.textures}
-                            previewName={doc.name}
-                            lazy={false}
-                            drill={true}
-                            interactive={true}
-                            controls={['zoom']}
-                            autoFocus="fit"
-                            chrome="card"
-                            transparent={false}
-                            height={400}
-                        />
+                    {doc && (
+                        <div className="relative">
+                            <MtlxGraphPreview
+                                xml={doc.xml}
+                                preview="right"
+                                previewTextures={doc.textures}
+                                previewName={doc.name}
+                                lazy={false}
+                                drill={true}
+                                interactive={true}
+                                controls={['zoom']}
+                                autoFocus="fit"
+                                chrome="card"
+                                transparent={false}
+                                height={400}
+                            />
+                            {/* Overlaid on top of the (possibly still-stale)
+                                preview above instead of replacing it, so the
+                                mounted preview/viewer never unmounts. */}
+                            {!ready && docStatus === 'loading' && (
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/70 text-gray-300 text-sm rounded-lg">
+                                    Loading material…
+                                </div>
+                            )}
+                            {docStatus === 'error' && (
+                                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gray-900/85 text-center px-4 rounded-lg">
+                                    <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
+                                    <span className="text-sm text-gray-300">Could not load this material.</span>
+                                    <span className="text-xs text-gray-500">{docError}</span>
+                                </div>
+                            )}
+                        </div>
                     )}
 
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3 border-t border-gray-800 pt-3">
-                        <GalleryMetaField label="Family" value={material.familyLabel} />
-                        <GalleryMetaField label="Shader" value={material.shader} />
+                        <GalleryMetaField label="Family" value={shown.familyLabel} />
+                        <GalleryMetaField label="Shader" value={shown.shader} />
                         <GalleryMetaField
                             label="Source"
-                            value={material.origin === 'materialx' ? 'MaterialX ' + tag : 'Playground'}
+                            value={shown.origin === 'materialx' ? 'MaterialX ' + tag : 'Playground'}
                         />
-                        <GalleryMetaField label="Document size" value={galleryHumanBytes(material.bytes)} />
-                        {material.textured && (
+                        <GalleryMetaField label="Document size" value={galleryHumanBytes(shown.bytes)} />
+                        {shown.textured && (
                             <GalleryMetaField
                                 label="Textures"
-                                value={material.textureCount + ' (' + galleryHumanBytes(material.textureBytes) + ')'}
+                                value={shown.textureCount + ' (' + galleryHumanBytes(shown.textureBytes) + ')'}
                             />
                         )}
-                        <GalleryMetaField label="Renderables" value={material.renderables.join(', ')} />
+                        <GalleryMetaField label="Renderables" value={shown.renderables.join(', ')} />
                     </div>
 
-                    {material.note && (
-                        <p className="text-xs text-gray-500 border-t border-gray-800 pt-3">{material.note}</p>
+                    {shown.note && (
+                        <p className="text-xs text-gray-500 border-t border-gray-800 pt-3">{shown.note}</p>
                     )}
 
                     <div className="flex flex-wrap gap-2 border-t border-gray-800 pt-3">
@@ -380,7 +422,7 @@ function GalleryDetailOverlay({
                             {linkCopied ? 'Copied' : 'Copy Link'}
                         </button>
                         <a
-                            href={gallerySourceHref(material, tag)}
+                            href={gallerySourceHref(shown, tag)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className={PILL_ACTION}
@@ -522,18 +564,18 @@ function MtlxGalleryApp({ active } = {}) {
 
     const openMaterial = materials ? materials.find((m) => m.id === openId) || null : null;
 
-    // Fetched document cache, keyed by material id, so reopening the same
-    // card's overlay is instant. `doc` also carries the raw crawl (`map`,
-    // `rootKey`) alongside `xml`/`textures`/`name`, for the zip download.
+    // Fetched document cache (LRU-capped, see galleryCacheGet/Set above);
+    // `doc` never resets to null once set, so a stale-but-real document
+    // keeps MtlxGraphPreview mounted while a new one loads or the overlay closes.
     const docCacheRef = React.useRef(new Map());
     const [doc, setDoc] = React.useState(null);
     const [docStatus, setDocStatus] = React.useState('idle');
     const [docError, setDocError] = React.useState(null);
     React.useEffect(() => {
-        if (!openMaterial) { setDoc(null); setDocStatus('idle'); setDocError(null); return undefined; }
-        const cached = docCacheRef.current.get(openMaterial.id);
+        if (!openMaterial) { setDocStatus('idle'); setDocError(null); return undefined; }
+        const cached = galleryCacheGet(docCacheRef.current, openMaterial.id);
         let cancelled = false;
-        setDocStatus('loading'); setDoc(null); setDocError(null);
+        setDocStatus('loading'); setDocError(null);
         (async () => {
             try {
                 // The overlay's graph/3D-viewer bundle loads concurrently
@@ -545,8 +587,8 @@ function MtlxGalleryApp({ active } = {}) {
                         const xml = await map[rootKey].text();
                         const textures = window.looseFilesFrom(map);
                         const name = rootKey.replace(/\.mtlx$/i, '');
-                        const built = { xml, textures, name, map, rootKey };
-                        docCacheRef.current.set(openMaterial.id, built);
+                        const built = { id: openMaterial.id, xml, textures, name, map, rootKey };
+                        galleryCacheSet(docCacheRef.current, openMaterial.id, built);
                         return built;
                     })(),
                     window.mtlxLoadViewDeps('galleryDetail'),
@@ -564,7 +606,7 @@ function MtlxGalleryApp({ active } = {}) {
 
     const [actionBusy, setActionBusy] = React.useState(null);
     const openIn = async (target) => {
-        if (actionBusy || !doc) return;
+        if (actionBusy || !doc || !openMaterial || doc.id !== openMaterial.id) return;
         setActionBusy(target);
         try {
             await window.mtlxLoadViewDeps(target);
@@ -578,7 +620,7 @@ function MtlxGalleryApp({ active } = {}) {
         }
     };
     const downloadDoc = async () => {
-        if (actionBusy || !doc || !openMaterial) return;
+        if (actionBusy || !doc || !openMaterial || doc.id !== openMaterial.id) return;
         const hasCompanions = Object.keys(doc.map).some((k) => k !== doc.rootKey);
         if (!hasCompanions) {
             window.downloadXml(doc.xml, openMaterial.id + '.mtlx');
