@@ -534,8 +534,10 @@
     padding: 6px;
     gap: 0;
     border-radius: 8px;
-    border: 1px solid var(--site-gray-600);
-    background-color: var(--site-gray-800);
+    /* Transparent at rest, but keep the 1px border reserving its own
+       space so hover doesn't shift/resize the button (BTN_MENUBAR). */
+    border: 1px solid transparent;
+    background-color: transparent;
     color: var(--site-gray-200);
     cursor: pointer;
     transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
@@ -543,6 +545,7 @@
 }
 .mtlx-icon-btn:hover {
     background-color: var(--site-gray-700);
+    border-color: var(--site-gray-600);
 }
 .mtlx-icon-btn svg {
     width: 20px;
