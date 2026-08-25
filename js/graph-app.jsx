@@ -6617,7 +6617,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     </div>
 
                     {/* Preset picker. The unsaved-changes dialog below now
-                        outranks it via z-[55] (not DOM order), so it still
+                        outranks it via z-[56] (not DOM order), so it still
                         paints on top during a mid-select confirmReplace. */}
                     <MtlxPresetPicker
                         open={presetPickerOpen}
@@ -6625,23 +6625,26 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         onSelect={handlePresetPickerSelect}
                     />
 
-                    {/* Shader Code export dialog ("Shader Code" button). */}
+                    {/* Shader Code export dialog ("Export Shader Code..."
+                        File menu item). z-[55] beats the restore dialog's
+                        z-50; onClose no-ops while confirm covers it (Esc). */}
                     {shaderExport && (
                         <ShaderExportDialog
                             open={true}
-                            onClose={() => setShaderExport(null)}
+                            onClose={() => { if (!confirmCloseOpen) setShaderExport(null); }}
                             renderables={shaderExport.renderables}
                             initialIndex={0}
                             generate={({ renderable, label, targetKey }) =>
                                 generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
                         />
                     )}
 
                     {/* Unsaved-changes dialog: gates Open / drag-drop of a new
                         .mtlx / switching documents while dirty (never the
-                        additive Import). See confirmReplace; z-[55] beats z-50 peers. */}
+                        additive Import). See confirmReplace; z-[56] beats z-55/z-50 peers. */}
                     {confirmCloseOpen && (
-                        <div className="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
+                        <div className="absolute inset-0 z-[56] flex items-center justify-center bg-gray-950/70"
                             onMouseDown={closeConfirm}>
                             <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                                 onMouseDown={(e) => e.stopPropagation()}>
@@ -6690,7 +6693,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             onDiscard={onDiscardDraft}
                             onDiscardAll={onDiscardAllDrafts}
                             onClose={() => setRestoreOffer(null)}
-                            coveredByConfirm={confirmCloseOpen}
+                            coveredByConfirm={confirmCloseOpen || !!exportDialog || !!shaderExport}
                         />
                     )}
 
@@ -6782,7 +6785,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         <ValidateDialog status={validateStatus} open={validateOpen} onClose={() => setValidateOpen(false)} />
                     )}
 
-                    {/* Export dialog ("Export" button, item B1). */}
+                    {/* Export dialog ("Export" button, item B1); also the
+                        desktop Export menu command, which can fire while the
+                        restore/confirm dialogs are already up (z-[55]). */}
                     {exportDialog && (
                         <ExportDialog
                             open={!!exportDialog}
@@ -6790,6 +6795,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             textures={exportDialog.textures}
                             onExport={handleExportDialogSubmit}
                             onClose={() => setExportDialog(null)}
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
+                            coveredByConfirm={confirmCloseOpen}
                         />
                     )}
 
