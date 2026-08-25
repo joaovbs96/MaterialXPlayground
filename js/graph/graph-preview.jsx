@@ -100,6 +100,15 @@
             const [failed, setFailed] = React.useState(() => !(window.mtlxHasWebGL2 ? window.mtlxHasWebGL2() : true));
             const [loaded, setLoaded] = React.useState(false);
             const [mounted, setMounted] = React.useState(false);
+            // Multi-material documents (e.g. the chess set): last
+            // 'mtlx-renderables' detail, and the selected name driving the
+            // element's live `material` attribute (see the effects below).
+            const [renderables, setRenderables] = React.useState([]);
+            const [material, setMaterial] = React.useState('');
+            // Defensive: mtlx-ui.jsx loads before this file for every
+            // current host (js/shell.jsx VIEW_DEPS), but a future host
+            // that skips it should just render without the dropdown.
+            const MtlxSelectComp = window.MtlxSelect;
 
             // Creates and mounts the element once; geometry stays live via
             // the custom element's own attribute handling (embed/mtlx-viewer.js's
@@ -120,10 +129,12 @@
                     el.style.width = '100%';
                     el.style.height = '100%';
                     el.addEventListener('mtlx-renderables', (e) => {
-                        if (Array.isArray(e.detail) && e.detail.length) {
+                        const list = Array.isArray(e.detail) ? e.detail : [];
+                        if (list.length) {
                             loadedRef.current = true;
                             setLoaded(true);
                         }
+                        setRenderables(list);
                     });
                     el.addEventListener('mtlx-error', () => {
                         if (!loadedRef.current) setFailed(true);
@@ -142,6 +153,10 @@
 
             React.useEffect(() => {
                 if (failed || !elRef.current) return undefined;
+                // A new document is coming: drop the stale material list/
+                // selection now rather than wait for the next 'mtlx-renderables'.
+                setRenderables([]);
+                setMaterial('');
                 if (src) {
                     elRef.current.src = src;
                 } else if (xml) {
@@ -157,6 +172,18 @@
                 if (failed && elRef.current) elRef.current.remove();
             }, [failed]);
 
+            // Live material switch (LIVE_ATTRS in embed/mtlx-viewer.js): no
+            // iframe rebuild, mirrors the `geometry` property set above.
+            React.useEffect(() => {
+                if (elRef.current) elRef.current.material = material;
+            }, [material]);
+
+            // Drops the selection once the current document's renderables no
+            // longer include it, mirroring builder-app.jsx's Material control.
+            React.useEffect(() => {
+                setMaterial((m) => (m && !renderables.some((r) => r.name === m)) ? '' : m);
+            }, [renderables]);
+
             return failed ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center px-3">
                     <MtlxIcon name="cube" className="w-5 h-5 text-gray-600" />
@@ -168,6 +195,21 @@
                     {!loaded && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                             <span className="text-[11px] text-gray-500">Loading material</span>
+                        </div>
+                    )}
+                    {mounted && MtlxSelectComp && renderables.length > 1 && (
+                        <div className="absolute top-1.5 left-1.5 z-10 max-w-[calc(100%-2.25rem)]">
+                            <MtlxSelectComp
+                                value={material}
+                                options={renderables.map((r) => ({ value: r.name, label: r.name }))}
+                                emptyOption="First material"
+                                onChange={setMaterial}
+                                defValue={null}
+                                title="Material to display"
+                                size="sm"
+                                variant="toolbar"
+                                className="max-w-full truncate"
+                            />
                         </div>
                     )}
                     {mounted && (
