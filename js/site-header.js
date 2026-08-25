@@ -628,6 +628,20 @@
     var navRight = document.getElementById('mtlx-nav-right');
     if (headerBar && navDesktop && navRight && navToggle) {
         var rafId = null;
+        // Window Controls Overlay reserves space behind the native min/max/
+        // close buttons; scrollWidth can't see content that merely spills
+        // into the bar's own padding, so check real element edges instead.
+        var overlayOverflow = function () {
+            var wco = navigator.windowControlsOverlay;
+            if (!wco || !wco.visible) return false;
+            var limit = wco.getTitlebarAreaRect().right - 24;
+            var items = headerBar.querySelectorAll('a, button, select, input, [role="button"]');
+            for (var i = 0; i < items.length; i++) {
+                var r = items[i].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && r.right > limit) return true;
+            }
+            return false;
+        };
         var measure = function () {
             // Three stages: (1) full-width desktop nav, (2) `is-compact`
             // (CSS hides the pills' abbreviatable text) if that alone
@@ -637,10 +651,10 @@
             navDesktop.style.display = 'flex';
             navRight.style.display = 'flex';
             navToggle.style.display = 'none';
-            var overflow = headerBar.scrollWidth > headerBar.clientWidth;
+            var overflow = headerBar.scrollWidth > headerBar.clientWidth || overlayOverflow();
             if (overflow) {
                 headerBar.classList.add('is-compact');
-                overflow = headerBar.scrollWidth > headerBar.clientWidth;
+                overflow = headerBar.scrollWidth > headerBar.clientWidth || overlayOverflow();
             }
             if (overflow) {
                 navDesktop.style.display = 'none';
@@ -677,6 +691,11 @@
         // reports itself; that alone can push the bar from fitting to
         // overflowing.
         window.addEventListener('mtlx-version', measure);
+        // The overlay rect can change without a window resize (e.g. still
+        // settling right after launch); re-measure whenever it does.
+        if (navigator.windowControlsOverlay) {
+            navigator.windowControlsOverlay.addEventListener('geometrychange', scheduleMeasure);
+        }
     }
 
     // ---- GitHub repo widget: async facts row -----------------------------
