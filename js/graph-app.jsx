@@ -186,6 +186,7 @@
                                         lazy={false}
                                         interactive={false}
                                         chrome="none"
+                                        transparent={false}
                                         controls="none"
                                         autoFocus="fit"
                                         height={320}
