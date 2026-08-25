@@ -184,11 +184,12 @@
                                         previewTextures={shown.textures}
                                         previewName={shown.name}
                                         lazy={false}
-                                        interactive={false}
+                                        interactive={true}
                                         chrome="none"
                                         transparent={false}
-                                        controls="none"
+                                        controls={['zoom']}
                                         autoFocus="fit"
+                                        focusMinZoom={0.6}
                                         height={320}
                                     />
                                 ) : (
