@@ -62,6 +62,44 @@ function fetchGalleryDoc(m) {
     return window.fetchRemoteDocumentFiles(m.docPath);
 }
 
+// Zip-safe path for a companion key: drops '.'/'..' segments (a zip entry
+// must not carry parent traversal); findFileForRef's basename fallback
+// still matches it on reimport (js/mtlx-engine.js, ~903).
+function galleryZipEntryPath(key) {
+    const segs = key.replace(/\\/g, '/').split('/').filter((s) => s && s !== '.' && s !== '..');
+    return segs.length ? segs.join('/') : 'file';
+}
+
+// Builds <id>.zip: the root doc (as <id>.mtlx - every rootKey we crawl
+// already matches that name) plus every companion file, textures and
+// xi:include sibling .mtlx docs alike. Level 0: nothing here compresses well.
+async function galleryBuildZip(map, rootKey, xml, id) {
+    const files = { [id + '.mtlx']: window.fflate.strToU8(xml) };
+    const used = new Set(Object.keys(files));
+    const companionKeys = Object.keys(map).filter((k) => k !== rootKey);
+    const bytesByKey = {};
+    await Promise.all(companionKeys.map(async (key) => {
+        bytesByKey[key] = new Uint8Array(await map[key].arrayBuffer());
+    }));
+    companionKeys.forEach((key) => {
+        let entryPath = galleryZipEntryPath(key);
+        if (used.has(entryPath)) {
+            // Collision (two companions collapsed to the same path): keep
+            // the zip valid by numbering it, even though that basename no
+            // longer matches its ref (an already-rare, defensive fallback).
+            const dot = entryPath.lastIndexOf('.');
+            const stem = dot > 0 ? entryPath.slice(0, dot) : entryPath;
+            const ext = dot > 0 ? entryPath.slice(dot) : '';
+            let n = 2;
+            while (used.has(stem + '_' + n + ext)) n++;
+            entryPath = stem + '_' + n + ext;
+        }
+        used.add(entryPath);
+        files[entryPath] = bytesByKey[key];
+    });
+    return new Blob([window.fflate.zipSync(files, { level: 0 })], { type: 'application/zip' });
+}
+
 // Human-readable byte size, one decimal place below 10 of a unit.
 function galleryHumanBytes(n) {
     if (!(n > 0)) return '0 B';
@@ -148,6 +186,9 @@ function GalleryDetailOverlay({ material, tag, doc, docStatus, docError, actionB
     useEscapeToClose(onClose, !!material);
     if (!material) return null;
     const ready = docStatus === 'ready' && !!doc;
+    // The zip pill's label rule: only the root .mtlx (no textures, no
+    // xi:include siblings) keeps the plain-file download.
+    const hasCompanions = ready && Object.keys(doc.map).some((k) => k !== doc.rootKey);
     return (
         <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70 p-4"
@@ -239,12 +280,12 @@ function GalleryDetailOverlay({ material, tag, doc, docStatus, docError, actionB
                         </button>
                         <button
                             type="button"
-                            disabled={!ready}
+                            disabled={!ready || !!actionBusy}
                             onClick={onDownload}
                             className={PILL_ACTION}
                         >
                             <MtlxIcon name="download" className="w-3.5 h-3.5" />
-                            Download .mtlx
+                            {actionBusy === 'download' ? 'Downloading' : (hasCompanions ? 'Download .zip' : 'Download .mtlx')}
                         </button>
                     </div>
                 </div>
@@ -338,8 +379,8 @@ function MtlxGalleryApp({ active } = {}) {
     const openMaterial = materials ? materials.find((m) => m.id === openId) || null : null;
 
     // Fetched document cache, keyed by material id, so reopening the same
-    // card's overlay is instant. `doc` is { xml, textures, name } for
-    // whichever material is currently open.
+    // card's overlay is instant. `doc` also carries the raw crawl (`map`,
+    // `rootKey`) alongside `xml`/`textures`/`name`, for the zip download.
     const docCacheRef = React.useRef(new Map());
     const [doc, setDoc] = React.useState(null);
     const [docStatus, setDocStatus] = React.useState('idle');
@@ -356,7 +397,7 @@ function MtlxGalleryApp({ active } = {}) {
                 const xml = await map[rootKey].text();
                 const textures = window.looseFilesFrom(map);
                 const name = rootKey.replace(/\.mtlx$/i, '');
-                const result = { xml, textures, name };
+                const result = { xml, textures, name, map, rootKey };
                 docCacheRef.current.set(openMaterial.id, result);
                 if (!cancelled) { setDoc(result); setDocStatus('ready'); }
             } catch (e) {
@@ -382,9 +423,22 @@ function MtlxGalleryApp({ active } = {}) {
             setActionBusy(null);
         }
     };
-    const downloadDoc = () => {
-        if (!doc || !openMaterial) return;
-        window.downloadXml(doc.xml, openMaterial.id + '.mtlx');
+    const downloadDoc = async () => {
+        if (actionBusy || !doc || !openMaterial) return;
+        const hasCompanions = Object.keys(doc.map).some((k) => k !== doc.rootKey);
+        if (!hasCompanions) {
+            window.downloadXml(doc.xml, openMaterial.id + '.mtlx');
+            return;
+        }
+        setActionBusy('download');
+        try {
+            const blob = await galleryBuildZip(doc.map, doc.rootKey, doc.xml, openMaterial.id);
+            window.downloadBlob(blob, openMaterial.id + '.zip');
+        } catch (e) {
+            console.error('[gallery] zip download failed', e);
+        } finally {
+            setActionBusy(null);
+        }
     };
 
     // Grid extent resolved against the shell's view wrapper (HeroGrid's own
