@@ -280,6 +280,10 @@
             // its bootstrap before any script runs); bound to a single
             // opened .mtlx file, so browser-only affordances are hidden.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            // True when hosted in the Electron desktop shell (set by its
+            // preload before any script runs). This product has no such
+            // shell, so this stays permanently false here.
+            const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
@@ -5594,6 +5598,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 {
                     label: 'View .mtlx XML', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
                     title: 'View the raw MaterialX XML for the current document',
+                },
+                IN_ELECTRON && { separator: true },
+                IN_ELECTRON && {
+                    label: 'Close Window', icon: 'x', onSelect: () => window.close(),
+                    title: 'Close this window',
                 },
             ];
 
