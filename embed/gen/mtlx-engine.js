@@ -5408,10 +5408,11 @@ const createMtlxRenderView = async ({
         if (has('u_envLightIntensity') && !newUniforms.u_envLightIntensity) newUniforms.u_envLightIntensity = {
           value: envExposure
         };
-        // Generated ESSL declares u_refractionTwoSided, not
-        // u_refractionEnv, matches the official viewer's binding.
+        // Generated ESSL declares u_refractionTwoSided (the name
+        // the official viewer also binds). false matches upstream's
+        // LightHandler default; true double-squares tinted transmission.
         if (has('u_refractionTwoSided')) newUniforms.u_refractionTwoSided = {
-          value: true
+          value: false
         };
         // Direct lights = rig (fixed) + auto-extracted env
         // key light (rotates live), ALWAYS bound at a FIXED
