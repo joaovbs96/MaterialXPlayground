@@ -428,3 +428,26 @@ html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16p
 .md-typeset .mtlx-pagenav__dir { font-size: .62rem; color: var(--site-gray-400); }
 .md-typeset .mtlx-pagenav__title { font-size: .75rem; font-weight: 600; color: var(--site-blue-300); }
 .md-typeset .mtlx-pagenav__spacer { flex: 0 1 auto; }
+
+/* Ports js/shared/hero-grid.jsx's pattern to plain CSS over one fixed
+   height, anchored to <body> (already position:relative). z-index:-1,
+   not 0: .md-container's flex children are positioned and would win. */
+.mtlx-bg-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 700px;
+  pointer-events: none;
+  z-index: -1;
+  background-image:
+    linear-gradient(to right, rgba(107, 114, 128, 0.16) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(107, 114, 128, 0.16) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center top;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0px, rgba(0, 0, 0, 1) 200px, rgba(0, 0, 0, 0) 700px);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0px, rgba(0, 0, 0, 1) 200px, rgba(0, 0, 0, 0) 700px);
+}
+@media print {
+  .mtlx-bg-grid { display: none; }
+}
