@@ -144,7 +144,7 @@ const windowStates = new Map();
 function getWindowState(win) {
     let state = windowStates.get(win);
     if (!state) {
-        state = { currentPath: null, dirty: false, watcher: null, editDepth: 0 };
+        state = { currentPath: null, dirty: false, watcher: null, editDepth: 0, forceClose: false };
         windowStates.set(win, state);
         win.on('closed', () => {
             if (state.watcher) state.watcher.close();
@@ -252,6 +252,77 @@ function requestSaveFromRenderer(win) {
         ipcMain.on('mtlx-request-save-reply', listener);
         win.webContents.send('mtlx-request-save');
     });
+}
+
+// Bounds the Save and Close renderer round trip below so a hung/broken
+// graph-view contract can't leave the close prompt stuck forever.
+const SAVE_ON_CLOSE_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((resolve, reject) => setTimeout(() => reject(new Error('timed out')), ms)),
+    ]);
+}
+
+// Shown in place of Electron's default silent close-block (its reaction to
+// a beforeunload preventDefault with no 'close' listener). forceClose lets
+// the re-issued win.close() below skip straight past the guard.
+async function confirmCloseWindow(win) {
+    const state = getWindowState(win);
+    const choice = await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons: ['Save and Close', 'Discard', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        title: 'MaterialX Playground',
+        message: 'This document has unsaved changes.',
+        detail: 'Do you want to save the changes before closing?',
+    });
+
+    if (choice.response === 2) return; // Cancel: leave the window open.
+
+    if (choice.response === 1) { // Discard
+        state.forceClose = true;
+        win.close();
+        return;
+    }
+
+    // The renderer round trip can hang or throw if the graph-view contract
+    // ever drifts; timeout/catch degrades to a discard-or-cancel prompt
+    // instead of leaving the window stuck mid-close.
+    let xml;
+    try {
+        xml = await withTimeout(requestSaveFromRenderer(win), SAVE_ON_CLOSE_TIMEOUT_MS);
+    } catch (e) {
+        console.error('[main] save-before-close failed: ' + errMsg(e));
+        const fallback = await dialog.showMessageBox(win, {
+            type: 'warning',
+            buttons: ['Discard', 'Cancel'],
+            defaultId: 1,
+            cancelId: 1,
+            title: 'MaterialX Playground',
+            message: 'Could not save this document.',
+            detail: 'Close it anyway and lose the unsaved changes?',
+        });
+        if (fallback.response === 0) {
+            state.forceClose = true;
+            win.close();
+        }
+        return;
+    }
+
+    const saveResult = await saveMtlxForWindow(win, { xml });
+    if (saveResult.canceled) return; // Save As dialog canceled: stay open.
+    if (!saveResult.ok) {
+        dialog.showErrorBox('MaterialX Playground', 'Could not save: ' + saveResult.error);
+        return;
+    }
+    // Same signal saveFromMenu sends: lets the renderer's own isDirty/undo
+    // "saved" bookkeeping settle before the re-issued close below.
+    win.webContents.send('mtlx-save-committed');
+    state.forceClose = true;
+    win.close();
 }
 
 // Reads filePath, scans it for xi:include/texture refs, and sends the
@@ -692,6 +763,23 @@ function createWindow() {
     win.on('focus', () => { lastFocusedWindow = win; });
     win.on('closed', () => {
         if (lastFocusedWindow === win) lastFocusedWindow = null;
+    });
+
+    // state.dirty (kept live by mtlx-notify-edit) gates this synchronously;
+    // Electron otherwise silently blocks close when the page's own
+    // beforeunload handler prevents unload, with no dialog at all.
+    win.on('close', (event) => {
+        const state = getWindowState(win);
+        if (state.forceClose || !state.dirty) return;
+        event.preventDefault();
+        confirmCloseWindow(win);
+    });
+
+    // The re-issued win.close() below re-runs the page's OWN beforeunload
+    // handler, which still asks to cancel; forceClose overrides that too,
+    // so the confirmed close is not blocked a second time.
+    win.webContents.on('will-prevent-unload', (event) => {
+        if (getWindowState(win).forceClose) event.preventDefault();
     });
 
     win.once('ready-to-show', () => win.show());
