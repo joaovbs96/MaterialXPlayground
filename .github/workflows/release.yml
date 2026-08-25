@@ -150,6 +150,7 @@ jobs:
             --exclude='.claude' \
             --exclude='.vscode' \
             --exclude='.vscodeignore' \
+            --exclude='electron' \
             --exclude='node_modules' \
             --exclude='tutorials-src' \
             --exclude='scripts' \
