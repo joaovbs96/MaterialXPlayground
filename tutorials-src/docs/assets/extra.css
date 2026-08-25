@@ -35,6 +35,14 @@ body, .md-typeset { font-family: var(--site-font-sans); }
 .md-typeset table:not([class]), .md-typeset table:not([class]) th, .md-typeset table:not([class]) td { border-color: var(--site-gray-700); }
 .md-typeset hr { border-color: var(--site-gray-800); }
 
+/* Fenced code blocks: the page itself already sits at the darkest gray
+   token, so code reads as a raised gray-800 surface (like every other
+   card) rather than a recessed well, framed instead of borderless. */
+.md-typeset .highlight {
+  border: .075rem solid var(--site-gray-700);
+  border-radius: .5rem;
+}
+
 /* Headings: material's h1 is light-weight (300) and dimmed; the site's
    headings are bold and near-white (font-bold text-gray-100). */
 .md-typeset h1, .md-typeset h2, .md-typeset h3, .md-typeset h4, .md-typeset h5, .md-typeset h6 {
@@ -92,7 +100,7 @@ html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16p
    corners blend into the clipped rounding. */
 .md-typeset .tabbed-set {
   border: .075rem solid var(--site-gray-600);
-  border-radius: .2rem;
+  border-radius: .5rem;
   overflow: hidden;
   background-color: var(--md-code-bg-color);
 }
@@ -408,7 +416,7 @@ html { font-size: 125%; scroll-padding-top: calc(var(--site-header-height) + 16p
   max-width: 48%;
   padding: .5rem .8rem;
   border: .075rem solid var(--site-gray-600);
-  border-radius: .2rem;
+  border-radius: .5rem;
   text-decoration: none;
   transition: border-color .15s, background-color .15s;
 }
