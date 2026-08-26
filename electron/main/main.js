@@ -248,7 +248,9 @@ async function saveMtlxForWindow(win, { xml, suggestedName, forceDialog } = {}) 
 
     state.currentPath = target;
     state.dirty = false;
-    app.addRecentDocument(target);
+    // showRecentInSystem only gates what we push to the OS; our own
+    // recentFiles list (addRecent below) always keeps working.
+    if (showRecentInSystem) app.addRecentDocument(target);
     addRecent(target);
     startWatcher(win, target);
     updateWindowTitle(win);
@@ -270,8 +272,15 @@ ipcMain.on('mtlx-notify-edit', (event, dirty) => {
 });
 
 // Renderer-side settings dialog (js/shell.jsx's DesktopSettingsDialog) reads
-// through this instead of the unreachable native menu checkbox.
-ipcMain.handle('mtlx-get-settings', () => ({ openInNewWindow }));
+// through this instead of the unreachable native menu checkbox. platform is
+// included because the renderer cannot read process.platform directly under
+// contextIsolation; jumpListStatus is the last buildJumpList() outcome.
+ipcMain.handle('mtlx-get-settings', () => ({
+    openInNewWindow,
+    showRecentInSystem,
+    platform: process.platform,
+    jumpListStatus,
+}));
 
 // Renderer-side About dialog (js/shell.jsx's DesktopAboutDialog) reads
 // these instead of the unreachable native menu's About item.
@@ -288,6 +297,10 @@ ipcMain.handle('mtlx-get-about', () => ({
 // Reuses setOpenInNewWindow so persistence and the native checkbox's
 // rebuildMenu() stay in sync with whatever the dialog set.
 ipcMain.on('mtlx-set-open-in-new-window', (event, value) => setOpenInNewWindow(value));
+
+// Reuses setShowRecentInSystem so persistence, app.clearRecentDocuments()
+// and the jump list rebuild stay in sync with whatever the dialog set.
+ipcMain.on('mtlx-set-show-recent-in-system', (event, value) => setShowRecentInSystem(value));
 
 // Renderer-side Open Recent dialog (js/graph-app.jsx's in-app File menu)
 // reads the same list the native Open Recent submenu is built from.
@@ -543,7 +556,9 @@ async function openMtlxFromDisk(filePath, win, isReload = false) {
     const state = getWindowState(win);
     state.currentPath = filePath;
     state.dirty = false;
-    app.addRecentDocument(filePath);
+    // showRecentInSystem only gates what we push to the OS; our own
+    // recentFiles list (addRecent below) always keeps working.
+    if (showRecentInSystem) app.addRecentDocument(filePath);
     addRecent(filePath);
     startWatcher(win, filePath);
     updateWindowTitle(win);
@@ -681,6 +696,11 @@ function getSettingsPath() {
 // gets its own new window. false routes those into the existing window.
 let openInNewWindow = true;
 
+// Whether we publish recent files to the OS (Windows jump list, macOS Dock).
+// Our own recentFiles list keeps working regardless; this only gates what
+// we push out via app.addRecentDocument/app.setJumpList.
+let showRecentInSystem = true;
+
 // Tolerant of a missing/corrupt file: any failure just means defaults,
 // same as a fresh install.
 function loadSettings() {
@@ -694,7 +714,7 @@ function loadSettings() {
 
 function saveSettings() {
     try {
-        fsSync.writeFileSync(getSettingsPath(), JSON.stringify({ openInNewWindow }), 'utf8');
+        fsSync.writeFileSync(getSettingsPath(), JSON.stringify({ openInNewWindow, showRecentInSystem }), 'utf8');
     } catch (e) {
         console.error('[main] failed to save settings: ' + errMsg(e));
     }
@@ -706,6 +726,17 @@ function setOpenInNewWindow(value) {
     openInNewWindow = !!value;
     saveSettings();
     rebuildMenu();
+}
+
+// Wired to the settings dialog's checkbox. Turning it off clears whatever
+// we already pushed to the OS instead of leaving stale entries behind;
+// turning it on rebuilds the jump list so a fixed Windows setting shows
+// up in the dialog without restarting the app.
+function setShowRecentInSystem(value) {
+    showRecentInSystem = !!value;
+    saveSettings();
+    if (!showRecentInSystem) app.clearRecentDocuments();
+    buildJumpList();
 }
 
 // Forwards a command string to a window's renderer, for menu items with
@@ -915,6 +946,19 @@ const JUMP_LIST_TASKS = [
 // custom category built from our own persisted recentFiles replaces it.
 const RECENT_JUMP_LIST_LIMIT = 5;
 
+// Most recent app.setJumpList() outcome, surfaced through mtlx-get-settings
+// so the settings dialog can tell the user when Windows is blocking it.
+// 'ok': succeeded. 'blocked': Windows denied it (customCategoryAccessDeniedError
+// or missingFileTypeRegistration), almost always Start_TrackDocs being off.
+// 'error': anything else unexpected.
+let jumpListStatus = 'ok';
+
+function classifyJumpListResult(result) {
+    if (!result || result === 'ok') return 'ok';
+    if (result === 'customCategoryAccessDeniedError' || result === 'missingFileTypeRegistration') return 'blocked';
+    return 'error';
+}
+
 // Windows-only: a custom recent-documents category built from our own
 // recentFiles, plus a tasks category for the four main tools, each
 // opening (or re-routing) a window via --mtlx-route.
@@ -937,15 +981,19 @@ function buildJumpList() {
     // missingFileTypeRegistration/customCategoryAccessDeniedError. A task
     // just relaunches the exe with the path as an argument, reusing the
     // argv handling getMtlxArg already provides.
-    const recentItems = recentFiles.slice(0, RECENT_JUMP_LIST_LIMIT).map((filePath) => ({
-        type: 'task',
-        program: process.execPath,
-        args: '"' + filePath + '"',
-        title: path.basename(filePath),
-        description: filePath,
-        iconPath: process.execPath,
-        iconIndex: 0,
-    }));
+    // showRecentInSystem off: the recents category is omitted entirely,
+    // not just left empty. Our own recentFiles list is untouched.
+    const recentItems = showRecentInSystem
+        ? recentFiles.slice(0, RECENT_JUMP_LIST_LIMIT).map((filePath) => ({
+            type: 'task',
+            program: process.execPath,
+            args: '"' + filePath + '"',
+            title: path.basename(filePath),
+            description: filePath,
+            iconPath: process.execPath,
+            iconIndex: 0,
+        }))
+        : [];
     // Omitted entirely (not an empty category) when there are no recents.
     const categories = recentItems.length > 0
         ? [{ type: 'custom', name: 'Recent Documents', items: recentItems }, tasksCategory]
@@ -955,6 +1003,7 @@ function buildJumpList() {
         // setJumpList can return an error string instead of throwing;
         // either way this must never take startup down with it.
         const result = app.setJumpList(categories);
+        jumpListStatus = classifyJumpListResult(result);
         if (result && result !== 'ok') {
             console.error('[main] setJumpList failed: ' + result);
             if (recentItems.length > 0) {
@@ -968,6 +1017,7 @@ function buildJumpList() {
             }
         }
     } catch (e) {
+        jumpListStatus = 'error';
         console.error('[main] setJumpList threw: ' + errMsg(e));
     }
 }
@@ -1290,7 +1340,9 @@ if (!gotLock) {
         });
 
         recentFiles = loadRecents();
-        openInNewWindow = loadSettings().openInNewWindow !== false;
+        const settings = loadSettings();
+        openInNewWindow = settings.openInNewWindow !== false;
+        showRecentInSystem = settings.showRecentInSystem !== false;
         rebuildMenu();
 
         // Must match electron/package.json's build.appId exactly: Windows
