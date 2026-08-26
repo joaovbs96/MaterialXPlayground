@@ -88,6 +88,19 @@ function mimeFor(filePath) {
     return MIME_TYPES[ext] || 'application/octet-stream';
 }
 
+// Strict CSP for HTML responses only. 'self' (not the app: scheme) so it
+// resolves to exactly app://playground; see the Stream 4 report for the
+// per-directive justification.
+const APP_CSP =
+    "default-src 'none'; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "font-src 'self'; " +
+    "img-src 'self' blob: data:; " +
+    "connect-src 'self' blob: data:; " +
+    "worker-src blob:; " +
+    "frame-src 'self';";
+
 // Resolves a request pathname against the site root, rejecting anything
 // that escapes it. Directories (and the empty/root path) fall through to
 // that directory's index.html; anything missing is a 404.
@@ -136,6 +149,9 @@ async function handleAppRequest(request) {
     if (result.status === 404) return plainTextResponse(404, isHead, 'Not found');
 
     const headers = { 'content-type': mimeFor(result.filePath) };
+    if (path.extname(result.filePath).toLowerCase() === '.html') {
+        headers['content-security-policy'] = APP_CSP;
+    }
     if (isHead) return new Response(null, { status: 200, headers });
 
     const data = await fs.readFile(result.filePath);
