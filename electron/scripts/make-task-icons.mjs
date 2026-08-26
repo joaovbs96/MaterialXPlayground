@@ -15,11 +15,11 @@ const ELECTRON_DIR = path.resolve(__dirname, '..');
 const OUT_DIR = path.join(ELECTRON_DIR, 'build', 'task-icons');
 
 // Rasterization needs a real Chromium to render SVG, so this script uses
-// the electron devDependency itself (already required for the app) via
-// BrowserWindow.capturePage, instead of adding a new SVG rasterizer dep.
-// Run this file with the electron.exe binary directly (see the npm script
-// below), not with plain node: node's require('electron') only resolves
-// to the binary path string and never boots the real app/BrowserWindow.
+// the electron devDependency itself (already required for the app) via an
+// in-page canvas, instead of adding a new SVG rasterizer dep. Run this
+// file with the electron.exe binary directly (see the npm script below),
+// not with plain node: node's require('electron') only resolves to the
+// binary path string and never boots the real app/BrowserWindow.
 const require = createRequire(import.meta.url);
 const electron = require('electron');
 
@@ -108,28 +108,39 @@ function openRenderWindow() {
         width: RENDER_SIZE,
         height: RENDER_SIZE,
         show: false,
-        transparent: true,
-        frame: false,
-        backgroundColor: '#00000000',
         webPreferences: { offscreen: false },
     });
 }
 
-// Renders one SVG string to a transparent PNG buffer at RENDER_SIZE via
-// win + capturePage; every ICO size below is downsized from this single
-// render, same precedent as make-icon.mjs.
+// Renders one SVG string to a transparent PNG buffer at RENDER_SIZE by
+// rasterizing it into an in-page <canvas> and reading back toDataURL, not
+// via win.webContents.capturePage(): capturePage on a transparent window
+// under software rendering was observed to composite the window's own
+// background instead of preserving alpha, yielding an opaque square.
+// Canvas rasterization never touches window compositing, so it keeps
+// alpha regardless of GPU/software rendering state.
 async function renderSvgToPng(win, svg) {
+    const svgDataUrl = 'data:image/svg+xml;base64,' + Buffer.from(svg, 'utf8').toString('base64');
     const html =
-        '<!doctype html><html><head><style>html,body{margin:0;background:transparent;}</style></head><body>' +
-        svg +
-        '</body></html>';
+        '<!doctype html><html><head><style>html,body{margin:0;background:transparent;}</style></head>' +
+        '<body><canvas id="c" width="' + RENDER_SIZE + '" height="' + RENDER_SIZE + '"></canvas></body></html>';
     await win.loadURL('data:text/html,' + encodeURIComponent(html));
-    // paint only happens once the window has actually shown at least a
-    // frame; showInactive keeps focus off it while still forcing paint.
-    win.showInactive();
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const image = await win.webContents.capturePage();
-    return image.toPNG();
+    const dataUrl = await win.webContents.executeJavaScript(
+        'new Promise((resolve, reject) => {' +
+        'const img = new Image();' +
+        'img.onload = () => {' +
+        'const canvas = document.getElementById("c");' +
+        'const ctx = canvas.getContext("2d");' +
+        'ctx.clearRect(0, 0, canvas.width, canvas.height);' +
+        'ctx.drawImage(img, 0, 0, canvas.width, canvas.height);' +
+        'resolve(canvas.toDataURL("image/png"));' +
+        '};' +
+        'img.onerror = () => reject(new Error("svg image failed to load"));' +
+        'img.src = ' + JSON.stringify(svgDataUrl) + ';' +
+        '})'
+    );
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    return Buffer.from(base64, 'base64');
 }
 
 // app.exit() can race past a just-written console.log on Windows before
