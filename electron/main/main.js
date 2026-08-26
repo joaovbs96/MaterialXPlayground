@@ -999,13 +999,34 @@ function createWindow() {
                 titlebarOk = false;
             }
 
+            // Offline enforcement: issue a probe request to an external host
+            // via net.request (the page's own CSP would otherwise block a
+            // fetch() before it ever reaches webRequest, which would test
+            // the CSP instead of the hard blocker) and confirm it is both
+            // refused AND that our blocker (via the counter it bumps) is
+            // what refused it, not some unrelated network error.
+            const blockedBefore = blockedRequestCount;
+            let probeRefused = false;
+            try {
+                const { net } = require('electron');
+                await new Promise((resolve) => {
+                    const req = net.request({ url: 'https://example.com/mtlx-smoke-probe', session: session.defaultSession });
+                    req.on('error', () => { probeRefused = true; resolve(); });
+                    req.on('response', () => resolve());
+                    req.end();
+                });
+            } catch (e) {
+                probeRefused = true;
+            }
+            const blockerOk = probeRefused && blockedRequestCount > blockedBefore;
+
             // The empty write's callback only fires once the console.log
             // above has actually flushed, same race/fix as finishSmoke.
-            if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title && menuOk && titlebarOk) {
+            if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title && menuOk && titlebarOk && blockerOk) {
                 console.log('[smoke] OK ' + title);
                 process.stdout.write('', () => app.quit());
             } else {
-                console.log('[smoke] FAIL bad url, empty title, missing menu, or bad titlebar: ' + currentUrl);
+                console.log('[smoke] FAIL bad url, empty title, missing menu, bad titlebar, or blocker not enforced: ' + currentUrl);
                 process.stdout.write('', () => app.exit(1));
             }
         });
