@@ -1281,11 +1281,19 @@ function BuilderApp({ active } = {}) {
         copyTimerRef.current = setTimeout(() => setCopiedKey(null), 1500);
     };
 
+    // The src value for anything copied/opened externally (Change 2): a
+    // pick we resolved ourselves is rewritten to its public form so it's
+    // fetchable outside the app; anything the user typed by hand is passed
+    // through untouched, since we never resolved it in the first place.
+    const publicSrc = pickedDoc ? builderPublicSrcForIdentity(pickedDoc) : src.trim();
+
     // Serializes the non-default settings into "#!builder?..." (same param
     // names as the embed query string, plus builder-only w/h/sizing),
-    // replaces the URL bar hash, and copies the resulting link.
+    // replaces the URL bar hash, and copies the resulting link. Uses
+    // publicSrc (not settings.src) so a picked doc's app:// src never
+    // leaks into a link shared outside the app.
     const handleShareConfig = async () => {
-        const qs = buildShareParams(settings).toString();
+        const qs = buildShareParams({ ...settings, src: publicSrc }).toString();
         const hash = '#!builder' + (qs ? '?' + qs : '');
         try { history.replaceState(null, '', hash); } catch (e) { window.location.hash = hash; }
         // Under Electron, window.location is the app:// origin, meaningless
@@ -1294,12 +1302,6 @@ function BuilderApp({ active } = {}) {
         const url = base + window.location.search + hash;
         await copySnippet('share', url);
     };
-
-    // The src value for anything copied/opened externally (Change 2): a
-    // pick we resolved ourselves is rewritten to its public form so it's
-    // fetchable outside the app; anything the user typed by hand is passed
-    // through untouched, since we never resolved it in the first place.
-    const publicSrc = pickedDoc ? builderPublicSrcForIdentity(pickedDoc) : src.trim();
 
     // ---- Snippet generation: omit anything at its documented default ----
     const queryEntries = () => {
