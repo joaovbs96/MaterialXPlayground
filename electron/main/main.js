@@ -664,6 +664,7 @@ function addRecent(filePath) {
 function clearRecents() {
     recentFiles = [];
     saveRecents(recentFiles);
+    app.clearRecentDocuments();
     rebuildMenu();
 }
 
@@ -884,6 +885,51 @@ function buildMenuTemplate() {
 
 function rebuildMenu() {
     Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()));
+}
+
+// Task icons ship outside app.asar (see electron/package.json's
+// extraResources): Windows cannot read an icon file that lives inside
+// the asar archive. Packaged runs resolve them next to the other
+// extraResources under resourcesPath; unpackaged (electron:dev, no asar
+// at all) runs resolve the same committed files straight out of
+// electron/build/task-icons instead.
+function getTaskIconsDir() {
+    return app.isPackaged ? path.join(process.resourcesPath, 'task-icons') : path.join(__dirname, '..', 'build', 'task-icons');
+}
+
+const JUMP_LIST_TASKS = [
+    { route: 'docs', title: 'Node Specs', description: 'Open the Node Specs reference', icon: 'docs.ico' },
+    { route: 'viewer', title: 'Viewer', description: 'Open the Viewer', icon: 'viewer.ico' },
+    { route: 'compare', title: 'Compare', description: 'Open the Compare tool', icon: 'compare.ico' },
+    { route: 'graph', title: 'Graph Editor', description: 'Open the Graph Editor', icon: 'graph.ico' },
+];
+
+// Windows-only: a recent-documents category (app.addRecentDocument already
+// keeps this fed on every save/open) plus a tasks category for the four
+// main tools, each opening (or re-routing) a window via --mtlx-route.
+function buildJumpList() {
+    if (process.platform !== 'win32') return;
+    const iconsDir = getTaskIconsDir();
+    const tasks = JUMP_LIST_TASKS.map((t) => ({
+        type: 'task',
+        program: process.execPath,
+        args: '--mtlx-route=' + t.route,
+        title: t.title,
+        description: t.description,
+        iconPath: path.join(iconsDir, t.icon),
+        iconIndex: 0,
+    }));
+
+    try {
+        // setJumpList can return an error string instead of throwing;
+        // either way this must never take startup down with it.
+        const result = app.setJumpList([{ type: 'recent' }, { type: 'tasks', name: 'Tools', items: tasks }]);
+        if (result && result !== 'ok') {
+            console.error('[main] setJumpList failed: ' + result);
+        }
+    } catch (e) {
+        console.error('[main] setJumpList threw: ' + errMsg(e));
+    }
 }
 
 // Updated by every window's own 'focus'/'closed' handlers (see
@@ -1180,6 +1226,14 @@ if (!gotLock) {
         recentFiles = loadRecents();
         openInNewWindow = loadSettings().openInNewWindow !== false;
         rebuildMenu();
+
+        // Must match electron/package.json's build.appId exactly: Windows
+        // keys a jump list to the AppUserModelID, which electron-builder
+        // stamps onto the installed shortcut from this same appId.
+        // Without this call the jump list silently does not appear at
+        // all, with no error anywhere.
+        app.setAppUserModelId('com.joaovbs96.materialxplayground');
+        buildJumpList();
 
         if (process.env.MTLX_SMOKE_OPEN) {
             runSmokeOpen(path.resolve(process.env.MTLX_SMOKE_OPEN));

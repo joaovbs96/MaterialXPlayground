@@ -24,6 +24,10 @@
       {
         "from": "dist-site",
         "to": "site"
+      },
+      {
+        "from": "build/task-icons",
+        "to": "task-icons"
       }
     ],
     "win": {
