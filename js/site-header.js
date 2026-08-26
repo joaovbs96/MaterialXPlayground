@@ -1146,6 +1146,11 @@
     // Experimental Preview notice, moved from the docs page's own banner
     // so it shows on every route. Needs display:inline: :where() sets
     // svg{display:block}.
+    // Host noun for the two sentences below: the web/VS Code wording
+    // ("this site" / "This website") reads wrong in the desktop About
+    // dialog, which is not a website, so it swaps to app-appropriate phrasing there.
+    var DISCLAIMER_HOST_NOUN = IS_ELECTRON ? 'this app' : 'this site';
+    var DISCLAIMER_PROJECT_SUBJECT = IS_ELECTRON ? SITE_TITLE : 'This website';
     var DISCLAIMER_EXPERIMENTAL_HTML =
             '<p class="mtlx-footer-experimental">' +
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
@@ -1153,12 +1158,12 @@
                     ' class="mtlx-footer-warn-icon">' +
                     '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
                 '</svg>' +
-                '<strong>Experimental preview:</strong> this site is under active development, 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
+                '<strong>Experimental preview:</strong> ' + DISCLAIMER_HOST_NOUN + ' is under active development, 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
                 '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
             '</p>';
     var DISCLAIMER_AFFILIATION_HTML =
             '<p>' +
-                'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
+                DISCLAIMER_PROJECT_SUBJECT + ' is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
                 'In the event of any discrepancies, the specification in the ' +
                 '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
                 'remains the definitive source of truth.' +
