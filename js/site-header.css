@@ -551,6 +551,13 @@
     width: 20px;
     height: 20px;
 }
+/* The octocat is a filled 16-unit glyph with ink to its edges, so at the
+   same 20px box it reads heavier than the outline icons beside it; shrink
+   it slightly so the three buttons look optically matched. */
+.mtlx-source.mtlx-icon-btn .mtlx-source-icon {
+    width: 18px;
+    height: 18px;
+}
 /* The GitHub button keeps its .mtlx-source-meta node in the DOM (repo
    name + facts row) so initSourceFacts' lookups never see a missing
    target; icon-only mode just hides it. */
