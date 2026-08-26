@@ -160,6 +160,10 @@ function MaterialViewerApp({
   // before any site script runs). The editor is bound to one opened
   // .mtlx file, so browser-only affordances (drop zone, pickers) are hidden.
   const IN_VSCODE = !!window.__MTLX_VSCODE__;
+  // True inside the offline Electron desktop app; the default
+  // material load below skips its remote fallback there, since
+  // the app promises to never reach the network on its own.
+  const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
   // Lets a future multi-view shell pause this view's background
   // work (render loop, global drag-drop) without unmounting.
   // Standalone material-viewer.html never passes it, so defaults true.
@@ -864,17 +868,22 @@ function MaterialViewerApp({
         // the user's own load is already in flight.
         if (hasSession() || loadedRef.current) return;
         setBusy(false);
-        setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
       });
       return;
     }
     // Local-first: materials/open_pbr_default.mtlx (repo root),
     // falling back to DEFAULT_MATERIAL_URL on any failure (a
     // non-ok response or a thrown network error), as before.
+    // Electron skips that remote leg: the app is offline by
+    // policy, so a missing local file is just a missing file.
     fetch('materials/open_pbr_default.mtlx').then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r;
-    }).catch(() => fetch(DEFAULT_MATERIAL_URL)).then(r => {
+    }).catch(e => {
+      if (IN_ELECTRON) throw e;
+      return fetch(DEFAULT_MATERIAL_URL);
+    }).then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     }).then(xml => {
@@ -891,7 +900,7 @@ function MaterialViewerApp({
       // the user's own load is already in flight.
       if (hasSession() || loadedRef.current) return;
       setBusy(false);
-      setStatus(IN_VSCODE ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+      setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
     });
   }, []);
   const onPickFileList = fileList => {

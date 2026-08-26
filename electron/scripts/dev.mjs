@@ -14,19 +14,28 @@ const ELECTRON_DIR = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(ELECTRON_DIR, '..');
 const IS_WIN = process.platform === 'win32';
 
-if (!existsSync(path.join(ELECTRON_DIR, 'node_modules'))) {
-    console.log('[electron:dev] installing electron/ dependencies...');
-    // npm ships as npm.cmd on Windows; Node refuses to spawn a .cmd/.bat
-    // directly without shell:true (batch-file argument injection hardening).
-    const install = spawnSync(IS_WIN ? 'npm.cmd' : 'npm', ['ci', '--prefix', ELECTRON_DIR], {
-        stdio: 'inherit',
-        shell: IS_WIN,
-    });
-    if (install.error) {
-        console.error(install.error);
+// npm ships as npm.cmd on Windows; Node refuses to spawn a .cmd/.bat
+// directly without shell:true (batch-file argument injection hardening).
+function runNpm(args, opts) {
+    const result = spawnSync(IS_WIN ? 'npm.cmd' : 'npm', args, Object.assign({ stdio: 'inherit', shell: IS_WIN }, opts));
+    if (result.error) {
+        console.error(result.error);
         process.exit(1);
     }
-    if (install.status !== 0) process.exit(install.status || 1);
+    if (result.status !== 0) process.exit(result.status || 1);
+}
+
+if (!existsSync(path.join(ELECTRON_DIR, 'node_modules'))) {
+    console.log('[electron:dev] installing electron/ dependencies...');
+    runNpm(['ci', '--prefix', ELECTRON_DIR]);
+}
+
+// Same offline-asset guard as pack.mjs: without this, a fresh tree's first
+// electron:dev run silently falls back to remote asset mode instead of
+// vendor/materialx, defeating the whole point of the desktop build.
+if (!existsSync(path.join(REPO_ROOT, 'vendor', 'materialx', 'manifest.json'))) {
+    console.log('[electron:dev] vendor/materialx missing, running npm run vendor:offline at the repo root...');
+    runNpm(['run', 'vendor:offline'], { cwd: REPO_ROOT });
 }
 
 const require = createRequire(import.meta.url);
