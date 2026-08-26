@@ -2,7 +2,7 @@
 // pack.mjs: single-command local packaging: ensures deps and vendor
 // data, stages the site, then runs electron-builder for the current
 // platform (unsigned, --publish never; this is the in-depth-test build).
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,11 +21,32 @@ function run(cmd, args, opts) {
     if (result.status !== 0) process.exit(result.status || 1);
 }
 
+function fail(message) {
+    console.error('[electron:pack] ' + message);
+    process.exit(1);
+}
+
+// electron-builder reads electron/package.json's version for the artifact
+// filename, but the project's real version lives in the root package.json.
+// Fail loudly here instead of silently shipping a stale/wrong version.
+function checkVersionSync() {
+    const rootVersion = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
+    const electronVersion = JSON.parse(readFileSync(path.join(ELECTRON_DIR, 'package.json'), 'utf8')).version;
+    if (rootVersion !== electronVersion) {
+        fail(
+            'version mismatch: root package.json is "' + rootVersion + '" but electron/package.json is "' +
+            electronVersion + '". Update electron/package.json\'s version to match before packaging.'
+        );
+    }
+}
+
 // npm ships as npm.cmd on Windows; Node refuses to spawn a .cmd/.bat
 // directly without shell:true (batch-file argument injection hardening).
 function runNpm(args, opts) {
     run(IS_WIN ? 'npm.cmd' : 'npm', args, Object.assign({ shell: IS_WIN }, opts));
 }
+
+checkVersionSync();
 
 if (!existsSync(path.join(ELECTRON_DIR, 'node_modules'))) {
     console.log('[electron:pack] installing electron/ dependencies...');
