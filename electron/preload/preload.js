@@ -69,6 +69,8 @@ const api = {
     respondCloseConfirm: (payload) => ipcRenderer.send('mtlx-close-confirm-response', payload),
     getSettings: () => ipcRenderer.invoke('mtlx-get-settings'),
     getAbout: () => ipcRenderer.invoke('mtlx-get-about'),
+    // TEMPORARY: backs the About dialog's diagnostic self test button.
+    offlineSelfTest: () => ipcRenderer.invoke('mtlx-offline-selftest'),
     setOpenInNewWindow: (value) => ipcRenderer.send('mtlx-set-open-in-new-window', !!value),
 };
 contextBridge.exposeInMainWorld('mtlxDesktop', api);

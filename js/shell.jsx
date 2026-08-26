@@ -643,6 +643,11 @@ function DesktopAboutDialog() {
     const [license, setLicense] = React.useState(__licenseCache);
     const [licenseError, setLicenseError] = React.useState(false);
     const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
+    // TEMPORARY: state for the offline self test diagnostic below. Remove
+    // this whole block, and the button/results markup, when the offline
+    // enforcement work is done being verified.
+    const [selfTest, setSelfTest] = React.useState(null);
+    const [selfTestRunning, setSelfTestRunning] = React.useState(false);
     const panelRef = React.useRef(null);
 
     React.useEffect(() => {
@@ -702,6 +707,34 @@ function DesktopAboutDialog() {
         window.addEventListener('pointerdown', onDown);
         return () => window.removeEventListener('pointerdown', onDown);
     }, [open]);
+
+    // TEMPORARY: runs both offline enforcement probes and stores their
+    // results for the diagnostic section at the bottom of this dialog.
+    const runSelfTest = async () => {
+        setSelfTestRunning(true);
+        let rendererProbe;
+        try {
+            await fetch('https://example.com/mtlx-probe');
+            rendererProbe = { pass: false, error: 'fetch unexpectedly succeeded' };
+        } catch (e) {
+            rendererProbe = { pass: true, error: e && e.message ? e.message : String(e) };
+        }
+        let mainProbe = { pass: false, error: 'bridge unavailable' };
+        if (typeof window.__mtlxOfflineSelfTest === 'function') {
+            try {
+                const result = await window.__mtlxOfflineSelfTest();
+                mainProbe = {
+                    pass: !!(result && result.pass),
+                    error: (result && result.errorMessage) || 'no error reported',
+                    counterIncremented: !!(result && result.counterIncremented),
+                };
+            } catch (e) {
+                mainProbe = { pass: false, error: e && e.message ? e.message : String(e) };
+            }
+        }
+        setSelfTest({ rendererProbe, mainProbe });
+        setSelfTestRunning(false);
+    };
 
     if (!open) return null;
 
@@ -818,6 +851,51 @@ function DesktopAboutDialog() {
                     ) : (
                         <div className="text-[11px] text-gray-500">Loading license&hellip;</div>
                     )}
+                </div>
+
+                {/* TEMPORARY diagnostic, not a shipped feature. Verifies
+                    the CSP connect-src and the hard session request
+                    blocker both hold. Remove this whole section, plus the
+                    IPC handler and bridge glue it calls, once verified. */}
+                <div className="mt-4 pt-3 border-t border-gray-700">
+                    <button
+                        type="button"
+                        onClick={runSelfTest}
+                        disabled={selfTestRunning}
+                        className="mtlx-icon-btn text-[11px] px-2 py-1 border border-gray-600 rounded"
+                    >
+                        {selfTestRunning ? 'Running offline self test...' : 'Run offline self test (temporary)'}
+                    </button>
+                    {selfTest ? (
+                        <div className="mt-2 flex flex-col gap-2">
+                            <div
+                                className={
+                                    selfTest.rendererProbe.pass
+                                        ? 'rounded border border-gray-600 bg-gray-900/60 px-2 py-1.5 text-[11px] text-gray-300'
+                                        : 'flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200'
+                                }
+                            >
+                                <div>{selfTest.rendererProbe.pass ? 'PASS' : 'FAILURE'}: renderer fetch probe</div>
+                                <div className="text-gray-400">
+                                    Proves the page CSP connect-src blocks outgoing fetch before it reaches the session blocker.
+                                </div>
+                                <div className="font-mono text-[10.5px]">{selfTest.rendererProbe.error}</div>
+                            </div>
+                            <div
+                                className={
+                                    selfTest.mainProbe.pass
+                                        ? 'rounded border border-gray-600 bg-gray-900/60 px-2 py-1.5 text-[11px] text-gray-300'
+                                        : 'flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200'
+                                }
+                            >
+                                <div>{selfTest.mainProbe.pass ? 'PASS' : 'FAILURE'}: main process net.request probe</div>
+                                <div className="text-gray-400">
+                                    Proves the hard session blocker itself (not just the CSP) refuses main process requests and bumps its counter.
+                                </div>
+                                <div className="font-mono text-[10.5px]">{selfTest.mainProbe.error}</div>
+                            </div>
+                        </div>
+                    ) : null}
                 </div>
             </div>
         </div>
