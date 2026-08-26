@@ -13,6 +13,11 @@ function errMsg(e) {
     return e && e.message ? e.message : String(e);
 }
 
+// Bumped by the onBeforeRequest blocker below every time it cancels a
+// request; the MTLX_SMOKE harness reads this to prove the blocker (not
+// just an unrelated network failure) is what refused its probe request.
+let blockedRequestCount = 0;
+
 const APP_SCHEME = 'app';
 // Pinned forever: this origin keys every user's localStorage/IndexedDB
 // (autosave records, texture blobs, prefs). Never change the host string.
@@ -1041,6 +1046,23 @@ if (!gotLock) {
             item.setSaveDialogOptions({
                 defaultPath: path.join(app.getPath('downloads'), item.getFilename()),
             });
+        });
+
+        // Hard offline enforcement: cancel every request whose scheme is
+        // not one this app itself serves or generates in-page. This does
+        // not touch shell.openExternal (the OS browser fetches those URLs,
+        // never through this session) and does not touch DevTools (its
+        // devtools: scheme is allow-listed below).
+        const ALLOWED_REQUEST_SCHEMES = [APP_SCHEME + ':', 'devtools:', 'blob:', 'data:'];
+        session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+            const allowed = ALLOWED_REQUEST_SCHEMES.some((scheme) => details.url.startsWith(scheme));
+            if (!allowed) {
+                blockedRequestCount++;
+                console.error('[main] blocked non-local request: ' + details.url);
+                callback({ cancel: true });
+                return;
+            }
+            callback({ cancel: false });
         });
 
         recentFiles = loadRecents();
