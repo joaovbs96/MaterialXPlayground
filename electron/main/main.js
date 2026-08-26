@@ -22,10 +22,19 @@ const APP_SCHEME = 'app';
 // Pinned forever: this origin keys every user's localStorage/IndexedDB
 // (autosave records, texture blobs, prefs). Never change the host string.
 const APP_HOST = 'playground';
-// #!graph: same default view as the VS Code extension. Without a route
-// hash the site lands on its marketing home page instead, where neither
-// view (nor __mtlxGetGraphXml/onOpenFile's consumers) is ever mounted.
-const START_URL = APP_SCHEME + '://' + APP_HOST + '/index.html#!graph';
+
+// The four routable tools (source of truth: shellRouteFor in
+// js/site-header.js). #!graph is the default: same default view as the
+// VS Code extension. Without a route hash the site lands on its
+// marketing home page instead, where neither view (nor
+// __mtlxGetGraphXml/onOpenFile's consumers) is ever mounted.
+const ROUTE_HASHES = { docs: '#!docs', viewer: '#!viewer', compare: '#!compare', graph: '#!graph' };
+const DEFAULT_ROUTE = 'graph';
+
+function urlForRoute(route) {
+    const hash = ROUTE_HASHES[route] || ROUTE_HASHES[DEFAULT_ROUTE];
+    return APP_SCHEME + '://' + APP_HOST + '/index.html' + hash;
+}
 // Debounce for the per-window disk watcher (startWatcher below), same
 // precedent value as vscode_extension/src/editorProvider.js.
 const RELOAD_DEBOUNCE_MS = 400;
@@ -555,6 +564,17 @@ function getMtlxArg(argv) {
     return null;
 }
 
+// Finds a --mtlx-route=<route> argv entry (jump list tasks below, and
+// second-instance argv from clicking one while the app is already open).
+function getRouteArg(argv) {
+    for (const a of argv) {
+        if (typeof a !== 'string') continue;
+        const m = /^--mtlx-route=(docs|viewer|compare|graph)$/.exec(a);
+        if (m) return m[1];
+    }
+    return null;
+}
+
 // app.exit() can race past a just-written console.log on Windows before
 // the pipe flushes; queuing one more (empty) write and exiting from its
 // callback guarantees the earlier write has actually landed first.
@@ -894,6 +914,35 @@ function openMtlxRouted(filePath) {
     openMtlxFromDisk(filePath, target, false);
 }
 
+// Changes an already-open window's tool without reloading the page (a
+// plain loadURL would reload the whole app and lose state): the site's
+// shell already listens for hashchange, so just set the hash in-page.
+function setWindowRoute(win, route) {
+    const hash = ROUTE_HASHES[route] || ROUTE_HASHES[DEFAULT_ROUTE];
+    win.webContents.executeJavaScript('location.hash = ' + JSON.stringify(hash) + ';').catch((e) => {
+        console.error('[main] failed to set route "' + route + '": ' + errMsg(e));
+    });
+}
+
+// Jump list task clicks (and any other route-only launch) funnel through
+// here: honors the same Open Files in New Window preference as
+// openMtlxRouted, switching the existing window's tool in-page instead of
+// reloading when the preference is off. Focused/restored either way.
+function openRouteRouted(route) {
+    if (openInNewWindow) {
+        createWindow(route);
+        return;
+    }
+    const target = getRoutingTargetWindow();
+    if (!target) {
+        createWindow(route);
+        return;
+    }
+    if (target.isMinimized()) target.restore();
+    target.focus();
+    setWindowRoute(target, route);
+}
+
 // Window Controls Overlay theming: matches .mtlx-header's rgba(17,24,39,.95)
 // blended over the same #111827 page background, and the gray-200 icon
 // color from js/site-tokens.css; height matches --site-header-height.
@@ -901,7 +950,7 @@ const TITLEBAR_OVERLAY_COLOR = '#111827';
 const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e5e7eb';
 const TITLEBAR_OVERLAY_HEIGHT = 56;
 
-function createWindow() {
+function createWindow(route) {
     const win = new BrowserWindow({
         width: 1440,
         height: 900,
@@ -988,7 +1037,7 @@ function createWindow() {
         if (getWindowState(win).currentPath) event.preventDefault();
     });
 
-    win.loadURL(START_URL);
+    win.loadURL(urlForRoute(route));
 
     if (process.env.MTLX_SMOKE === '1') {
         win.webContents.once('did-finish-load', async () => {
@@ -1073,7 +1122,14 @@ if (!gotLock) {
         const filePath = getMtlxArg(argv);
         if (filePath) {
             openMtlxRouted(filePath);
-        } else if (BrowserWindow.getAllWindows().length === 0) {
+            return;
+        }
+        const route = getRouteArg(argv);
+        if (route) {
+            openRouteRouted(route);
+            return;
+        }
+        if (BrowserWindow.getAllWindows().length === 0) {
             createWindow();
         } else {
             const win = BrowserWindow.getAllWindows()[0];
@@ -1130,9 +1186,10 @@ if (!gotLock) {
             return;
         }
 
-        const win = createWindow();
         const argFile = pendingOpenFilePath || getMtlxArg(process.argv);
+        const argRoute = getRouteArg(process.argv);
         pendingOpenFilePath = null;
+        const win = createWindow(argFile ? undefined : argRoute);
         if (argFile) openMtlxFromDisk(argFile, win, false);
 
         app.on('activate', () => {
