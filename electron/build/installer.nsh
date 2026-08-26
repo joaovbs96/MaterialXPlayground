@@ -7,8 +7,9 @@
 !define MTLX_CASCADE_KEY "MaterialXPlaygroundCascade"
 
 !macro customInstall
-  WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\OpenWithMaterialXPlayground" "" "Open on MaterialX Playground"
-  WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\OpenWithMaterialXPlayground\command" "" `"$appExe" "%1"`
+  ; Cleans up the old flat verb from a previously installed build: the
+  ; cascade below replaces it, so an upgrade must not leave it orphaned.
+  DeleteRegKey SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\OpenWithMaterialXPlayground"
 
   ; Cascading "MaterialX Playground" submenu, same shape as 7-Zip's own
   ; context menu entry: a parent verb carrying MUIVerb + an empty
