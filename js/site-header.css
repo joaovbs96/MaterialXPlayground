@@ -991,3 +991,12 @@
 .mtlx-footer-link-amber:hover {
     color: var(--site-amber-100);
 }
+
+/* DesktopAboutDialog (js/shell.jsx) wraps the same experimental-notice
+   markup in the site's amber warning box idiom instead of the footer
+   strip; neutralize the footer's own amber color/opacity here so the
+   box's Tailwind text color is not fought paragraph-side. */
+.mtlx-about-disclaimer .mtlx-footer-experimental {
+    color: inherit;
+    opacity: 1;
+}

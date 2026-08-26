@@ -709,6 +709,7 @@ function DesktopAboutDialog() {
     const mtlxVersion = verEl ? verEl.textContent : null;
     const buildId = window.__MTLX_BUILD;
     const links = window.SITE_LINKS || {};
+    const disclaimerParts = window.SITE_DISCLAIMER_PARTS || {};
     const logoPaths = window.SITE_LOGO_PATHS || '';
     const title = window.SITE_TITLE || 'MaterialX Playground';
 
@@ -767,13 +768,24 @@ function DesktopAboutDialog() {
                 </div>
 
                 {/* Same two paragraphs as the web/VS Code footer strip
-                    (js/site-header.js DISCLAIMER_BODY_HTML), shown here
-                    instead since Electron hides that footer entirely. */}
-                <div
-                    className="mtlx-footer-inner mb-3"
-                    style={{ padding: 0, maxWidth: 'none', margin: 0 }}
-                    dangerouslySetInnerHTML={{ __html: window.SITE_DISCLAIMER_HTML || '' }}
-                />
+                    (js/site-header.js SITE_DISCLAIMER_PARTS), shown here
+                    instead since Electron hides that footer entirely. The
+                    experimental notice gets the site's amber warning box;
+                    .mtlx-about-disclaimer neutralizes the footer's own
+                    amber styling so it does not fight the box's colors. */}
+                {disclaimerParts.experimental ? (
+                    <div
+                        className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-1 mb-3"
+                        dangerouslySetInnerHTML={{ __html: disclaimerParts.experimental }}
+                    />
+                ) : null}
+                {disclaimerParts.affiliation ? (
+                    <div
+                        className="mtlx-footer-inner mb-4"
+                        style={{ padding: 0, maxWidth: 'none', margin: 0 }}
+                        dangerouslySetInnerHTML={{ __html: disclaimerParts.affiliation }}
+                    />
+                ) : null}
 
                 {vendorEntries && vendorEntries.length ? (
                     <div className="text-[11px] text-gray-400 mb-1">

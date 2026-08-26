@@ -1143,10 +1143,10 @@
     // paragraphs: the footer below and shell.jsx's DesktopAboutDialog (in
     // Electron, where the footer strip is hidden) both render this same
     // string, so the wording never drifts between the two.
-    var DISCLAIMER_BODY_HTML =
-            // Experimental Preview notice, moved from the docs
-            // page's own banner so it shows on every route.
-            // Needs display:inline: :where() sets svg{display:block}.
+    // Experimental Preview notice, moved from the docs page's own banner
+    // so it shows on every route. Needs display:inline: :where() sets
+    // svg{display:block}.
+    var DISCLAIMER_EXPERIMENTAL_HTML =
             '<p class="mtlx-footer-experimental">' +
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
                     ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
@@ -1155,13 +1155,15 @@
                 '</svg>' +
                 '<strong>Experimental preview:</strong> this site is under active development, 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
                 '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
-            '</p>' +
+            '</p>';
+    var DISCLAIMER_AFFILIATION_HTML =
             '<p>' +
                 'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
                 'In the event of any discrepancies, the specification in the ' +
                 '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
                 'remains the definitive source of truth.' +
             '</p>';
+    var DISCLAIMER_BODY_HTML = DISCLAIMER_EXPERIMENTAL_HTML + DISCLAIMER_AFFILIATION_HTML;
 
     var footerHtml =
         '<footer id="mtlx-footer" class="mtlx-footer">' +
@@ -1214,7 +1216,7 @@
     };
     // Skipped entirely under VS Code (this shrink-0 strip would steal
     // bottom height from the full-bleed webview views) and under Electron
-    // (js/shell.jsx's DesktopAboutDialog shows DISCLAIMER_BODY_HTML instead,
+    // (js/shell.jsx's DesktopAboutDialog shows SITE_DISCLAIMER_PARTS instead,
     // reachable from the header help button there).
     if (!window.__MTLX_VSCODE__ && !window.__MTLX_ELECTRON__) {
         if (document.readyState === 'loading') {
@@ -1229,5 +1231,12 @@
     window.SITE_LINKS = LINKS;
     window.SITE_LOGO_PATHS = LOGO_PATHS;
     window.SITE_DISCLAIMER_HTML = DISCLAIMER_BODY_HTML;
+    // Split paragraphs for shell.jsx's DesktopAboutDialog, which styles the
+    // experimental notice as its own warning box (the footer keeps composing
+    // both paragraphs together above, unchanged).
+    window.SITE_DISCLAIMER_PARTS = {
+        experimental: DISCLAIMER_EXPERIMENTAL_HTML,
+        affiliation: DISCLAIMER_AFFILIATION_HTML
+    };
     window.shellRouteFor = shellRouteFor;
 })();
