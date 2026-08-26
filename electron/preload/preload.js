@@ -71,6 +71,7 @@ const api = {
     getAbout: () => ipcRenderer.invoke('mtlx-get-about'),
     setOpenInNewWindow: (value) => ipcRenderer.send('mtlx-set-open-in-new-window', !!value),
     setShowRecentInSystem: (value) => ipcRenderer.send('mtlx-set-show-recent-in-system', !!value),
+    setDocumentOpenView: (value) => ipcRenderer.send('mtlx-set-document-open-view', value),
     getRecents: () => ipcRenderer.invoke('mtlx-get-recents'),
     openRecent: (filePath) => ipcRenderer.invoke('mtlx-open-recent', filePath),
 };

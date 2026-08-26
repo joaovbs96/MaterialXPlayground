@@ -515,6 +515,7 @@ function DesktopSettingsDialog() {
     const [open, setOpen] = React.useState(false);
     const [openInNewWindow, setOpenInNewWindowState] = React.useState(true);
     const [showRecentInSystem, setShowRecentInSystemState] = React.useState(true);
+    const [documentOpenView, setDocumentOpenViewState] = React.useState('graph');
     // platform/jumpListStatus come from main over the bridge (contextIsolation
     // hides process.platform from the renderer); null until the first read.
     const [platform, setPlatform] = React.useState(null);
@@ -536,6 +537,9 @@ function DesktopSettingsDialog() {
                     }
                     if (typeof settings.showRecentInSystem === 'boolean') {
                         setShowRecentInSystemState(settings.showRecentInSystem);
+                    }
+                    if (settings.documentOpenView === 'viewer' || settings.documentOpenView === 'graph') {
+                        setDocumentOpenViewState(settings.documentOpenView);
                     }
                     if (typeof settings.platform === 'string') setPlatform(settings.platform);
                     if (typeof settings.jumpListStatus === 'string') setJumpListStatus(settings.jumpListStatus);
@@ -583,6 +587,13 @@ function DesktopSettingsDialog() {
         }
     };
 
+    const changeDocumentOpenView = (value) => {
+        setDocumentOpenViewState(value);
+        if (typeof window.__mtlxSetDocumentOpenView === 'function') {
+            window.__mtlxSetDocumentOpenView(value);
+        }
+    };
+
     if (!open) return null;
     return (
         // top: header height (not inset-0/z-[70]): a normal popup, not the
@@ -621,6 +632,24 @@ function DesktopSettingsDialog() {
                         </span>
                     </span>
                 </label>
+                <div className="flex items-start justify-between gap-2 mt-3">
+                    <span>
+                        <span className="block text-[12px] text-gray-200">Open Documents Into</span>
+                        <span className="block text-[11px] text-gray-400">
+                            Which view a document lands in when opened without a specific view requested.
+                        </span>
+                    </span>
+                    <MtlxSelect
+                        value={documentOpenView}
+                        options={['graph', 'viewer']}
+                        labels={{ graph: 'Graph Editor', viewer: 'Viewer' }}
+                        defValue="graph"
+                        onChange={changeDocumentOpenView}
+                        ariaLabel="Open Documents Into"
+                        size="sm"
+                        variant="field"
+                    />
+                </div>
                 {(platform === 'win32' || platform === 'darwin') ? (
                     <label className="flex items-start gap-2 cursor-pointer mt-3">
                         <input

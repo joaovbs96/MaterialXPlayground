@@ -85,6 +85,9 @@
     window.__mtlxSetShowRecentInSystem = function (value) {
         window.mtlxDesktop.setShowRecentInSystem(value);
     };
+    window.__mtlxSetDocumentOpenView = function (value) {
+        window.mtlxDesktop.setDocumentOpenView(value);
+    };
 
     // Shell-level About dialog (js/shell.jsx's DesktopAboutDialog),
     // opened from the header help button (js/site-header.js).

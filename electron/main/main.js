@@ -277,6 +277,7 @@ ipcMain.on('mtlx-notify-edit', (event, dirty) => {
 ipcMain.handle('mtlx-get-settings', () => ({
     openInNewWindow,
     showRecentInSystem,
+    documentOpenView,
     platform: process.platform,
     jumpListStatus,
 }));
@@ -300,6 +301,10 @@ ipcMain.on('mtlx-set-open-in-new-window', (event, value) => setOpenInNewWindow(v
 // Reuses setShowRecentInSystem so persistence, app.clearRecentDocuments()
 // and the jump list rebuild stay in sync with whatever the dialog set.
 ipcMain.on('mtlx-set-show-recent-in-system', (event, value) => setShowRecentInSystem(value));
+
+// Reuses setDocumentOpenView so persistence stays in sync with whatever
+// the dialog set.
+ipcMain.on('mtlx-set-document-open-view', (event, value) => setDocumentOpenView(value));
 
 // Renderer-side Open Recent dialog (js/graph-app.jsx's in-app File menu)
 // reads the same list the native Open Recent submenu is built from.
@@ -602,7 +607,7 @@ function finishSmoke(ok, message) {
 // graph view's live XML until it reflects that file (or times out).
 async function runSmokeOpen(filePath) {
     try {
-        const win = createWindow();
+        const win = createWindow(documentOpenView);
         await new Promise((resolve, reject) => {
             win.webContents.once('did-finish-load', resolve);
             win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
@@ -700,6 +705,11 @@ let openInNewWindow = true;
 // we push out via app.addRecentDocument/app.setJumpList.
 let showRecentInSystem = true;
 
+// Which view a document lands in when opened without an explicit
+// --mtlx-route (double-click, Explorer's plain Open, Open Recent, a
+// second-instance file launch, macOS open-file). A route always wins.
+let documentOpenView = 'graph';
+
 // Tolerant of a missing/corrupt file: any failure just means defaults,
 // same as a fresh install.
 function loadSettings() {
@@ -713,7 +723,11 @@ function loadSettings() {
 
 function saveSettings() {
     try {
-        fsSync.writeFileSync(getSettingsPath(), JSON.stringify({ openInNewWindow, showRecentInSystem }), 'utf8');
+        fsSync.writeFileSync(
+            getSettingsPath(),
+            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView }),
+            'utf8'
+        );
     } catch (e) {
         console.error('[main] failed to save settings: ' + errMsg(e));
     }
@@ -736,6 +750,13 @@ function setShowRecentInSystem(value) {
     saveSettings();
     if (!showRecentInSystem) app.clearRecentDocuments();
     buildJumpList();
+}
+
+// Wired to the settings dialog's view choice. Only affects opens with no
+// explicit --mtlx-route; that always wins over this preference.
+function setDocumentOpenView(value) {
+    documentOpenView = value === 'viewer' ? 'viewer' : 'graph';
+    saveSettings();
 }
 
 // Forwards a command string to a window's renderer, for menu items with
@@ -784,7 +805,7 @@ function buildRecentSubmenu() {
                 buildJumpList();
                 return;
             }
-            openMtlxFromDisk(filePath, win || createWindow(), false);
+            openMtlxFromDisk(filePath, win || createWindow(documentOpenView), false);
         },
     }));
     items.push({ type: 'separator' });
@@ -815,7 +836,7 @@ function buildMenuTemplate() {
                             ? await dialog.showOpenDialog(win, options)
                             : await dialog.showOpenDialog(options);
                         if (result.canceled || !result.filePaths[0]) return;
-                        openMtlxFromDisk(result.filePaths[0], win || createWindow(), false);
+                        openMtlxFromDisk(result.filePaths[0], win || createWindow(documentOpenView), false);
                     },
                 },
                 { label: 'Open Recent', submenu: buildRecentSubmenu() },
@@ -1040,10 +1061,10 @@ function getRoutingTargetWindow() {
 // above, focused either way so the user sees where the file landed.
 function openMtlxRouted(filePath) {
     if (openInNewWindow) {
-        openMtlxFromDisk(filePath, createWindow(), false);
+        openMtlxFromDisk(filePath, createWindow(documentOpenView), false);
         return;
     }
-    const target = getRoutingTargetWindow() || createWindow();
+    const target = getRoutingTargetWindow() || createWindow(documentOpenView);
     if (target.isMinimized()) target.restore();
     target.focus();
     openMtlxFromDisk(filePath, target, false);
@@ -1342,6 +1363,7 @@ if (!gotLock) {
         const settings = loadSettings();
         openInNewWindow = settings.openInNewWindow !== false;
         showRecentInSystem = settings.showRecentInSystem !== false;
+        documentOpenView = settings.documentOpenView === 'viewer' ? 'viewer' : 'graph';
         rebuildMenu();
 
         // Must match electron/package.json's build.appId exactly: Windows
@@ -1362,10 +1384,10 @@ if (!gotLock) {
         pendingOpenFilePath = null;
         // Always honor an explicit route: it must not be dropped just
         // because a file argument is also present (see openMtlxRoutedTo
-        // above). With no route: a file open keeps the DEFAULT_ROUTE
-        // fallback, and a bare launch lands on Home (the renderer itself
-        // hops to the graph editor if a crash-recovery draft is waiting).
-        const launchRoute = argRoute || (argFile ? DEFAULT_ROUTE : 'home');
+        // above). With no route: a file open lands in documentOpenView,
+        // and a bare launch lands on Home (the renderer itself hops to
+        // the graph editor if a crash-recovery draft is waiting).
+        const launchRoute = argRoute || (argFile ? documentOpenView : 'home');
         const win = createWindow(launchRoute);
         if (argFile) openMtlxFromDisk(argFile, win, false);
 
