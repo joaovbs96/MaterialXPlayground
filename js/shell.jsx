@@ -907,6 +907,20 @@ function Shell() {
         };
     }, []);
 
+    // A bare desktop launch (no document, no explicit view) lands on Home
+    // (main.js). If a crash-recovery draft is waiting in autosave, hop to
+    // the graph editor instead so the offer isn't silently missed. Mount-
+    // once only: '#!home' is exactly what a bare launch loads, and a later
+    // deliberate Home visit must never get rerouted from under the user.
+    React.useEffect(() => {
+        if (!IN_ELECTRON) return;
+        if (window.location.hash !== '#!home') return;
+        if (!window.MtlxAutosave || !window.MtlxAutosave.available()) return;
+        if (window.MtlxAutosave.offerable(null, null).length > 0) {
+            window.location.hash = '#!graph';
+        }
+    }, []);
+
     // Mark a view as mounted the first time it becomes active; once
     // mounted a view stays mounted (kept alive, just hidden) for the
     // lifetime of the page.

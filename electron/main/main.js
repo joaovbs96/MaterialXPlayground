@@ -24,11 +24,10 @@ const APP_SCHEME = 'app';
 const APP_HOST = 'playground';
 
 // The four routable tools (source of truth: shellRouteFor in
-// js/site-header.js). #!graph is the default: same default view as the
-// VS Code extension. Without a route hash the site lands on its
-// marketing home page instead, where neither view (nor
-// __mtlxGetGraphXml/onOpenFile's consumers) is ever mounted.
-const ROUTE_HASHES = { docs: '#!docs', viewer: '#!viewer', compare: '#!compare', graph: '#!graph' };
+// js/site-header.js), plus 'home': the mobile nav's own Home link uses
+// '#!home' too, so it's the established hash for landing on Home, not
+// just shellRouteFor's unmatched-hash fallback.
+const ROUTE_HASHES = { docs: '#!docs', viewer: '#!viewer', compare: '#!compare', graph: '#!graph', home: '#!home' };
 const DEFAULT_ROUTE = 'graph';
 
 function urlForRoute(route) {
@@ -1292,7 +1291,7 @@ if (!gotLock) {
             return;
         }
         if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
+            createWindow('home');
         } else {
             const win = BrowserWindow.getAllWindows()[0];
             if (win.isMinimized()) win.restore();
@@ -1361,13 +1360,17 @@ if (!gotLock) {
         const argFile = pendingOpenFilePath || getMtlxArg(process.argv);
         const argRoute = getRouteArg(process.argv);
         pendingOpenFilePath = null;
-        // Always honor the route: it must not be dropped just because a
-        // file argument is also present (see openMtlxRoutedTo above).
-        const win = createWindow(argRoute);
+        // Always honor an explicit route: it must not be dropped just
+        // because a file argument is also present (see openMtlxRoutedTo
+        // above). With no route: a file open keeps the DEFAULT_ROUTE
+        // fallback, and a bare launch lands on Home (the renderer itself
+        // hops to the graph editor if a crash-recovery draft is waiting).
+        const launchRoute = argRoute || (argFile ? DEFAULT_ROUTE : 'home');
+        const win = createWindow(launchRoute);
         if (argFile) openMtlxFromDisk(argFile, win, false);
 
         app.on('activate', () => {
-            if (BrowserWindow.getAllWindows().length === 0) createWindow();
+            if (BrowserWindow.getAllWindows().length === 0) createWindow('home');
         });
     });
 
