@@ -185,6 +185,12 @@
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Same brand blue as .mtlx-brand above, for the desktop About dialog's
+   logo/title. No hover rule: this is a static header, not a link. */
+.mtlx-dialog-brand {
+    color: var(--site-blue-400);
+}
+
 /* Desktop page tabs + right-side links: hidden below 768px (the
    hamburger + mobile panel cover narrow widths instead). js's measure()
    can also force these to an inline style.display at >=768px (labels

@@ -514,6 +514,7 @@ function DesktopCloseConfirmDialog() {
 function DesktopSettingsDialog() {
     const [open, setOpen] = React.useState(false);
     const [openInNewWindow, setOpenInNewWindowState] = React.useState(true);
+    const panelRef = React.useRef(null);
 
     React.useEffect(() => {
         if (!window.__MTLX_ELECTRON__) return undefined;
@@ -540,6 +541,20 @@ function DesktopSettingsDialog() {
         return () => window.removeEventListener('keydown', onKey);
     }, [open]);
 
+    // Outside-pointerdown close (SettingsDialog pattern from mtlx-ui.jsx):
+    // this effect only attaches once React has committed the render that
+    // follows the click that opened the dialog, so it can never see that
+    // same click's own pointerdown.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (panelRef.current && panelRef.current.contains(e.target)) return;
+            setOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
     const toggleOpenInNewWindow = (checked) => {
         setOpenInNewWindowState(checked);
         if (typeof window.__mtlxSetOpenInNewWindow === 'function') {
@@ -554,14 +569,24 @@ function DesktopSettingsDialog() {
         <div
             className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
-            onMouseDown={() => setOpen(false)}
         >
             <div
+                ref={panelRef}
                 className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
-                onMouseDown={(e) => e.stopPropagation()}
             >
-                <div className="text-sm font-semibold text-gray-100 mb-3">Settings</div>
-                <label className="flex items-start gap-2 mb-4 cursor-pointer">
+                <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-gray-100">Settings</div>
+                    <button
+                        type="button"
+                        onClick={() => setOpen(false)}
+                        className="mtlx-icon-btn"
+                        title="Close"
+                        aria-label="Close"
+                    >
+                        <MtlxIcon name="x" />
+                    </button>
+                </div>
+                <label className="flex items-start gap-2 cursor-pointer">
                     <input
                         type="checkbox"
                         className="mt-0.5"
@@ -575,16 +600,36 @@ function DesktopSettingsDialog() {
                         </span>
                     </span>
                 </label>
-                <div className="flex justify-end">
-                    <button
-                        onClick={() => setOpen(false)}
-                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                    >Close</button>
-                </div>
             </div>
         </div>
     );
 }
+
+// Curated display name + license URL per vendor-manifest.json `source`
+// string, so raw package specs/URLs never leak into the About dialog.
+// Several sources map to the same library (react/react-dom, three/three-147,
+// the two tailwindcss entries) and are deduped by name when rendered.
+// License URLs are GitHub blob links pinned to HEAD (never main/master).
+const VENDOR_LIBRARY_MAP = {
+    '@babel/standalone@7.26.10': { name: 'Babel', licenseUrl: 'https://github.com/babel/babel/blob/HEAD/LICENSE' },
+    '@highlightjs/cdn-assets@11.9.0': { name: 'highlight.js', licenseUrl: 'https://github.com/highlightjs/highlight.js/blob/HEAD/LICENSE' },
+    'dagre@0.8.5': { name: 'Dagre', licenseUrl: 'https://github.com/dagrejs/dagre/blob/HEAD/LICENSE' },
+    'jszip@3.10.1': { name: 'JSZip', licenseUrl: 'https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown' },
+    'katex@0.16.47': { name: 'KaTeX', licenseUrl: 'https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE' },
+    'react@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
+    'react-dom@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
+    'reactflow@11.11.4': { name: 'React Flow', licenseUrl: 'https://github.com/xyflow/xyflow/blob/HEAD/LICENSE' },
+    'three@0.128.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
+    'three-147@0.147.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
+    'utif@3.1.0': { name: 'UTIF.js', licenseUrl: 'https://github.com/photopea/UTIF.js/blob/HEAD/LICENSE' },
+    'https://cdn.tailwindcss.com/3.4.17': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
+    'https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
+    'https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE': { name: 'Draco', licenseUrl: 'https://github.com/google/draco/blob/HEAD/LICENSE' },
+};
+// MaterialX itself ships via vendor/materialx (fetched separately by
+// `npm run vendor:offline`, gitignored) so it never appears in
+// vendor-manifest.json; list it by hand instead.
+const MATERIALX_LIBRARY = { name: 'MaterialX', licenseUrl: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/HEAD/LICENSE' };
 
 // About dialog opened from the header help button (js/site-header.js),
 // replacing the native menu's unreachable "About MaterialX Playground"
@@ -598,6 +643,7 @@ function DesktopAboutDialog() {
     const [license, setLicense] = React.useState(__licenseCache);
     const [licenseError, setLicenseError] = React.useState(false);
     const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
+    const panelRef = React.useRef(null);
 
     React.useEffect(() => {
         if (!window.__MTLX_ELECTRON__) return undefined;
@@ -616,8 +662,16 @@ function DesktopAboutDialog() {
                 fetch('vendor/vendor-manifest.json')
                     .then((res) => { if (!res.ok) throw new Error('bad response'); return res.json(); })
                     .then((manifest) => {
-                        const names = (manifest.entries || []).map((e) => String(e.source).replace(/@.*$/, ''));
-                        const unique = names.filter((n, i) => names.indexOf(n) === i).sort();
+                        const libs = (manifest.entries || [])
+                            .map((e) => VENDOR_LIBRARY_MAP[String(e.source)])
+                            .filter(Boolean);
+                        libs.push(MATERIALX_LIBRARY);
+                        const seen = new Set();
+                        const unique = libs.filter((lib) => {
+                            if (seen.has(lib.name)) return false;
+                            seen.add(lib.name);
+                            return true;
+                        }).sort((a, b) => a.name.localeCompare(b.name));
                         __vendorEntriesCache = unique;
                         setVendorEntries(unique);
                     })
@@ -635,6 +689,20 @@ function DesktopAboutDialog() {
         return () => window.removeEventListener('keydown', onKey);
     }, [open]);
 
+    // Outside-pointerdown close (SettingsDialog pattern from mtlx-ui.jsx):
+    // this effect only attaches once React has committed the render that
+    // follows the click that opened the dialog, so it can never see that
+    // same click's own pointerdown.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (panelRef.current && panelRef.current.contains(e.target)) return;
+            setOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
     if (!open) return null;
 
     const verEl = document.querySelector('#mtlx-header-version [data-role="ver"]');
@@ -648,16 +716,26 @@ function DesktopAboutDialog() {
         <div
             className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
-            onMouseDown={() => setOpen(false)}
         >
             <div
+                ref={panelRef}
                 className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
-                onMouseDown={(e) => e.stopPropagation()}
             >
-                <div className="flex items-center gap-3 mb-3">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24"
-                        fill="currentColor" className="mtlx-brand-icon" dangerouslySetInnerHTML={{ __html: logoPaths }} />
-                    <div className="text-base font-semibold text-gray-100">{title}</div>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 mtlx-dialog-brand">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24"
+                            fill="currentColor" className="mtlx-brand-icon" dangerouslySetInnerHTML={{ __html: logoPaths }} />
+                        <div className="text-base font-semibold">{title}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setOpen(false)}
+                        className="mtlx-icon-btn"
+                        title="Close"
+                        aria-label="Close"
+                    >
+                        <MtlxIcon name="x" />
+                    </button>
                 </div>
 
                 <div className="text-[12px] text-gray-300 leading-relaxed mb-3">
@@ -688,15 +766,39 @@ function DesktopAboutDialog() {
                     ) : null}
                 </div>
 
+                {/* Same two paragraphs as the web/VS Code footer strip
+                    (js/site-header.js DISCLAIMER_BODY_HTML), shown here
+                    instead since Electron hides that footer entirely. */}
+                <div
+                    className="mtlx-footer-inner mb-3"
+                    style={{ padding: 0, maxWidth: 'none', margin: 0 }}
+                    dangerouslySetInnerHTML={{ __html: window.SITE_DISCLAIMER_HTML || '' }}
+                />
+
                 {vendorEntries && vendorEntries.length ? (
-                    <div className="text-[11px] text-gray-400 mb-3">
+                    <div className="text-[11px] text-gray-400 mb-1">
                         <span className="text-gray-300">Third-party libraries: </span>
-                        {vendorEntries.join(', ')}
+                        {vendorEntries.map((lib, i) => (
+                            <React.Fragment key={lib.name}>
+                                {i > 0 ? ', ' : ''}
+                                <a href={lib.licenseUrl} target="_blank" rel="noopener noreferrer"
+                                    className="text-blue-400 hover:text-blue-300 underline">{lib.name}</a>
+                            </React.Fragment>
+                        ))}
+                    </div>
+                ) : null}
+                {vendorEntries && vendorEntries.length ? (
+                    <div className="text-[11px] text-gray-500 mb-3">
+                        We believe this list to be complete. If we are missing anything,{' '}
+                        {links.issues ? (
+                            <a href={links.issues} target="_blank" rel="noopener noreferrer"
+                                className="text-gray-400 hover:text-gray-300 underline">let us know</a>
+                        ) : 'let us know'}.
                     </div>
                 ) : null}
 
                 <div className="text-[11px] text-gray-400 mb-1">License</div>
-                <div className="flex-1 min-h-0 overflow-y-auto bg-gray-900/60 border border-gray-700 rounded-md p-2 mb-3">
+                <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto bg-gray-900/60 border border-gray-700 rounded-md p-2">
                     {license ? (
                         <pre className="text-[10.5px] text-gray-300 whitespace-pre-wrap font-mono">{license}</pre>
                     ) : licenseError ? (
@@ -704,13 +806,6 @@ function DesktopAboutDialog() {
                     ) : (
                         <div className="text-[11px] text-gray-500">Loading license&hellip;</div>
                     )}
-                </div>
-
-                <div className="flex justify-end">
-                    <button
-                        onClick={() => setOpen(false)}
-                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
-                    >Close</button>
                 </div>
             </div>
         </div>
