@@ -302,6 +302,7 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
         recentFiles = recentFiles.filter((p) => p !== filePath);
         saveRecents(recentFiles);
         rebuildMenu();
+        buildJumpList();
         return { ok: false, missing: true, path: filePath };
     }
     openMtlxRouted(filePath);
@@ -659,6 +660,7 @@ function addRecent(filePath) {
     recentFiles = [filePath].concat(recentFiles.filter((p) => p !== filePath)).slice(0, 10);
     saveRecents(recentFiles);
     rebuildMenu();
+    buildJumpList();
 }
 
 function clearRecents() {
@@ -666,6 +668,7 @@ function clearRecents() {
     saveRecents(recentFiles);
     app.clearRecentDocuments();
     rebuildMenu();
+    buildJumpList();
 }
 
 // Sibling to mtlx-recents.json, same tolerant JSON-store pattern; holds
@@ -748,6 +751,7 @@ function buildRecentSubmenu() {
                 recentFiles = recentFiles.filter((p) => p !== filePath);
                 saveRecents(recentFiles);
                 rebuildMenu();
+                buildJumpList();
                 return;
             }
             openMtlxFromDisk(filePath, win || createWindow(), false);
@@ -904,9 +908,16 @@ const JUMP_LIST_TASKS = [
     { route: 'graph', title: 'Graph Editor', description: 'Open the Graph Editor', icon: 'graph.ico' },
 ];
 
-// Windows-only: a recent-documents category (app.addRecentDocument already
-// keeps this fed on every save/open) plus a tasks category for the four
-// main tools, each opening (or re-routing) a window via --mtlx-route.
+// Windows' built-in { type: 'recent' } category was showing up empty:
+// it depends on this app being registered as a file-type handler AND on
+// Windows' own per-AppUserModelID recent-documents bookkeeping, and it
+// clearly was not populating from app.addRecentDocument alone here. A
+// custom category built from our own persisted recentFiles replaces it.
+const RECENT_JUMP_LIST_LIMIT = 5;
+
+// Windows-only: a custom recent-documents category built from our own
+// recentFiles, plus a tasks category for the four main tools, each
+// opening (or re-routing) a window via --mtlx-route.
 function buildJumpList() {
     if (process.platform !== 'win32') return;
     const iconsDir = getTaskIconsDir();
@@ -919,13 +930,42 @@ function buildJumpList() {
         iconPath: path.join(iconsDir, t.icon),
         iconIndex: 0,
     }));
+    const tasksCategory = { type: 'tasks', name: 'Tools', items: tasks };
+
+    // 'task' items (not 'file'): a 'file' item needs the same file-type
+    // registration the built-in category needed and can fail with
+    // missingFileTypeRegistration/customCategoryAccessDeniedError. A task
+    // just relaunches the exe with the path as an argument, reusing the
+    // argv handling getMtlxArg already provides.
+    const recentItems = recentFiles.slice(0, RECENT_JUMP_LIST_LIMIT).map((filePath) => ({
+        type: 'task',
+        program: process.execPath,
+        args: '"' + filePath + '"',
+        title: path.basename(filePath),
+        description: filePath,
+        iconPath: process.execPath,
+        iconIndex: 0,
+    }));
+    // Omitted entirely (not an empty category) when there are no recents.
+    const categories = recentItems.length > 0
+        ? [{ type: 'custom', name: 'Recent Documents', items: recentItems }, tasksCategory]
+        : [tasksCategory];
 
     try {
         // setJumpList can return an error string instead of throwing;
         // either way this must never take startup down with it.
-        const result = app.setJumpList([{ type: 'recent' }, { type: 'tasks', name: 'Tools', items: tasks }]);
+        const result = app.setJumpList(categories);
         if (result && result !== 'ok') {
             console.error('[main] setJumpList failed: ' + result);
+            if (recentItems.length > 0) {
+                // A custom category can fail in ways the built-in one does
+                // not; fall back to it so the user is not left with less
+                // than before this change.
+                const fallback = app.setJumpList([{ type: 'recent' }, tasksCategory]);
+                if (fallback && fallback !== 'ok') {
+                    console.error('[main] setJumpList fallback failed: ' + fallback);
+                }
+            }
         }
     } catch (e) {
         console.error('[main] setJumpList threw: ' + errMsg(e));
