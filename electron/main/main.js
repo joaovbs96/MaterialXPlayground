@@ -280,6 +280,25 @@ ipcMain.handle('mtlx-get-about', () => ({
 // rebuildMenu() stay in sync with whatever the dialog set.
 ipcMain.on('mtlx-set-open-in-new-window', (event, value) => setOpenInNewWindow(value));
 
+// Renderer-side Open Recent dialog (js/graph-app.jsx's in-app File menu)
+// reads the same list the native Open Recent submenu is built from.
+ipcMain.handle('mtlx-get-recents', () => recentFiles.slice());
+
+// Opens a path chosen from the renderer's Open Recent dialog. Routed
+// through openMtlxRouted so it honors the Open Files in New Window
+// preference, unlike the native Open Recent submenu which always
+// reuses the window the click happened in.
+ipcMain.handle('mtlx-open-recent', (event, filePath) => {
+    if (!filePath || !fsSync.existsSync(filePath)) {
+        recentFiles = recentFiles.filter((p) => p !== filePath);
+        saveRecents(recentFiles);
+        rebuildMenu();
+        return { ok: false, missing: true, path: filePath };
+    }
+    openMtlxRouted(filePath);
+    return { ok: true };
+});
+
 // Asks a window's renderer to hand back its current graph XML; used by
 // saveFromMenu (the native Save/Save As menu items) below.
 function requestSaveFromRenderer(win) {

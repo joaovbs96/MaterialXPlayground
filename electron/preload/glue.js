@@ -88,4 +88,14 @@
     window.__mtlxGetAbout = function () {
         return window.mtlxDesktop.getAbout();
     };
+
+    // Graph editor's in-app Open Recent dialog (js/graph-app.jsx), since
+    // the native Open Recent submenu is unreachable behind titleBarStyle
+    // 'hidden'. getRecents is read fresh every time the dialog opens.
+    window.__mtlxGetRecents = function () {
+        return window.mtlxDesktop.getRecents();
+    };
+    window.__mtlxOpenRecent = function (filePath) {
+        return window.mtlxDesktop.openRecent(filePath);
+    };
 })();
