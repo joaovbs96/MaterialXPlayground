@@ -96,6 +96,15 @@
             (tag || DEFAULT_TAG) + '/' + relPath;
     }
 
+    // Always the remote raw.githubusercontent.com form, even in local
+    // mode. For callers that need a URL other people/hosts can fetch
+    // (shared links, copied snippets), unlike repoUrl() which is for
+    // this app's own fetches and must stay local-first.
+    function publicRepoUrl(relPath, tag) {
+        return 'https://raw.githubusercontent.com/' + REPO + '/' +
+            (tag || DEFAULT_TAG) + '/' + relPath;
+    }
+
     function resourcesRoot() {
         return repoUrl('resources/');
     }
@@ -104,6 +113,7 @@
         ready: ready,
         isLocal: isLocal,
         repoUrl: repoUrl,
+        publicRepoUrl: publicRepoUrl,
         resourcesRoot: resourcesRoot,
         // Pinned MaterialX repo tag, exposed so other single-file scripts
         // (js/spec-parser.js, js/site-header.js) can default to this
