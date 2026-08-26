@@ -245,8 +245,11 @@ ipcMain.handle('mtlx-get-settings', () => ({ openInNewWindow }));
 
 // Renderer-side About dialog (js/shell.jsx's DesktopAboutDialog) reads
 // these instead of the unreachable native menu's About item.
+// Unpackaged dev runs read electron/package.json's committed version via
+// app.getVersion(); dev.mjs resolves the real version from git instead
+// and passes it through this env var, so prefer it when present.
 ipcMain.handle('mtlx-get-about', () => ({
-    appVersion: app.getVersion(),
+    appVersion: process.env.MTLX_DEV_VERSION || app.getVersion(),
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,

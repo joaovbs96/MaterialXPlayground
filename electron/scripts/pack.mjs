@@ -6,6 +6,7 @@ import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveVersion } from './lib/resolve-version.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ELECTRON_DIR = path.resolve(__dirname, '..');
@@ -21,21 +22,18 @@ function run(cmd, args, opts) {
     if (result.status !== 0) process.exit(result.status || 1);
 }
 
-function fail(message) {
-    console.error('[electron:pack] ' + message);
-    process.exit(1);
-}
-
-// electron-builder reads electron/package.json's version for the artifact
-// filename, but the project's real version lives in the root package.json.
-// Fail loudly here instead of silently shipping a stale/wrong version.
-function checkVersionSync() {
+// The committed root package.json version is not the source of truth for
+// the packaged app (see resolveVersion), but a stale value is a smell
+// worth flagging so it doesn't silently drift too far from releases.
+function warnIfVersionStale() {
     const rootVersion = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
-    const electronVersion = JSON.parse(readFileSync(path.join(ELECTRON_DIR, 'package.json'), 'utf8')).version;
-    if (rootVersion !== electronVersion) {
-        fail(
-            'version mismatch: root package.json is "' + rootVersion + '" but electron/package.json is "' +
-            electronVersion + '". Update electron/package.json\'s version to match before packaging.'
+    const latestTag = spawnSync('git', ['describe', '--tags', '--abbrev=0'], { cwd: REPO_ROOT, encoding: 'utf8' });
+    if (latestTag.error || latestTag.status !== 0) return;
+    const tagVersion = latestTag.stdout.trim().replace(/^v/, '');
+    if (tagVersion && tagVersion !== rootVersion) {
+        console.warn(
+            '[electron:pack] WARNING: root package.json version "' + rootVersion +
+            '" does not match latest git tag "' + tagVersion + '". Consider bumping package.json.'
         );
     }
 }
@@ -46,7 +44,7 @@ function runNpm(args, opts) {
     run(IS_WIN ? 'npm.cmd' : 'npm', args, Object.assign({ shell: IS_WIN }, opts));
 }
 
-checkVersionSync();
+warnIfVersionStale();
 
 if (!existsSync(path.join(ELECTRON_DIR, 'node_modules'))) {
     console.log('[electron:pack] installing electron/ dependencies...');
@@ -61,6 +59,9 @@ if (!existsSync(path.join(REPO_ROOT, 'vendor', 'materialx', 'manifest.json'))) {
 console.log('[electron:pack] staging site...');
 run(process.execPath, [path.join(__dirname, 'stage-site.mjs')]);
 
+const { version, source } = resolveVersion(REPO_ROOT);
+console.log('[electron:pack] resolved version ' + version + ' (source: ' + source + ')');
+
 console.log('[electron:pack] running electron-builder...');
 // Invoke electron-builder's own entry script with node directly rather
 // than the node_modules/.bin/electron-builder.cmd shim (same .cmd spawn
@@ -73,7 +74,12 @@ if (IS_WIN) {
     // transient EPERM; this preloaded shim retries it (see the file).
     nodeArgs.push('--require', path.join(__dirname, 'lib', 'win-fs-retry-shim.cjs'));
 }
-run(process.execPath, [...nodeArgs, builderCli, '--publish', 'never'], { cwd: ELECTRON_DIR });
+// extraMetadata.version overrides the packaged app.asar's package.json
+// version at build time only, without touching the tracked file.
+run(process.execPath, [
+    ...nodeArgs, builderCli, '--publish', 'never',
+    '--config.extraMetadata.version=' + version,
+], { cwd: ELECTRON_DIR });
 
 const distDir = path.join(ELECTRON_DIR, 'dist');
 console.log('[electron:pack] output in ' + distDir + ':');
