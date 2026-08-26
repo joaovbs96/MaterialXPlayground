@@ -276,35 +276,6 @@ ipcMain.handle('mtlx-get-about', () => ({
     node: process.versions.node,
 }));
 
-// TEMPORARY: backs the About dialog's "Run offline self test" button.
-// Copies the MTLX_SMOKE harness's own probe (net.request bound to
-// session.defaultSession) to prove the hard blocker, not just the CSP.
-ipcMain.handle('mtlx-offline-selftest', async () => {
-    const blockedBefore = blockedRequestCount;
-    let errored = false;
-    let errorMessage = null;
-    try {
-        const { net } = require('electron');
-        await new Promise((resolve) => {
-            const req = net.request({ url: 'https://example.com/mtlx-probe', session: session.defaultSession });
-            req.on('error', (e) => { errored = true; errorMessage = errMsg(e); resolve(); });
-            req.on('response', () => resolve());
-            req.end();
-        });
-    } catch (e) {
-        errored = true;
-        errorMessage = errMsg(e);
-    }
-    const blockedAfter = blockedRequestCount;
-    const counterIncremented = blockedAfter > blockedBefore;
-    return {
-        errored,
-        errorMessage,
-        counterIncremented,
-        pass: errored && counterIncremented,
-    };
-});
-
 // Reuses setOpenInNewWindow so persistence and the native checkbox's
 // rebuildMenu() stay in sync with whatever the dialog set.
 ipcMain.on('mtlx-set-open-in-new-window', (event, value) => setOpenInNewWindow(value));

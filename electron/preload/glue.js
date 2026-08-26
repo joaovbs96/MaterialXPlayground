@@ -88,9 +88,4 @@
     window.__mtlxGetAbout = function () {
         return window.mtlxDesktop.getAbout();
     };
-
-    // TEMPORARY: backs the About dialog's diagnostic self test button.
-    window.__mtlxOfflineSelfTest = function () {
-        return window.mtlxDesktop.offlineSelfTest();
-    };
 })();
