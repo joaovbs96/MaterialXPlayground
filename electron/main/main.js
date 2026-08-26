@@ -960,6 +960,32 @@ function openMtlxRouted(filePath) {
     openMtlxFromDisk(filePath, target, false);
 }
 
+// Same as openMtlxRouted, but for a launch that carries BOTH a file and a
+// --mtlx-route (our cascading context-menu submenu entries): the window
+// lands on the requested route instead of losing it to the file argument.
+// A new window opens straight onto that route; a reused window is
+// hash-routed there first so the document lands in the view the user
+// actually asked for, not whatever the window already had loaded.
+function openMtlxRoutedTo(filePath, route) {
+    if (!route) {
+        openMtlxRouted(filePath);
+        return;
+    }
+    if (openInNewWindow) {
+        openMtlxFromDisk(filePath, createWindow(route), false);
+        return;
+    }
+    const target = getRoutingTargetWindow();
+    if (!target) {
+        openMtlxFromDisk(filePath, createWindow(route), false);
+        return;
+    }
+    if (target.isMinimized()) target.restore();
+    target.focus();
+    setWindowRoute(target, route);
+    openMtlxFromDisk(filePath, target, false);
+}
+
 // Changes an already-open window's tool without reloading the page (a
 // plain loadURL would reload the whole app and lose state): the site's
 // shell already listens for hashchange, so just set the hash in-page.
@@ -1166,11 +1192,11 @@ if (!gotLock) {
 
     app.on('second-instance', (event, argv) => {
         const filePath = getMtlxArg(argv);
+        const route = getRouteArg(argv);
         if (filePath) {
-            openMtlxRouted(filePath);
+            openMtlxRoutedTo(filePath, route);
             return;
         }
-        const route = getRouteArg(argv);
         if (route) {
             openRouteRouted(route);
             return;
@@ -1243,7 +1269,9 @@ if (!gotLock) {
         const argFile = pendingOpenFilePath || getMtlxArg(process.argv);
         const argRoute = getRouteArg(process.argv);
         pendingOpenFilePath = null;
-        const win = createWindow(argFile ? undefined : argRoute);
+        // Always honor the route: it must not be dropped just because a
+        // file argument is also present (see openMtlxRoutedTo above).
+        const win = createWindow(argRoute);
         if (argFile) openMtlxFromDisk(argFile, win, false);
 
         app.on('activate', () => {
