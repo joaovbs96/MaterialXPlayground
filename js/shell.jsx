@@ -782,7 +782,7 @@ function DesktopAboutDialog() {
                 {disclaimerParts.affiliation ? (
                     <div
                         className="mtlx-footer-inner mb-4"
-                        style={{ padding: 0, maxWidth: 'none', margin: 0 }}
+                        style={{ padding: 0, maxWidth: 'none', margin: 0, marginBottom: '1rem' }}
                         dangerouslySetInnerHTML={{ __html: disclaimerParts.affiliation }}
                     />
                 ) : null}
