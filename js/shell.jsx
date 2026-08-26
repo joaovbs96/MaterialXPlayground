@@ -514,6 +514,11 @@ function DesktopCloseConfirmDialog() {
 function DesktopSettingsDialog() {
     const [open, setOpen] = React.useState(false);
     const [openInNewWindow, setOpenInNewWindowState] = React.useState(true);
+    const [showRecentInSystem, setShowRecentInSystemState] = React.useState(true);
+    // platform/jumpListStatus come from main over the bridge (contextIsolation
+    // hides process.platform from the renderer); null until the first read.
+    const [platform, setPlatform] = React.useState(null);
+    const [jumpListStatus, setJumpListStatus] = React.useState('ok');
     const panelRef = React.useRef(null);
 
     React.useEffect(() => {
@@ -521,12 +526,19 @@ function DesktopSettingsDialog() {
         const onOpen = () => {
             setOpen(true);
             // Read fresh every time: a second window's own preference read
-            // stays independent from what this dialog last showed.
+            // stays independent from what this dialog last showed. This also
+            // means jumpListStatus is current as of the last buildJumpList().
             if (typeof window.__mtlxGetDesktopSettings === 'function') {
                 window.__mtlxGetDesktopSettings().then((settings) => {
-                    if (settings && typeof settings.openInNewWindow === 'boolean') {
+                    if (!settings) return;
+                    if (typeof settings.openInNewWindow === 'boolean') {
                         setOpenInNewWindowState(settings.openInNewWindow);
                     }
+                    if (typeof settings.showRecentInSystem === 'boolean') {
+                        setShowRecentInSystemState(settings.showRecentInSystem);
+                    }
+                    if (typeof settings.platform === 'string') setPlatform(settings.platform);
+                    if (typeof settings.jumpListStatus === 'string') setJumpListStatus(settings.jumpListStatus);
                 });
             }
         };
@@ -559,6 +571,15 @@ function DesktopSettingsDialog() {
         setOpenInNewWindowState(checked);
         if (typeof window.__mtlxSetOpenInNewWindow === 'function') {
             window.__mtlxSetOpenInNewWindow(checked);
+        }
+    };
+
+    // Turning this on rebuilds the jump list on main's side, so re-opening
+    // this dialog after fixing the Windows setting reads a cleared status.
+    const toggleShowRecentInSystem = (checked) => {
+        setShowRecentInSystemState(checked);
+        if (typeof window.__mtlxSetShowRecentInSystem === 'function') {
+            window.__mtlxSetShowRecentInSystem(checked);
         }
     };
 
@@ -600,6 +621,29 @@ function DesktopSettingsDialog() {
                         </span>
                     </span>
                 </label>
+                {(platform === 'win32' || platform === 'darwin') ? (
+                    <label className="flex items-start gap-2 cursor-pointer mt-3">
+                        <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={showRecentInSystem}
+                            onChange={(e) => toggleShowRecentInSystem(e.target.checked)}
+                        />
+                        <span>
+                            <span className="block text-[12px] text-gray-200">Show Recent Files in System</span>
+                            <span className="block text-[11px] text-gray-400">
+                                Publish recently opened files to the {platform === 'darwin' ? 'Dock' : 'taskbar jump list'}.
+                            </span>
+                        </span>
+                    </label>
+                ) : null}
+                {showRecentInSystem && platform === 'win32' && jumpListStatus === 'blocked' ? (
+                    <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-2">
+                        Windows is blocking recent files from appearing in the jump list. Turn on
+                        "Show recommended files in Start, recent files in File Explorer, and items in Jump Lists"
+                        in Settings &gt; Personalization &gt; Start to fix this.
+                    </div>
+                ) : null}
             </div>
         </div>
     );
