@@ -252,7 +252,7 @@ const VIEW_DEPS = {
         // Dependency-free, self-registering custom element (docs/EMBEDDING.md)
         // that drives the live preview - a plain script, not a babelScript.
         scripts: ['embed/mtlx-viewer.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx', 'js/shared/preset-picker.jsx'],
         app: 'js/builder-app.jsx',
         globalName: 'BuilderApp',
     },
