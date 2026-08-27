@@ -61,6 +61,13 @@ const PLAYGROUND_ENTRIES = [
     absPath: path.join(REPO_ROOT, "examples", "animated_noise.mtlx"),
     docPath: "examples/animated_noise.mtlx",
   },
+  {
+    id: "AnimatedChristmasTreeOrnament",
+    name: "Animated Christmas Tree Ornament",
+    absPath: path.join(REPO_ROOT, "materials", "AnimatedChristmasTreeOrnament", "ChristmasTreeOrnament016_1K-JPG.mtlx"),
+    docPath: "materials/AnimatedChristmasTreeOrnament/ChristmasTreeOrnament016_1K-JPG.mtlx",
+    note: "Textures released under CC0 1.0 Universal; see materials/AnimatedChristmasTreeOrnament/LICENSE.txt for the full license text.",
+  },
 ];
 
 function log(...args) {
