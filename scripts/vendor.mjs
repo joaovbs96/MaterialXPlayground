@@ -41,6 +41,10 @@ const MTLX_GIT_URL = `https://github.com/${MTLX_REPO}.git`;
 // vendored, not just the files read today, because the preset crawler
 // resolves xi:include siblings and relative texture paths at runtime.
 const MTLX_INCLUDE_PREFIXES = ["documents/Specification/", "resources/Materials/Examples/", "resources/Images/"];
+// Root-level files copied verbatim alongside the prefixes above. Apache-2.0
+// requires the license to travel with the vendored content, which the deploy
+// ships to the live site.
+const MTLX_INCLUDE_FILES = ["LICENSE"];
 
 const MATERIALX_ROOT = path.join(VENDOR_ROOT, MATERIALX_DIR_NAME);
 const MATERIALX_MANIFEST_PATH = path.join(MATERIALX_ROOT, "manifest.json");
@@ -398,9 +402,20 @@ export async function runMaterialx() {
         files.push({ path: posixPath, bytes: data.length, sha: gitBlobSha1(data) });
       }
     }
+    for (const rel of MTLX_INCLUDE_FILES) {
+      const srcAbs = path.join(cloneRoot, ...rel.split("/"));
+      if (!existsSync(srcAbs)) {
+        throw new Error(`${rel} is missing from the ${MTLX_TAG} clone. Did the upstream repo layout change?`);
+      }
+      const data = await readFile(srcAbs);
+      const destAbs = path.join(MATERIALX_ROOT, ...rel.split("/"));
+      await mkdir(path.dirname(destAbs), { recursive: true });
+      await writeFile(destAbs, data);
+      files.push({ path: rel, bytes: data.length, sha: gitBlobSha1(data) });
+    }
     files.sort((a, b) => a.path.localeCompare(b.path));
     const totalBytes = files.reduce((sum, f) => sum + f.bytes, 0);
-    log(`copied ${files.length} file(s) from the sparse checkout under: ${MTLX_INCLUDE_PREFIXES.join(", ")}`);
+    log(`copied ${files.length} file(s) from the sparse checkout under: ${MTLX_INCLUDE_PREFIXES.join(", ")} (plus ${MTLX_INCLUDE_FILES.join(", ")})`);
 
     const manifest = {
       tag: MTLX_TAG,

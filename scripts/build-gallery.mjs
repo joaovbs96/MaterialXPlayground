@@ -39,6 +39,13 @@ const FAMILY_PREFIXES = {
   SimpleHair: "simple_hair_",
 };
 
+// Every entry carries a license the gallery can display in place. `origin`
+// picks the resolver: "materialx" goes through MtlxAssets.repoUrl (the
+// vendored copy locally, raw.githubusercontent when remote), "site" is
+// site-relative.
+const MATERIALX_LICENSE = { label: "Apache License 2.0", origin: "materialx", path: "LICENSE" };
+const REPO_LICENSE = { label: "Apache License 2.0", origin: "site", path: "LICENSE" };
+
 // Curated showcase materials, appended after the vendored examples. Paths
 // are absolute so collectTextures() can resolve their own local refs.
 const PLAYGROUND_ENTRIES = [
@@ -47,6 +54,7 @@ const PLAYGROUND_ENTRIES = [
     name: "Motley Patchwork Rug",
     absPath: path.join(REPO_ROOT, "materials", "Motley_Patchwork_Rug", "Motley_Patchwork_Rug.mtlx"),
     docPath: "materials/Motley_Patchwork_Rug/Motley_Patchwork_Rug.mtlx",
+    license: { label: "MIT License", origin: "site", path: "materials/Motley_Patchwork_Rug/LICENSE.txt" },
     note: "Redistributed under the MIT License; see materials/Motley_Patchwork_Rug/LICENSE.txt for the source and full license text.",
   },
   {
@@ -66,6 +74,7 @@ const PLAYGROUND_ENTRIES = [
     name: "Animated Christmas Tree Ornament",
     absPath: path.join(REPO_ROOT, "materials", "AnimatedChristmasTreeOrnament", "ChristmasTreeOrnament016_1K-JPG.mtlx"),
     docPath: "materials/AnimatedChristmasTreeOrnament/ChristmasTreeOrnament016_1K-JPG.mtlx",
+    license: { label: "CC0 1.0 Universal", origin: "site", path: "materials/AnimatedChristmasTreeOrnament/LICENSE.txt" },
     note: "Textures released under CC0 1.0 Universal; see materials/AnimatedChristmasTreeOrnament/LICENSE.txt for the full license text.",
   },
 ];
@@ -315,6 +324,7 @@ async function buildExampleEntry(family, fileName, absPath) {
     shader,
     tags: dedupe([familyLabel, textured ? "Textured" : "Procedural", shader]),
     thumb: `thumbs/${id}.jpg`,
+    license: MATERIALX_LICENSE,
   };
   if (id === "standard_surface_chess_set") {
     const note = extractLineComment(xml, 3);
@@ -345,6 +355,7 @@ async function buildPlaygroundEntry(def) {
     shader,
     tags: dedupe([familyLabel, textured ? "Textured" : "Procedural", shader]),
     thumb: `thumbs/${def.id}.jpg`,
+    license: def.license || REPO_LICENSE,
   };
   if (def.note) entry.note = def.note;
   return entry;

@@ -115,6 +115,16 @@ function gallerySourceHref(m, tag) {
     return repo + '/blob/main/' + m.docPath;
 }
 
+// Absolute URL for an entry's license text. 'materialx' licenses resolve
+// through MtlxAssets (the vendored copy locally, raw.githubusercontent when
+// remote); 'site' ones are site-relative.
+function galleryLicenseHref(m) {
+    const lic = m && m.license;
+    if (!lic || !lic.path) return null;
+    if (lic.origin === 'materialx') return window.MtlxAssets.repoUrl(lic.path);
+    return new URL(lic.path, document.baseURI).href;
+}
+
 // Which page numbers the pagination control shows: page 1, the last page,
 // and current-1/current/current+1, with a single missing page shown as a
 // number instead of an ellipsis (only a genuine multi-page gap gets one).
@@ -294,6 +304,70 @@ function GalleryPagination({ page, pageCount, onChange }) {
     );
 }
 
+// License text read in place, so the offline zip and the VS Code webview
+// can show it without an external link. Stacks above the detail overlay.
+function GalleryLicenseDialog({ material, onClose }) {
+    const href = galleryLicenseHref(material);
+    const [state, setState] = React.useState({ status: 'loading', text: '' });
+    useEscapeToClose(onClose, true);
+    React.useEffect(() => {
+        if (!href) { setState({ status: 'error', text: '' }); return undefined; }
+        let cancelled = false;
+        setState({ status: 'loading', text: '' });
+        fetch(href)
+            .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+            .then((text) => { if (!cancelled) setState({ status: 'ready', text }); })
+            .catch(() => { if (!cancelled) setState({ status: 'error', text: '' }); });
+        return () => { cancelled = true; };
+    }, [href]);
+    const label = (material.license && material.license.label) || 'License';
+    return (
+        <div
+            className="fixed left-0 right-0 bottom-0 z-[55] flex items-center justify-center bg-gray-950/70 p-4"
+            style={{ top: 'var(--mtlx-header-h, 0px)' }}
+            onMouseDown={onClose}
+        >
+            <div
+                onMouseDown={(e) => e.stopPropagation()}
+                className="w-full max-w-[48rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+            >
+                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                    <div className="min-w-0">
+                        <span className="block text-sm font-semibold text-gray-100 truncate">{label}</span>
+                        <span className="block text-[11px] text-gray-500 truncate">{material.name}</span>
+                    </div>
+                    <button type="button" onClick={onClose} className={PILL_ACTION}>
+                        <MtlxIcon name="x" className="w-3.5 h-3.5" />
+                        Close
+                    </button>
+                </div>
+                <div className="overflow-y-auto custom-scrollbar p-4">
+                    {state.status === 'loading' && (
+                        <div className="h-[200px] flex items-center justify-center text-gray-400 text-sm animate-pulse">
+                            Loading license...
+                        </div>
+                    )}
+                    {state.status === 'error' && (
+                        <div className="h-[160px] flex flex-col items-center justify-center gap-2 text-center px-4">
+                            <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
+                            <p className="text-sm text-gray-300">This license could not be loaded.</p>
+                            {href && (
+                                <a href={href} target="_blank" rel="noopener noreferrer" className={PILL_ACTION}>
+                                    <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
+                                    Open the file directly
+                                </a>
+                            )}
+                        </div>
+                    )}
+                    {state.status === 'ready' && (
+                        <pre className="text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap break-words font-mono">{state.text}</pre>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // Detail overlay: matches DialogFrame's chrome but built by hand for a
 // labeled Close pill. Stays MOUNTED after its first open (hidden via a
 // CSS class instead) so MtlxGraphPreview's <materialx-viewer> never rebuilds.
@@ -308,7 +382,9 @@ function GalleryDetailOverlay({
     const shownRef = React.useRef(null);
     if (material) shownRef.current = material;
     const shown = shownRef.current;
-    useEscapeToClose(onClose, isOpen);
+    // Esc closes the license first when it covers this overlay.
+    const [licenseOpen, setLicenseOpen] = React.useState(false);
+    useEscapeToClose(onClose, isOpen && !licenseOpen);
     if (!shown) return null; // never opened yet this session
     // "Ready" means doc reflects THIS material, not a stale previous one
     // still on display while a new fetch is in flight.
@@ -464,9 +540,18 @@ function GalleryDetailOverlay({
                             <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                             View Source
                         </a>
+                        {shown.license && (
+                            <button type="button" onClick={() => setLicenseOpen(true)} className={PILL_ACTION}>
+                                <MtlxIcon name="file-text" className="w-3.5 h-3.5" />
+                                License
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
+            {isOpen && licenseOpen && (
+                <GalleryLicenseDialog material={shown} onClose={() => setLicenseOpen(false)} />
+            )}
         </div>
     );
 }
