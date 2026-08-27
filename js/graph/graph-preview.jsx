@@ -64,6 +64,32 @@
         };
         const boundsAspect = (b) => (b && b.width > 0 && b.height > 0) ? b.width / b.height : null;
 
+        // Downstream-only walk (edge source -> target) from a clicked node to
+        // the material renderable it feeds. Visited guard blocks fan-out
+        // loops; a dead end or unknown id returns null ("do nothing").
+        const resolveMaterialForNode = (nodeId, nodes, edges) => {
+            const nodeById = new Map(nodes.map((n) => [n.id, n]));
+            const outIds = new Map();
+            for (const e of edges) {
+                if (!outIds.has(e.source)) outIds.set(e.source, []);
+                outIds.get(e.source).push(e.target);
+            }
+            const visited = new Set();
+            const walk = (id) => {
+                if (visited.has(id)) return null;
+                visited.add(id);
+                const n = nodeById.get(id);
+                if (!n) return null;
+                if (n.data && n.data.kind === 'material') return n.data.name;
+                for (const nextId of (outIds.get(id) || [])) {
+                    const found = walk(nextId);
+                    if (found) return found;
+                }
+                return null;
+            };
+            return walk(nodeId);
+        };
+
         const fetchGraphText = async (url) => {
             const res = await fetch(url);
             if (!res.ok) throw new Error('MtlxGraphPreview: failed to fetch "' + url + '" (HTTP ' + res.status + ').');
@@ -93,13 +119,22 @@
         // through the embed's queued, promise-returning load() call (the
         // same postMessage path embed-boot.js's 'load' handler answers, and
         // js/viewer-app.jsx's "Send to Viewer" button also uses).
-        function GraphPreviewViewer({ src, xml, geometry, textures, docName }) {
+        function GraphPreviewViewer({ src, xml, geometry, textures, docName, materialRequest }) {
             const mountRef = React.useRef(null);
             const elRef = React.useRef(null);
             const loadedRef = React.useRef(false);
             const [failed, setFailed] = React.useState(() => !(window.mtlxHasWebGL2 ? window.mtlxHasWebGL2() : true));
             const [loaded, setLoaded] = React.useState(false);
             const [mounted, setMounted] = React.useState(false);
+            // Multi-material documents (e.g. the chess set): last
+            // 'mtlx-renderables' detail, and the selected name driving the
+            // element's live `material` attribute (see the effects below).
+            const [renderables, setRenderables] = React.useState([]);
+            const [material, setMaterial] = React.useState('');
+            // Defensive: mtlx-ui.jsx loads before this file for every
+            // current host (js/shell.jsx VIEW_DEPS), but a future host
+            // that skips it should just render without the dropdown.
+            const MtlxSelectComp = window.MtlxSelect;
 
             // Creates and mounts the element once; geometry stays live via
             // the custom element's own attribute handling (embed/mtlx-viewer.js's
@@ -120,10 +155,12 @@
                     el.style.width = '100%';
                     el.style.height = '100%';
                     el.addEventListener('mtlx-renderables', (e) => {
-                        if (Array.isArray(e.detail) && e.detail.length) {
+                        const list = Array.isArray(e.detail) ? e.detail : [];
+                        if (list.length) {
                             loadedRef.current = true;
                             setLoaded(true);
                         }
+                        setRenderables(list);
                     });
                     el.addEventListener('mtlx-error', () => {
                         if (!loadedRef.current) setFailed(true);
@@ -142,6 +179,10 @@
 
             React.useEffect(() => {
                 if (failed || !elRef.current) return undefined;
+                // A new document is coming: drop the stale material list/
+                // selection now rather than wait for the next 'mtlx-renderables'.
+                setRenderables([]);
+                setMaterial('');
                 if (src) {
                     elRef.current.src = src;
                 } else if (xml) {
@@ -157,6 +198,28 @@
                 if (failed && elRef.current) elRef.current.remove();
             }, [failed]);
 
+            // Live material switch (LIVE_ATTRS in embed/mtlx-viewer.js): no
+            // iframe rebuild, mirrors the `geometry` property set above.
+            React.useEffect(() => {
+                if (elRef.current) elRef.current.material = material;
+            }, [material]);
+
+            // Drops the selection once the current document's renderables no
+            // longer include it, mirroring builder-app.jsx's Material control.
+            React.useEffect(() => {
+                setMaterial((m) => (m && !renderables.some((r) => r.name === m)) ? '' : m);
+            }, [renderables]);
+
+            // Bridged in from MtlxGraphPreview's onNodeClick (fresh object
+            // every click, so a repeat click re-applies). A single-renderable
+            // doc has nothing to switch between, same threshold as the dropdown.
+            React.useEffect(() => {
+                if (!materialRequest || renderables.length <= 1) return;
+                if (renderables.some((r) => r.name === materialRequest.name)) {
+                    setMaterial(materialRequest.name);
+                }
+            }, [materialRequest]);
+
             return failed ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center px-3">
                     <MtlxIcon name="cube" className="w-5 h-5 text-gray-600" />
@@ -168,6 +231,21 @@
                     {!loaded && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                             <span className="text-[11px] text-gray-500">Loading material</span>
+                        </div>
+                    )}
+                    {mounted && MtlxSelectComp && renderables.length > 1 && (
+                        <div className="absolute top-1.5 left-1.5 z-10 max-w-[calc(100%-2.25rem)]">
+                            <MtlxSelectComp
+                                value={material}
+                                options={renderables.map((r) => ({ value: r.name, label: r.name }))}
+                                emptyOption="First material"
+                                onChange={setMaterial}
+                                defValue={null}
+                                title="Material to display"
+                                size="sm"
+                                variant="toolbar"
+                                className="max-w-full truncate"
+                            />
                         </div>
                     )}
                     {mounted && (
@@ -248,6 +326,10 @@
                 // (default 1); false/'none' disables auto framing entirely.
                 autoFocus = 'fit',
                 focusZoom,
+                // Floor under fitView's own computed zoom (undefined keeps
+                // today's behavior: only the ReactFlow instance's minZoom=0.1
+                // below applies), so a caller can keep a large graph legible.
+                focusMinZoom,
                 wheel = 'scroll',
                 pan = true,
                 interactive = true,
@@ -322,6 +404,11 @@
             // later collapses hide it with CSS instead of unmounting it, so
             // <materialx-viewer> and its iframe survive every toggle.
             const [previewEverLoaded, setPreviewEverLoaded] = React.useState(false);
+            // Resolved material name for the preview column, from the
+            // graph's own onNodeClick below; { name, seq } so a repeat
+            // click on the same material still re-applies (seq breaks the tie).
+            const [previewMaterialRequest, setPreviewMaterialRequest] = React.useState(null);
+            const materialRequestSeqRef = React.useRef(0);
 
             const prefersReducedMotion = React.useMemo(() => {
                 try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
@@ -486,6 +573,17 @@
                 setFlow((prev) => ({ ...prev, edges: applyEdgeChanges(sel, prev.edges) }));
             }, []);
 
+            // Clicking a node switches the render pane to whatever material
+            // it feeds (resolveMaterialForNode above). A nodegraph's "open"
+            // chip stops its own click, so drilling never reaches this.
+            const onNodeClick = React.useCallback((evt, node) => {
+                if (!interactive || !previewSupported) return;
+                const name = resolveMaterialForNode(node.id, flow.nodes, flow.edges);
+                if (!name) return;
+                materialRequestSeqRef.current += 1;
+                setPreviewMaterialRequest({ name, seq: materialRequestSeqRef.current });
+            }, [interactive, previewSupported, flow]);
+
             // Node width/height arrive async via RF's ResizeObserver, so fitView
             // silently no-ops until every node is measured. Retry across frames,
             // like graph-app.jsx's fitViewSoon, instead of trusting one rAF hop.
@@ -505,9 +603,11 @@
                     inst.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, { zoom });
                 } else {
                     const maxZoom = focusZoom === undefined ? 1.2 : focusZoom;
-                    inst.fitView({ padding: 0.15, maxZoom });
+                    const fitOpts = { padding: 0.15, maxZoom };
+                    if (focusMinZoom !== undefined) fitOpts.minZoom = focusMinZoom;
+                    inst.fitView(fitOpts);
                 }
-            }, [focusMode, focusZoom]);
+            }, [focusMode, focusZoom, focusMinZoom]);
 
             // Keyed on graphVersion (bumped only by a real rebuild above), not
             // `flow`, so a selection-only flow update from onNodesChange never
@@ -670,6 +770,7 @@
                             style={{ width: '100%', height: '100%' }}
                             nodes={flow.nodes} edges={flow.edges} nodeTypes={NODE_TYPES}
                             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+                            onNodeClick={onNodeClick}
                             onInit={(inst) => { rfInstRef.current = inst; }}
 
                             /* wheel: plain wheel scrolls the host page, Ctrl and pinch zoom the canvas */
@@ -682,7 +783,11 @@
                             panOnDrag={effPanOnDrag} zoomOnDoubleClick={false}
                             minZoom={0.1} maxZoom={2}
                             fitView={focusMode !== 'none'}
-                            fitViewOptions={{ padding: 0.15, maxZoom: focusZoom === undefined ? 1.2 : focusZoom }}
+                            fitViewOptions={{
+                                padding: 0.15,
+                                maxZoom: focusZoom === undefined ? 1.2 : focusZoom,
+                                ...(focusMinZoom === undefined ? null : { minZoom: focusMinZoom }),
+                            }}
 
                             /* left-drag rubber-band selects, middle-drag pans; RF
                                ignores selectionOnDrag unless panOnDrag !== true,
@@ -773,7 +878,7 @@
                         <div className={'relative flex-none w-64 sm:w-72' + (previewCollapsed ? ' hidden' : '')}>
                             {!previewCollapsed && previewToggleBtn}
                             {previewEverLoaded && (
-                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} />
+                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} materialRequest={previewMaterialRequest} />
                             )}
                         </div>
                     )}

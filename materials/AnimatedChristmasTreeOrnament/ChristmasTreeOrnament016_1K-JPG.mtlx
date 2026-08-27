@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<!--
+  Exported by MaterialX Playground v2026.8.10
+  https://joaovbs96.github.io/MaterialXPlayground/
+  MaterialX v1.39.5
+-->
+<materialx version="1.39" fileprefix="./">
+  <open_pbr_surface name="ChristmasTreeOrnament016_1K_JPG_OpenPbrSurface" xpos="6.5583" ypos="1.2375" type="surfaceshader">
+    <input name="base_color" nodename="ChristmasTreeOrnament016_1K_JPG_Color" type="color3" />
+    <input name="base_metalness" nodename="ChristmasTreeOrnament016_1K_JPG_Metalness" type="float" />
+    <input name="geometry_normal" nodename="NormalMap" type="vector3" />
+    <input name="specular_roughness" nodename="ChristmasTreeOrnament016_1K_JPG_Roughness" type="float" />
+  </open_pbr_surface>
+  <surfacematerial name="ChristmasTreeOrnament016_1K_JPG" xpos="7.85" ypos="2.0875" type="material">
+    <input name="surfaceshader" nodename="ChristmasTreeOrnament016_1K_JPG_OpenPbrSurface" type="surfaceshader" />
+    <input name="displacementshader" nodename="displacement" type="displacementshader" />
+  </surfacematerial>
+  <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Color" xpos="3.975" ypos="0.1" type="color3">
+    <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Color.jpg" colorspace="srgb_texture" type="filename" />
+    <input name="uvtiling" value="1.0, 1.0" type="vector2" />
+    <input name="texcoord" type="vector2" nodename="texcoord1" />
+    <input name="uvoffset" type="vector2" nodename="convert1" />
+  </tiledimage>
+  <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Displacement" xpos="3.975" ypos="3.1333" type="float">
+    <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Displacement.jpg" type="filename" />
+    <input name="uvtiling" value="1.0, 1.0" type="vector2" />
+    <input name="texcoord" type="vector2" nodename="texcoord1" />
+    <input name="uvoffset" type="vector2" nodename="convert1" />
+  </tiledimage>
+  <displacement name="displacement" xpos="5.2667" ypos="3.225" type="displacementshader">
+    <input name="displacement" nodename="ChristmasTreeOrnament016_1K_JPG_Displacement" type="float" />
+    <input name="scale" value="1.0" type="float" />
+  </displacement>
+  <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Metalness" xpos="3.975" ypos="0.8583" type="float">
+    <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Metalness.jpg" type="filename" />
+    <input name="uvtiling" value="1.0, 1.0" type="vector2" />
+    <input name="texcoord" type="vector2" nodename="texcoord1" />
+    <input name="uvoffset" type="vector2" nodename="convert1" />
+  </tiledimage>
+  <tiledimage name="ChristmasTreeOrnament016_1K_JPG_NormalGL" xpos="3.975" ypos="1.6167" type="vector3">
+    <input name="file" value="ChristmasTreeOrnament016_1K-JPG_NormalGL.jpg" type="filename" />
+    <input name="uvtiling" value="1.0, 1.0" type="vector2" />
+    <input name="texcoord" type="vector2" nodename="texcoord1" />
+    <input name="uvoffset" type="vector2" nodename="convert1" />
+  </tiledimage>
+  <normalmap name="NormalMap" xpos="5.2667" ypos="1.7083" type="vector3">
+    <input name="in" nodename="ChristmasTreeOrnament016_1K_JPG_NormalGL" type="vector3" />
+    <input name="scale" value="1.0" type="float" />
+  </normalmap>
+  <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Roughness" xpos="3.975" ypos="2.375" type="float">
+    <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Roughness.jpg" type="filename" />
+    <input name="uvtiling" value="1.0, 1.0" type="vector2" />
+    <input name="texcoord" type="vector2" nodename="texcoord1" />
+    <input name="uvoffset" type="vector2" nodename="convert1" />
+  </tiledimage>
+  <time name="time1" type="float" xpos="0.1" ypos="2.0917" />
+  <multiply name="multiply1" type="float" nodedef="ND_multiply_float" xpos="1.3917" ypos="2.0458">
+    <input name="in1" type="float" nodename="time1" />
+    <input name="in2" type="float" value="0.2" />
+  </multiply>
+  <convert name="convert1" type="vector2" nodedef="ND_convert_float_vector2" xpos="2.6833" ypos="2.0917">
+    <input name="in" type="float" nodename="multiply1" />
+  </convert>
+  <texcoord name="texcoord1" type="vector2" xpos="2.6833" ypos="1.4167" />
+</materialx>

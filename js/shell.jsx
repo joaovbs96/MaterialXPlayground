@@ -142,6 +142,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/preset-picker.jsx',
         ],
         app: 'js/viewer-app.jsx',
         globalName: 'MaterialViewerApp',
@@ -169,6 +170,7 @@ const VIEW_DEPS = {
             'js/graph/legend.jsx',
             'js/graph/node-component.jsx',
             'js/graph/graph-preview.jsx',
+            'js/shared/preset-picker.jsx',
             'js/graph/preview.jsx',
             'js/graph/catalog.jsx',
             'js/graph/dialogs.jsx',
@@ -200,10 +202,44 @@ const VIEW_DEPS = {
         app: 'js/what-is-materialx.jsx',
         globalName: 'WhatIsMaterialXApp',
     },
+    // Eager deps only: mtlx-ui (MtlxSelect for the page-size control) and
+    // hero-grid. The overlay's graph/3D-viewer stack is deferred to
+    // 'galleryDetail' below, loaded only once a card is opened.
+    gallery: {
+        css: [],
+        scripts: [],
+        babelScripts: [
+            'js/shared/mtlx-ui.jsx',
+            'js/shared/hero-grid.jsx',
+        ],
+        app: 'js/gallery-app.jsx',
+        globalName: 'MtlxGalleryApp',
+    },
+    // Dependency-only bundle (no app/globalName): loaded on demand via
+    // mtlxLoadViewDeps('galleryDetail') on first overlay open. Never
+    // routed to directly, so it's absent from Shell's viewState/render tree.
+    galleryDetail: {
+        css: [
+            'vendor/reactflow/style.css',
+            'js/graph/graph-preview.css',
+        ],
+        scripts: [
+            'vendor/reactflow/index.js',
+            'vendor/dagre/dagre.min.js',
+            'embed/mtlx-viewer.js',
+        ],
+        babelScripts: [
+            'js/graph/model.jsx',
+            'js/graph/style.jsx',
+            'js/graph/legend.jsx',
+            'js/graph/node-component.jsx',
+            'js/graph/graph-preview.jsx',
+        ],
+    },
     compare: {
         css: [],
         scripts: ['vendor/jszip/jszip.min.js', 'js/shared/image-metrics.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/compare-ui.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/compare-ui.jsx', 'js/shared/preset-picker.jsx'],
         app: 'js/compare-app.jsx',
         globalName: 'MaterialCompareApp',
     },
@@ -270,6 +306,10 @@ async function loadViewDeps(viewName) {
         for (const href of dep.css) await loadCss(href);
         for (const src of dep.scripts) await loadScript(src);
         for (const src of dep.babelScripts) await loadJsxApp(src);
+        // Dependency-only bundles (e.g. 'galleryDetail') carry no app or
+        // globalName: they exist to be awaited for their scripts, not to
+        // be mounted as a view themselves.
+        if (!dep.app) return;
         await loadJsxApp(dep.app);
         if (!window[dep.globalName]) {
             throw new Error('View "' + viewName + '" loaded but window.' + dep.globalName + ' is missing — a script in its manifest likely failed to parse (see console).');
@@ -373,11 +413,101 @@ class ViewErrorBoundary extends React.Component {
     }
 }
 
+// Hash -> view routing, shared between Shell's synchronous initial read
+// (so a direct #!gallery load never first mounts the hidden home view)
+// and its hashchange/popstate listeners below.
+function parseShellHash() {
+    if (EMBED) return 'docs';
+    // js/site-header.js is the source of truth for hash->view routing;
+    // this inline fallback is defensive-only and should never actually run.
+    return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
+}
+
+// Styled stand-in for the native close-confirm dialog (main.js's
+// requestCloseConfirmation), shown here so it stays visible even if
+// the dirty view is hidden behind Home. Inert on web (event never fires).
+function DesktopCloseConfirmDialog() {
+    const [open, setOpen] = React.useState(false);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onRequest = (e) => {
+            if (e.detail && e.detail.withdraw) {
+                setOpen(false);
+                return;
+            }
+            setOpen(true);
+            // Tell main the dialog is showing: cancels its native-dialog
+            // fallback timer so a slow decision here doesn't stack a
+            // native dialog on top.
+            if (typeof window.__mtlxRespondCloseConfirm === 'function') {
+                window.__mtlxRespondCloseConfirm('shown');
+            }
+        };
+        window.addEventListener('mtlx-desktop-close-confirm', onRequest);
+        return () => window.removeEventListener('mtlx-desktop-close-confirm', onRequest);
+    }, []);
+
+    const respond = (choice) => {
+        setOpen(false);
+        if (typeof window.__mtlxRespondCloseConfirm === 'function') {
+            window.__mtlxRespondCloseConfirm(choice);
+        }
+    };
+
+    // Esc = Cancel, matching the graph editor's own dialogs.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') respond('cancel'); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    if (!open) return null;
+    return (
+        // fixed + z-[70], above the header's own z-60: the window itself
+        // is closing here, so the usual below-header scrim convention
+        // does not apply.
+        <div
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-950/70"
+            onMouseDown={() => respond('cancel')}
+        >
+            <div
+                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="text-sm font-semibold text-gray-100 mb-1">This document has unsaved changes.</div>
+                <div className="text-[12px] text-gray-400 mb-4">
+                    Do you want to save the changes before closing?
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                        onClick={() => respond('cancel')}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    >Cancel</button>
+                    <button
+                        onClick={() => respond('discard')}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                    >Discard</button>
+                    <button
+                        autoFocus
+                        onClick={() => respond('save')}
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                    >Save and Close</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
 function Shell() {
-    const [activeView, setActiveView] = React.useState('home');
+    // Initialized from the CURRENT hash, not a hardcoded 'home': site-header.js
+    // (which defines window.shellRouteFor) loads before this script runs, so
+    // a direct #!gallery load mounts gallery first render, never home.
+    const [activeView, setActiveView] = React.useState(parseShellHash);
     const [viewState, setViewState] = React.useState({
         home: { mounted: false, status: 'idle' },
         docs: { mounted: false, status: 'idle' },
@@ -387,6 +517,7 @@ function Shell() {
         builder: { mounted: false, status: 'idle' },
         vscode: { mounted: false, status: 'idle' },
         whatIsMaterialx: { mounted: false, status: 'idle' },
+        gallery: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -396,16 +527,10 @@ function Shell() {
     // Hash router: '#!viewer'/'#!graph' select those views; '#!docs' or
     // any '#/...' (legacy permalink) means docs, left untouched for
     // docs-app.jsx's own hash logic; anything else means the home view.
+    // The initial value comes from the useState initializer above, so this
+    // effect only needs to react to LATER navigation.
     React.useEffect(() => {
-        const parseHash = () => {
-            if (EMBED) return 'docs';
-            // js/site-header.js is the source of truth for hash->view
-            // routing; this inline fallback is defensive-only and
-            // should never actually run.
-            return window.shellRouteFor ? window.shellRouteFor(window.location.hash || '') : 'home';
-        };
-        const onNav = () => setActiveView(parseHash());
-        setActiveView(parseHash());
+        const onNav = () => setActiveView(parseShellHash());
         window.addEventListener('hashchange', onNav);
         window.addEventListener('popstate', onNav);
         return () => {
@@ -460,6 +585,7 @@ function Shell() {
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
             whatIsMaterialx: 'MaterialX Playground - What is MaterialX?',
+            gallery: 'MaterialX Playground - Material Gallery',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -493,6 +619,7 @@ function Shell() {
             builder: 'p-2 sm:p-6 md:pb-3 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             whatIsMaterialx: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            gallery: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -586,6 +713,10 @@ function Shell() {
                 // Same wrapper contract as vscode/home: a static,
                 // scrollable content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+            } else if (view === 'gallery') {
+                // Same wrapper contract as vscode/whatIsMaterialx/home: a
+                // static, scrollable content page, not a full-bleed canvas.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
                 // directly via their own `absolute inset-0` root.
@@ -615,6 +746,8 @@ function Shell() {
             {renderView('builder')}
             {renderView('vscode')}
             {renderView('whatIsMaterialx')}
+            {renderView('gallery')}
+            <DesktopCloseConfirmDialog />
         </div>
     );
 }

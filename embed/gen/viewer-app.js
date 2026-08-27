@@ -424,16 +424,10 @@ function MaterialViewerApp({
   sidebarOpenRef.current = sidebarOpen;
   const narrowRef = React.useRef(narrow);
   narrowRef.current = narrow;
-  // Presets dialog: curated official examples (MTLX_PRESETS in
-  // js/shared/mtlx-ui.jsx). presetsBusyPath tracks which row is
-  // fetching so only it spins while the whole list disables.
-  const [presetsOpen, setPresetsOpen] = React.useState(false);
-  const [presetsBusy, setPresetsBusy] = React.useState(false);
-  const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
-  // Selected MTLX_PRESETS path for the Document card's curated
-  // select, mirrored with PresetsDialog's picks via loadPreset
-  // (cleared at the three non-preset ingest entry points only).
-  const [presetPick, setPresetPick] = React.useState('');
+  // Unified preset picker (js/shared/preset-picker.jsx), replacing
+  // the old MTLX_PRESETS dropdown and PresetsDialog. It fetches
+  // and ingests its own picks, so this view owns no busy state.
+  const [presetPickerOpen, setPresetPickerOpen] = React.useState(false);
   // Shader export dialog ("Export Shader Code" overlay button).
   const [shaderExportOpen, setShaderExportOpen] = React.useState(false);
   // True from "parsing a document" until the render view is live (or
@@ -549,27 +543,19 @@ function MaterialViewerApp({
     });
   };
 
-  // Fetch a curated example (fetchPresetFiles) and hand it to
-  // ingest() like a drag-drop. No confirmReplace guard, unlike
-  // graph-app.jsx's loadPreset: the viewer has no unsaved edits.
-  const loadPreset = async preset => {
-    setPresetsBusy(true);
-    setPresetsBusyPath(presetKey(preset));
-    setError(null);
-    try {
-      const {
-        map,
-        rootKey
-      } = await fetchPresetFiles(preset);
-      await ingestRef.current(map, rootKey);
-      setPresetsOpen(false);
-      setPresetPick(preset.path);
-    } catch (e) {
-      setError('Could not load preset: ' + errMsg(e));
-    } finally {
-      setPresetsBusy(false);
-      setPresetsBusyPath(null);
-    }
+  // Picker onSelect ({ xml, name, files }): the exact same shape
+  // handleImport (below) already handles for the 'mtlx-view-document'
+  // handoff, so this just closes the picker and reuses it.
+  const handlePresetPickerSelect = picked => {
+    setPresetPickerOpen(false);
+    handleImport(picked);
+  };
+  // Opens the picker once its graph/3D-viewer deps are loaded
+  // (the 'galleryDetail' bundle - reactflow/dagre/model/style/
+  // legend/node-component/graph-preview + embed/mtlx-viewer.js).
+  const openPresetPicker = async () => {
+    await window.mtlxLoadViewDeps('galleryDetail');
+    setPresetPickerOpen(true);
   };
   const ingest = async (map, rootKey) => {
     setError(null);
@@ -605,8 +591,9 @@ function MaterialViewerApp({
     }
     if (droppedMtlx.length) {
       // One .mtlx loads directly; several in the same drop show
-      // the dropdown. A caller-supplied rootKey (e.g. loadPreset)
-      // wins, since a preset crawl may pull in sibling .mtlx via xi:include.
+      // the dropdown. A caller-supplied rootKey (e.g. the default-
+      // material crawl above) wins, since a crawl may pull in
+      // sibling .mtlx via xi:include.
       const pick = rootKey && mtlx.indexOf(rootKey) !== -1 ? rootKey : mtlx.length === 1 ? mtlx[0] : null;
       setChosenMtlx(pick);
       if (pick) loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.');
@@ -634,7 +621,6 @@ function MaterialViewerApp({
   useWindowFileDrop({
     activeRef,
     onFiles: map => {
-      setPresetPick('');
       ingestRef.current(map);
     },
     onDragState: setDragOver,
@@ -659,7 +645,6 @@ function MaterialViewerApp({
         type: 'application/xml'
       })
     });
-    setPresetPick('');
     // A sender's geometry, re-validated here rather than trusted:
     // resolveViewerGeom drops anything unrenderable and handles
     // the transparent-vs-room fallback.
@@ -915,7 +900,6 @@ function MaterialViewerApp({
       // webkitdirectory inputs carry relative paths
       map[f.webkitRelativePath || f.name] = f;
     }
-    setPresetPick('');
     ingest(map);
   };
   const onPickFiles = e => {
@@ -1338,27 +1322,16 @@ function MaterialViewerApp({
     block: true
   }), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-amber-300/90 mt-1.5"
-  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), window.MTLX_PRESETS && window.presetKey && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
-    label: "Or pick a curated example"
-  }), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: presetPick,
-    options: window.MTLX_PRESETS.map(p => ({
-      value: presetKey(p),
-      label: p.label
-    })),
-    placeholder: "Choose a curated example",
-    disabled: presetsBusy || busy,
-    onChange: path => {
-      setPresetPick(path);
-      if (!path) return;
-      const preset = window.MTLX_PRESETS.find(p => presetKey(p) === path);
-      if (preset) loadPreset(preset);
-    },
-    defValue: null,
-    size: "lg",
-    variant: "field",
-    block: true
-  }))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
+  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+    label: "Or pick a preset"
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: openPresetPicker,
+    className: BTN_SECONDARY + ' w-full justify-start gap-1.5'
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "presets",
+    className: "w-3.5 h-3.5"
+  }), "Presets"))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "color-swatch",
     title: "Materials",
     summary: currentMaterialName,
@@ -1653,8 +1626,8 @@ function MaterialViewerApp({
       // Presets: browser-only (VS Code is bound to the open file).
       presets: !IN_VSCODE ? /*#__PURE__*/React.createElement("button", {
         key: "presets",
-        onClick: () => setPresetsOpen(true),
-        title: "Load a curated official MaterialX example",
+        onClick: openPresetPicker,
+        title: "Load a preset from the Material Gallery",
         className: hudChipClass(false)
       }, /*#__PURE__*/React.createElement(MtlxIcon, {
         name: "presets",
@@ -1768,13 +1741,11 @@ function MaterialViewerApp({
       className: "flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500"
     }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.")), IN_VSCODE ? stage : /*#__PURE__*/React.createElement("div", {
       className: "relative flex-1 min-w-0"
-    }, stage), !chromeless && /*#__PURE__*/React.createElement(PresetsDialog, {
-      open: presetsOpen,
-      onClose: () => setPresetsOpen(false),
-      onPick: loadPreset,
-      busy: presetsBusy,
-      busyPath: presetsBusyPath,
-      overlayClassName: "fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
+    }, stage), !chromeless && /*#__PURE__*/React.createElement(MtlxPresetPicker, {
+      open: presetPickerOpen,
+      onClose: () => setPresetPickerOpen(false),
+      onSelect: handlePresetPickerSelect,
+      overlayClassName: "fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-gray-950/70"
     }), !chromeless && shaderExportOpen && loadedRef.current && /*#__PURE__*/React.createElement(ShaderExportDialog, {
       open: true,
       onClose: () => setShaderExportOpen(false),

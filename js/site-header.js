@@ -154,6 +154,15 @@
             '<path d="M9.165 13.903l-4.165 3.597l-2 -1l4.333 -4.5m1.735 -1.802l6.932 -7.198v5l-4.795 4.141" />' +
             '<path d="M16 16.5l-11 -10l-2 1l13 13.5" />' +
         '</svg>';
+    // Matches MTLX_ICON_PATHS['layout-grid'] (js/shared/ui-commons.js), a
+    // simple grid-of-tiles glyph for the Material Gallery nav entry.
+    var ICON_NAV_GALLERY =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M4 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
+            '<path d="M14 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
+            '<path d="M4 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
+            '<path d="M14 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
+        '</svg>';
     var ICON_CHEVRON_DOWN =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-tab-chevron">' +
             '<path d="M6 9l6 6l6 -6" />' +
@@ -176,6 +185,7 @@
         { id: 'graph', label: 'Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
         { id: 'learn', label: 'Learn', group: true, icon: ICON_NAV_LEARN, items: [
             { id: 'whatIsMaterialx', label: 'What is MaterialX?', shellHref: '#!what-is-materialx', icon: '<span class="mtlx-menu-logo" aria-hidden="true"></span>' },
+            { id: 'gallery', label: 'Material Gallery', shellHref: '#!gallery', icon: ICON_NAV_GALLERY },
             { id: 'tutorials', label: 'Tutorials', icon: ICON_NAV_LEARN, status: 'soon' },
         ] },
         { id: 'integrate', label: 'Integrate', group: true, icon: ICON_NAV_INTEGRATE, items: [
@@ -209,6 +219,7 @@
         if (hash === '#!builder' || hash.indexOf('#!builder?') === 0) { return 'builder'; }
         if (hash === '#!vscode') { return 'vscode'; }
         if (hash === '#!what-is-materialx') { return 'whatIsMaterialx'; }
+        if (hash === '#!gallery' || hash.indexOf('#!gallery?') === 0) { return 'gallery'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
     }
@@ -439,6 +450,17 @@
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
 
+    // Publishes the header's rendered height as --mtlx-header-h on <html>,
+    // so fixed modal scrims elsewhere can stop short of it. Re-published
+    // below wherever that height can change (measure, mobile menu, banner).
+    var headerRoot = document.querySelector('.mtlx-header');
+    var publishHeaderHeight = function () {
+        if (!headerRoot) return;
+        var h = Math.round(headerRoot.getBoundingClientRect().height);
+        document.documentElement.style.setProperty('--mtlx-header-h', h + 'px');
+    };
+    publishHeaderHeight();
+
     // Mobile hamburger + dropdown panel (plain JS, no framework — this
     // file isn't Babel-transformed). Both only exist in the innerHTML
     // built above, so querying them here always finds them.
@@ -449,6 +471,7 @@
         mobileMenu.classList.remove('is-open');
         mobileMenu.style.display = 'none';
         navToggle.setAttribute('aria-expanded', 'false');
+        publishHeaderHeight();
     };
     if (navToggle && mobileMenu) {
         navToggle.addEventListener('click', function () {
@@ -459,6 +482,7 @@
             // site-header.css's own >=768px rule or the panel stays hidden.
             mobileMenu.style.display = willOpen ? 'block' : 'none';
             navToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+            publishHeaderHeight();
         });
         // Any link inside the mobile panel (nav item or source/version
         // link) closes the panel once activated.
@@ -644,6 +668,7 @@
                 // a now-hidden hamburger.
                 closeMobileMenu();
             }
+            publishHeaderHeight();
         };
         measure();
         // rAF-debounced re-measure, reassigned onto the hoisted no-op
@@ -929,6 +954,7 @@
             }
             setState(state, reasonText);
             banner.classList.add('is-visible');
+            publishHeaderHeight();
         }
 
         // Dismissal is ephemeral (no storage), same choice as the footer
@@ -936,6 +962,7 @@
         // true so the re-check listeners below never fire again.
         dismissEl.addEventListener('click', function () {
             banner.classList.remove('is-visible');
+            publishHeaderHeight();
         });
 
         function handleCheck(result) {

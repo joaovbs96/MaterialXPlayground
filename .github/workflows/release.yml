@@ -155,6 +155,14 @@ jobs:
             --exclude='scripts' \
             ./ "$DEST"/
 
+      # Manifest only, no thumbnails in the offline zip (see
+      # docs/local/GALLERY.md). vendor:offline already ran above, so
+      # vendor/materialx is populated for build-gallery.mjs to scan.
+      - name: Generate gallery manifest
+        run: |
+          DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"
+          node scripts/build-gallery.mjs --out "$DEST/gallery"
+
       - name: Sanity-check staged tree
         run: |
           DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"

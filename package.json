@@ -30,7 +30,10 @@
     "build:webview": "node scripts/build.mjs webview",
     "check": "node scripts/build.mjs --check",
     "test:embed": "playwright test",
-    "test:embed:smoke": "playwright test --grep @smoke"
+    "test:embed:smoke": "playwright test --grep @smoke",
+    "gallery:manifest": "node scripts/build-gallery.mjs",
+    "gallery:thumbs": "node scripts/gallery-shots.mjs",
+    "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs"
   },
   "devDependencies": {
     "@babel/standalone": "7.26.10",

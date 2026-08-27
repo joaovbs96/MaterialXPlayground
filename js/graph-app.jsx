@@ -103,7 +103,7 @@
         // Multi-session recovery browser (item 14). Copies PortPickerPopover's
         // ArrowUp/ArrowDown/Enter + scrollIntoView idiom for its session
         // list; the render column hosts one never-re-keyed MtlxGraphPreview.
-        function AutosaveRestoreDialog({ offers, onRestore, onDiscard, onDiscardAll, onClose }) {
+        function AutosaveRestoreDialog({ offers, onRestore, onDiscard, onDiscardAll, onClose, coveredByConfirm }) {
             const [hi, setHi] = React.useState(0);
             const listRef = React.useRef(null);
             const panelRef = React.useRef(null);
@@ -111,8 +111,15 @@
             const tokenRef = React.useRef(0);
             const [shown, setShown] = React.useState(null); // { xml, textures, name }
 
-            useEscapeToClose(onClose, true);
-            React.useEffect(() => { if (panelRef.current) panelRef.current.focus(); }, []);
+            // Suspended while the discard/continue confirm sits on top of
+            // this dialog, so Esc there closes only that confirm.
+            useEscapeToClose(onClose, !coveredByConfirm);
+            // Also runs on mount. Re-focuses on Cancel too: that confirm's
+            // own button just unmounted with focus, dropping it to <body>
+            // and stranding this panel's arrow-key/Enter nav.
+            React.useEffect(() => {
+                if (!coveredByConfirm && panelRef.current) panelRef.current.focus();
+            }, [coveredByConfirm]);
             React.useEffect(() => {
                 if (hi >= offers.length) setHi(Math.max(0, offers.length - 1));
             }, [offers.length, hi]);
@@ -184,10 +191,12 @@
                                         previewTextures={shown.textures}
                                         previewName={shown.name}
                                         lazy={false}
-                                        interactive={false}
+                                        interactive={true}
                                         chrome="none"
-                                        controls="none"
+                                        transparent={false}
+                                        controls={['zoom']}
                                         autoFocus="fit"
+                                        focusMinZoom={0.6}
                                         height={320}
                                     />
                                 ) : (
@@ -278,6 +287,10 @@
             // its bootstrap before any script runs); bound to a single
             // opened .mtlx file, so browser-only affordances are hidden.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            // True when hosted in the Electron desktop shell (set by its
+            // preload before any script runs). This product has no such
+            // shell, so this stays permanently false here.
+            const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
@@ -405,12 +418,9 @@
             // when opened (openExportDialog below), or null while closed —
             // same "computed once, not per render" contract as xmlDialogXml.
             const [exportDialog, setExportDialog] = React.useState(null);
-            // Presets dialog: curated MaterialX examples (MTLX_PRESETS in
-            // js/shared/mtlx-ui.jsx). `presetsBusyPath` tracks which preset
-            // is fetching so only that row spins while all rows disable.
-            const [presetsOpen, setPresetsOpen] = React.useState(false);
-            const [presetsBusy, setPresetsBusy] = React.useState(false);
-            const [presetsBusyPath, setPresetsBusyPath] = React.useState(null);
+            // Unified preset picker (js/shared/preset-picker.jsx), replacing
+            // the old PresetsDialog (MTLX_PRESETS in js/shared/mtlx-ui.jsx).
+            const [presetPickerOpen, setPresetPickerOpen] = React.useState(false);
             // Shader export dialog: holds { renderables } computed once
             // when opened (openShaderExport below), null while closed —
             // same one-shot-computed contract as exportDialog above.
@@ -1124,8 +1134,8 @@
             };
 
             // `rootKey` (optional): when the caller already knows which
-            // .mtlx is the document (loadPreset's map may hold .mtlx-
-            // suffixed includes too), skip the ambiguous-drop heuristic below.
+            // .mtlx is the document (a crawled map may hold .mtlx-suffixed
+            // includes too), skip the ambiguous-drop heuristic below.
             // `additive` (File > Import): never replaces the session, new
             // .mtlx files join the mtlxPaths candidates list instead of
             // loading; textures still merge and rebind live previews.
@@ -1314,6 +1324,10 @@
                     action();
                 }
             };
+            // Shared cancel path (backdrop click, Cancel button, Escape):
+            // all three back out without running the pending action.
+            const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
+            useEscapeToClose(closeConfirm, confirmCloseOpen);
             const guardedIngest = (map) => {
                 const hasMtlx = Object.keys(map).some((k) => /\.mtlx$/i.test(k));
                 confirmReplace(hasMtlx, () => ingest(map));
@@ -2615,26 +2629,18 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const writeFinalRef = React.useRef(writeFinal);
             writeFinalRef.current = writeFinal;
 
-            // Toolbar "Presets" button: fetches a curated example .mtlx
-            // (crawl lives in fetchPresetFiles) and hands it to ingest(),
-            // gated behind confirmReplace like every other doc-replacing action.
-            const loadPreset = (preset) => {
+            // Picker onSelect ({ xml, name, files }, already fetched by the
+            // picker itself): gated behind confirmReplace like every other
+            // doc-replacing action, same map-building recipe as the
+            // 'mtlx-load-document' handoff's handleImport above.
+            const handlePresetPickerSelect = (picked) => {
                 confirmReplace(true, () => {
-                    (async () => {
-                        setPresetsBusy(true);
-                        setPresetsBusyPath(presetKey(preset));
-                        setError(null);
-                        try {
-                            const { map, rootKey } = await fetchPresetFiles(preset);
-                            ingestRef.current(map, rootKey);
-                            setPresetsOpen(false);
-                        } catch (e) {
-                            setError('Could not load preset: ' + errMsg(e));
-                        } finally {
-                            setPresetsBusy(false);
-                            setPresetsBusyPath(null);
-                        }
-                    })();
+                    const safeName = (picked.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                    const map = Object.assign({}, picked.files || {}, {
+                        [safeName + '.mtlx']: new Blob([picked.xml], { type: 'application/xml' }),
+                    });
+                    ingestRef.current(map);
+                    setPresetPickerOpen(false);
                 });
             };
 
@@ -5575,8 +5581,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     title: 'Add textures or more .mtlx documents to the session without replacing it',
                 },
                 !IN_VSCODE && {
-                    label: 'Presets…', icon: 'presets', onSelect: () => setPresetsOpen(true),
-                    title: 'Load a curated official MaterialX example document',
+                    label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
+                    title: 'Load a preset from the Material Gallery',
                 },
                 AUTOSAVE_ON && {
                     label: 'Restore Autosaved…', icon: 'restore',
@@ -5603,6 +5609,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 {
                     label: 'View .mtlx XML', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
                     title: 'View the raw MaterialX XML for the current document',
+                },
+                IN_ELECTRON && { separator: true },
+                IN_ELECTRON && {
+                    label: 'Close Window', icon: 'x', onSelect: () => window.close(),
+                    title: 'Close this window',
                 },
             ];
 
@@ -6570,35 +6581,36 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         )}
                     </div>
 
-                    {/* Presets dialog. Rendered BEFORE the unsaved-changes
-                        dialog below (same z-50 class, earlier in the DOM)
-                        so that dialog paints on top during a mid-fetch confirmReplace. */}
-                    <PresetsDialog
-                        open={presetsOpen}
-                        onClose={() => setPresetsOpen(false)}
-                        onPick={loadPreset}
-                        busy={presetsBusy}
-                        busyPath={presetsBusyPath}
+                    {/* Preset picker. The unsaved-changes dialog below now
+                        outranks it via z-[56] (not DOM order), so it still
+                        paints on top during a mid-select confirmReplace. */}
+                    <MtlxPresetPicker
+                        open={presetPickerOpen}
+                        onClose={() => setPresetPickerOpen(false)}
+                        onSelect={handlePresetPickerSelect}
                     />
 
-                    {/* Shader Code export dialog ("Shader Code" button). */}
+                    {/* Shader Code export dialog ("Export Shader Code..."
+                        File menu item). z-[55] beats the restore dialog's
+                        z-50; onClose no-ops while confirm covers it (Esc). */}
                     {shaderExport && (
                         <ShaderExportDialog
                             open={true}
-                            onClose={() => setShaderExport(null)}
+                            onClose={() => { if (!confirmCloseOpen) setShaderExport(null); }}
                             renderables={shaderExport.renderables}
                             initialIndex={0}
                             generate={({ renderable, label, targetKey }) =>
                                 generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
                         />
                     )}
 
-                    {/* Unsaved-changes dialog: gates Open / drag-drop of a
-                        new .mtlx / switching documents while dirty (never
-                        the additive Import). See confirmReplace. */}
+                    {/* Unsaved-changes dialog: gates Open / drag-drop of a new
+                        .mtlx / switching documents while dirty (never the
+                        additive Import). See confirmReplace; z-[56] beats z-55/z-50 peers. */}
                     {confirmCloseOpen && (
-                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70"
-                            onMouseDown={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}>
+                        <div className="absolute inset-0 z-[56] flex items-center justify-center bg-gray-950/70"
+                            onMouseDown={closeConfirm}>
                             <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                                 onMouseDown={(e) => e.stopPropagation()}>
                                 <div className="text-sm font-semibold text-gray-100 mb-1">Unsaved changes</div>
@@ -6608,7 +6620,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 </div>
                                 <div className="flex flex-wrap justify-end gap-2">
                                     <button
-                                        onClick={() => { pendingActionRef.current = null; setConfirmCloseOpen(false); }}
+                                        onClick={closeConfirm}
                                         className={BTN_SECONDARY}
                                     >Cancel</button>
                                     <button
@@ -6646,6 +6658,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             onDiscard={onDiscardDraft}
                             onDiscardAll={onDiscardAllDrafts}
                             onClose={() => setRestoreOffer(null)}
+                            coveredByConfirm={confirmCloseOpen || !!exportDialog || !!shaderExport}
                         />
                     )}
 
@@ -6737,7 +6750,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         <ValidateDialog status={validateStatus} open={validateOpen} onClose={() => setValidateOpen(false)} />
                     )}
 
-                    {/* Export dialog ("Export" button, item B1). */}
+                    {/* Export dialog ("Export" button, item B1); also the
+                        desktop Export menu command, which can fire while the
+                        restore/confirm dialogs are already up (z-[55]). */}
                     {exportDialog && (
                         <ExportDialog
                             open={!!exportDialog}
@@ -6745,6 +6760,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             textures={exportDialog.textures}
                             onExport={handleExportDialogSubmit}
                             onClose={() => setExportDialog(null)}
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
+                            coveredByConfirm={confirmCloseOpen}
                         />
                     )}
 

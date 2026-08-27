@@ -2,16 +2,16 @@
 <div class="embed-help-doc">
 <h1>Embedding the MaterialX Viewer</h1>
 <p>Drop a single MaterialX material into any web page as a self-contained, chromeless
-3D preview — the &quot;YouTube iframe&quot; experience, but for <code>.mtlx</code> files. No build step, no
+3D preview, the &quot;YouTube iframe&quot; experience, but for <code>.mtlx</code> files. No build step, no
 framework required on your side.</p>
 <p>Two ways to use it:</p>
 <ul>
-<li><strong>Plain <code>&lt;iframe&gt;</code></strong> — zero JavaScript, configured entirely through the query string.</li>
-<li><strong>The <code>&lt;materialx-viewer&gt;</code> custom element</strong> — one <code>&lt;script&gt;</code> tag, an HTML attribute API,
+<li><strong>Plain <code>&lt;iframe&gt;</code></strong>, zero JavaScript, configured entirely through the query string.</li>
+<li><strong>The <code>&lt;materialx-viewer&gt;</code> custom element</strong>, one <code>&lt;script&gt;</code> tag, an HTML attribute API,
 and automatic lazy-loading if you&#39;re embedding more than a couple of materials on one page.</li>
 </ul>
 <p>Both point at <code>embed/viewer.html</code>, which is a dedicated, minimal page: no site shell, no
-Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (optionally) its HUD.</p>
+Tailwind, no in-browser Babel, no hash router, just the 3D viewport and (optionally) its HUD.</p>
 <h2 id="quick-start-no-javascript">Quick start (no JavaScript)</h2>
 <pre><code class="language-html">&lt;iframe
   src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&amp;geometry=sphere&amp;controls=geometry,env,fullscreen&quot;
@@ -20,7 +20,7 @@ Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (opti
   title=&quot;MaterialX material preview&quot;&gt;
 &lt;/iframe&gt;
 </code></pre>
-<p>That&#39;s it — no <code>src=</code> on <code>.mtlx</code> at all also works: with no <code>src</code> param the viewer loads a
+<p>That&#39;s it, no <code>src=</code> on <code>.mtlx</code> at all also works: with no <code>src</code> param the viewer loads a
 default OpenPBR material, which is a fine sanity check while you wire things up.</p>
 <p>Every <code>&lt;iframe&gt;</code> example in this doc sets <code>style=&quot;border:0&quot;</code>, since browsers draw a default
 border around iframes; that matters especially for a <code>transparent</code> embed (see
@@ -164,7 +164,7 @@ in-page, for reference while you work.</p>
 <tr>
 <td><code>origin</code></td>
 <td>origin URL (scheme + host + port)</td>
-<td><em>(none — accepts/broadcasts to any origin)</em></td>
+<td><em>(none, accepts/broadcasts to any origin)</em></td>
 <td>Locks the embed&#39;s postMessage protocol to one parent origin. Only meaningful if you&#39;re scripting the iframe directly with <code>postMessage</code>; the <code>&lt;materialx-viewer&gt;</code> element sets this for you. See <a href="#security">Security</a>.</td>
 </tr>
 </tbody></table>
@@ -243,7 +243,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>fullscreen</code></td>
-<td>A fullscreen toggle button. Requires <code>allowfullscreen</code> on the <code>&lt;iframe&gt;</code> itself — see <a href="#limitations">Limitations</a>.</td>
+<td>A fullscreen toggle button. Requires <code>allowfullscreen</code> on the <code>&lt;iframe&gt;</code> itself, see <a href="#limitations">Limitations</a>.</td>
 </tr>
 </tbody></table>
 <p><code>rotate</code> and the Environment panel&#39;s backdrop picker have no effect on the default <code>shaderball-scene</code> geometry (auto-rotate is disabled for the full scene, and its authored room ignores <code>backdrop</code> entirely, occluding the sky sphere too), so both are hidden while it&#39;s selected and come back as soon as the geometry changes to something else. Neither is reported through <code>mtlx-error</code>: <code>shaderball-scene</code> is the default geometry, so reporting it would make every <code>controls=all</code> embed noisy from the moment it loads.</p>
@@ -307,15 +307,15 @@ This is experimental.</p>
 <p>Unlike <code>transparent</code>, there is no geometry constraint: it works with every <code>geometry</code> value,
 including the default <code>shaderball-scene</code>. It is also gated per material, not per geometry, so an
 opaque material in the same document renders exactly the same either way.</p>
-<p>This mirrors the &quot;Force Transparency&quot; toggle in the viewer&#39;s own Settings HUD panel, and, like
-that toggle, persists to the visitor&#39;s browser storage for this site (<code>localStorage</code>, shared by
-origin). An embed that sets <code>forcetransparency</code> writes that same shared preference, so it can
-also change the starting state of the next unrelated embed or page view on the same origin,
-unless that one passes its own explicit <code>forcetransparency</code> value too. Omitting the param
-entirely leaves whatever that shared preference already is untouched.</p>
+<p>This mirrors the &quot;Force Transparency&quot; toggle in the viewer&#39;s own Settings HUD panel, but does not
+share that toggle&#39;s persistence: setting <code>forcetransparency</code> here, or via the equivalent
+<code>setForceTransparency</code> postMessage command, only affects this embed instance and never writes to
+the visitor&#39;s shared <code>localStorage</code> preference for this site. Only a visitor using the Settings
+HUD panel&#39;s own toggle persists that shared preference. Omitting the param entirely still starts
+this embed from whatever that shared preference already is, left untouched either way.</p>
 <h2 id="the-materialx-viewer-custom-element">The <code>&lt;materialx-viewer&gt;</code> custom element</h2>
-<p>For anything beyond a single static embed — a docs page with several materials, a product
-grid, a listing that scrolls — use the wrapper element instead of hand-writing iframes. It
+<p>For anything beyond a single static embed, a docs page with several materials, a product
+grid, a listing that scrolls, use the wrapper element instead of hand-writing iframes. It
 maps attributes to the same query string above, exposes methods over <code>postMessage</code>, and
 (critically) lazily instantiates its iframe only when scrolled near the viewport, with a
 page-wide cap on how many can be live at once. See <a href="#performance">Performance</a> for why that
@@ -329,7 +329,7 @@ matters.</p>
   style=&quot;width: 640px; height: 480px;&quot;&gt;
 &lt;/materialx-viewer&gt;
 </code></pre>
-<p>One <code>&lt;script&gt;</code> tag covers every <code>&lt;materialx-viewer&gt;</code> on the page — the element self-registers
+<p>One <code>&lt;script&gt;</code> tag covers every <code>&lt;materialx-viewer&gt;</code> on the page, the element self-registers
 once and no-ops on a second load. By default it sizes itself <code>width:100%</code> with a 16:9
 <code>aspect-ratio</code>; override with ordinary CSS (as above) or a host rule targeting the tag.</p>
 <h3 id="attributes-properties">Attributes / properties</h3>
@@ -351,7 +351,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td><code>src</code></td>
 <td><code>.src</code></td>
 <td>URL string</td>
-<td>—</td>
+<td>(none)</td>
 <td>No (reload)</td>
 </tr>
 <tr>
@@ -379,14 +379,14 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td><code>env</code></td>
 <td><code>.env</code></td>
 <td>number (degrees)</td>
-<td>—</td>
+<td>(none)</td>
 <td>Yes</td>
 </tr>
 <tr>
 <td><code>exposure</code></td>
 <td><code>.exposure</code></td>
 <td>number</td>
-<td>—</td>
+<td>(none)</td>
 <td>Yes</td>
 </tr>
 <tr>
@@ -492,21 +492,21 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td><code>.base</code></td>
 <td>URL string</td>
 <td>the directory <code>mtlx-viewer.js</code> was loaded from</td>
-<td>— (read once per activation)</td>
+<td>No (read once per activation)</td>
 </tr>
 <tr>
 <td><code>poster</code></td>
 <td><code>.poster</code></td>
 <td>URL string</td>
-<td>—</td>
-<td>— (placeholder image only, before the iframe activates)</td>
+<td>(none)</td>
+<td>No (placeholder image only, before the iframe activates)</td>
 </tr>
 <tr>
 <td><code>eager</code></td>
 <td><code>.eager</code></td>
 <td>boolean</td>
 <td>off</td>
-<td>— (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the <code>IntersectionObserver</code> still runs alongside it, so an evicted instance can come back once it&#39;s visible again.)</td>
+<td>No (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the <code>IntersectionObserver</code> still runs alongside it, so an evicted instance can come back once it&#39;s visible again.)</td>
 </tr>
 </tbody></table>
 <p><code>camera</code>, unlike the rest of the live-updating attributes, has a one-time-vs-live split: as a
@@ -529,7 +529,7 @@ or the property (<code>el.transparent = false</code>), to turn one off. This is 
 <code>boolean</code> query params above, which do parse the value (<code>1</code>/<code>true</code>/<code>yes</code>/<code>on</code>).</p>
 <p><code>base</code> only needs setting explicitly if <code>mtlx-viewer.js</code> isn&#39;t loaded as a plain, synchronous
 <code>&lt;script src&gt;</code> next to <code>viewer.html</code> (for example, if you copy the script into a bundler or
-inject it dynamically) — normally it&#39;s inferred automatically from where the script itself
+inject it dynamically). Normally it&#39;s inferred automatically from where the script itself
 was loaded from.</p>
 <h3 id="methods">Methods</h3>
 <table>
@@ -543,26 +543,26 @@ was loaded from.</p>
 <tbody><tr>
 <td><code>el.load(xml, opts?)</code></td>
 <td><code>Promise&lt;{ name, type }[]&gt;</code></td>
-<td>Loads a <code>.mtlx</code> document by sending its XML text over <code>postMessage</code> — see <a href="#loading-a-document-without-cors">Loading a document without CORS</a>. <code>opts.textures</code> is an optional <code>{ relPath: Blob | ArrayBuffer | base64-string }</code> map; <code>opts.name</code> sets the material&#39;s display name. The promise resolves with that document&#39;s renderables array once it finishes parsing (the same array <code>mtlx-renderables</code> carries), or rejects if the embed reports a load error, or if the iframe is torn down or reloaded before it answers.</td>
+<td>Loads a <code>.mtlx</code> document by sending its XML text over <code>postMessage</code>, see <a href="#loading-a-document-without-cors">Loading a document without CORS</a>. <code>opts.textures</code> is an optional <code>{ relPath: Blob | ArrayBuffer | base64-string }</code> map; <code>opts.name</code> sets the material&#39;s display name. The promise resolves with that document&#39;s renderables array once it finishes parsing (the same array <code>mtlx-renderables</code> carries), or rejects if the embed reports a load error, or if the iframe is torn down or reloaded before it answers.</td>
 </tr>
 <tr>
 <td><code>el.setEnvRotation(radians)</code></td>
-<td>—</td>
-<td><strong>Radians</strong>, matching the underlying engine API — note this differs from the <code>env</code> attribute/query param, which is degrees.</td>
+<td>(none)</td>
+<td><strong>Radians</strong>, matching the underlying engine API. Note this differs from the <code>env</code> attribute/query param, which is degrees.</td>
 </tr>
 <tr>
 <td><code>el.setEnvExposure(value)</code></td>
-<td>—</td>
+<td>(none)</td>
 <td></td>
 </tr>
 <tr>
 <td><code>el.setEnvBackground(bool)</code></td>
-<td>—</td>
+<td>(none)</td>
 <td></td>
 </tr>
 <tr>
 <td><code>el.resetCamera()</code></td>
-<td>—</td>
+<td>(none)</td>
 <td>Returns to the <code>camera</code>-baseline pose (see the <code>camera</code> param above) if one was ever set, otherwise the engine&#39;s default framing.</td>
 </tr>
 <tr>
@@ -583,7 +583,7 @@ was loaded from.</p>
 </tbody></table>
 <p>Calls made before the iframe reports <code>ready</code> (including calls that trigger the iframe&#39;s
 first creation, e.g. calling <code>load()</code> on a not-yet-visible, non-<code>eager</code> element) are queued
-and flushed in order once it does — you never need to wait for <code>mtlx-ready</code> yourself before
+and flushed in order once it does, you never need to wait for <code>mtlx-ready</code> yourself before
 calling these.</p>
 <h3 id="events">Events</h3>
 <p>Dispatched as <code>CustomEvent</code>s on the element itself:</p>
@@ -602,7 +602,7 @@ calling these.</p>
 </tr>
 <tr>
 <td><code>mtlx-renderables</code></td>
-<td><code>[{ name, type }, ...]</code> — the array itself is the <code>detail</code></td>
+<td><code>[{ name, type }, ...]</code>, the array itself is the <code>detail</code></td>
 <td>A document finished parsing; lists its renderable materials/shaders. Fires for the page&#39;s own initial document and for every later <code>load()</code> call alike. When it&#39;s answering a <code>load()</code>, the underlying <code>postMessage</code> reply carries that call&#39;s correlation id on the wire (that&#39;s what settles <code>load()</code>&#39;s returned promise); the event&#39;s own <code>detail</code> is unaffected, still just the plain array.</td>
 </tr>
 <tr>
@@ -656,7 +656,7 @@ with the defaults below as fallbacks:</p>
 </tbody></table>
 <p>Since normal CSS on your page can&#39;t cross the iframe boundary, these are read from the query
 string (or the matching <code>&lt;materialx-viewer&gt;</code> attribute) and applied <em>inside</em> the framed
-document as inline styles on its <code>&lt;html&gt;</code> element — that&#39;s what makes them reachable by a
+document as inline styles on its <code>&lt;html&gt;</code> element, that&#39;s what makes them reachable by a
 cross-origin host, not just a <a href="#self-hosting">self-hosted</a> copy.</p>
 <p><strong>Validation.</strong> Each value is checked with the browser&#39;s own <code>CSS.supports()</code> before it&#39;s
 applied: <code>accent</code>/<code>surface</code>/<code>text</code> must pass <code>CSS.supports(&#39;color&#39;, value)</code>, and <code>radius</code> must
@@ -664,7 +664,7 @@ pass <code>CSS.supports(&#39;border-radius&#39;, value)</code>. On top of that, 
 <code>}</code>, <code>/*</code>, or <code>expression</code> is rejected outright even if <code>CSS.supports()</code> would otherwise accept
 it, since a value landing in a stylesheet is worth extra caution (a <code>url()</code> in particular could
 make the embed phone home). A rejected value is dropped, reported through <code>mtlx-error</code>, and
-leaves whatever was already applied (the default, or a prior valid value) untouched — the
+leaves whatever was already applied (the default, or a prior valid value) untouched, the
 other, valid params in the same request still apply normally.</p>
 <pre><code class="language-html">&lt;iframe
   src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;controls=geometry,env&amp;accent=%232563eb&amp;surface=%23ffffff&amp;text=%23111111&amp;radius=2px&quot;
@@ -704,8 +704,8 @@ texture images on one origin, so <code>src=</code> renders it fully textured wit
 your textures live somewhere else, <code>el.load()</code> with an explicit <code>opts.textures</code> map (below)
 remains the path for handing them across.</p>
 <p><code>el.load(xmlString)</code> sidesteps this entirely: you read/fetch the <code>.mtlx</code> text yourself, on
-your own page — no cross-origin restriction applies there, since you&#39;re not making a
-cross-origin request <em>into</em> the iframe — and hand the resulting string across over
+your own page, no cross-origin restriction applies there, since you&#39;re not making a
+cross-origin request <em>into</em> the iframe, and hand the resulting string across over
 <code>postMessage</code> instead.</p>
 <pre><code class="language-html">&lt;script src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/mtlx-viewer.js&quot;&gt;&lt;/script&gt;
 &lt;materialx-viewer id=&quot;v&quot; geometry=&quot;sphere&quot; style=&quot;width: 640px; height: 480px;&quot;&gt;&lt;/materialx-viewer&gt;
@@ -727,33 +727,33 @@ cross-origin request <em>into</em> the iframe — and hand the resulting string 
 </code></pre>
 <p><strong>When to use which:</strong></p>
 <ul>
-<li><strong><code>src=</code></strong> — simplest option. Use it when the document is same-origin with wherever you
+<li><strong><code>src=</code></strong>, simplest option. Use it when the document is same-origin with wherever you
 host the embed, or already served with permissive CORS headers (public MaterialX examples
 on GitHub, most CDNs and object storage with a CORS policy configured).</li>
-<li><strong><code>load()</code></strong> — use it when you can&#39;t add CORS headers to the <code>.mtlx</code> host: an internal
+<li><strong><code>load()</code></strong>, use it when you can&#39;t add CORS headers to the <code>.mtlx</code> host: an internal
 server, a signed/authenticated URL, a file the user just picked with <code>&lt;input type=&quot;file&quot;&gt;</code>,
 etc.</li>
 </ul>
 <h2 id="performance">Performance</h2>
 <p>Each <code>&lt;materialx-viewer&gt;</code> (or hand-written <code>&lt;iframe&gt;</code>) is a <strong>separate, independent iframe</strong>:
 its own ~3.8 MB MaterialX WASM instance, and its own WebGL context. Browsers cap the number
-of live WebGL contexts at roughly 8–16 depending on browser/GPU — go over that and the oldest
+of live WebGL contexts at roughly 8–16 depending on browser/GPU, go over that and the oldest
 contexts get silently evicted, breaking whichever viewers held them.</p>
 <p>The custom element handles this for you:</p>
 <ul>
 <li>An <code>IntersectionObserver</code> defers creating an element&#39;s iframe until it scrolls near the
-viewport (<code>rootMargin: &#39;200px&#39;</code> — activates slightly before it&#39;s actually visible), instead
+viewport (<code>rootMargin: &#39;200px&#39;</code>, activates slightly before it&#39;s actually visible), instead
 of instantiating every viewer on the page up front.</li>
-<li>A page-wide LRU cap — <code>MaterialXViewerElement.maxLiveIframes</code>, default <strong>6</strong> — tears down
+<li>A page-wide LRU cap, <code>MaterialXViewerElement.maxLiveIframes</code>, default <strong>6</strong>, tears down
 the least-recently-visible <em>off-screen</em> instance before creating a new one past the limit,
 so a long page of materials never exceeds the browser&#39;s context ceiling. Adjust it globally:<pre><code class="language-js">MaterialXViewerElement.maxLiveIframes = 4; // set before or after elements exist
 </code></pre>
 </li>
 </ul>
-<p>A hand-written <code>&lt;iframe&gt;</code> gets none of this — fine for one or two static embeds (use
+<p>A hand-written <code>&lt;iframe&gt;</code> gets none of this, fine for one or two static embeds (use
 <code>loading=&quot;lazy&quot;</code> as shown in the Quick start snippet), but reach for the custom element for
 anything with more than a couple of viewers on one page.</p>
-<p>For a grid/listing use case, set <code>poster=&quot;…&quot;</code> on each element (a static preview image) — it
+<p>For a grid/listing use case, set <code>poster=&quot;…&quot;</code> on each element (a static preview image); it
 shows in place of the plain placeholder until that instance actually activates.</p>
 <p><strong>Real measured transfer sizes</strong> (cold cache, from the Network panel):</p>
 <table>
@@ -772,30 +772,30 @@ shows in place of the plain placeholder until that instance actually activates.<
 <td>~5.79 MiB</td>
 </tr>
 </tbody></table>
-<p>The floor is the ~3.84 MB WASM module itself — every <em>live</em> iframe pays that once. Compare
+<p>The floor is the ~3.84 MB WASM module itself; every <em>live</em> iframe pays that once. Compare
 against the ~10.8 MB the same material costs inside the full playground app (Babel, Tailwind,
-site header, and the default heavier geometry all add up) — the embed exists specifically to
+site header, and the default heavier geometry all add up); the embed exists specifically to
 avoid that.</p>
 <h2 id="self-hosting">Self-hosting</h2>
-<p>The hosted default is <code>https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html</code> —
+<p>The hosted default is <code>https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html</code>,
 nothing to set up. To self-host instead (e.g. from the offline release zip), serve at least
 these directories from your web root:</p>
 <ul>
-<li><code>embed/</code> — the viewer page, the precompiled engine/UI bundles (<code>embed/gen/*.js</code>), the
+<li><code>embed/</code>, the viewer page, the precompiled engine/UI bundles (<code>embed/gen/*.js</code>), the
 wrapper element (<code>embed/mtlx-viewer.js</code>), and <code>embed/embed.css</code>.</li>
-<li><code>js/</code> — the MaterialX engine and shared UI helpers, including <code>js/materialx/</code> (the WASM
-module itself — the largest asset by far) and <code>js/vendor/</code> (the EXR loader).</li>
-<li><code>models/</code> — the preview geometry GLBs (<code>shaderball</code>, <code>cloth</code>, etc.).</li>
-<li><code>env_maps/</code> — the default HDRI environment.</li>
-<li><code>vendor/three/</code> and <code>vendor/react/</code> — the rendering and UI runtime.</li>
+<li><code>js/</code>, the MaterialX engine and shared UI helpers, including <code>js/materialx/</code> (the WASM
+module itself, the largest asset by far) and <code>js/vendor/</code> (the EXR loader).</li>
+<li><code>models/</code>, the preview geometry GLBs (<code>shaderball</code>, <code>cloth</code>, etc.).</li>
+<li><code>env_maps/</code>, the default HDRI environment.</li>
+<li><code>vendor/three/</code> and <code>vendor/react/</code>, the rendering and UI runtime.</li>
 </ul>
 <p><strong>The directory depth matters.</strong> <code>embed/viewer.html</code> sets <code>&lt;base href=&quot;../&quot;&gt;</code> so that
 <code>js/mtlx-engine.js</code>&#39;s asset resolution (which is written for a root-level page, e.g.
 <code>./js/materialx/…</code>, <code>models/…</code>) still works from one directory down. That means <code>embed/</code>
 must sit <strong>exactly one level below</strong> the same root that contains <code>js/</code>, <code>models/</code>,
-<code>env_maps/</code>, and <code>vendor/</code> — don&#39;t flatten the tree or nest <code>embed/</code> any deeper.</p>
+<code>env_maps/</code>, and <code>vendor/</code>, don&#39;t flatten the tree or nest <code>embed/</code> any deeper.</p>
 <p>The <a href="https://github.com/joaovbs96/MaterialXPlayground/releases/latest" target="_blank" rel="noopener">offline release zip</a>
-attached to every GitHub release already contains the full tree in this shape — unzip it and
+attached to every GitHub release already contains the full tree in this shape; unzip it and
 serve the folder as-is with any static file server.</p>
 <h3 id="non-default-materialx-engine-versions">Non-default MaterialX engine versions</h3>
 <p>Only the default engine build, <code>js/materialx/1.39.5/</code>, is committed to the repo, so it&#39;s
@@ -845,19 +845,19 @@ parent:</p>
 <code>event.source</code> is actually <em>its own</em> iframe&#39;s <code>contentWindow</code> (not some other frame on the
 page) before acting on it or dispatching a DOM event, so multiple <code>&lt;materialx-viewer&gt;</code>
 instances on one page can&#39;t cross-talk even without <code>origin</code> set.</p>
-<p>Without <code>origin</code>, the embed accepts commands from — and broadcasts to — any frame that can
+<p>Without <code>origin</code>, the embed accepts commands from, and broadcasts to, any frame that can
 reach it. That&#39;s the default because a hand-written <code>&lt;iframe&gt;</code> has no way to know its host&#39;s
 origin in advance. It&#39;s an acceptable default because the protocol never carries anything
-secret: no auth tokens, no user data — only the <code>.mtlx</code> XML/textures/render-state the host
+secret: no auth tokens, no user data, only the <code>.mtlx</code> XML/textures/render-state the host
 itself chose to send. Pass <code>origin</code> explicitly wherever that assumption doesn&#39;t hold.</p>
 <h2 id="limitations">Limitations</h2>
 <p>Stated plainly, so nothing here surprises you at integration time:</p>
 <ul>
-<li><strong>No zip ingest.</strong> The embed never loads the zip library, to save the ~100 KB — you can&#39;t
+<li><strong>No zip ingest.</strong> The embed never loads the zip library (to save the ~100 KB), so you can&#39;t
 hand it a <code>.zip</code> via <code>src=</code> or <code>load()</code>. Load an already-extracted <code>.mtlx</code> string plus a
 <code>{ relPath: Blob }</code> texture map instead.</li>
 <li><strong>Window-level drag-and-drop is disabled.</strong> The embed doesn&#39;t listen for files dropped
-anywhere on the page (unlike the full playground app) — there&#39;s no host page to hijack, and
+anywhere on the page (unlike the full playground app), there&#39;s no host page to hijack, and
 no sidebar UI in chromeless mode to show a drop&#39;s result anyway.</li>
 <li><strong>Fullscreen needs <code>allowfullscreen</code> on the <code>&lt;iframe&gt;</code>.</strong> Without it, the browser silently
 denies the Fullscreen API and the engine falls back to a non-native CSS &quot;maximize&quot;. The

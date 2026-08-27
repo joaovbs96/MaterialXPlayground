@@ -1,17 +1,17 @@
 # Embedding the MaterialX Viewer
 
 Drop a single MaterialX material into any web page as a self-contained, chromeless
-3D preview — the "YouTube iframe" experience, but for `.mtlx` files. No build step, no
+3D preview, the "YouTube iframe" experience, but for `.mtlx` files. No build step, no
 framework required on your side.
 
 Two ways to use it:
 
-- **Plain `<iframe>`** — zero JavaScript, configured entirely through the query string.
-- **The `<materialx-viewer>` custom element** — one `<script>` tag, an HTML attribute API,
+- **Plain `<iframe>`**, zero JavaScript, configured entirely through the query string.
+- **The `<materialx-viewer>` custom element**, one `<script>` tag, an HTML attribute API,
   and automatic lazy-loading if you're embedding more than a couple of materials on one page.
 
 Both point at `embed/viewer.html`, which is a dedicated, minimal page: no site shell, no
-Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (optionally) its HUD.
+Tailwind, no in-browser Babel, no hash router, just the 3D viewport and (optionally) its HUD.
 
 ## Quick start (no JavaScript)
 
@@ -24,7 +24,7 @@ Tailwind, no in-browser Babel, no hash router — just the 3D viewport and (opti
 </iframe>
 ```
 
-That's it — no `src=` on `.mtlx` at all also works: with no `src` param the viewer loads a
+That's it, no `src=` on `.mtlx` at all also works: with no `src` param the viewer loads a
 default OpenPBR material, which is a fine sanity check while you wire things up.
 
 Every `<iframe>` example in this doc sets `style="border:0"`, since browsers draw a default
@@ -62,7 +62,7 @@ in-page, for reference while you work.
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
 | `radius` | CSS `<length>` | `4px` | HUD button/select corner radius. See [Theming](#theming). |
-| `origin` | origin URL (scheme + host + port) | *(none — accepts/broadcasts to any origin)* | Locks the embed's postMessage protocol to one parent origin. Only meaningful if you're scripting the iframe directly with `postMessage`; the `<materialx-viewer>` element sets this for you. See [Security](#security). |
+| `origin` | origin URL (scheme + host + port) | *(none, accepts/broadcasts to any origin)* | Locks the embed's postMessage protocol to one parent origin. Only meaningful if you're scripting the iframe directly with `postMessage`; the `<materialx-viewer>` element sets this for you. See [Security](#security). |
 
 Every `boolean` param accepts `1`, `true`, `yes`, or `on` for true, and `0`, `false`, `no`,
 or `off` for false, case-insensitively (so `autorotate=on` and `background=TRUE` both work,
@@ -91,7 +91,7 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | `env` | The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle). |
 | `screenshot` | A "save PNG" button. |
 | `settings` | The settings popover (force-transparency, etc.). |
-| `fullscreen` | A fullscreen toggle button. Requires `allowfullscreen` on the `<iframe>` itself — see [Limitations](#limitations). |
+| `fullscreen` | A fullscreen toggle button. Requires `allowfullscreen` on the `<iframe>` itself, see [Limitations](#limitations). |
 
 `rotate` and the Environment panel's backdrop picker have no effect on the default `shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its authored room ignores `backdrop` entirely, occluding the sky sphere too), so both are hidden while it's selected and come back as soon as the geometry changes to something else. Neither is reported through `mtlx-error`: `shaderball-scene` is the default geometry, so reporting it would make every `controls=all` embed noisy from the moment it loads.
 
@@ -149,17 +149,17 @@ Unlike `transparent`, there is no geometry constraint: it works with every `geom
 including the default `shaderball-scene`. It is also gated per material, not per geometry, so an
 opaque material in the same document renders exactly the same either way.
 
-This mirrors the "Force Transparency" toggle in the viewer's own Settings HUD panel, and, like
-that toggle, persists to the visitor's browser storage for this site (`localStorage`, shared by
-origin). An embed that sets `forcetransparency` writes that same shared preference, so it can
-also change the starting state of the next unrelated embed or page view on the same origin,
-unless that one passes its own explicit `forcetransparency` value too. Omitting the param
-entirely leaves whatever that shared preference already is untouched.
+This mirrors the "Force Transparency" toggle in the viewer's own Settings HUD panel, but does not
+share that toggle's persistence: setting `forcetransparency` here, or via the equivalent
+`setForceTransparency` postMessage command, only affects this embed instance and never writes to
+the visitor's shared `localStorage` preference for this site. Only a visitor using the Settings
+HUD panel's own toggle persists that shared preference. Omitting the param entirely still starts
+this embed from whatever that shared preference already is, left untouched either way.
 
 ## The `<materialx-viewer>` custom element
 
-For anything beyond a single static embed — a docs page with several materials, a product
-grid, a listing that scrolls — use the wrapper element instead of hand-writing iframes. It
+For anything beyond a single static embed, a docs page with several materials, a product
+grid, a listing that scrolls, use the wrapper element instead of hand-writing iframes. It
 maps attributes to the same query string above, exposes methods over `postMessage`, and
 (critically) lazily instantiates its iframe only when scrolled near the viewport, with a
 page-wide cap on how many can be live at once. See [Performance](#performance) for why that
@@ -176,7 +176,7 @@ matters.
 </materialx-viewer>
 ```
 
-One `<script>` tag covers every `<materialx-viewer>` on the page — the element self-registers
+One `<script>` tag covers every `<materialx-viewer>` on the page, the element self-registers
 once and no-ops on a second load. By default it sizes itself `width:100%` with a 16:9
 `aspect-ratio`; override with ordinary CSS (as above) or a host rule targeting the tag.
 
@@ -189,12 +189,12 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 
 | Attribute | Property | Type | Default | Live-updates? |
 | --- | --- | --- | --- | --- |
-| `src` | `.src` | URL string | — | No (reload) |
+| `src` | `.src` | URL string | (none) | No (reload) |
 | `version` | `.version` | see the `version` query param above | `1.39.5` | No (reload) |
 | `geometry` | `.geometry` | see table above | `shaderball-scene` | Yes |
 | `material` | `.material` | string: a renderable name, or an index | (first renderable) | Yes |
-| `env` | `.env` | number (degrees) | — | Yes |
-| `exposure` | `.exposure` | number | — | Yes |
+| `env` | `.env` | number (degrees) | (none) | Yes |
+| `exposure` | `.exposure` | number | (none) | Yes |
 | `autorotate` | `.autorotate` | boolean | off | No (reload) |
 | `wheel` | `.wheel` | `scroll`, `zoom`, `none` | `scroll` | No (reload) |
 | `camera` | `.camera` | `"px,py,pz,tx,ty,tz"` | (none) | Yes |
@@ -209,9 +209,9 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
 | `radius` | `.radius` | CSS `<length>` | `4px` | Yes |
-| `base` | `.base` | URL string | the directory `mtlx-viewer.js` was loaded from | — (read once per activation) |
-| `poster` | `.poster` | URL string | — | — (placeholder image only, before the iframe activates) |
-| `eager` | `.eager` | boolean | off | — (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the `IntersectionObserver` still runs alongside it, so an evicted instance can come back once it's visible again.) |
+| `base` | `.base` | URL string | the directory `mtlx-viewer.js` was loaded from | No (read once per activation) |
+| `poster` | `.poster` | URL string | (none) | No (placeholder image only, before the iframe activates) |
+| `eager` | `.eager` | boolean | off | No (read once, on connect. Creates the iframe immediately instead of waiting to scroll into view; the `IntersectionObserver` still runs alongside it, so an evicted instance can come back once it's visible again.) |
 
 `camera`, unlike the rest of the live-updating attributes, has a one-time-vs-live split: as a
 query param on a plain `<iframe>` it only ever seeds the *initial* pose (see the table above).
@@ -238,25 +238,25 @@ or the property (`el.transparent = false`), to turn one off. This is a different
 
 `base` only needs setting explicitly if `mtlx-viewer.js` isn't loaded as a plain, synchronous
 `<script src>` next to `viewer.html` (for example, if you copy the script into a bundler or
-inject it dynamically) — normally it's inferred automatically from where the script itself
+inject it dynamically). Normally it's inferred automatically from where the script itself
 was loaded from.
 
 ### Methods
 
 | Method | Returns | Notes |
 | --- | --- | --- |
-| `el.load(xml, opts?)` | `Promise<{ name, type }[]>` | Loads a `.mtlx` document by sending its XML text over `postMessage` — see [Loading a document without CORS](#loading-a-document-without-cors). `opts.textures` is an optional `{ relPath: Blob \| ArrayBuffer \| base64-string }` map; `opts.name` sets the material's display name. The promise resolves with that document's renderables array once it finishes parsing (the same array `mtlx-renderables` carries), or rejects if the embed reports a load error, or if the iframe is torn down or reloaded before it answers. |
-| `el.setEnvRotation(radians)` | — | **Radians**, matching the underlying engine API — note this differs from the `env` attribute/query param, which is degrees. |
-| `el.setEnvExposure(value)` | — | |
-| `el.setEnvBackground(bool)` | — | |
-| `el.resetCamera()` | — | Returns to the `camera`-baseline pose (see the `camera` param above) if one was ever set, otherwise the engine's default framing. |
+| `el.load(xml, opts?)` | `Promise<{ name, type }[]>` | Loads a `.mtlx` document by sending its XML text over `postMessage`, see [Loading a document without CORS](#loading-a-document-without-cors). `opts.textures` is an optional `{ relPath: Blob \| ArrayBuffer \| base64-string }` map; `opts.name` sets the material's display name. The promise resolves with that document's renderables array once it finishes parsing (the same array `mtlx-renderables` carries), or rejects if the embed reports a load error, or if the iframe is torn down or reloaded before it answers. |
+| `el.setEnvRotation(radians)` | (none) | **Radians**, matching the underlying engine API. Note this differs from the `env` attribute/query param, which is degrees. |
+| `el.setEnvExposure(value)` | (none) | |
+| `el.setEnvBackground(bool)` | (none) | |
+| `el.resetCamera()` | (none) | Returns to the `camera`-baseline pose (see the `camera` param above) if one was ever set, otherwise the engine's default framing. |
 | `el.getCamera()` | `Promise<{ position: [x,y,z], target: [tx,ty,tz] }>` | Resolves with the current camera pose. Rejects if there's no live view to read it from (a fixed-camera geometry, or the iframe isn't up yet). |
 | `el.setCamera(pose)` | (none) | Repositions the camera live and rebases what the HUD Reset button/`resetCamera` return to, onto this new pose. `pose.position`/`pose.target` are each an optional 3-number array; either can be omitted to leave that half alone. Fire-and-forget: an invalid pose is reported through `mtlx-error` rather than a rejection. |
 | `el.snapshot()` | `Promise<Blob>` | Resolves with a PNG snapshot of the current frame. |
 
 Calls made before the iframe reports `ready` (including calls that trigger the iframe's
 first creation, e.g. calling `load()` on a not-yet-visible, non-`eager` element) are queued
-and flushed in order once it does — you never need to wait for `mtlx-ready` yourself before
+and flushed in order once it does, you never need to wait for `mtlx-ready` yourself before
 calling these.
 
 ### Events
@@ -266,7 +266,7 @@ Dispatched as `CustomEvent`s on the element itself:
 | Event | `detail` | Fires when |
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
-| `mtlx-renderables` | `[{ name, type }, ...]` — the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
+| `mtlx-renderables` | `[{ name, type }, ...]`, the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
 | `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, a failed or unsupported `geometryUrl`, or an unrecognized `wheel`/`version`/`backdrop`/`forcetransparency` value. |
 
 ```js
@@ -291,7 +291,7 @@ with the defaults below as fallbacks:
 
 Since normal CSS on your page can't cross the iframe boundary, these are read from the query
 string (or the matching `<materialx-viewer>` attribute) and applied *inside* the framed
-document as inline styles on its `<html>` element — that's what makes them reachable by a
+document as inline styles on its `<html>` element, that's what makes them reachable by a
 cross-origin host, not just a [self-hosted](#self-hosting) copy.
 
 **Validation.** Each value is checked with the browser's own `CSS.supports()` before it's
@@ -300,7 +300,7 @@ pass `CSS.supports('border-radius', value)`. On top of that, any value containin
 `}`, `/*`, or `expression` is rejected outright even if `CSS.supports()` would otherwise accept
 it, since a value landing in a stylesheet is worth extra caution (a `url()` in particular could
 make the embed phone home). A rejected value is dropped, reported through `mtlx-error`, and
-leaves whatever was already applied (the default, or a prior valid value) untouched — the
+leaves whatever was already applied (the default, or a prior valid value) untouched, the
 other, valid params in the same request still apply normally.
 
 ```html
@@ -352,8 +352,8 @@ your textures live somewhere else, `el.load()` with an explicit `opts.textures` 
 remains the path for handing them across.
 
 `el.load(xmlString)` sidesteps this entirely: you read/fetch the `.mtlx` text yourself, on
-your own page — no cross-origin restriction applies there, since you're not making a
-cross-origin request *into* the iframe — and hand the resulting string across over
+your own page, no cross-origin restriction applies there, since you're not making a
+cross-origin request *into* the iframe, and hand the resulting string across over
 `postMessage` instead.
 
 ```html
@@ -378,10 +378,10 @@ cross-origin request *into* the iframe — and hand the resulting string across 
 
 **When to use which:**
 
-- **`src=`** — simplest option. Use it when the document is same-origin with wherever you
+- **`src=`**, simplest option. Use it when the document is same-origin with wherever you
   host the embed, or already served with permissive CORS headers (public MaterialX examples
   on GitHub, most CDNs and object storage with a CORS policy configured).
-- **`load()`** — use it when you can't add CORS headers to the `.mtlx` host: an internal
+- **`load()`**, use it when you can't add CORS headers to the `.mtlx` host: an internal
   server, a signed/authenticated URL, a file the user just picked with `<input type="file">`,
   etc.
 
@@ -389,26 +389,26 @@ cross-origin request *into* the iframe — and hand the resulting string across 
 
 Each `<materialx-viewer>` (or hand-written `<iframe>`) is a **separate, independent iframe**:
 its own ~3.8 MB MaterialX WASM instance, and its own WebGL context. Browsers cap the number
-of live WebGL contexts at roughly 8–16 depending on browser/GPU — go over that and the oldest
+of live WebGL contexts at roughly 8–16 depending on browser/GPU, go over that and the oldest
 contexts get silently evicted, breaking whichever viewers held them.
 
 The custom element handles this for you:
 
 - An `IntersectionObserver` defers creating an element's iframe until it scrolls near the
-  viewport (`rootMargin: '200px'` — activates slightly before it's actually visible), instead
+  viewport (`rootMargin: '200px'`, activates slightly before it's actually visible), instead
   of instantiating every viewer on the page up front.
-- A page-wide LRU cap — `MaterialXViewerElement.maxLiveIframes`, default **6** — tears down
+- A page-wide LRU cap, `MaterialXViewerElement.maxLiveIframes`, default **6**, tears down
   the least-recently-visible *off-screen* instance before creating a new one past the limit,
   so a long page of materials never exceeds the browser's context ceiling. Adjust it globally:
   ```js
   MaterialXViewerElement.maxLiveIframes = 4; // set before or after elements exist
   ```
 
-A hand-written `<iframe>` gets none of this — fine for one or two static embeds (use
+A hand-written `<iframe>` gets none of this, fine for one or two static embeds (use
 `loading="lazy"` as shown in the Quick start snippet), but reach for the custom element for
 anything with more than a couple of viewers on one page.
 
-For a grid/listing use case, set `poster="…"` on each element (a static preview image) — it
+For a grid/listing use case, set `poster="…"` on each element (a static preview image); it
 shows in place of the plain placeholder until that instance actually activates.
 
 **Real measured transfer sizes** (cold cache, from the Network panel):
@@ -418,33 +418,33 @@ shows in place of the plain placeholder until that instance actually activates.
 | `?geometry=sphere` (no HUD, no geometry download) | 5,628,322 (~5.37 MiB) |
 | `?geometry=shaderball&controls=geometry,rotate,reset,env,screenshot,settings,fullscreen` (full HUD) | ~5.79 MiB |
 
-The floor is the ~3.84 MB WASM module itself — every *live* iframe pays that once. Compare
+The floor is the ~3.84 MB WASM module itself; every *live* iframe pays that once. Compare
 against the ~10.8 MB the same material costs inside the full playground app (Babel, Tailwind,
-site header, and the default heavier geometry all add up) — the embed exists specifically to
+site header, and the default heavier geometry all add up); the embed exists specifically to
 avoid that.
 
 ## Self-hosting
 
-The hosted default is `https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html` —
+The hosted default is `https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html`,
 nothing to set up. To self-host instead (e.g. from the offline release zip), serve at least
 these directories from your web root:
 
-- `embed/` — the viewer page, the precompiled engine/UI bundles (`embed/gen/*.js`), the
+- `embed/`, the viewer page, the precompiled engine/UI bundles (`embed/gen/*.js`), the
   wrapper element (`embed/mtlx-viewer.js`), and `embed/embed.css`.
-- `js/` — the MaterialX engine and shared UI helpers, including `js/materialx/` (the WASM
-  module itself — the largest asset by far) and `js/vendor/` (the EXR loader).
-- `models/` — the preview geometry GLBs (`shaderball`, `cloth`, etc.).
-- `env_maps/` — the default HDRI environment.
-- `vendor/three/` and `vendor/react/` — the rendering and UI runtime.
+- `js/`, the MaterialX engine and shared UI helpers, including `js/materialx/` (the WASM
+  module itself, the largest asset by far) and `js/vendor/` (the EXR loader).
+- `models/`, the preview geometry GLBs (`shaderball`, `cloth`, etc.).
+- `env_maps/`, the default HDRI environment.
+- `vendor/three/` and `vendor/react/`, the rendering and UI runtime.
 
 **The directory depth matters.** `embed/viewer.html` sets `<base href="../">` so that
 `js/mtlx-engine.js`'s asset resolution (which is written for a root-level page, e.g.
 `./js/materialx/…`, `models/…`) still works from one directory down. That means `embed/`
 must sit **exactly one level below** the same root that contains `js/`, `models/`,
-`env_maps/`, and `vendor/` — don't flatten the tree or nest `embed/` any deeper.
+`env_maps/`, and `vendor/`, don't flatten the tree or nest `embed/` any deeper.
 
 The [offline release zip](https://github.com/joaovbs96/MaterialXPlayground/releases/latest)
-attached to every GitHub release already contains the full tree in this shape — unzip it and
+attached to every GitHub release already contains the full tree in this shape; unzip it and
 serve the folder as-is with any static file server.
 
 ### Non-default MaterialX engine versions
@@ -507,21 +507,21 @@ The custom element adds a second layer on top of that: it verifies every inbound
 page) before acting on it or dispatching a DOM event, so multiple `<materialx-viewer>`
 instances on one page can't cross-talk even without `origin` set.
 
-Without `origin`, the embed accepts commands from — and broadcasts to — any frame that can
+Without `origin`, the embed accepts commands from, and broadcasts to, any frame that can
 reach it. That's the default because a hand-written `<iframe>` has no way to know its host's
 origin in advance. It's an acceptable default because the protocol never carries anything
-secret: no auth tokens, no user data — only the `.mtlx` XML/textures/render-state the host
+secret: no auth tokens, no user data, only the `.mtlx` XML/textures/render-state the host
 itself chose to send. Pass `origin` explicitly wherever that assumption doesn't hold.
 
 ## Limitations
 
 Stated plainly, so nothing here surprises you at integration time:
 
-- **No zip ingest.** The embed never loads the zip library, to save the ~100 KB — you can't
+- **No zip ingest.** The embed never loads the zip library (to save the ~100 KB), so you can't
   hand it a `.zip` via `src=` or `load()`. Load an already-extracted `.mtlx` string plus a
   `{ relPath: Blob }` texture map instead.
 - **Window-level drag-and-drop is disabled.** The embed doesn't listen for files dropped
-  anywhere on the page (unlike the full playground app) — there's no host page to hijack, and
+  anywhere on the page (unlike the full playground app), there's no host page to hijack, and
   no sidebar UI in chromeless mode to show a drop's result anyway.
 - **Fullscreen needs `allowfullscreen` on the `<iframe>`.** Without it, the browser silently
   denies the Fullscreen API and the engine falls back to a non-native CSS "maximize". The
