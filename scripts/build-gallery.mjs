@@ -11,6 +11,7 @@
 
 import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -223,6 +224,11 @@ function extractLineComment(xml, lineNumber) {
 async function collectDocument(rootPath, rootXml) {
   const seenRefs = new Set();
   const refs = [];
+  // Fingerprint of everything this material renders from. A deploy reuses
+  // the previously published thumbnail when this is unchanged, so it has
+  // to cover the root doc, every include, and every texture byte.
+  const hash = createHash("sha256");
+  hash.update(rootXml);
   const pieces = [rootXml];
   const visited = new Set([rootPath]);
   const queue = [{ dir: path.dirname(rootPath), xml: rootXml }];
@@ -238,6 +244,8 @@ async function collectDocument(rootPath, rootXml) {
         continue;
       }
       const incXml = await readFile(incPath, "utf8");
+      hash.update(href);
+      hash.update(incXml);
       pieces.push(incXml);
       queue.push({ dir: path.dirname(incPath), xml: incXml });
     }
@@ -256,6 +264,8 @@ async function collectDocument(rootPath, rootXml) {
       const st = await stat(abs);
       textureCount++;
       textureBytes += st.size;
+      hash.update(ref);
+      hash.update(await readFile(abs));
     } catch (e) {
       console.warn(`warning: texture ref not found on disk: ${abs} (ref "${ref}")`);
     }
@@ -265,6 +275,7 @@ async function collectDocument(rootPath, rootXml) {
   return {
     textureCount,
     textureBytes,
+    hash: hash.digest("hex").slice(0, 16),
     renderables: extractRenderables(combinedXml),
     shader: extractShaderCategory(combinedXml) || "unknown",
   };
@@ -300,7 +311,7 @@ async function listExampleFiles() {
 async function buildExampleEntry(family, fileName, absPath) {
   const xml = await readFile(absPath, "utf8");
   const stats = await stat(absPath);
-  const { textureCount, textureBytes, renderables, shader } = await collectDocument(absPath, xml);
+  const { textureCount, textureBytes, hash, renderables, shader } = await collectDocument(absPath, xml);
 
   const id = fileName.replace(/\.mtlx$/, "");
   const familyLabel = FAMILY_LABELS[family] || family;
@@ -324,6 +335,7 @@ async function buildExampleEntry(family, fileName, absPath) {
     shader,
     tags: dedupe([familyLabel, textured ? "Textured" : "Procedural", shader]),
     thumb: `thumbs/${id}.jpg`,
+    hash,
     license: MATERIALX_LICENSE,
   };
   if (id === "standard_surface_chess_set") {
@@ -336,7 +348,7 @@ async function buildExampleEntry(family, fileName, absPath) {
 async function buildPlaygroundEntry(def) {
   const xml = await readFile(def.absPath, "utf8");
   const stats = await stat(def.absPath);
-  const { textureCount, textureBytes, renderables, shader } = await collectDocument(def.absPath, xml);
+  const { textureCount, textureBytes, hash, renderables, shader } = await collectDocument(def.absPath, xml);
   const textured = textureCount > 0;
   const familyLabel = "Playground";
 
@@ -355,6 +367,7 @@ async function buildPlaygroundEntry(def) {
     shader,
     tags: dedupe([familyLabel, textured ? "Textured" : "Procedural", shader]),
     thumb: `thumbs/${def.id}.jpg`,
+    hash,
     license: def.license || REPO_LICENSE,
   };
   if (def.note) entry.note = def.note;
