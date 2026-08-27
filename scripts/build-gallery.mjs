@@ -11,6 +11,7 @@
 
 import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +40,13 @@ const FAMILY_PREFIXES = {
   SimpleHair: "simple_hair_",
 };
 
+// Every entry carries a license the gallery can display in place. `origin`
+// picks the resolver: "materialx" goes through MtlxAssets.repoUrl (the
+// vendored copy locally, raw.githubusercontent when remote), "site" is
+// site-relative.
+const MATERIALX_LICENSE = { label: "Apache License 2.0", origin: "materialx", path: "LICENSE" };
+const REPO_LICENSE = { label: "Apache License 2.0", origin: "site", path: "LICENSE" };
+
 // Curated showcase materials, appended after the vendored examples. Paths
 // are absolute so collectTextures() can resolve their own local refs.
 const PLAYGROUND_ENTRIES = [
@@ -47,6 +55,7 @@ const PLAYGROUND_ENTRIES = [
     name: "Motley Patchwork Rug",
     absPath: path.join(REPO_ROOT, "materials", "Motley_Patchwork_Rug", "Motley_Patchwork_Rug.mtlx"),
     docPath: "materials/Motley_Patchwork_Rug/Motley_Patchwork_Rug.mtlx",
+    license: { label: "MIT License", origin: "site", path: "materials/Motley_Patchwork_Rug/LICENSE.txt" },
     note: "Redistributed under the MIT License; see materials/Motley_Patchwork_Rug/LICENSE.txt for the source and full license text.",
   },
   {
@@ -60,6 +69,14 @@ const PLAYGROUND_ENTRIES = [
     name: "Animated Noise",
     absPath: path.join(REPO_ROOT, "examples", "animated_noise.mtlx"),
     docPath: "examples/animated_noise.mtlx",
+  },
+  {
+    id: "AnimatedChristmasTreeOrnament",
+    name: "Animated Christmas Tree Ornament",
+    absPath: path.join(REPO_ROOT, "materials", "AnimatedChristmasTreeOrnament", "ChristmasTreeOrnament016_1K-JPG.mtlx"),
+    docPath: "materials/AnimatedChristmasTreeOrnament/ChristmasTreeOrnament016_1K-JPG.mtlx",
+    license: { label: "CC0 1.0 Universal", origin: "site", path: "materials/AnimatedChristmasTreeOrnament/LICENSE.txt" },
+    note: "Textures released under CC0 1.0 Universal; see materials/AnimatedChristmasTreeOrnament/LICENSE.txt for the full license text.",
   },
 ];
 
@@ -207,6 +224,11 @@ function extractLineComment(xml, lineNumber) {
 async function collectDocument(rootPath, rootXml) {
   const seenRefs = new Set();
   const refs = [];
+  // Fingerprint of everything this material renders from. A deploy reuses
+  // the previously published thumbnail when this is unchanged, so it has
+  // to cover the root doc, every include, and every texture byte.
+  const hash = createHash("sha256");
+  hash.update(rootXml);
   const pieces = [rootXml];
   const visited = new Set([rootPath]);
   const queue = [{ dir: path.dirname(rootPath), xml: rootXml }];
@@ -222,6 +244,8 @@ async function collectDocument(rootPath, rootXml) {
         continue;
       }
       const incXml = await readFile(incPath, "utf8");
+      hash.update(href);
+      hash.update(incXml);
       pieces.push(incXml);
       queue.push({ dir: path.dirname(incPath), xml: incXml });
     }
@@ -240,6 +264,8 @@ async function collectDocument(rootPath, rootXml) {
       const st = await stat(abs);
       textureCount++;
       textureBytes += st.size;
+      hash.update(ref);
+      hash.update(await readFile(abs));
     } catch (e) {
       console.warn(`warning: texture ref not found on disk: ${abs} (ref "${ref}")`);
     }
@@ -249,6 +275,7 @@ async function collectDocument(rootPath, rootXml) {
   return {
     textureCount,
     textureBytes,
+    hash: hash.digest("hex").slice(0, 16),
     renderables: extractRenderables(combinedXml),
     shader: extractShaderCategory(combinedXml) || "unknown",
   };
@@ -284,7 +311,7 @@ async function listExampleFiles() {
 async function buildExampleEntry(family, fileName, absPath) {
   const xml = await readFile(absPath, "utf8");
   const stats = await stat(absPath);
-  const { textureCount, textureBytes, renderables, shader } = await collectDocument(absPath, xml);
+  const { textureCount, textureBytes, hash, renderables, shader } = await collectDocument(absPath, xml);
 
   const id = fileName.replace(/\.mtlx$/, "");
   const familyLabel = FAMILY_LABELS[family] || family;
@@ -308,6 +335,8 @@ async function buildExampleEntry(family, fileName, absPath) {
     shader,
     tags: dedupe([familyLabel, textured ? "Textured" : "Procedural", shader]),
     thumb: `thumbs/${id}.jpg`,
+    hash,
+    license: MATERIALX_LICENSE,
   };
   if (id === "standard_surface_chess_set") {
     const note = extractLineComment(xml, 3);
@@ -319,7 +348,7 @@ async function buildExampleEntry(family, fileName, absPath) {
 async function buildPlaygroundEntry(def) {
   const xml = await readFile(def.absPath, "utf8");
   const stats = await stat(def.absPath);
-  const { textureCount, textureBytes, renderables, shader } = await collectDocument(def.absPath, xml);
+  const { textureCount, textureBytes, hash, renderables, shader } = await collectDocument(def.absPath, xml);
   const textured = textureCount > 0;
   const familyLabel = "Playground";
 
@@ -338,6 +367,8 @@ async function buildPlaygroundEntry(def) {
     shader,
     tags: dedupe([familyLabel, textured ? "Textured" : "Procedural", shader]),
     thumb: `thumbs/${def.id}.jpg`,
+    hash,
+    license: def.license || REPO_LICENSE,
   };
   if (def.note) entry.note = def.note;
   return entry;

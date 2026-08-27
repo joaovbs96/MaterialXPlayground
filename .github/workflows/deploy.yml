@@ -139,11 +139,38 @@ jobs:
 
       # Generated straight into the staged site; gitignored locally (see
       # docs/local/GALLERY.md). Same release-or-dispatch gate as above.
+      #
+      # On dispatch the staging step above did not run, so there is no
+      # $RUNNER_TEMP/site to generate into. Generation still runs (that is
+      # the point of the dry run) but targets its own directory, which also
+      # stops the dispatch path from looking like it exercised
+      # generate-after-stage when it did not.
+      #
+      # Captures run SEQUENTIALLY on purpose. Concurrency measured 1.33x
+      # faster but silently produced 8 blank thumbnails out of 54 (the
+      # screenshot races the first paint); see scripts/gallery-shots.mjs.
+      # A blank tile that exits 0 is worse than a slow job.
+      #
+      # A release reuses the thumbnails already published on the live site
+      # for every material whose fingerprint is unchanged, so it renders
+      # only what actually changed (54 materials at ~13s each otherwise:
+      # the runner has no GPU, so WebGL falls back to SwiftShader and the
+      # cost is software rasterization we cannot optimise away).
+      #
+      # A dispatch deliberately does NOT reuse: it is the dry run, and it
+      # is only worth anything if it exercises real rendering.
       - name: Generate gallery data
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         run: |
-          node scripts/build-gallery.mjs --out "$RUNNER_TEMP/site/gallery"
-          node scripts/gallery-shots.mjs --manifest "$RUNNER_TEMP/site/gallery/manifest.json" --out "$RUNNER_TEMP/site/gallery"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            DEST="$RUNNER_TEMP/site/gallery"
+            REUSE="--reuse-from https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          else
+            DEST="$RUNNER_TEMP/gallery-dryrun"
+            REUSE=""
+          fi
+          node scripts/build-gallery.mjs --out "$DEST"
+          node scripts/gallery-shots.mjs --manifest "$DEST/manifest.json" --out "$DEST" $REUSE
 
       # Not committed: the tag isn't knowable ahead of release, and the
       # build-id gate byte-compares committed artifacts. vsix name/url are
