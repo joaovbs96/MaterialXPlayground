@@ -2,7 +2,7 @@
 // stage-site.mjs: copies the runtime payload (the unmodified site) into
 // electron/dist-site/ for packaging, per docs/local/ELECTRON.md's staging
 // include list. dist-site/ is cleaned first and is gitignored output.
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +15,12 @@ const DEST = path.join(ELECTRON_DIR, 'dist-site');
 const ROOT_FILES = ['index.html', 'favicon.ico', 'environment_map.mtlx', 'apple-touch-icon.png', 'LICENSE'];
 // Top-level directories copied, each filtered through shouldSkip.
 const ROOT_DIRS = ['js', 'vendor', 'models', 'env_maps', 'materials', 'examples', 'embed', 'images'];
+// Generated, never committed, and absent on a machine that has not run
+// `npm run gallery:data`. Without it the packaged app shows the gallery's
+// "not generated" card and its preset picker falls back to MTLX_PRESETS,
+// so release CI populates it (from the published site, not by rendering)
+// before packing. Optional so a local pack still works without it.
+const OPTIONAL_ROOT_DIRS = ['gallery'];
 
 // js/materialx/1.39.4 and every JsMaterialXCore.* file are dead weight
 // (js/mtlx-engine.js only ever loads JsMaterialXGenShader.*, a superset
@@ -72,6 +78,14 @@ async function main() {
     }
     for (const dir of ROOT_DIRS) {
         await copyDir(path.join(REPO_ROOT, dir), path.join(DEST, dir), dir);
+    }
+    for (const dir of OPTIONAL_ROOT_DIRS) {
+        const src = path.join(REPO_ROOT, dir);
+        if (!existsSync(src)) {
+            console.warn(`[stage-site] ${dir}/ absent, skipping (run \`npm run gallery:data\` to include it)`);
+            continue;
+        }
+        await copyDir(src, path.join(DEST, dir), dir);
     }
 
     console.log('[stage-site] staged into ' + DEST);

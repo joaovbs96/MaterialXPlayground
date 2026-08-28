@@ -138,6 +138,17 @@ jobs:
           echo "mtlx_versions=$MTLX_VERSIONS" >> "$GITHUB_OUTPUT"
           echo "mtlx_default_version=$MTLX_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
 
+      # Populates gallery/ at the repo root BEFORE the rsync below, so the
+      # offline zip carries it and electron/scripts/stage-site.mjs (desktop
+      # job) finds it too. --reuse-only downloads the tiles the live site
+      # already published and renders NOTHING: rendering needs a browser and
+      # costs ~13s a material on a GPU-less runner. Materials published since
+      # the last deploy simply keep the gallery placeholder.
+      - name: Populate gallery data
+        run: |
+          node scripts/build-gallery.mjs
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+
       - name: Stage offline site
         run: |
           DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"
@@ -155,14 +166,6 @@ jobs:
             --exclude='tutorials-src' \
             --exclude='scripts' \
             ./ "$DEST"/
-
-      # Manifest only, no thumbnails in the offline zip (see
-      # docs/local/GALLERY.md). vendor:offline already ran above, so
-      # vendor/materialx is populated for build-gallery.mjs to scan.
-      - name: Generate gallery manifest
-        run: |
-          DEST="$RUNNER_TEMP/package/${{ steps.pkg.outputs.name }}"
-          node scripts/build-gallery.mjs --out "$DEST/gallery"
 
       - name: Sanity-check staged tree
         run: |
@@ -270,8 +273,88 @@ jobs:
           path: ${{ runner.temp }}/${{ steps.pkg.outputs.vsix_name }}.vsix
           if-no-files-found: error
 
-  upload:
+  # Phase 6, final step: build the desktop installers. Mandatory matrix,
+  # not a convenience: electron-builder cross-compiles poorly, so mac
+  # artifacts need the macos runner and linux artifacts the ubuntu one.
+  # `needs: package` certifies the tree once (build, stale gate, check)
+  # before three runners spend 40+ minutes each on it.
+  desktop:
     needs: package
+    if: github.event_name == 'release'
+    strategy:
+      # One platform failing must not deny the other two their artifacts.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # resolve-version.mjs prefers the release tag from the environment,
+          # but falls back to `git describe`, which returns nothing on a
+          # shallow clone and would silently drop to package.json's stale
+          # number. Full history keeps that fallback honest.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      # Same reuse-only download as the package job: the desktop app ships
+      # the gallery, but no runner should re-render tiles the site already
+      # published. Without this the packaged app shows the gallery's "not
+      # generated" card and its preset picker falls back to MTLX_PRESETS.
+      - name: Populate gallery data
+        run: |
+          node scripts/build-gallery.mjs
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: electron
+
+      # pack.mjs stages the site, resolves the version from the tag and runs
+      # electron-builder --publish never; it writes nothing tracked, so the
+      # stale gate in `package` stays valid.
+      - name: Build desktop app
+        run: node scripts/pack.mjs
+        working-directory: electron
+
+      - name: Sanity-check desktop output
+        shell: bash
+        run: |
+          test -f electron/dist-site/gallery/manifest.json || { echo "::error::gallery data missing from the staged desktop site"; exit 1; }
+          THUMBS=$(ls electron/dist-site/gallery/thumbs 2>/dev/null | wc -l)
+          echo "staged gallery thumbnails: $THUMBS"
+          COUNT=$(find electron/dist -maxdepth 1 -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) | wc -l)
+          test "$COUNT" -gt 0 || { echo "::error::electron-builder produced no installer on ${{ matrix.os }}"; exit 1; }
+          find electron/dist -maxdepth 1 -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) -exec ls -lh {} \;
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.dmg
+            electron/dist/*.zip
+            electron/dist/*.AppImage
+            electron/dist/*.deb
+          if-no-files-found: error
+
+  upload:
+    needs: [package, desktop]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -287,11 +370,30 @@ jobs:
         with:
           name: ${{ needs.package.outputs.vsix_name }}
 
+      # All three platforms land in one directory; each matrix artifact is
+      # named separately so a platform that failed simply contributes none.
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: desktop
+
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release upload "${{ github.event.release.tag_name }}" "${{ needs.package.outputs.name }}.zip" --clobber
+
+      - name: Attach desktop installers to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          shopt -s nullglob
+          FILES=(desktop/*)
+          test ${#FILES[@]} -gt 0 || { echo "::error::no desktop installers to attach"; exit 1; }
+          gh release upload "${{ github.event.release.tag_name }}" "${FILES[@]}" --clobber
 
       - name: Attach vsix to release
         env:
