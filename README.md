@@ -135,6 +135,30 @@ The packaged extension is fully self-contained: it bundles the MaterialX librari
 
 There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension local.materialx-playground`.
 
+## Desktop app (experimental)
+
+The playground also ships as a standalone desktop app for Windows, macOS and Linux. It is the same playground, packaged with the MaterialX libraries and examples inside, so it runs fully offline and never makes a network request. `.mtlx` files can be associated with it and opened straight from the file manager.
+
+> ⚠️ **Early, experimental release.** The desktop builds are new and have had far less testing than the website. Please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). There are no auto-updates: download a newer release and install it over the old one.
+
+### Install
+
+Download the asset for your platform from the [latest release](https://github.com/joaovbs96/MaterialXPlayground/releases/latest):
+
+- **Windows:** the `.exe` installer, or the portable `.exe` if you would rather not install.
+- **macOS:** the `.dmg` (or the `.zip` if you prefer to unpack it yourself).
+- **Linux:** the `.AppImage` (mark it executable and run it) or the `.deb`. AppImage needs `libfuse2` on recent distributions.
+
+### First launch on macOS
+
+The macOS builds are **not notarized** (that needs a paid Apple Developer account), so the first launch takes an extra step:
+
+1. Open the app. macOS refuses it and says it cannot verify the developer.
+2. Go to **System Settings > Privacy & Security**, scroll to the Security section, and choose **Open Anyway** next to the message about the app.
+3. Confirm. Later launches behave normally.
+
+Right-clicking the app and choosing Open no longer works as a bypass on macOS 15 and newer, so use System Settings.
+
 ## Embedding (experimental)
 
 Drop a single material into any other web page as a lightweight, chromeless viewer, the same idea as embedding a YouTube video. The easiest way to start is the **Embed Builder** on the home page: configure the embed against a live preview and copy a ready-made snippet.

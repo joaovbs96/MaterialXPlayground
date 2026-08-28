@@ -371,6 +371,13 @@
     // bar) as the WCO draggable title bar (site-header.css +
     // electron/main/main.js's titleBarOverlay); native buttons overlay its edge.
     var DESKTOP_TITLEBAR_CLASS = window.__MTLX_ELECTRON__ ? ' mtlx-desktop-titlebar' : '';
+    // macOS keeps its own traffic lights at the window's top LEFT, where
+    // the brand sits, and gets no titlebar-area-* env vars to pad against
+    // (those exist only for the Windows/Linux overlay). This class is what
+    // site-header.css reserves that left gutter on. __MTLX_PLATFORM__ comes
+    // from preload.js, set synchronously like the flag above.
+    var DESKTOP_MAC_CLASS = (window.__MTLX_ELECTRON__ && window.__MTLX_PLATFORM__ === 'darwin')
+        ? ' mtlx-desktop-mac' : '';
 
     // Same Electron gate as DESKTOP_TITLEBAR_CLASS above (window.__MTLX_ELECTRON__
     // is set synchronously by preload.js's contextBridge call, before this
@@ -385,7 +392,7 @@
     // whether or not Tailwind Play is loaded on the page.
     var html =
         '<header class="mtlx-header' + DESKTOP_TITLEBAR_CLASS + '">' +
-            '<div id="mtlx-header-bar" class="mtlx-header-bar' + DESKTOP_TITLEBAR_CLASS + '">' +
+            '<div id="mtlx-header-bar" class="mtlx-header-bar' + DESKTOP_TITLEBAR_CLASS + DESKTOP_MAC_CLASS + '">' +
 
                 // Brand: logo mark + site title, linking to the shell's
                 // home view (#!home). Under VS Code there's no home to

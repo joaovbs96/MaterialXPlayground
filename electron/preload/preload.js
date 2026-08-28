@@ -8,6 +8,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 contextBridge.exposeInMainWorld('__MTLX_ELECTRON__', true);
+// Platform, exposed the same synchronous way: js/site-header.js builds its
+// markup at load time, so it cannot wait on the async mtlxDesktop bridge,
+// and contextIsolation hides process.platform from the page. Only the
+// macOS title bar needs it (traffic lights sit where the header's brand
+// goes), so this is the value that decides that layout.
+contextBridge.exposeInMainWorld('__MTLX_PLATFORM__', process.platform);
 
 // Buffered like the site's own window.__mtlxPendingImport pattern: main
 // may send 'mtlx-open-file' before the page registers onOpenFile, so the

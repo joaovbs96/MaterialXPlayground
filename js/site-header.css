@@ -129,6 +129,16 @@
         padding-right: calc(32px + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
     }
 }
+/* macOS: the traffic lights are drawn by the OS at the window's top LEFT,
+   over the brand. Nothing reserves that space automatically, because the
+   titlebar-area-* vars above only exist for the Windows/Linux overlay and
+   resolve to their zero fallbacks here. Reserve it explicitly instead.
+   The gutter must clear the cluster's left inset (trafficLightPosition.x in
+   electron/main/main.js) plus its ~52px width; change both together. */
+.mtlx-header-bar.mtlx-desktop-mac {
+    --mtlx-traffic-light-gutter: 80px;
+    padding-left: var(--mtlx-traffic-light-gutter);
+}
 /* The mobile dropdown panel and the update banner are siblings of the bar
    that can grow the outer strip taller (menu open, banner visible); carve
    both out whole so nothing below the header strip is ever draggable. */

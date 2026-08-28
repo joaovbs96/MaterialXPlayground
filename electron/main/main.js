@@ -9,6 +9,10 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const docScanner = require('./doc-scanner');
 
+// macOS diverges on window chrome and menu layout, both decided at
+// startup; the existing one-off process.platform checks stay as they are.
+const IS_MAC = process.platform === 'darwin';
+
 function errMsg(e) {
     return e && e.message ? e.message : String(e);
 }
@@ -820,6 +824,11 @@ function buildMenuTemplate() {
     const iconPath = process.platform === 'darwin' ? undefined : path.join(__dirname, '..', 'build', 'icon.ico');
 
     return [
+        // macOS puts About/Services/Hide/Quit in a leading app menu named
+        // after the bundle. Prepending it does not disturb the MTLX_SMOKE
+        // menu assertion, which looks up the menu LABELLED 'File' rather
+        // than indexing position 0.
+        ...(IS_MAC ? [{ role: 'appMenu' }] : []),
         {
             label: 'File',
             submenu: [
@@ -860,7 +869,10 @@ function buildMenuTemplate() {
                 },
                 { type: 'separator' },
                 { label: 'Close Window', role: 'close' },
-                { label: 'Quit', role: 'quit' },
+                // Quit lives in the app menu on macOS (Cmd+Q is wired there
+                // by role: 'appMenu'); repeating it in File reads wrong and
+                // gives the accelerator two owners.
+                ...(IS_MAC ? [] : [{ label: 'Quit', role: 'quit' }]),
             ],
         },
         {
@@ -898,7 +910,9 @@ function buildMenuTemplate() {
                 { role: 'togglefullscreen' },
             ],
         },
-        {
+        // macOS expects Minimize/Zoom/Bring All to Front, which the built-in
+        // role supplies (and keeps the window list Cocoa manages for us).
+        IS_MAC ? { role: 'windowMenu' } : {
             label: 'Window',
             submenu: [
                 { role: 'minimize' },
@@ -1131,6 +1145,10 @@ function openRouteRouted(route) {
 const TITLEBAR_OVERLAY_COLOR = '#111827';
 const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e5e7eb';
 const TITLEBAR_OVERLAY_HEIGHT = 56;
+// macOS traffic lights: x is the cluster's left edge. Kept in sync with
+// the --mtlx-traffic-light-gutter reserve in js/site-header.css; change
+// both or the header brand slides under the buttons.
+const TRAFFIC_LIGHT_INSET_X = 20;
 
 function createWindow(route) {
     const win = new BrowserWindow({
@@ -1146,11 +1164,28 @@ function createWindow(route) {
         // only hides the menu strip visually (Alt reveals it) and does not
         // unregister the application menu, so accelerators keep working.
         titleBarStyle: 'hidden',
-        titleBarOverlay: {
-            color: TITLEBAR_OVERLAY_COLOR,
-            symbolColor: TITLEBAR_OVERLAY_SYMBOL_COLOR,
-            height: TITLEBAR_OVERLAY_HEIGHT,
-        },
+        // Windows/Linux only: macOS ignores titleBarOverlay outright and
+        // keeps its own traffic lights, so it is gated rather than left to
+        // be silently dropped. On darwin the lights are positioned instead
+        // (below), and js/site-header.css reserves the LEFT inset they need
+        // -- the env(titlebar-area-*) padding that covers the overlay
+        // buttons elsewhere resolves to zero here, since those vars only
+        // exist when an overlay is active.
+        ...(IS_MAC
+            ? {
+                trafficLightPosition: {
+                    x: TRAFFIC_LIGHT_INSET_X,
+                    // Centres the ~16px cluster in the header strip.
+                    y: Math.round((TITLEBAR_OVERLAY_HEIGHT - 16) / 2),
+                },
+            }
+            : {
+                titleBarOverlay: {
+                    color: TITLEBAR_OVERLAY_COLOR,
+                    symbolColor: TITLEBAR_OVERLAY_SYMBOL_COLOR,
+                    height: TITLEBAR_OVERLAY_HEIGHT,
+                },
+            }),
         autoHideMenuBar: true,
         webPreferences: {
             contextIsolation: true,
