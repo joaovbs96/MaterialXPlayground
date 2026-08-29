@@ -110,7 +110,7 @@ const APP_CSP =
     "font-src 'self'; " +
     "img-src 'self' blob: data:; " +
     "connect-src 'self' blob: data:; " +
-    "worker-src blob:; " +
+    "worker-src 'self' blob:; " +
     "frame-src 'self';";
 
 // Resolves a request pathname against the site root, rejecting anything
