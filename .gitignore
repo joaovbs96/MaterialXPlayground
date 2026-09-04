@@ -39,3 +39,6 @@ docs/local/
 # run gallery:data): manifest + thumbnails, regenerated locally and at
 # deploy time, never committed.
 gallery/
+
+# Claude Code local settings and agent worktrees
+.claude/
