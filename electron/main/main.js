@@ -505,6 +505,10 @@ async function confirmCloseWindow(win) {
     if (choice.response === 1) { // Discard
         state.forceClose = true;
         if (!win.isDestroyed()) win.close();
+        // The preventDefault cancelled the pending quit, so re-issue it;
+        // remaining windows get their own guard, and this one already has
+        // forceClose set and will not re-prompt.
+        if (relaunchPending) app.quit();
         return;
     }
 
@@ -536,6 +540,15 @@ async function confirmCloseWindow(win) {
         if (fallback.response === 0) {
             state.forceClose = true;
             win.close();
+            // The preventDefault cancelled the pending quit, so re-issue
+            // it; remaining windows get their own guard, and this one
+            // already has forceClose set and will not re-prompt.
+            if (relaunchPending) app.quit();
+        } else {
+            // Cancel: leave the window open, and abandon any relaunch
+            // that was waiting on this quit to actually proceed.
+            relaunchPending = false;
+            pendingSafeMode = false;
         }
         return;
     }
@@ -552,6 +565,10 @@ async function confirmCloseWindow(win) {
     win.webContents.send('mtlx-save-committed');
     state.forceClose = true;
     win.close();
+    // The preventDefault cancelled the pending quit, so re-issue it;
+    // remaining windows get their own guard, and this one already has
+    // forceClose set and will not re-prompt.
+    if (relaunchPending) app.quit();
 }
 
 // Correlates a styled close-confirm round trip; only a response
@@ -625,6 +642,15 @@ async function performStyledSaveAndClose(win) {
         if (fallback.response === 0) {
             state.forceClose = true;
             win.close();
+            // The preventDefault cancelled the pending quit, so re-issue
+            // it; remaining windows get their own guard, and this one
+            // already has forceClose set and will not re-prompt.
+            if (relaunchPending) app.quit();
+        } else {
+            // Cancel: leave the window open, and abandon any relaunch
+            // that was waiting on this quit to actually proceed.
+            relaunchPending = false;
+            pendingSafeMode = false;
         }
         return;
     }
@@ -640,6 +666,10 @@ async function performStyledSaveAndClose(win) {
     win.webContents.send('mtlx-save-committed');
     state.forceClose = true;
     win.close();
+    // The preventDefault cancelled the pending quit, so re-issue it;
+    // remaining windows get their own guard, and this one already has
+    // forceClose set and will not re-prompt.
+    if (relaunchPending) app.quit();
 }
 
 // Primary close-guard entry (wired below): asks the renderer for its
@@ -669,6 +699,10 @@ async function requestCloseConfirmation(win) {
         if (choice === 'discard') {
             state.forceClose = true;
             if (!win.isDestroyed()) win.close();
+            // The preventDefault cancelled the pending quit, so re-issue
+            // it; remaining windows get their own guard, and this one
+            // already has forceClose set and will not re-prompt.
+            if (relaunchPending) app.quit();
         } else if (choice === 'save') {
             await performStyledSaveAndClose(win);
         } else {
@@ -1581,10 +1615,9 @@ function createWindow(route) {
         const state = getWindowState(win);
         if (state.forceClose || !state.dirty) return;
         event.preventDefault();
-        // This close attempt is being deferred to a confirmation dialog,
-        // not guaranteed to happen; abandon any relaunch riding on it.
-        relaunchPending = false;
-        pendingSafeMode = false;
+        // Deferred to a confirmation dialog; a pending relaunch stays
+        // armed here (the outcome branches below re-issue app.quit() or
+        // reset it) instead of being dropped just for asking.
         requestCloseConfirmation(win).catch((e) => {
             console.error('[main] close confirmation failed: ' + errMsg(e));
         });
