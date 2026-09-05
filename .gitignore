@@ -3,6 +3,12 @@ node_modules/
 vendor/materialx/
 *.vsix
 
+.gpu-render-out/**
+.pt-render-out/**
+native/mtlx-pt/**
+presentation/**
+scratchpad/**
+
 # electron/: local dev/pack output, never committed.
 electron/dist/
 electron/dist-site/
