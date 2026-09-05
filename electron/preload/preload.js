@@ -100,9 +100,9 @@ const api = {
     relaunch: () => ipcRenderer.send('mtlx-relaunch'),
     getRecents: () => ipcRenderer.invoke('mtlx-get-recents'),
     openRecent: (filePath) => ipcRenderer.invoke('mtlx-open-recent', filePath),
-    // Resolves a dropped File to its real filesystem path (js/shared/
-    // mtlx-ui.jsx's desktopPathDrop); '' when it throws or the File is
-    // not backed by a real file (e.g. one constructed in JS).
+    // Resolves a dropped File to its real filesystem path (glue.js's
+    // __mtlxDesktopPathDrop); '' when it throws or the File is not
+    // backed by a real file (e.g. one constructed in JS).
     getPathForFile: (file) => {
         try {
             const p = webUtils.getPathForFile(file);

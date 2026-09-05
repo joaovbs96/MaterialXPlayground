@@ -381,7 +381,7 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
     return { ok: true };
 });
 
-// Drop-to-open (js/shared/mtlx-ui.jsx's desktopPathDrop, via preload's
+// Drop-to-open (glue.js's __mtlxDesktopPathDrop, via preload's
 // openPath): mirrors mtlx-open-recent's validation, then routes through
 // openInNewWindow like any other OS-driven open.
 ipcMain.handle('mtlx-open-path', (event, filePath) => {
