@@ -324,11 +324,25 @@ jobs:
         run: npm ci
         working-directory: electron
 
+      - name: Smoke-test the desktop shell
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          # Fallback if the Linux leg fails on sandbox errors: prefix the
+          # xvfb-run command with ELECTRON_DISABLE_SANDBOX=1. Not applied by
+          # default; only add it if this step starts failing on ubuntu-latest.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -y && sudo apt-get install -y xvfb
+            xvfb-run -a node electron/scripts/dev.mjs --smoke
+          else
+            node electron/scripts/dev.mjs --smoke
+          fi
+
       # pack.mjs stages the site, resolves the version from the tag and runs
       # electron-builder --publish never; it writes nothing tracked, so the
       # stale gate in `package` stays valid.
       - name: Build desktop app
-        run: node scripts/pack.mjs
+        run: node scripts/pack.mjs --skip-gallery
         working-directory: electron
 
       - name: Sanity-check desktop output

@@ -82,7 +82,7 @@ async function main() {
     for (const dir of OPTIONAL_ROOT_DIRS) {
         const src = path.join(REPO_ROOT, dir);
         if (!existsSync(src)) {
-            console.warn(`[stage-site] ${dir}/ absent, skipping (run \`npm run gallery:data\` to include it)`);
+            console.warn(`[stage-site] ${dir}/ absent (generation skipped or failed); the packaged app shows the empty gallery card`);
             continue;
         }
         await copyDir(src, path.join(DEST, dir), dir);

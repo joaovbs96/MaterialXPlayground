@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveVersion } from './lib/resolve-version.mjs';
+import { ensureGalleryData } from './lib/ensure-gallery.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ELECTRON_DIR = path.resolve(__dirname, '..');
@@ -55,6 +56,8 @@ if (!existsSync(path.join(REPO_ROOT, 'vendor', 'materialx', 'manifest.json'))) {
     console.log('[electron:pack] vendor/materialx missing, running npm run vendor:offline at the repo root...');
     runNpm(['run', 'vendor:offline'], { cwd: REPO_ROOT });
 }
+
+ensureGalleryData({ repoRoot: REPO_ROOT, mode: 'pack', argv: process.argv.slice(2), env: process.env });
 
 console.log('[electron:pack] staging site...');
 run(process.execPath, [path.join(__dirname, 'stage-site.mjs')]);

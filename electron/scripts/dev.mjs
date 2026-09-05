@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveVersion } from './lib/resolve-version.mjs';
+import { ensureGalleryData } from './lib/ensure-gallery.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ELECTRON_DIR = path.resolve(__dirname, '..');
@@ -37,6 +38,8 @@ if (!existsSync(path.join(REPO_ROOT, 'vendor', 'materialx', 'manifest.json'))) {
     console.log('[electron:dev] vendor/materialx missing, running npm run vendor:offline at the repo root...');
     runNpm(['run', 'vendor:offline'], { cwd: REPO_ROOT });
 }
+
+ensureGalleryData({ repoRoot: REPO_ROOT, mode: 'dev', argv: process.argv.slice(2), env: process.env });
 
 const require = createRequire(import.meta.url);
 const electronPath = require(path.join(ELECTRON_DIR, 'node_modules', 'electron'));

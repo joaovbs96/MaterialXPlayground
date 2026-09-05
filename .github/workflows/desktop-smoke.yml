@@ -1,0 +1,67 @@
+# -----------------------------------------------------------------------------
+# Desktop shell smoke, cross-platform
+# -----------------------------------------------------------------------------
+# Proving ground for release.yml's `desktop` job "Smoke-test the desktop
+# shell" step: runs the same MTLX_SMOKE harness on all three platforms
+# outside of a release, so a regression surfaces on a pull request instead
+# of during an actual release run.
+# -----------------------------------------------------------------------------
+
+name: Desktop smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'electron/**'
+      - '.github/workflows/desktop-smoke.yml'
+
+permissions: {}
+
+concurrency:
+  group: desktop-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: electron
+
+      - name: Smoke-test the desktop shell
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          # Fallback if the Linux leg fails on sandbox errors: prefix the
+          # xvfb-run command with ELECTRON_DISABLE_SANDBOX=1. Not applied by
+          # default; only add it if this step starts failing on ubuntu-latest.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -y && sudo apt-get install -y xvfb
+            xvfb-run -a node electron/scripts/dev.mjs --smoke
+          else
+            node electron/scripts/dev.mjs --smoke
+          fi
