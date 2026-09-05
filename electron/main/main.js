@@ -3,7 +3,7 @@
 // docs/local/ELECTRON.md for why).
 'use strict';
 
-const { app, BrowserWindow, protocol, session, shell, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, protocol, session, shell, ipcMain, dialog, Menu, screen, clipboard } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
@@ -323,6 +323,7 @@ ipcMain.handle('mtlx-get-settings', () => ({
     documentOpenView,
     safeMode,
     safeModeActive,
+    windowBounds,
     platform: process.platform,
     jumpListStatus,
 }));
@@ -378,6 +379,40 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
     }
     openMtlxRouted(filePath);
     return { ok: true };
+});
+
+// Drop-to-open (js/shared/mtlx-ui.jsx's desktopPathDrop, via preload's
+// openPath): mirrors mtlx-open-recent's validation, then routes through
+// openInNewWindow like any other OS-driven open.
+ipcMain.handle('mtlx-open-path', (event, filePath) => {
+    if (typeof filePath !== 'string' || !filePath || !fsSync.existsSync(filePath) || !/\.mtlx$/i.test(filePath)) {
+        return { ok: false };
+    }
+    if (openInNewWindow) {
+        openMtlxRouted(filePath);
+    } else {
+        openMtlxFromDisk(filePath, BrowserWindow.fromWebContents(event.sender) || getRoutingTargetWindow() || createWindow(documentOpenView), false);
+    }
+    return { ok: true };
+});
+
+// Renderer-side Reveal/Copy Path (js/graph-app.jsx's in-app File menu).
+// No dialog here (unlike the native menu items below): the caller shows
+// its own "not saved yet" message when ok is false.
+ipcMain.handle('mtlx-reveal-document', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const filePath = win ? getWindowState(win).currentPath : null;
+    if (!filePath) return { ok: false, path: null };
+    shell.showItemInFolder(filePath);
+    return { ok: true, path: filePath };
+});
+
+ipcMain.handle('mtlx-copy-document-path', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const filePath = win ? getWindowState(win).currentPath : null;
+    if (!filePath) return { ok: false, path: null };
+    clipboard.writeText(filePath);
+    return { ok: true, path: filePath };
 });
 
 // Asks a window's renderer to hand back its current graph XML; used by
@@ -778,6 +813,10 @@ let documentOpenView = 'graph';
 // relaunch, which is what the settings dialog's "Relaunch now" offers.
 let safeMode = false;
 
+// Last-known bounds of the last focused (or sole) window; see
+// initialBounds()/persistWindowBounds() next to createWindow below.
+let windowBounds = null;
+
 // Delegates to the pre-ready reader above so the two never drift; kept
 // as its own function since every other setting is read through it.
 function loadSettings() {
@@ -788,7 +827,7 @@ function saveSettings() {
     try {
         fsSync.writeFileSync(
             getSettingsPath(),
-            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode }),
+            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds }),
             'utf8'
         );
     } catch (e) {
@@ -866,6 +905,20 @@ async function saveFromMenu(win, forceDialog) {
     }
 }
 
+// Shared by the native Reveal/Copy Path menu items below: the window's
+// bound document path, or the saveFromMenu-style info dialog when there
+// is none yet. The IPC handlers above deliberately do not reuse this.
+function documentPathForMenu(win) {
+    const filePath = getWindowState(win).currentPath;
+    if (filePath) return filePath;
+    dialog.showMessageBox(win, {
+        type: 'info',
+        title: 'MaterialX Playground',
+        message: 'This document has not been saved to disk yet.',
+    });
+    return null;
+}
+
 // One item per known recent path, "prune on click" if the file is gone,
 // a trailing Clear Recent, or a single disabled placeholder when empty.
 function buildRecentSubmenu() {
@@ -940,6 +993,23 @@ function buildMenuTemplate() {
                     label: 'Export...',
                     accelerator: 'CmdOrCtrl+E',
                     click: (menuItem, win) => sendMenuCommand(win, 'export'),
+                },
+                { type: 'separator' },
+                {
+                    label: IS_MAC ? 'Reveal in Finder' : process.platform === 'win32' ? 'Show in Explorer' : 'Show in File Manager',
+                    click: (menuItem, win) => {
+                        if (!win) return;
+                        const filePath = documentPathForMenu(win);
+                        if (filePath) shell.showItemInFolder(filePath);
+                    },
+                },
+                {
+                    label: 'Copy Path',
+                    click: (menuItem, win) => {
+                        if (!win) return;
+                        const filePath = documentPathForMenu(win);
+                        if (filePath) clipboard.writeText(filePath);
+                    },
                 },
                 { type: 'separator' },
                 { label: 'Close Window', role: 'close' },
@@ -1238,12 +1308,100 @@ const TRAFFIC_LIGHT_INSET_X = 20;
 // several seconds, and that must not look like a real hang.
 const UNRESPONSIVE_GRACE_MS = 20000;
 
+// Bounds persistence (windowBounds above): initialBounds() decides where
+// the next createWindow() lands; armBoundsSave/persistWindowBounds below
+// keep the persisted value current from resize/move/close.
+const DEFAULT_WINDOW_WIDTH = 1440;
+const DEFAULT_WINDOW_HEIGHT = 900;
+const WINDOW_MIN_WIDTH = 1000;
+const WINDOW_MIN_HEIGHT = 640;
+// A saved rect must overlap its matching display's work area by at least
+// this many pixels in both dimensions to be trusted; anything smaller
+// reads as "mostly off-screen" (unplugged monitor, changed arrangement).
+const BOUNDS_OVERLAP_MIN = 100;
+const BOUNDS_SAVE_DEBOUNCE_MS = 500;
+
+function rectOverlapSize(a, b) {
+    const width = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    const height = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+    return { width: Math.max(0, width), height: Math.max(0, height) };
+}
+
+// Clamps rect into workArea (never bigger than it, never off its edges)
+// and enforces the same minimum size createWindow itself enforces.
+function clampRectToWorkArea(rect, workArea) {
+    const width = Math.min(Math.max(rect.width, WINDOW_MIN_WIDTH), workArea.width);
+    const height = Math.min(Math.max(rect.height, WINDOW_MIN_HEIGHT), workArea.height);
+    const x = Math.min(Math.max(rect.x, workArea.x), workArea.x + workArea.width - width);
+    const y = Math.min(Math.max(rect.y, workArea.y), workArea.y + workArea.height - height);
+    return { x, y, width, height };
+}
+
+// Where the next createWindow() should land: a second-or-later window
+// cascades from the last focused one instead of reusing the saved spot;
+// only the first window of a launch considers the saved bounds at all.
+function initialBounds() {
+    const others = BrowserWindow.getAllWindows();
+    if (others.length > 0) {
+        const source = (lastFocusedWindow && others.includes(lastFocusedWindow)) ? lastFocusedWindow : others[0];
+        const base = source.getNormalBounds();
+        const display = screen.getDisplayMatching(base);
+        const offset = clampRectToWorkArea(
+            { x: base.x + 32, y: base.y + 32, width: base.width, height: base.height },
+            display.workArea
+        );
+        return { x: offset.x, y: offset.y, width: offset.width, height: offset.height, maximized: false };
+    }
+
+    if (windowBounds && [windowBounds.x, windowBounds.y, windowBounds.width, windowBounds.height].every(Number.isFinite)) {
+        const saved = { x: windowBounds.x, y: windowBounds.y, width: windowBounds.width, height: windowBounds.height };
+        const display = screen.getDisplayMatching(saved);
+        const overlap = rectOverlapSize(saved, display.workArea);
+        if (overlap.width >= BOUNDS_OVERLAP_MIN && overlap.height >= BOUNDS_OVERLAP_MIN) {
+            const clamped = clampRectToWorkArea(saved, display.workArea);
+            return { ...clamped, maximized: !!windowBounds.maximized };
+        }
+    }
+
+    // No usable saved rect: Electron centers on the primary display when
+    // x/y are omitted entirely, which is preferable to guessing one.
+    return { width: DEFAULT_WINDOW_WIDTH, height: DEFAULT_WINDOW_HEIGHT, maximized: false };
+}
+
+// Only the last focused (or the sole remaining) window's bounds are worth
+// persisting; a background window's geometry is not what a relaunch
+// should restore.
+function shouldPersistBoundsFor(win) {
+    const wins = BrowserWindow.getAllWindows();
+    return wins.length === 1 || win === lastFocusedWindow;
+}
+
+// getNormalBounds (not getBounds) so a maximized window's RESTORED size
+// is what gets saved, per electron.d.ts:2846's own doc comment.
+function persistWindowBounds(win) {
+    if (!win || win.isDestroyed() || !shouldPersistBoundsFor(win)) return;
+    const normal = win.getNormalBounds();
+    windowBounds = { x: normal.x, y: normal.y, width: normal.width, height: normal.height, maximized: win.isMaximized() };
+    saveSettings();
+}
+
+let boundsSaveTimer = null;
+function armBoundsSave(win) {
+    if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
+    boundsSaveTimer = setTimeout(() => {
+        boundsSaveTimer = null;
+        persistWindowBounds(win);
+    }, BOUNDS_SAVE_DEBOUNCE_MS);
+}
+
 function createWindow(route) {
+    const bounds = initialBounds();
     const win = new BrowserWindow({
-        width: 1440,
-        height: 900,
-        minWidth: 1000,
-        minHeight: 640,
+        width: bounds.width,
+        height: bounds.height,
+        ...(Number.isFinite(bounds.x) && Number.isFinite(bounds.y) ? { x: bounds.x, y: bounds.y } : {}),
+        minWidth: WINDOW_MIN_WIDTH,
+        minHeight: WINDOW_MIN_HEIGHT,
         backgroundColor: '#0b0f19',
         show: false,
         icon: runtimeIconPath(),
@@ -1295,6 +1453,16 @@ function createWindow(route) {
     win.on('focus', () => { lastFocusedWindow = win; });
     win.on('closed', () => {
         if (lastFocusedWindow === win) lastFocusedWindow = null;
+    });
+
+    // Bounds persistence (windowBounds): debounced on resize/move, and
+    // immediate (any pending debounce dropped first) on close so the
+    // last gesture before quitting is never lost to the timer.
+    win.on('resize', () => armBoundsSave(win));
+    win.on('move', () => armBoundsSave(win));
+    win.on('close', () => {
+        if (boundsSaveTimer) { clearTimeout(boundsSaveTimer); boundsSaveTimer = null; }
+        persistWindowBounds(win);
     });
 
     // state.dirty (kept live by mtlx-notify-edit) gates this synchronously;
@@ -1415,7 +1583,10 @@ function createWindow(route) {
         });
     });
 
-    win.once('ready-to-show', () => win.show());
+    win.once('ready-to-show', () => {
+        if (bounds.maximized) win.maximize();
+        win.show();
+    });
 
     // Only http(s) targets go to the OS browser; app:// popups (e.g. a
     // site-relative license link opened with target=_blank) get a normal
@@ -1644,6 +1815,7 @@ if (!gotLock) {
         showRecentInSystem = settings.showRecentInSystem !== false;
         documentOpenView = settings.documentOpenView === 'viewer' ? 'viewer' : 'graph';
         safeMode = settings.safeMode === true;
+        windowBounds = settings.windowBounds && typeof settings.windowBounds === 'object' ? settings.windowBounds : null;
         rebuildMenu();
 
         // Must match electron/package.json's build.appId exactly: Windows

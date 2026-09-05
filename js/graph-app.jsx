@@ -2571,6 +2571,19 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 }
                 setStatus('Could not open recent file.');
             };
+            // File > Reveal/Copy Path (item 3, E3): main reports { ok: false }
+            // when this window has no bound document yet; reuses the same
+            // setStatus idiom onOpenRecentPath above uses for its own failures.
+            const doRevealDocument = async () => {
+                if (typeof window.__mtlxRevealDocument !== 'function') return;
+                const result = await window.__mtlxRevealDocument();
+                if (!result || !result.ok) setStatus('This document has not been saved to disk yet.');
+            };
+            const doCopyDocumentPath = async () => {
+                if (typeof window.__mtlxCopyDocumentPath !== 'function') return;
+                const result = await window.__mtlxCopyDocumentPath();
+                if (!result || !result.ok) setStatus('This document has not been saved to disk yet.');
+            };
             // Same document packaged as a .zip alongside every matched
             // texture (`resolvedTextures`, from scanExportTextures). Stored
             // under its authored ref path so re-dropping the zip resolves normally.
@@ -5822,6 +5835,16 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     label: 'Save As…', icon: 'file-download', keys: 'Ctrl+Shift+S', disabled: !parsed,
                     onSelect: () => doSaveInApp(true),
                     title: 'Save the current document to a new file',
+                },
+                IN_ELECTRON && {
+                    label: window.__MTLX_PLATFORM__ === 'darwin' ? 'Reveal in Finder'
+                        : window.__MTLX_PLATFORM__ === 'win32' ? 'Show in Explorer' : 'Show in File Manager',
+                    icon: 'folder', onSelect: doRevealDocument,
+                    title: 'Reveal the saved document in the system file manager',
+                },
+                IN_ELECTRON && {
+                    label: 'Copy Path', icon: 'clipboard', onSelect: doCopyDocumentPath,
+                    title: 'Copy the saved document\'s file path to the clipboard',
                 },
                 {
                     label: 'Export .mtlx…', icon: 'file-download', disabled: !parsed, onSelect: openExportDialog,

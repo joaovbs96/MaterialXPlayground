@@ -1041,6 +1041,38 @@ function Shell() {
         }
     }, []);
 
+    // Electron-only drop-to-open: a single dropped .mtlx opens as a real
+    // document (main's mtlx-open-path) instead of the in-memory import.
+    // Deferred to a microtask so an active view's own drop hook wins first.
+    React.useEffect(() => {
+        if (!IN_ELECTRON) return undefined;
+        const hasFiles = (e) => {
+            const t = e.dataTransfer && e.dataTransfer.types;
+            return !!t && Array.from(t).indexOf('Files') >= 0;
+        };
+        const onDragOver = (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        };
+        const onDrop = (e) => {
+            if (!hasFiles(e)) return;
+            if (typeof window.desktopPathDrop !== 'function' || typeof window.__mtlxOpenPath !== 'function') return;
+            const path = window.desktopPathDrop(e.dataTransfer);
+            if (!path) return;
+            e.preventDefault();
+            queueMicrotask(() => {
+                if (!e.__mtlxHandled) window.__mtlxOpenPath(path);
+            });
+        };
+        window.addEventListener('dragover', onDragOver);
+        window.addEventListener('drop', onDrop);
+        return () => {
+            window.removeEventListener('dragover', onDragOver);
+            window.removeEventListener('drop', onDrop);
+        };
+    }, []);
+
     // Mark a view as mounted the first time it becomes active; once
     // mounted a view stays mounted (kept alive, just hidden) for the
     // lifetime of the page.

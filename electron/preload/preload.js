@@ -3,7 +3,7 @@
 // exposes mtlxDesktop plus installs glue.js into the page's main world.
 'use strict';
 
-const { contextBridge, ipcRenderer, webFrame } = require('electron');
+const { contextBridge, ipcRenderer, webFrame, webUtils } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -100,6 +100,20 @@ const api = {
     relaunch: () => ipcRenderer.send('mtlx-relaunch'),
     getRecents: () => ipcRenderer.invoke('mtlx-get-recents'),
     openRecent: (filePath) => ipcRenderer.invoke('mtlx-open-recent', filePath),
+    // Resolves a dropped File to its real filesystem path (js/shared/
+    // mtlx-ui.jsx's desktopPathDrop); '' when it throws or the File is
+    // not backed by a real file (e.g. one constructed in JS).
+    getPathForFile: (file) => {
+        try {
+            const p = webUtils.getPathForFile(file);
+            return typeof p === 'string' ? p : '';
+        } catch (e) {
+            return '';
+        }
+    },
+    openPath: (filePath) => ipcRenderer.invoke('mtlx-open-path', filePath),
+    revealDocument: () => ipcRenderer.invoke('mtlx-reveal-document'),
+    copyDocumentPath: () => ipcRenderer.invoke('mtlx-copy-document-path'),
 };
 contextBridge.exposeInMainWorld('mtlxDesktop', api);
 

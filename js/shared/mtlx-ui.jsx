@@ -890,6 +890,26 @@ const openInViewer = ({ xml, name, files, geometry }) => {
     window.location.hash = '#!viewer';
 };
 
+// Electron drop-to-open (main.js's mtlx-open-path IPC): a drop of EXACTLY
+// one real .mtlx file resolves to its on-disk path via webUtils.
+// Returns null for anything else (folders, multi-file, web/embeds).
+const desktopPathDrop = (dt) => {
+    if (!dt || !dt.files || dt.files.length !== 1) return null;
+    const file = dt.files[0];
+    if (!file || !/\.mtlx$/i.test(file.name || '')) return null;
+    const item = dt.items && dt.items[0];
+    const entry = item && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    if (!entry || !entry.isFile) return null;
+    if (typeof window.__mtlxGetPathForFile !== 'function') return null;
+    let path = '';
+    try {
+        path = window.__mtlxGetPathForFile(file);
+    } catch (e) {
+        path = '';
+    }
+    return path ? path : null;
+};
+
 // Page-wide drag & drop: files can drop anywhere, not just a drop zone.
 // `activeRef.current === false` suppresses handling for backgrounded
 // views; `disabled` registers no listeners (used by VS Code callers).
@@ -926,9 +946,20 @@ const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }
         const onDropAnywhere = async (e) => {
             if (activeRef && !activeRef.current) return;
             if (!hasFiles(e)) return;
+            // Claims the drop for js/shell.jsx's window-level listener,
+            // which defers its own check to a microtask so this
+            // synchronous flag always wins when a view hook is active.
+            e.__mtlxHandled = true;
             e.preventDefault();
             depth = 0;
             if (onDragStateRef.current) onDragStateRef.current(false);
+            if (typeof window.__mtlxOpenPath === 'function') {
+                const path = desktopPathDrop(e.dataTransfer);
+                if (path) {
+                    window.__mtlxOpenPath(path);
+                    return;
+                }
+            }
             const map = await readDroppedItems(e.dataTransfer);
             if (onFilesRef.current) onFilesRef.current(map);
         };
@@ -3036,7 +3067,7 @@ Object.assign(window, {
     downloadSnapshot, downloadBlob, downloadXml, attributeExportedXml,
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
-    useWindowFileDrop, LoadingOverlay, ViewportControls,
+    useWindowFileDrop, desktopPathDrop, LoadingOverlay, ViewportControls,
     ColorSwatch, MtlxSelect, MtlxMenu, MtlxMenuBar, PreviewErrorBoundary,
     fullscreenPortalRoot,
     BTN_MENUBAR,

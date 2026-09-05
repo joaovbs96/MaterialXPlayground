@@ -117,4 +117,23 @@
     window.__mtlxOpenRecent = function (filePath) {
         return window.mtlxDesktop.openRecent(filePath);
     };
+
+    // Drop-to-open (js/shared/mtlx-ui.jsx's desktopPathDrop, and its two
+    // call sites via useWindowFileDrop / js/shell.jsx's window listener).
+    window.__mtlxGetPathForFile = function (file) {
+        return window.mtlxDesktop.getPathForFile(file);
+    };
+    window.__mtlxOpenPath = function (filePath) {
+        return window.mtlxDesktop.openPath(filePath);
+    };
+
+    // File > Reveal/Copy Path (js/graph-app.jsx's in-app File menu; the
+    // native menu items call shell.showItemInFolder/clipboard.writeText
+    // directly in main and do not go through these).
+    window.__mtlxRevealDocument = function () {
+        return window.mtlxDesktop.revealDocument();
+    };
+    window.__mtlxCopyDocumentPath = function () {
+        return window.mtlxDesktop.copyDocumentPath();
+    };
 })();
