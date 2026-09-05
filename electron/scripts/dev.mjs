@@ -47,6 +47,10 @@ const electronPath = require(path.join(ELECTRON_DIR, 'node_modules', 'electron')
 const smoke = process.argv.includes('--smoke');
 const smokeOpenIndex = process.argv.indexOf('--smoke-open');
 const smokeOpenFile = smokeOpenIndex !== -1 ? process.argv[smokeOpenIndex + 1] : null;
+if (smoke && smokeOpenFile) {
+    console.error('[electron:dev] --smoke and --smoke-open are mutually exclusive.');
+    process.exit(2);
+}
 const { version } = resolveVersion(REPO_ROOT);
 const env = Object.assign({}, process.env, { MTLX_SITE_ROOT: REPO_ROOT, MTLX_DEV_VERSION: version });
 if (smoke) env.MTLX_SMOKE = '1';

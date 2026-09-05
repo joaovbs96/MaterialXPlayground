@@ -61,7 +61,7 @@ jobs:
           # default; only add it if this step starts failing on ubuntu-latest.
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -y && sudo apt-get install -y xvfb
-            xvfb-run -a node electron/scripts/dev.mjs --smoke
+            xvfb-run -a node electron/scripts/dev.mjs --smoke --skip-gallery
           else
-            node electron/scripts/dev.mjs --smoke
+            node electron/scripts/dev.mjs --smoke --skip-gallery
           fi

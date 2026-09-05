@@ -7,9 +7,13 @@ import path from 'node:path';
 
 const DEFAULT_REUSE_FROM = 'https://joaovbs96.github.io/MaterialXPlayground';
 
-function runNode(scriptPath, args, repoRoot) {
-    const result = spawnSync(process.execPath, [scriptPath, ...args], { cwd: repoRoot, stdio: 'inherit' });
+// timeoutMs is optional; a timed-out spawnSync reports via result.error
+// and/or result.signal (the process gets killed), never a clean status.
+function runNode(scriptPath, args, repoRoot, timeoutMs) {
+    const opts = Object.assign({ cwd: repoRoot, stdio: 'inherit' }, timeoutMs ? { timeout: timeoutMs } : {});
+    const result = spawnSync(process.execPath, [scriptPath, ...args], opts);
     if (result.error) return { ok: false, message: String(result.error) };
+    if (result.signal) return { ok: false, message: 'terminated by signal ' + result.signal };
     if (result.status !== 0) return { ok: false, message: 'exit code ' + result.status };
     return { ok: true };
 }
@@ -30,7 +34,7 @@ export function ensureGalleryData({ repoRoot, mode, argv, env }) {
     }
 
     console.log('[gallery] building gallery manifest...');
-    const manifestResult = runNode(path.join(repoRoot, 'scripts', 'build-gallery.mjs'), [], repoRoot);
+    const manifestResult = runNode(path.join(repoRoot, 'scripts', 'build-gallery.mjs'), [], repoRoot, 60000);
     if (!manifestResult.ok) {
         console.error('[gallery] node scripts/build-gallery.mjs failed: ' + manifestResult.message);
         process.exit(1);
@@ -38,7 +42,7 @@ export function ensureGalleryData({ repoRoot, mode, argv, env }) {
 
     const reuseFrom = env.MTLX_GALLERY_REUSE_FROM || DEFAULT_REUSE_FROM;
     console.log('[gallery] downloading published thumbnails from ' + reuseFrom + ' ...');
-    const shotsResult = runNode(path.join(repoRoot, 'scripts', 'gallery-shots.mjs'), ['--reuse-from', reuseFrom, '--reuse-only'], repoRoot);
+    const shotsResult = runNode(path.join(repoRoot, 'scripts', 'gallery-shots.mjs'), ['--reuse-from', reuseFrom, '--reuse-only'], repoRoot, 120000);
     if (!shotsResult.ok) {
         console.warn('[gallery] ============================================================');
         console.warn('[gallery] WARNING: gallery-shots.mjs failed (' + shotsResult.message + ').');
