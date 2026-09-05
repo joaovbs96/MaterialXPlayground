@@ -21,7 +21,7 @@ function errMsg(e) {
 // notice is { kind, level: 'info' | 'warn', text }; kind is how the
 // shell dedupes (a new notice with the same kind replaces the old one).
 function sendNotice(win, notice) {
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
     win.webContents.send('mtlx-notice', notice);
 }
 
@@ -216,10 +216,15 @@ function getWindowState(win) {
             // (the hang dialog's Force Reload) so the render-process-gone
             // handler below does not also show its own crash dialog for it.
             selfInflictedCrash: false,
+            // Per-window bounds-save debounce (armBoundsSave) and did-fail-load
+            // retry counter (reset on did-finish-load).
+            boundsSaveTimer: null,
+            failLoadRetries: 0,
         };
         windowStates.set(win, state);
         win.on('closed', () => {
             if (state.watcher) state.watcher.close();
+            if (state.boundsSaveTimer) clearTimeout(state.boundsSaveTimer);
             windowStates.delete(win);
         });
     }
@@ -370,7 +375,14 @@ ipcMain.handle('mtlx-get-recents', () => recentFiles.slice());
 // preference, unlike the native Open Recent submenu which always
 // reuses the window the click happened in.
 ipcMain.handle('mtlx-open-recent', (event, filePath) => {
-    if (!filePath || !fsSync.existsSync(filePath)) {
+    // Hardening: only ever act on a path we ourselves listed as recent,
+    // and only a real .mtlx path, not whatever string the renderer sent.
+    const isKnownRecent = typeof filePath === 'string'
+        && recentFiles.some((p) => path.normalize(p) === path.normalize(filePath));
+    if (!isKnownRecent || !/\.mtlx$/i.test(filePath)) {
+        return { ok: false };
+    }
+    if (!fsSync.existsSync(filePath)) {
         recentFiles = recentFiles.filter((p) => p !== filePath);
         saveRecents(recentFiles);
         rebuildMenu();
@@ -386,12 +398,25 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
 // openInNewWindow like any other OS-driven open.
 ipcMain.handle('mtlx-open-path', (event, filePath) => {
     if (typeof filePath !== 'string' || !filePath || !fsSync.existsSync(filePath) || !/\.mtlx$/i.test(filePath)) {
+        const sender = BrowserWindow.fromWebContents(event.sender);
+        const base = typeof filePath === 'string' ? path.basename(filePath) : String(filePath);
+        sendNotice(sender, {
+            kind: 'open-path-rejected',
+            level: 'warn',
+            text: 'Could not open ' + base + ': the file is missing or is not a .mtlx document.',
+        });
         return { ok: false };
     }
     if (openInNewWindow) {
         openMtlxRouted(filePath);
     } else {
-        openMtlxFromDisk(filePath, BrowserWindow.fromWebContents(event.sender) || getRoutingTargetWindow() || createWindow(documentOpenView), false);
+        const sender = BrowserWindow.fromWebContents(event.sender);
+        // main rebinds currentPath before the page confirms, so a dirty
+        // target must never be reused; open a fresh window instead.
+        const target = (sender && !getWindowState(sender).dirty)
+            ? sender
+            : (getRoutingTargetWindow() || createWindow(documentOpenView));
+        openMtlxFromDisk(filePath, target, false);
     }
     return { ok: true };
 });
@@ -417,15 +442,33 @@ ipcMain.handle('mtlx-copy-document-path', (event) => {
 
 // Asks a window's renderer to hand back its current graph XML; used by
 // saveFromMenu (the native Save/Save As menu items) below.
-function requestSaveFromRenderer(win) {
+// timeoutMs is optional: saveFromMenu awaits indefinitely (no deadline),
+// the close-confirm paths below pass SAVE_ON_CLOSE_TIMEOUT_MS. Either way
+// the reply listener is removed on every exit, including a timeout.
+function requestSaveFromRenderer(win, timeoutMs) {
     return new Promise((resolve, reject) => {
-        const listener = (event, result) => {
-            if (BrowserWindow.fromWebContents(event.sender) !== win) return;
+        let settled = false;
+        let timer = null;
+        const cleanup = () => {
+            settled = true;
+            if (timer) clearTimeout(timer);
             ipcMain.removeListener('mtlx-request-save-reply', listener);
+        };
+        const listener = (event, result) => {
+            if (settled) return;
+            if (BrowserWindow.fromWebContents(event.sender) !== win) return;
+            cleanup();
             if (result && result.error) reject(new Error(result.error));
             else resolve(result && result.xml);
         };
         ipcMain.on('mtlx-request-save-reply', listener);
+        if (timeoutMs) {
+            timer = setTimeout(() => {
+                if (settled) return;
+                cleanup();
+                reject(new Error('timed out'));
+            }, timeoutMs);
+        }
         win.webContents.send('mtlx-request-save');
     });
 }
@@ -434,17 +477,11 @@ function requestSaveFromRenderer(win) {
 // graph-view contract can't leave the close prompt stuck forever.
 const SAVE_ON_CLOSE_TIMEOUT_MS = 8000;
 
-function withTimeout(promise, ms) {
-    return Promise.race([
-        promise,
-        new Promise((resolve, reject) => setTimeout(() => reject(new Error('timed out')), ms)),
-    ]);
-}
-
 // Shown in place of Electron's default silent close-block (its reaction to
 // a beforeunload preventDefault with no 'close' listener). forceClose lets
 // the re-issued win.close() below skip straight past the guard.
 async function confirmCloseWindow(win) {
+    if (win.isDestroyed()) return;
     const state = getWindowState(win);
     const choice = await dialog.showMessageBox(win, {
         type: 'question',
@@ -455,23 +492,37 @@ async function confirmCloseWindow(win) {
         message: 'This document has unsaved changes.',
         detail: 'Do you want to save the changes before closing?',
     });
+    if (win.isDestroyed()) return;
 
-    if (choice.response === 2) return; // Cancel: leave the window open.
-
-    if (choice.response === 1) { // Discard
-        state.forceClose = true;
-        win.close();
+    if (choice.response === 2) {
+        // Cancel: leave the window open, and abandon any relaunch that
+        // was waiting on this quit to actually proceed.
+        relaunchPending = false;
+        pendingSafeMode = false;
         return;
     }
 
-    // The renderer round trip can hang or throw if the graph-view contract
-    // ever drifts; timeout/catch degrades to a discard-or-cancel prompt
-    // instead of leaving the window stuck mid-close.
+    if (choice.response === 1) { // Discard
+        state.forceClose = true;
+        if (!win.isDestroyed()) win.close();
+        return;
+    }
+
+    // The round trip can hang/throw, and a crashed renderer cannot answer
+    // it at all; either way, degrade to a discard-or-cancel prompt instead
+    // of leaving the window stuck mid-close.
     let xml;
-    try {
-        xml = await withTimeout(requestSaveFromRenderer(win), SAVE_ON_CLOSE_TIMEOUT_MS);
-    } catch (e) {
-        console.error('[main] save-before-close failed: ' + errMsg(e));
+    let saveFailed = win.webContents.isCrashed();
+    if (!saveFailed) {
+        try {
+            xml = await requestSaveFromRenderer(win, SAVE_ON_CLOSE_TIMEOUT_MS);
+        } catch (e) {
+            console.error('[main] save-before-close failed: ' + errMsg(e));
+            saveFailed = true;
+        }
+        if (win.isDestroyed()) return;
+    }
+    if (saveFailed) {
         const fallback = await dialog.showMessageBox(win, {
             type: 'warning',
             buttons: ['Discard', 'Cancel'],
@@ -481,6 +532,7 @@ async function confirmCloseWindow(win) {
             message: 'Could not save this document.',
             detail: 'Close it anyway and lose the unsaved changes?',
         });
+        if (win.isDestroyed()) return;
         if (fallback.response === 0) {
             state.forceClose = true;
             win.close();
@@ -489,6 +541,7 @@ async function confirmCloseWindow(win) {
     }
 
     const saveResult = await saveMtlxForWindow(win, { xml });
+    if (win.isDestroyed()) return;
     if (saveResult.canceled) return; // Save As dialog canceled: stay open.
     if (!saveResult.ok) {
         dialog.showErrorBox('MaterialX Playground', 'Could not save: ' + saveResult.error);
@@ -551,12 +604,14 @@ function requestStyledCloseConfirm(win, token) {
 // confirmCloseWindow's own branch below: that fallback must stay
 // byte-for-byte unchanged, so this duplicates it against the same helpers.
 async function performStyledSaveAndClose(win) {
+    if (win.isDestroyed()) return;
     const state = getWindowState(win);
     let xml;
     try {
-        xml = await withTimeout(requestSaveFromRenderer(win), SAVE_ON_CLOSE_TIMEOUT_MS);
+        xml = await requestSaveFromRenderer(win, SAVE_ON_CLOSE_TIMEOUT_MS);
     } catch (e) {
         console.error('[main] save-before-close failed: ' + errMsg(e));
+        if (win.isDestroyed()) return;
         const fallback = await dialog.showMessageBox(win, {
             type: 'warning',
             buttons: ['Discard', 'Cancel'],
@@ -566,14 +621,17 @@ async function performStyledSaveAndClose(win) {
             message: 'Could not save this document.',
             detail: 'Close it anyway and lose the unsaved changes?',
         });
+        if (win.isDestroyed()) return;
         if (fallback.response === 0) {
             state.forceClose = true;
             win.close();
         }
         return;
     }
+    if (win.isDestroyed()) return;
 
     const saveResult = await saveMtlxForWindow(win, { xml });
+    if (win.isDestroyed()) return;
     if (saveResult.canceled) return; // Save As dialog canceled: stay open.
     if (!saveResult.ok) {
         dialog.showErrorBox('MaterialX Playground', 'Could not save: ' + saveResult.error);
@@ -588,6 +646,7 @@ async function performStyledSaveAndClose(win) {
 // styled dialog first, falling back to confirmCloseWindow's native one
 // only on timeout/IPC error; closeConfirmToken makes repeat clicks refocus.
 async function requestCloseConfirmation(win) {
+    if (win.isDestroyed()) return;
     const state = getWindowState(win);
     if (state.closeConfirmToken !== null) {
         win.focus();
@@ -609,11 +668,15 @@ async function requestCloseConfirmation(win) {
 
         if (choice === 'discard') {
             state.forceClose = true;
-            win.close();
+            if (!win.isDestroyed()) win.close();
         } else if (choice === 'save') {
             await performStyledSaveAndClose(win);
+        } else {
+            // 'cancel' (or anything unexpected): leave the window open,
+            // and abandon any relaunch that was waiting on this quit.
+            relaunchPending = false;
+            pendingSafeMode = false;
         }
-        // 'cancel' (or anything unexpected): leave the window open.
     } finally {
         if (state.closeConfirmToken === token) state.closeConfirmToken = null;
     }
@@ -630,6 +693,7 @@ async function openMtlxFromDisk(filePath, win, isReload = false) {
         dialog.showErrorBox('MaterialX Playground', 'Could not open "' + filePath + '": ' + errMsg(e));
         return;
     }
+    if (win.isDestroyed()) return;
 
     const name = path.basename(filePath, path.extname(filePath));
 
@@ -639,6 +703,7 @@ async function openMtlxFromDisk(filePath, win, isReload = false) {
     } catch (e) {
         console.error('[main] doc-scanner failed for "' + filePath + '": ' + errMsg(e));
     }
+    if (win.isDestroyed()) return;
     scanned.warnings.forEach((w) => console.warn('[main] doc-scanner: ' + w));
 
     const files = {};
@@ -704,13 +769,24 @@ async function runSmokeOpen(filePath) {
         const win = createWindow(documentOpenView);
         await new Promise((resolve, reject) => {
             const loadTimer = setTimeout(() => {
+                cleanup();
                 reject(new Error('timed out after ' + SMOKE_DEADLINE_MS + ' ms waiting for initial load'));
             }, SMOKE_DEADLINE_MS);
-            win.webContents.once('did-finish-load', () => { clearTimeout(loadTimer); resolve(); });
-            win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+            // -3 is Chromium's ABORTED, routinely fired by in-page
+            // navigations; only a real main-frame failure should reject.
+            const onFinish = () => { cleanup(); resolve(); };
+            const onFail = (event, code, description, url, isMainFrame) => {
+                if (!isMainFrame || code === -3) return;
+                cleanup();
+                reject(new Error(code + ' ' + description));
+            };
+            function cleanup() {
                 clearTimeout(loadTimer);
-                reject(new Error(errorCode + ' ' + errorDescription));
-            });
+                win.webContents.removeListener('did-finish-load', onFinish);
+                win.webContents.removeListener('did-fail-load', onFail);
+            }
+            win.webContents.on('did-finish-load', onFinish);
+            win.webContents.on('did-fail-load', onFail);
         });
 
         let probeName = null;
@@ -871,10 +947,21 @@ function setSafeMode(value) {
 
 // app.quit() below still runs each window's own dirty-close guard
 // (win.on('close')), so a relaunch cannot silently drop unsaved work.
-function relaunchApp() {
-    app.relaunch({ args: process.argv.slice(1).filter((a) => a !== '--safe-mode') });
+// The actual app.relaunch()/setSafeMode call is deferred to 'will-quit'
+// (below) so a quit the user later cancels never leaves a relaunch armed.
+let relaunchPending = false;
+let pendingSafeMode = false;
+function relaunchApp(opts) {
+    relaunchPending = true;
+    if (opts && opts.safeMode) pendingSafeMode = true;
     app.quit();
 }
+
+app.on('will-quit', () => {
+    if (!relaunchPending) return;
+    if (pendingSafeMode) setSafeMode(true);
+    app.relaunch({ args: process.argv.slice(1).filter((a) => a !== '--safe-mode') });
+});
 
 // Forwards a command string to a window's renderer, for menu items with
 // no main-process business logic of their own (New/Export/Undo/Redo).
@@ -1231,7 +1318,13 @@ function openMtlxRouted(filePath) {
         openMtlxFromDisk(filePath, createWindow(documentOpenView), false);
         return;
     }
-    const target = getRoutingTargetWindow() || createWindow(documentOpenView);
+    let target = getRoutingTargetWindow();
+    // main rebinds currentPath before the page confirms, so a dirty
+    // target must never be reused; open a fresh window instead.
+    if (!target || getWindowState(target).dirty) {
+        openMtlxFromDisk(filePath, createWindow(documentOpenView), false);
+        return;
+    }
     if (target.isMinimized()) target.restore();
     target.focus();
     openMtlxFromDisk(filePath, target, false);
@@ -1253,7 +1346,9 @@ function openMtlxRoutedTo(filePath, route) {
         return;
     }
     const target = getRoutingTargetWindow();
-    if (!target) {
+    // main rebinds currentPath before the page confirms, so a dirty
+    // target must never be reused; open a fresh window instead.
+    if (!target || getWindowState(target).dirty) {
         openMtlxFromDisk(filePath, createWindow(route), false);
         return;
     }
@@ -1307,6 +1402,10 @@ const TRAFFIC_LIGHT_INSET_X = 20;
 // prompt: shader compilation can legitimately freeze the renderer for
 // several seconds, and that must not look like a real hang.
 const UNRESPONSIVE_GRACE_MS = 20000;
+
+// Caps repeated did-fail-load Retry clicks (a persistently broken load
+// should stop offering a retry that will never succeed).
+const DID_FAIL_LOAD_MAX_RETRIES = 3;
 
 // Bounds persistence (windowBounds above): initialBounds() decides where
 // the next createWindow() lands; armBoundsSave/persistWindowBounds below
@@ -1376,21 +1475,30 @@ function shouldPersistBoundsFor(win) {
     return wins.length === 1 || win === lastFocusedWindow;
 }
 
+// On close the window-count rule above is unreliable (windows are
+// mid-teardown during a multi-window quit), so persist only for the
+// last focused window, or when there is no other reliable focus target.
+function shouldPersistBoundsOnClose(win) {
+    return win === lastFocusedWindow || !lastFocusedWindow || lastFocusedWindow.isDestroyed();
+}
+
 // getNormalBounds (not getBounds) so a maximized window's RESTORED size
 // is what gets saved, per electron.d.ts:2846's own doc comment.
-function persistWindowBounds(win) {
-    if (!win || win.isDestroyed() || !shouldPersistBoundsFor(win)) return;
+function persistWindowBounds(win, shouldPersist) {
+    if (!win || win.isDestroyed() || !shouldPersist(win)) return;
     const normal = win.getNormalBounds();
     windowBounds = { x: normal.x, y: normal.y, width: normal.width, height: normal.height, maximized: win.isMaximized() };
     saveSettings();
 }
 
-let boundsSaveTimer = null;
+// Debounce timer lives on the window's own state so one window's resize
+// spam never clobbers another's pending save.
 function armBoundsSave(win) {
-    if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
-    boundsSaveTimer = setTimeout(() => {
-        boundsSaveTimer = null;
-        persistWindowBounds(win);
+    const state = getWindowState(win);
+    if (state.boundsSaveTimer) clearTimeout(state.boundsSaveTimer);
+    state.boundsSaveTimer = setTimeout(() => {
+        state.boundsSaveTimer = null;
+        persistWindowBounds(win, shouldPersistBoundsFor);
     }, BOUNDS_SAVE_DEBOUNCE_MS);
 }
 
@@ -1461,8 +1569,9 @@ function createWindow(route) {
     win.on('resize', () => armBoundsSave(win));
     win.on('move', () => armBoundsSave(win));
     win.on('close', () => {
-        if (boundsSaveTimer) { clearTimeout(boundsSaveTimer); boundsSaveTimer = null; }
-        persistWindowBounds(win);
+        const state = getWindowState(win);
+        if (state.boundsSaveTimer) { clearTimeout(state.boundsSaveTimer); state.boundsSaveTimer = null; }
+        persistWindowBounds(win, shouldPersistBoundsOnClose);
     });
 
     // state.dirty (kept live by mtlx-notify-edit) gates this synchronously;
@@ -1472,7 +1581,13 @@ function createWindow(route) {
         const state = getWindowState(win);
         if (state.forceClose || !state.dirty) return;
         event.preventDefault();
-        requestCloseConfirmation(win);
+        // This close attempt is being deferred to a confirmation dialog,
+        // not guaranteed to happen; abandon any relaunch riding on it.
+        relaunchPending = false;
+        pendingSafeMode = false;
+        requestCloseConfirmation(win).catch((e) => {
+            console.error('[main] close confirmation failed: ' + errMsg(e));
+        });
     });
 
     // The re-issued win.close() below re-runs the page's OWN beforeunload
@@ -1500,6 +1615,10 @@ function createWindow(route) {
         const state = getWindowState(win);
         if (state.selfInflictedCrash) { state.selfInflictedCrash = false; return; }
         if (details.reason === 'clean-exit' || state.forceClose) return;
+        // A pending styled close-confirm round trip already has its own
+        // render-process-gone listener that falls back to the native
+        // dialog; do not also show this generic crash dialog for it.
+        if (state.closeConfirmToken !== null) return;
         dialog.showMessageBox(win, {
             type: 'warning',
             buttons: ['Reload', 'Close Window'],
@@ -1565,19 +1684,25 @@ function createWindow(route) {
 
     // Only a real main-frame failure matters; -3 is Chromium's ABORTED,
     // routinely fired by in-page navigations and not an actual failure.
+    win.webContents.on('did-finish-load', () => {
+        getWindowState(win).failLoadRetries = 0;
+    });
     win.webContents.on('did-fail-load', (event, code, description, url, isMainFrame) => {
         if (!isMainFrame || code === -3) return;
+        const state = getWindowState(win);
+        const canRetry = state.failLoadRetries < DID_FAIL_LOAD_MAX_RETRIES;
         dialog.showMessageBox(win, {
             type: 'warning',
-            buttons: ['Retry', 'Close Window'],
+            buttons: canRetry ? ['Retry', 'Close Window'] : ['Close Window'],
             defaultId: 0,
             title: 'MaterialX Playground',
             message: 'The app page failed to load (' + description + ').',
         }).then((result) => {
-            if (result.response === 0) {
-                win.loadURL(url);
+            if (canRetry && result.response === 0) {
+                state.failLoadRetries++;
+                win.loadURL(url || urlForRoute(documentOpenView));
             } else {
-                getWindowState(win).forceClose = true;
+                state.forceClose = true;
                 win.close();
             }
         });
@@ -1748,8 +1873,10 @@ if (!gotLock) {
     // on its own and the site already handles lost/restored contexts.
     let gpuCrashTimestamps = [];
     let gpuCrashPromptOpen = false;
+    let gpuPromptCooldownUntil = 0;
     const GPU_CRASH_WINDOW_MS = 60000;
     const GPU_CRASH_THRESHOLD = 3;
+    const GPU_PROMPT_COOLDOWN_MS = 5 * 60000;
     app.on('child-process-gone', async (event, details) => {
         if (details.type !== 'GPU' || details.reason === 'clean-exit') return;
         const now = Date.now();
@@ -1762,7 +1889,7 @@ if (!gotLock) {
             text: 'The graphics process restarted (' + details.reason + '). If a view stays blank, use View > Reload.',
         });
 
-        if (gpuCrashTimestamps.length < GPU_CRASH_THRESHOLD || safeModeActive || gpuCrashPromptOpen) return;
+        if (gpuCrashTimestamps.length < GPU_CRASH_THRESHOLD || safeModeActive || gpuCrashPromptOpen || now < gpuPromptCooldownUntil) return;
         gpuCrashPromptOpen = true;
         const win = BrowserWindow.getFocusedWindow();
         const options = {
@@ -1775,9 +1902,14 @@ if (!gotLock) {
         };
         const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
         gpuCrashPromptOpen = false;
+        // Reset the crash tally and hold off on prompting again for a
+        // while either way, so an unstable GPU cannot re-prompt on a loop.
+        gpuCrashTimestamps = [];
+        gpuPromptCooldownUntil = Date.now() + GPU_PROMPT_COOLDOWN_MS;
         if (result.response === 0) {
-            setSafeMode(true);
-            relaunchApp();
+            // The GPU prompt path must not persist safeMode before the
+            // quit actually proceeds; relaunchApp defers that to will-quit.
+            relaunchApp({ safeMode: true });
         }
     });
 

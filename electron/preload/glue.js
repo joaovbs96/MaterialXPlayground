@@ -138,7 +138,9 @@
         if (!file || !/\.mtlx$/i.test(file.name || '')) return null;
         var item = dt.items && dt.items[0];
         var entry = item && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-        if (!entry || !entry.isFile) return null;
+        // entry is unavailable in some drag sources; only reject when it
+        // exists and is actually a directory, not merely absent.
+        if (entry && !entry.isFile) return null;
         var path = '';
         try {
             path = window.__mtlxGetPathForFile(file);
