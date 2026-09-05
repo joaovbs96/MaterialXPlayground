@@ -159,6 +159,12 @@ The macOS builds are **not notarized** (that needs a paid Apple Developer accoun
 
 Right-clicking the app and choosing Open no longer works as a bypass on macOS 15 and newer, so use System Settings.
 
+### Troubleshooting
+
+- **Safe mode.** Turns off hardware acceleration (software rendering, slower but more compatible). Turn it on from **Settings > Safe mode**, or launch the app with `--safe-mode`. Use it if a view stays blank or the app crashes on your machine; a repeated graphics crash also offers to turn it on for you.
+- **Crash dialogs.** If a window's page crashes, a dialog offers to reload it (the document is restored from disk, with unsaved graph edits offered from the autosave) or close the window. If the graphics process itself crashes, a small notice appears and rendering keeps going; use **View > Reload** if a view stays blank. If a page stops responding, a dialog appears after a delay (shader compilation can legitimately take a while) offering to keep waiting, force-reload, or close the window.
+- **Settings file location.** Preferences (including safe mode) live in `mtlx-settings.json` under the app's user data folder: Windows `%APPDATA%\materialx-playground-desktop`, macOS `~/Library/Application Support/materialx-playground-desktop`, Linux `~/.config/materialx-playground-desktop`.
+
 ## Embedding (experimental)
 
 Drop a single material into any other web page as a lightweight, chromeless viewer, the same idea as embedding a YouTube video. The easiest way to start is the **Embed Builder** on the home page: configure the embed against a live preview and copy a ready-made snippet.

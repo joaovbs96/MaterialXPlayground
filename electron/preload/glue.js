@@ -88,6 +88,19 @@
     window.__mtlxSetDocumentOpenView = function (value) {
         window.mtlxDesktop.setDocumentOpenView(value);
     };
+    window.__mtlxSetSafeMode = function (value) {
+        window.mtlxDesktop.setSafeMode(value);
+    };
+    window.__mtlxRelaunch = function () {
+        window.mtlxDesktop.relaunch();
+    };
+
+    // Shell-level notice bar (js/shell.jsx's DesktopNoticeBar): safe-mode
+    // startup and crash-recovery notices pushed from main (GPU restarts,
+    // etc), one CustomEvent per notice.
+    window.mtlxDesktop.onNotice(function (notice) {
+        window.dispatchEvent(new CustomEvent('mtlx-desktop-notice', { detail: notice }));
+    });
 
     // Shell-level About dialog (js/shell.jsx's DesktopAboutDialog),
     // opened from the header help button (js/site-header.js).

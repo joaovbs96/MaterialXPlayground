@@ -17,6 +17,18 @@ function errMsg(e) {
     return e && e.message ? e.message : String(e);
 }
 
+// Main-to-renderer notice channel (js/shell.jsx's DesktopNoticeBar). A
+// notice is { kind, level: 'info' | 'warn', text }; kind is how the
+// shell dedupes (a new notice with the same kind replaces the old one).
+function sendNotice(win, notice) {
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send('mtlx-notice', notice);
+}
+
+function broadcastNotice(notice) {
+    BrowserWindow.getAllWindows().forEach((win) => sendNotice(win, notice));
+}
+
 // Bumped by the onBeforeRequest blocker below every time it cancels a
 // request; the MTLX_SMOKE harness reads this to prove the blocker (not
 // just an unrelated network failure) is what refused its probe request.
@@ -63,6 +75,24 @@ protocol.registerSchemesAsPrivileged([
 if (process.env.MTLX_DEBUG_PORT) {
     app.commandLine.appendSwitch('remote-debugging-port', process.env.MTLX_DEBUG_PORT);
 }
+
+// Synchronous because safeModeActive below must be decided before
+// app.whenReady(); loadSettings() (used everywhere else in this file)
+// just delegates here once the rest of the module has finished loading.
+function readSettingsSync() {
+    try {
+        const parsed = JSON.parse(fsSync.readFileSync(getSettingsPath(), 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+// Must be decided before app.whenReady(): disableHardwareAcceleration()
+// is a no-op once Electron has finished starting up, and the normal
+// settings read (loadSettings, inside whenReady below) runs too late.
+const safeModeActive = process.argv.includes('--safe-mode') || readSettingsSync().safeMode === true;
+if (safeModeActive) app.disableHardwareAcceleration();
 
 function getSiteRoot() {
     if (process.env.MTLX_SITE_ROOT) return path.resolve(process.env.MTLX_SITE_ROOT);
@@ -177,7 +207,16 @@ const windowStates = new Map();
 function getWindowState(win) {
     let state = windowStates.get(win);
     if (!state) {
-        state = { currentPath: null, dirty: false, watcher: null, editDepth: 0, forceClose: false, closeConfirmToken: null };
+        state = {
+            currentPath: null, dirty: false, watcher: null, editDepth: 0, forceClose: false, closeConfirmToken: null,
+            // Renderer-hang bookkeeping (win.on('unresponsive')/'responsive'
+            // below): hangTimer/hangPromptOpen/hangAbortController.
+            hangTimer: null, hangPromptOpen: false, hangAbortController: null,
+            // Set right before a self-inflicted forcefullyCrashRenderer()
+            // (the hang dialog's Force Reload) so the render-process-gone
+            // handler below does not also show its own crash dialog for it.
+            selfInflictedCrash: false,
+        };
         windowStates.set(win, state);
         win.on('closed', () => {
             if (state.watcher) state.watcher.close();
@@ -282,6 +321,8 @@ ipcMain.handle('mtlx-get-settings', () => ({
     openInNewWindow,
     showRecentInSystem,
     documentOpenView,
+    safeMode,
+    safeModeActive,
     platform: process.platform,
     jumpListStatus,
 }));
@@ -296,6 +337,7 @@ ipcMain.handle('mtlx-get-about', () => ({
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
+    safeModeActive,
 }));
 
 // Reuses setOpenInNewWindow so persistence and the native checkbox's
@@ -309,6 +351,14 @@ ipcMain.on('mtlx-set-show-recent-in-system', (event, value) => setShowRecentInSy
 // Reuses setDocumentOpenView so persistence stays in sync with whatever
 // the dialog set.
 ipcMain.on('mtlx-set-document-open-view', (event, value) => setDocumentOpenView(value));
+
+// Reuses setSafeMode so persistence stays in sync with whatever the
+// dialog set; takes effect on the next launch (see safeModeActive above).
+ipcMain.on('mtlx-set-safe-mode', (event, value) => setSafeMode(value));
+
+// Offered by the settings dialog's "Relaunch now" button right after
+// toggling safe mode, so the change does not wait for a manual restart.
+ipcMain.on('mtlx-relaunch', () => relaunchApp());
 
 // Renderer-side Open Recent dialog (js/graph-app.jsx's in-app File menu)
 // reads the same list the native Open Recent submenu is built from.
@@ -723,22 +773,22 @@ let showRecentInSystem = true;
 // second-instance file launch, macOS open-file). A route always wins.
 let documentOpenView = 'graph';
 
-// Tolerant of a missing/corrupt file: any failure just means defaults,
-// same as a fresh install.
+// Persisted preference; safeModeActive (decided pre-ready, above) is
+// this LAUNCH's actual state. Toggling this only takes effect after a
+// relaunch, which is what the settings dialog's "Relaunch now" offers.
+let safeMode = false;
+
+// Delegates to the pre-ready reader above so the two never drift; kept
+// as its own function since every other setting is read through it.
 function loadSettings() {
-    try {
-        const parsed = JSON.parse(fsSync.readFileSync(getSettingsPath(), 'utf8'));
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (e) {
-        return {};
-    }
+    return readSettingsSync();
 }
 
 function saveSettings() {
     try {
         fsSync.writeFileSync(
             getSettingsPath(),
-            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView }),
+            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode }),
             'utf8'
         );
     } catch (e) {
@@ -770,6 +820,21 @@ function setShowRecentInSystem(value) {
 function setDocumentOpenView(value) {
     documentOpenView = value === 'viewer' ? 'viewer' : 'graph';
     saveSettings();
+}
+
+// Wired to the settings dialog's Safe mode checkbox. Persists only:
+// applying it needs disableHardwareAcceleration() before whenReady, so
+// it always takes effect on the NEXT launch, via relaunchApp below.
+function setSafeMode(value) {
+    safeMode = !!value;
+    saveSettings();
+}
+
+// app.quit() below still runs each window's own dirty-close guard
+// (win.on('close')), so a relaunch cannot silently drop unsaved work.
+function relaunchApp() {
+    app.relaunch({ args: process.argv.slice(1).filter((a) => a !== '--safe-mode') });
+    app.quit();
 }
 
 // Forwards a command string to a window's renderer, for menu items with
@@ -1168,6 +1233,11 @@ const TITLEBAR_OVERLAY_HEIGHT = 56;
 // both or the header brand slides under the buttons.
 const TRAFFIC_LIGHT_INSET_X = 20;
 
+// Grace period before an unresponsive window gets a "not responding"
+// prompt: shader compilation can legitimately freeze the renderer for
+// several seconds, and that must not look like a real hang.
+const UNRESPONSIVE_GRACE_MS = 20000;
+
 function createWindow(route) {
     const win = new BrowserWindow({
         width: 1440,
@@ -1244,6 +1314,107 @@ function createWindow(route) {
         if (getWindowState(win).forceClose) event.preventDefault();
     });
 
+    // Reloads this window from wherever it was: the same document, freshly
+    // re-read from disk. Safe to call right after loadURL: openMtlxFromDisk
+    // already defers its send until the new page's did-finish-load.
+    function reloadCrashedWindow() {
+        const state = getWindowState(win);
+        const url = win.webContents.getURL();
+        state.dirty = false;
+        win.loadURL(url || urlForRoute(documentOpenView));
+        if (state.currentPath) openMtlxFromDisk(state.currentPath, win, false);
+    }
+
+    // The renderer (not the whole app) crashed: offer to reload the
+    // document or close the window. selfInflictedCrash skips this for
+    // the hang prompt's own forcefullyCrashRenderer() call below.
+    win.webContents.on('render-process-gone', (event, details) => {
+        const state = getWindowState(win);
+        if (state.selfInflictedCrash) { state.selfInflictedCrash = false; return; }
+        if (details.reason === 'clean-exit' || state.forceClose) return;
+        dialog.showMessageBox(win, {
+            type: 'warning',
+            buttons: ['Reload', 'Close Window'],
+            defaultId: 0,
+            title: 'MaterialX Playground',
+            message: "This window's page crashed (" + details.reason + ').',
+            detail: 'Reload restores the document from disk. Unsaved graph edits are offered from the autosave.',
+        }).then((result) => {
+            if (result.response === 0) {
+                reloadCrashedWindow();
+            } else {
+                state.forceClose = true;
+                win.close();
+            }
+        });
+    });
+
+    // 'unresponsive' arms the grace timer (see UNRESPONSIVE_GRACE_MS
+    // above); 'responsive' cancels it, or withdraws the prompt below
+    // via the AbortSignal if the timer already fired.
+    win.on('unresponsive', () => {
+        const state = getWindowState(win);
+        if (state.hangTimer) return;
+        state.hangTimer = setTimeout(() => {
+            state.hangTimer = null;
+            if (state.hangPromptOpen) return;
+            state.hangPromptOpen = true;
+            const controller = new AbortController();
+            state.hangAbortController = controller;
+            dialog.showMessageBox(win, {
+                type: 'warning',
+                message: 'The page is not responding.',
+                detail: 'Shader compilation can take a while. Wait unless it stays frozen.',
+                buttons: ['Wait', 'Force Reload', 'Close Window'],
+                defaultId: 0,
+                cancelId: 0,
+                signal: controller.signal,
+            }).then((result) => {
+                state.hangPromptOpen = false;
+                state.hangAbortController = null;
+                if (result.response === 1) {
+                    state.selfInflictedCrash = true;
+                    win.webContents.forcefullyCrashRenderer();
+                    reloadCrashedWindow();
+                } else if (result.response === 2) {
+                    state.forceClose = true;
+                    win.close();
+                }
+            });
+        }, UNRESPONSIVE_GRACE_MS);
+    });
+    win.on('responsive', () => {
+        const state = getWindowState(win);
+        if (state.hangTimer) {
+            clearTimeout(state.hangTimer);
+            state.hangTimer = null;
+        }
+        if (state.hangAbortController) {
+            state.hangAbortController.abort();
+            state.hangAbortController = null;
+        }
+    });
+
+    // Only a real main-frame failure matters; -3 is Chromium's ABORTED,
+    // routinely fired by in-page navigations and not an actual failure.
+    win.webContents.on('did-fail-load', (event, code, description, url, isMainFrame) => {
+        if (!isMainFrame || code === -3) return;
+        dialog.showMessageBox(win, {
+            type: 'warning',
+            buttons: ['Retry', 'Close Window'],
+            defaultId: 0,
+            title: 'MaterialX Playground',
+            message: 'The app page failed to load (' + description + ').',
+        }).then((result) => {
+            if (result.response === 0) {
+                win.loadURL(url);
+            } else {
+                getWindowState(win).forceClose = true;
+                win.close();
+            }
+        });
+    });
+
     win.once('ready-to-show', () => win.show());
 
     // Only http(s) targets go to the OS browser; app:// popups (e.g. a
@@ -1273,6 +1444,16 @@ function createWindow(route) {
     });
 
     win.loadURL(urlForRoute(route));
+
+    if (safeModeActive) {
+        win.webContents.once('did-finish-load', () => {
+            sendNotice(win, {
+                kind: 'safe-mode',
+                level: 'info',
+                text: 'Safe mode: hardware acceleration is off, rendering is slower. Turn it off in Settings.',
+            });
+        });
+    }
 
     if (process.env.MTLX_SMOKE === '1') {
         const smokeDeadline = setTimeout(() => {
@@ -1391,6 +1572,44 @@ if (!gotLock) {
         openMtlxRouted(path.resolve(filePath));
     });
 
+    // GPU-process crash notices, plus a safe-mode offer after repeated
+    // crashes. Never force a reload: Chromium restarts the GPU process
+    // on its own and the site already handles lost/restored contexts.
+    let gpuCrashTimestamps = [];
+    let gpuCrashPromptOpen = false;
+    const GPU_CRASH_WINDOW_MS = 60000;
+    const GPU_CRASH_THRESHOLD = 3;
+    app.on('child-process-gone', async (event, details) => {
+        if (details.type !== 'GPU' || details.reason === 'clean-exit') return;
+        const now = Date.now();
+        gpuCrashTimestamps = gpuCrashTimestamps.filter((t) => now - t < GPU_CRASH_WINDOW_MS);
+        gpuCrashTimestamps.push(now);
+
+        broadcastNotice({
+            kind: 'gpu-restart',
+            level: 'warn',
+            text: 'The graphics process restarted (' + details.reason + '). If a view stays blank, use View > Reload.',
+        });
+
+        if (gpuCrashTimestamps.length < GPU_CRASH_THRESHOLD || safeModeActive || gpuCrashPromptOpen) return;
+        gpuCrashPromptOpen = true;
+        const win = BrowserWindow.getFocusedWindow();
+        const options = {
+            type: 'warning',
+            buttons: ['Relaunch in Safe Mode', 'Not Now'],
+            defaultId: 0,
+            cancelId: 1,
+            title: 'MaterialX Playground',
+            message: 'The graphics process keeps crashing. Relaunch in safe mode (software rendering)?',
+        };
+        const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+        gpuCrashPromptOpen = false;
+        if (result.response === 0) {
+            setSafeMode(true);
+            relaunchApp();
+        }
+    });
+
     app.whenReady().then(() => {
         protocol.handle(APP_SCHEME, handleAppRequest);
 
@@ -1424,6 +1643,7 @@ if (!gotLock) {
         openInNewWindow = settings.openInNewWindow !== false;
         showRecentInSystem = settings.showRecentInSystem !== false;
         documentOpenView = settings.documentOpenView === 'viewer' ? 'viewer' : 'graph';
+        safeMode = settings.safeMode === true;
         rebuildMenu();
 
         // Must match electron/package.json's build.appId exactly: Windows

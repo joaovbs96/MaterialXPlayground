@@ -49,6 +49,16 @@ ipcRenderer.on('mtlx-save-committed', () => { if (saveCommittedCallback) saveCom
 let menuCommandCallback = null;
 ipcRenderer.on('mtlx-menu-command', (event, cmd) => { if (menuCommandCallback) menuCommandCallback(cmd); });
 
+// Same buffering idea as onOpenFile above, but an ARRAY: several notices
+// (e.g. a safe-mode startup notice plus a GPU restart) can arrive before
+// the shell's DesktopNoticeBar registers its callback.
+let noticeCallback = null;
+let pendingNotices = [];
+ipcRenderer.on('mtlx-notice', (event, notice) => {
+    if (noticeCallback) noticeCallback(notice);
+    else pendingNotices.push(notice);
+});
+
 // Main asking this window to show the styled close-confirm dialog
 // (main.js's requestCloseConfirmation); glue.js echoes the token back
 // so a stale reply after the native fallback wins is dropped there.
@@ -73,11 +83,21 @@ const api = {
     onMenuCommand: (callback) => { menuCommandCallback = callback; },
     onCloseConfirmRequest: (callback) => { closeConfirmCallback = callback; },
     respondCloseConfirm: (payload) => ipcRenderer.send('mtlx-close-confirm-response', payload),
+    onNotice: (callback) => {
+        noticeCallback = callback;
+        if (pendingNotices.length) {
+            const queued = pendingNotices;
+            pendingNotices = [];
+            queued.forEach((notice) => callback(notice));
+        }
+    },
     getSettings: () => ipcRenderer.invoke('mtlx-get-settings'),
     getAbout: () => ipcRenderer.invoke('mtlx-get-about'),
     setOpenInNewWindow: (value) => ipcRenderer.send('mtlx-set-open-in-new-window', !!value),
     setShowRecentInSystem: (value) => ipcRenderer.send('mtlx-set-show-recent-in-system', !!value),
     setDocumentOpenView: (value) => ipcRenderer.send('mtlx-set-document-open-view', value),
+    setSafeMode: (value) => ipcRenderer.send('mtlx-set-safe-mode', !!value),
+    relaunch: () => ipcRenderer.send('mtlx-relaunch'),
     getRecents: () => ipcRenderer.invoke('mtlx-get-recents'),
     openRecent: (filePath) => ipcRenderer.invoke('mtlx-open-recent', filePath),
 };

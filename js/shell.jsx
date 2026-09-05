@@ -507,6 +507,58 @@ function DesktopCloseConfirmDialog() {
     );
 }
 
+// Main-to-renderer notice channel (main.js's sendNotice/broadcastNotice
+// over 'mtlx-notice'): safe-mode startup, GPU-process restarts, etc.
+// Inert on web (event never fires); dedupes by kind, caps at 3.
+function DesktopNoticeBar() {
+    const [notices, setNotices] = React.useState([]);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onNotice = (e) => {
+            const notice = e.detail;
+            if (!notice || !notice.kind) return;
+            setNotices((prev) => [notice, ...prev.filter((n) => n.kind !== notice.kind)].slice(0, 3));
+        };
+        window.addEventListener('mtlx-desktop-notice', onNotice);
+        return () => window.removeEventListener('mtlx-desktop-notice', onNotice);
+    }, []);
+
+    if (!window.__MTLX_ELECTRON__ || notices.length === 0) return null;
+
+    const dismiss = (kind) => setNotices((prev) => prev.filter((n) => n.kind !== kind));
+
+    return (
+        <div
+            id="mtlx-desktop-notice-bar"
+            className="fixed left-1/2 -translate-x-1/2 z-40 flex flex-col items-stretch gap-2 w-[28rem] max-w-[92%] pointer-events-none"
+            style={{ top: 'calc(var(--mtlx-header-h, 0px) + 10px)' }}
+        >
+            {notices.map((n) => (
+                <div
+                    key={n.kind}
+                    id={'mtlx-desktop-notice-' + n.kind}
+                    className={'pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur px-3 py-2 text-[12px] shadow-lg '
+                        + (n.level === 'warn'
+                            ? 'border-amber-600/50 bg-amber-900/30 text-amber-200'
+                            : 'border-slate-600/50 bg-slate-800/30 text-slate-200')}
+                >
+                    <span className="flex-1">{n.text}</span>
+                    <button
+                        type="button"
+                        onClick={() => dismiss(n.kind)}
+                        className={(n.level === 'warn' ? 'text-amber-200/80 hover:text-amber-100' : 'text-slate-200/80 hover:text-slate-100')
+                            + ' leading-none'}
+                        aria-label="Dismiss"
+                    >
+                        ×
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 // Settings dialog opened from the header cog (js/site-header.js). Unlike
 // DesktopCloseConfirmDialog above, this is a normal below-header popup, and
 // its only setting so far is the same preference the native menu checkbox
@@ -516,6 +568,11 @@ function DesktopSettingsDialog() {
     const [openInNewWindow, setOpenInNewWindowState] = React.useState(true);
     const [showRecentInSystem, setShowRecentInSystemState] = React.useState(true);
     const [documentOpenView, setDocumentOpenViewState] = React.useState('graph');
+    // safeMode is the persisted preference; safeModeActive is what THIS
+    // launch actually did with it (they differ right after a toggle,
+    // until "Relaunch now" or a manual restart catches safeMode up).
+    const [safeMode, setSafeModeState] = React.useState(false);
+    const [safeModeActive, setSafeModeActiveState] = React.useState(false);
     // platform/jumpListStatus come from main over the bridge (contextIsolation
     // hides process.platform from the renderer); null until the first read.
     const [platform, setPlatform] = React.useState(null);
@@ -541,6 +598,8 @@ function DesktopSettingsDialog() {
                     if (settings.documentOpenView === 'viewer' || settings.documentOpenView === 'graph') {
                         setDocumentOpenViewState(settings.documentOpenView);
                     }
+                    if (typeof settings.safeMode === 'boolean') setSafeModeState(settings.safeMode);
+                    if (typeof settings.safeModeActive === 'boolean') setSafeModeActiveState(settings.safeModeActive);
                     if (typeof settings.platform === 'string') setPlatform(settings.platform);
                     if (typeof settings.jumpListStatus === 'string') setJumpListStatus(settings.jumpListStatus);
                 });
@@ -591,6 +650,15 @@ function DesktopSettingsDialog() {
         setDocumentOpenViewState(value);
         if (typeof window.__mtlxSetDocumentOpenView === 'function') {
             window.__mtlxSetDocumentOpenView(value);
+        }
+    };
+
+    // Only persists; it takes effect on the next launch, hence the
+    // "Relaunch now" button below whenever this drifts from safeModeActive.
+    const toggleSafeMode = (checked) => {
+        setSafeModeState(checked);
+        if (typeof window.__mtlxSetSafeMode === 'function') {
+            window.__mtlxSetSafeMode(checked);
         }
     };
 
@@ -672,6 +740,29 @@ function DesktopSettingsDialog() {
                         "Show recommended files in Start, recent files in File Explorer, and items in Jump Lists"
                         in Settings &gt; Personalization &gt; Start to fix this.
                     </div>
+                ) : null}
+                <label className="flex items-start gap-2 cursor-pointer mt-3">
+                    <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={safeMode}
+                        onChange={(e) => toggleSafeMode(e.target.checked)}
+                    />
+                    <span>
+                        <span className="block text-[12px] text-gray-200">Safe mode (software rendering)</span>
+                        <span className="block text-[11px] text-gray-400">
+                            Turns off hardware acceleration on the next launch. Use it if views stay blank or the app crashes on this machine.
+                        </span>
+                    </span>
+                </label>
+                {safeMode !== safeModeActive ? (
+                    <button
+                        type="button"
+                        onClick={() => { if (typeof window.__mtlxRelaunch === 'function') window.__mtlxRelaunch(); }}
+                        className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                    >
+                        Relaunch now
+                    </button>
                 ) : null}
             </div>
         </div>
@@ -1159,6 +1250,7 @@ function Shell() {
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
             <DesktopCloseConfirmDialog />
+            <DesktopNoticeBar />
             <DesktopSettingsDialog />
             <DesktopAboutDialog />
         </div>
