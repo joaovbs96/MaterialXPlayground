@@ -136,7 +136,7 @@
    The gutter must clear the cluster's left inset (trafficLightPosition.x in
    electron/main/main.js) plus its ~52px width; change both together. */
 .mtlx-header-bar.mtlx-desktop-mac {
-    --mtlx-traffic-light-gutter: 80px;
+    --mtlx-traffic-light-gutter: 104px;
     padding-left: var(--mtlx-traffic-light-gutter);
 }
 /* The mobile dropdown panel and the update banner are siblings of the bar
