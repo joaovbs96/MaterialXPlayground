@@ -577,7 +577,20 @@ function DesktopSettingsDialog() {
     // hides process.platform from the renderer); null until the first read.
     const [platform, setPlatform] = React.useState(null);
     const [jumpListStatus, setJumpListStatus] = React.useState('ok');
+    // MtlxSelect below lives in js/shared/mtlx-ui.jsx, which Home (this
+    // dialog's usual host) never loads eagerly; fetch it on first open via
+    // the shell's memoized loader instead of crashing on a bare reference.
+    const [mtlxUiReady, setMtlxUiReady] = React.useState(typeof MtlxSelect !== 'undefined');
     const panelRef = React.useRef(null);
+
+    React.useEffect(() => {
+        if (!open || mtlxUiReady) return undefined;
+        let cancelled = false;
+        loadJsxApp('js/shared/mtlx-ui.jsx').then(() => {
+            if (!cancelled) setMtlxUiReady(true);
+        });
+        return () => { cancelled = true; };
+    }, [open, mtlxUiReady]);
 
     React.useEffect(() => {
         if (!window.__MTLX_ELECTRON__) return undefined;
@@ -686,84 +699,90 @@ function DesktopSettingsDialog() {
                         <MtlxIcon name="x" />
                     </button>
                 </div>
-                <label className="flex items-start gap-2 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={openInNewWindow}
-                        onChange={(e) => toggleOpenInNewWindow(e.target.checked)}
-                    />
-                    <span>
-                        <span className="block text-[12px] text-gray-200">Open Files in New Window</span>
-                        <span className="block text-[11px] text-gray-400">
-                            Open documents from the OS in a new window instead of the current one.
-                        </span>
-                    </span>
-                </label>
-                <div className="flex items-start justify-between gap-2 mt-3">
-                    <span>
-                        <span className="block text-[12px] text-gray-200">Open Documents Into</span>
-                        <span className="block text-[11px] text-gray-400">
-                            Which view a document lands in when opened without a specific view requested.
-                        </span>
-                    </span>
-                    <MtlxSelect
-                        value={documentOpenView}
-                        options={['graph', 'viewer']}
-                        labels={{ graph: 'Graph Editor', viewer: 'Viewer' }}
-                        defValue="graph"
-                        onChange={changeDocumentOpenView}
-                        ariaLabel="Open Documents Into"
-                        size="sm"
-                        variant="field"
-                    />
-                </div>
-                {(platform === 'win32' || platform === 'darwin') ? (
-                    <label className="flex items-start gap-2 cursor-pointer mt-3">
-                        <input
-                            type="checkbox"
-                            className="mt-0.5"
-                            checked={showRecentInSystem}
-                            onChange={(e) => toggleShowRecentInSystem(e.target.checked)}
-                        />
-                        <span>
-                            <span className="block text-[12px] text-gray-200">Show Recent Files in System</span>
-                            <span className="block text-[11px] text-gray-400">
-                                Publish recently opened files to the {platform === 'darwin' ? 'Dock' : 'taskbar jump list'}.
+                {!mtlxUiReady ? (
+                    <div className="text-[11px] text-gray-500">Loading settings&hellip;</div>
+                ) : (
+                    <React.Fragment>
+                        <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={openInNewWindow}
+                                onChange={(e) => toggleOpenInNewWindow(e.target.checked)}
+                            />
+                            <span>
+                                <span className="block text-[12px] text-gray-200">Open Files in New Window</span>
+                                <span className="block text-[11px] text-gray-400">
+                                    Open documents from the OS in a new window instead of the current one.
+                                </span>
                             </span>
-                        </span>
-                    </label>
-                ) : null}
-                {showRecentInSystem && platform === 'win32' && jumpListStatus === 'blocked' ? (
-                    <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-2">
-                        Windows is blocking recent files from appearing in the jump list. Turn on
-                        "Show recommended files in Start, recent files in File Explorer, and items in Jump Lists"
-                        in Settings &gt; Personalization &gt; Start to fix this.
-                    </div>
-                ) : null}
-                <label className="flex items-start gap-2 cursor-pointer mt-3">
-                    <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={safeMode}
-                        onChange={(e) => toggleSafeMode(e.target.checked)}
-                    />
-                    <span>
-                        <span className="block text-[12px] text-gray-200">Safe mode (software rendering)</span>
-                        <span className="block text-[11px] text-gray-400">
-                            Turns off hardware acceleration on the next launch. Use it if views stay blank or the app crashes on this machine.
-                        </span>
-                    </span>
-                </label>
-                {safeMode !== safeModeActive ? (
-                    <button
-                        type="button"
-                        onClick={() => { if (typeof window.__mtlxRelaunch === 'function') window.__mtlxRelaunch(); }}
-                        className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
-                    >
-                        Relaunch now
-                    </button>
-                ) : null}
+                        </label>
+                        <div className="flex items-start justify-between gap-2 mt-3">
+                            <span>
+                                <span className="block text-[12px] text-gray-200">Open Documents Into</span>
+                                <span className="block text-[11px] text-gray-400">
+                                    Which view a document lands in when opened without a specific view requested.
+                                </span>
+                            </span>
+                            <MtlxSelect
+                                value={documentOpenView}
+                                options={['graph', 'viewer']}
+                                labels={{ graph: 'Graph Editor', viewer: 'Viewer' }}
+                                defValue="graph"
+                                onChange={changeDocumentOpenView}
+                                ariaLabel="Open Documents Into"
+                                size="sm"
+                                variant="field"
+                            />
+                        </div>
+                        {(platform === 'win32' || platform === 'darwin') ? (
+                            <label className="flex items-start gap-2 cursor-pointer mt-3">
+                                <input
+                                    type="checkbox"
+                                    className="mt-0.5"
+                                    checked={showRecentInSystem}
+                                    onChange={(e) => toggleShowRecentInSystem(e.target.checked)}
+                                />
+                                <span>
+                                    <span className="block text-[12px] text-gray-200">Show Recent Files in System</span>
+                                    <span className="block text-[11px] text-gray-400">
+                                        Publish recently opened files to the {platform === 'darwin' ? 'Dock' : 'taskbar jump list'}.
+                                    </span>
+                                </span>
+                            </label>
+                        ) : null}
+                        {showRecentInSystem && platform === 'win32' && jumpListStatus === 'blocked' ? (
+                            <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-2">
+                                Windows is blocking recent files from appearing in the jump list. Turn on
+                                "Show recommended files in Start, recent files in File Explorer, and items in Jump Lists"
+                                in Settings &gt; Personalization &gt; Start to fix this.
+                            </div>
+                        ) : null}
+                        <label className="flex items-start gap-2 cursor-pointer mt-3">
+                            <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={safeMode}
+                                onChange={(e) => toggleSafeMode(e.target.checked)}
+                            />
+                            <span>
+                                <span className="block text-[12px] text-gray-200">Safe mode (software rendering)</span>
+                                <span className="block text-[11px] text-gray-400">
+                                    Turns off hardware acceleration on the next launch. Use it if views stay blank or the app crashes on this machine.
+                                </span>
+                            </span>
+                        </label>
+                        {safeMode !== safeModeActive ? (
+                            <button
+                                type="button"
+                                onClick={() => { if (typeof window.__mtlxRelaunch === 'function') window.__mtlxRelaunch(); }}
+                                className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                            >
+                                Relaunch now
+                            </button>
+                        ) : null}
+                    </React.Fragment>
+                )}
             </div>
         </div>
     );
@@ -1057,8 +1076,8 @@ function Shell() {
         };
         const onDrop = (e) => {
             if (!hasFiles(e)) return;
-            if (typeof window.desktopPathDrop !== 'function' || typeof window.__mtlxOpenPath !== 'function') return;
-            const path = window.desktopPathDrop(e.dataTransfer);
+            if (typeof window.__mtlxDesktopPathDrop !== 'function' || typeof window.__mtlxOpenPath !== 'function') return;
+            const path = window.__mtlxDesktopPathDrop(e.dataTransfer);
             if (!path) return;
             e.preventDefault();
             queueMicrotask(() => {

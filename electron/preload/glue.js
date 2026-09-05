@@ -118,13 +118,34 @@
         return window.mtlxDesktop.openRecent(filePath);
     };
 
-    // Drop-to-open (js/shared/mtlx-ui.jsx's desktopPathDrop, and its two
-    // call sites via useWindowFileDrop / js/shell.jsx's window listener).
+    // Drop-to-open (its two call sites: js/shared/mtlx-ui.jsx's
+    // useWindowFileDrop and js/shell.jsx's window listener). Lives here,
+    // not in mtlx-ui.jsx, so Home (which never loads mtlx-ui.jsx) can
+    // still resolve a dropped .mtlx to a real document.
     window.__mtlxGetPathForFile = function (file) {
         return window.mtlxDesktop.getPathForFile(file);
     };
     window.__mtlxOpenPath = function (filePath) {
         return window.mtlxDesktop.openPath(filePath);
+    };
+
+    // Electron drop-to-open: a drop of EXACTLY one real .mtlx file resolves
+    // to its on-disk path via webUtils. Returns null for anything else
+    // (folders, multi-file, web/embeds).
+    window.__mtlxDesktopPathDrop = function (dt) {
+        if (!dt || !dt.files || dt.files.length !== 1) return null;
+        var file = dt.files[0];
+        if (!file || !/\.mtlx$/i.test(file.name || '')) return null;
+        var item = dt.items && dt.items[0];
+        var entry = item && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (!entry || !entry.isFile) return null;
+        var path = '';
+        try {
+            path = window.__mtlxGetPathForFile(file);
+        } catch (e) {
+            path = '';
+        }
+        return path ? path : null;
     };
 
     // File > Reveal/Copy Path (js/graph-app.jsx's in-app File menu; the
