@@ -1009,26 +1009,6 @@ const openInViewer = ({
   window.location.hash = '#!viewer';
 };
 
-// Electron drop-to-open (main.js's mtlx-open-path IPC): a drop of EXACTLY
-// one real .mtlx file resolves to its on-disk path via webUtils.
-// Returns null for anything else (folders, multi-file, web/embeds).
-const desktopPathDrop = dt => {
-  if (!dt || !dt.files || dt.files.length !== 1) return null;
-  const file = dt.files[0];
-  if (!file || !/\.mtlx$/i.test(file.name || '')) return null;
-  const item = dt.items && dt.items[0];
-  const entry = item && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-  if (!entry || !entry.isFile) return null;
-  if (typeof window.__mtlxGetPathForFile !== 'function') return null;
-  let path = '';
-  try {
-    path = window.__mtlxGetPathForFile(file);
-  } catch (e) {
-    path = '';
-  }
-  return path ? path : null;
-};
-
 // Page-wide drag & drop: files can drop anywhere, not just a drop zone.
 // `activeRef.current === false` suppresses handling for backgrounded
 // views; `disabled` registers no listeners (used by VS Code callers).
@@ -1077,8 +1057,8 @@ const useWindowFileDrop = ({
       e.preventDefault();
       depth = 0;
       if (onDragStateRef.current) onDragStateRef.current(false);
-      if (typeof window.__mtlxOpenPath === 'function') {
-        const path = desktopPathDrop(e.dataTransfer);
+      if (typeof window.__mtlxDesktopPathDrop === 'function' && typeof window.__mtlxOpenPath === 'function') {
+        const path = window.__mtlxDesktopPathDrop(e.dataTransfer);
         if (path) {
           window.__mtlxOpenPath(path);
           return;
@@ -3467,7 +3447,6 @@ Object.assign(window, {
   openInViewer,
   looseFilesFrom,
   useWindowFileDrop,
-  desktopPathDrop,
   LoadingOverlay,
   ViewportControls,
   ColorSwatch,
