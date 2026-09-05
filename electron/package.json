@@ -28,6 +28,14 @@
       {
         "from": "build/task-icons",
         "to": "task-icons"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
       }
     ],
     "win": {

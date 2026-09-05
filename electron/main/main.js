@@ -599,6 +599,11 @@ function getRouteArg(argv) {
     return null;
 }
 
+// Shared deadline for the MTLX_SMOKE and MTLX_SMOKE_OPEN harnesses: a
+// hung load or a hung renderer must fail fast instead of eating the
+// whole CI job budget.
+const SMOKE_DEADLINE_MS = 60000;
+
 // app.exit() can race past a just-written console.log on Windows before
 // the pipe flushes; queuing one more (empty) write and exiting from its
 // callback guarantees the earlier write has actually landed first.
@@ -613,8 +618,12 @@ async function runSmokeOpen(filePath) {
     try {
         const win = createWindow(documentOpenView);
         await new Promise((resolve, reject) => {
-            win.webContents.once('did-finish-load', resolve);
+            const loadTimer = setTimeout(() => {
+                reject(new Error('timed out after ' + SMOKE_DEADLINE_MS + ' ms waiting for initial load'));
+            }, SMOKE_DEADLINE_MS);
+            win.webContents.once('did-finish-load', () => { clearTimeout(loadTimer); resolve(); });
             win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+                clearTimeout(loadTimer);
                 reject(new Error(errorCode + ' ' + errorDescription));
             });
         });
@@ -821,7 +830,7 @@ function buildRecentSubmenu() {
 // is Chromium's single global edit stack); the graph editor keeps its own
 // document-level undo stack, same precedent as the VS Code extension bridge.
 function buildMenuTemplate() {
-    const iconPath = process.platform === 'darwin' ? undefined : path.join(__dirname, '..', 'build', 'icon.ico');
+    const iconPath = runtimeIconPath();
 
     return [
         // macOS puts About/Services/Hide/Quit in a leading app menu named
@@ -964,6 +973,15 @@ function rebuildMenu() {
 // electron/build/task-icons instead.
 function getTaskIconsDir() {
     return app.isPackaged ? path.join(process.resourcesPath, 'task-icons') : path.join(__dirname, '..', 'build', 'task-icons');
+}
+
+// Same asar restriction as getTaskIconsDir: an icon file packed inside
+// app.asar cannot be read as a real file, so electron/package.json ships
+// these outside it too (extraResources) and this resolves the same pair.
+function runtimeIconPath() {
+    if (process.platform === 'darwin') return undefined;
+    const file = process.platform === 'linux' ? 'icon.png' : 'icon.ico';
+    return app.isPackaged ? path.join(process.resourcesPath, file) : path.join(__dirname, '..', 'build', file);
 }
 
 const JUMP_LIST_TASKS = [
@@ -1158,7 +1176,7 @@ function createWindow(route) {
         minHeight: 640,
         backgroundColor: '#0b0f19',
         show: false,
-        icon: process.platform === 'darwin' ? undefined : path.join(__dirname, '..', 'build', 'icon.ico'),
+        icon: runtimeIconPath(),
         // Hides the native title bar behind the site header, which becomes
         // the draggable bar (see js/site-header.js/.css); autoHideMenuBar
         // only hides the menu strip visually (Alt reveals it) and does not
@@ -1257,6 +1275,10 @@ function createWindow(route) {
     win.loadURL(urlForRoute(route));
 
     if (process.env.MTLX_SMOKE === '1') {
+        const smokeDeadline = setTimeout(() => {
+            console.log('[smoke] FAIL timeout after ' + SMOKE_DEADLINE_MS + ' ms');
+            app.exit(1);
+        }, SMOKE_DEADLINE_MS);
         win.webContents.once('did-finish-load', async () => {
             const currentUrl = win.webContents.getURL();
             const title = win.webContents.getTitle();
@@ -1309,14 +1331,17 @@ function createWindow(route) {
             // above has actually flushed, same race/fix as finishSmoke.
             if (currentUrl.startsWith(APP_SCHEME + '://' + APP_HOST + '/') && title && menuOk && titlebarOk && blockerOk) {
                 console.log('[smoke] OK ' + title);
+                clearTimeout(smokeDeadline);
                 process.stdout.write('', () => app.quit());
             } else {
                 console.log('[smoke] FAIL bad url, empty title, missing menu, bad titlebar, or blocker not enforced: ' + currentUrl);
+                clearTimeout(smokeDeadline);
                 process.stdout.write('', () => app.exit(1));
             }
         });
         win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
             console.log('[smoke] FAIL ' + errorCode + ' ' + errorDescription);
+            clearTimeout(smokeDeadline);
             process.stdout.write('', () => app.exit(1));
         });
     }
