@@ -1083,24 +1083,50 @@ const useWindowFileDrop = ({
 // Absolute loading overlay shown over a viewport while (re)generating.
 // Defaults match node-preview.jsx's markup; viewer-app.jsx overrides
 // className/labelClassName/barWidthClass to reproduce its own markup.
+// `fraction` (0..1 or null/undefined) is additive: a number switches the
+// bar to a determinate fill, default (undefined) keeps every existing
+// caller's indeterminate mtlx-loading-bar unchanged. `testId`/`children`
+// are additive too (the USD Scene Viewer's progress test id and its
+// in-overlay Cancel pill).
 const LoadingOverlay = ({
   show,
   label,
   className,
   labelClassName,
-  barWidthClass
+  barWidthClass,
+  fraction,
+  testId,
+  children
 }) => {
   if (!show) return null;
   const wrapCls = className || 'absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 z-10 bg-gray-900/80';
   const labelCls = labelClassName || 'animate-pulse';
+  const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
   const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
   return /*#__PURE__*/React.createElement("div", {
-    className: wrapCls
+    className: wrapCls,
+    "data-testid": testId
   }, label && /*#__PURE__*/React.createElement("span", {
     className: labelCls
-  }, label), /*#__PURE__*/React.createElement("div", {
+  }, label), hasFraction ? /*#__PURE__*/React.createElement("div", {
+    role: "progressbar",
+    "aria-label": typeof label === 'string' ? label : undefined,
+    "aria-valuemin": "0",
+    "aria-valuemax": "100",
+    "aria-valuenow": Math.round(Math.max(0, Math.min(1, fraction)) * 100),
+    className: (barWidthClass || 'w-48') + ' h-1.5 rounded-full bg-gray-700 overflow-hidden'
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-full rounded-full bg-blue-500 transition-all",
+    style: {
+      width: Math.max(0, Math.min(1, fraction)) * 100 + '%'
+    }
+  })) : /*#__PURE__*/React.createElement("div", {
+    role: "progressbar",
+    "aria-label": typeof label === 'string' ? label : undefined,
+    "aria-valuemin": "0",
+    "aria-valuemax": "100",
     className: barCls
-  }));
+  }), children);
 };
 
 // Viewport control strip (geom/rotate/env/screenshot/fullscreen), shared
@@ -1634,7 +1660,10 @@ function FilePickerField({
   icon,
   // Mono typography is opt-in: only the graph editor's and node specs'
   // parameter-editing rows want it. Everyone else gets the app's sans.
-  mono = false
+  mono = false,
+  // Additive: a data-testid for the hidden native file input (the
+  // onChoose branch has no such input, so this only applies below).
+  inputTestId
 }) {
   const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-gray-700 rounded-r-md bg-gray-800 hover:bg-gray-700 text-[11px] px-2 text-gray-300 whitespace-nowrap' + (mono ? ' font-mono' : '');
   const [draft, setDraft] = React.useState(value || '');
@@ -1707,6 +1736,7 @@ function FilePickerField({
     multiple: multiple,
     className: "hidden",
     disabled: disabled,
+    "data-testid": inputTestId,
     onChange: e => {
       if (onFiles) onFiles(e.target.files);
       // Clear so re-picking the SAME file still fires a change event.
