@@ -4664,12 +4664,58 @@ const getUsdSceneStudioCatcherGeometry = () => {
   const geometry = getStudioGeometry();
   return geometry && geometry.clone ? geometry.clone() : geometry;
 };
+// Shared studio shadow rig for the USD Scene Viewer, so its cast shadow
+// gets the same VSM softness and depth bracket as the studioLight block
+// above (js/mtlx-engine.js:4721-4736), instead of a hand copy that drifts.
+const createUsdSceneStudioLight = (scale = 1) => {
+  const light = new THREE.SpotLight(0xffffff, 0);
+  const target = new THREE.Object3D();
+  light.target = target;
+  light.castShadow = true;
+  light.angle = Math.atan(STUDIO_LIGHT_CONE_R / STUDIO_LIGHT_DISTANCE);
+  light.penumbra = 0.5;
+  light.shadow.camera.near = (STUDIO_LIGHT_DISTANCE - 4) * scale;
+  light.shadow.camera.far = (STUDIO_LIGHT_DISTANCE + STUDIO_WALL_R + 2) * scale;
+  light.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE, STUDIO_SHADOW_MAP_SIZE);
+  light.shadow.radius = 12;
+  light.shadow.bias = -0.0005;
+  light.shadow.normalBias = 0.02 * scale;
+  return {
+    light,
+    target
+  };
+};
+// Mirrors placeStudioLight (js/mtlx-engine.js:4657-4678) but relative to
+// an arbitrary floor center/scale instead of the viewer's fixed origin
+// bowl. `direction` uses the same convention as usd-scene-environment.js's
+// rotatedEnvDirection(): it points from the light toward the target.
+const placeUsdSceneStudioLight = (light, center, direction, scale = 1) => {
+  if (!light) return;
+  const toLightDir = direction.clone().negate();
+  const minY = Math.sin(STUDIO_LIGHT_MIN_ELEV_RAD);
+  if (toLightDir.y < minY) {
+    const horizLen = Math.hypot(toLightDir.x, toLightDir.z);
+    if (horizLen > 1e-6) {
+      const s = Math.sqrt(Math.max(0, 1 - minY * minY)) / horizLen;
+      toLightDir.x *= s;
+      toLightDir.z *= s;
+      toLightDir.y = minY;
+    }
+  }
+  light.position.copy(center).addScaledVector(toLightDir, STUDIO_LIGHT_DISTANCE * scale);
+  if (light.target) light.target.position.copy(center);
+  light.shadow.camera.near = (STUDIO_LIGHT_DISTANCE - 4) * scale;
+  light.shadow.camera.far = (STUDIO_LIGHT_DISTANCE + STUDIO_WALL_R + 2) * scale;
+  if (light.shadow.camera.updateProjectionMatrix) light.shadow.camera.updateProjectionMatrix();
+};
 window.MtlxStudio = Object.assign(window.MtlxStudio || {}, {
   createUsdSceneStudioMaterial,
   refreshUsdSceneStudioMaterial,
   applyUsdSceneStudioVariant: applyStudioVariantUniforms,
   getUsdSceneStudioGeometry,
   getUsdSceneStudioCatcherGeometry,
+  createUsdSceneStudioLight,
+  placeUsdSceneStudioLight,
   backdropBaseRotation: BG_BASE,
   backdropRotationSign: BG_SIGN,
   keyLightRotationMatrix: rad => keyLightRotationMatrix(rad)
