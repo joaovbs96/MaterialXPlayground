@@ -130,6 +130,7 @@
             () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
         );
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
+        const [recordOpen, setRecordOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
         const currentEnvironmentRef = React.useRef(null);
         const containerRef = React.useRef(null);
@@ -696,10 +697,12 @@
                             onCameraReset={frameAll}
                             showScreenshot
                             onScreenshot={takeScreenshot}
+                            onRecord={() => setRecordOpen(true)}
+                            showRecord={!!handle && typeof handle.beginCapture === 'function'}
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreen}
                             showLabels
-                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'fullscreen']]}
+                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'record', 'fullscreen']]}
                         />
                     )}
 
@@ -738,6 +741,10 @@
                     <MtlxIcon name="chevrons-right" className="w-4 h-4" />
                     <span className="max-w-[5rem] md:max-w-[8rem] truncate">Scene</span>
                 </button>
+            )}
+            {recordOpen && (
+                <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)}
+                    viewRef={handleRef} baseName={rootBasename ? rootBasename.replace(/\.[^.]+$/, '') : 'usd-scene'} transparent={false} />
             )}
         </div>;
     }

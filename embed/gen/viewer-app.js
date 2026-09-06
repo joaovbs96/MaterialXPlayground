@@ -503,6 +503,9 @@ function MaterialViewerApp({
       setError('Save PNG preview failed: ' + errMsg(e));
     }
   };
+  // RecordGifDialog (js/shared/mtlx-ui.jsx) open state, shared by
+  // both HUD flavors below.
+  const [recordOpen, setRecordOpen] = React.useState(false);
   // Shared by ViewportControls (app) and EmbedControls (chromeless):
   // resetCamera is absent for some geometries (e.g. flat2d).
   const handleCameraReset = () => {
@@ -1206,7 +1209,7 @@ function MaterialViewerApp({
 
   // Embed HUD opt-in: which ViewportControls buttons chromeless
   // mode shows. Recognized names: 'geometry', 'material', 'rotate',
-  // 'reset', 'env', 'screenshot', 'settings', 'fullscreen'. Ignored
+  // 'reset', 'env', 'screenshot', 'record', 'settings', 'fullscreen'. Ignored
   // (every showCtl() call short-circuits true) when !chromeless, so
   // the full app's HUD is unaffected.
   const embedControls = Array.isArray(controls) ? controls : [];
@@ -1222,12 +1225,18 @@ function MaterialViewerApp({
   // Per-control effective visibility, computed once so the mount
   // gate and each EmbedControls prop agree (a control can be
   // requested but still suppressed, e.g. rotate on the room geom).
+  // Geometries without an orbit rig (flat2d) cannot record, so the
+  // Record button hides instead of opening a dialog that only
+  // shows the "needs an orbit camera" guard.
+  const recordView = viewRef.current;
+  const canRecord = !!(recordView && typeof recordView.beginCapture === 'function' && recordView.getCamera && recordView.getCamera());
   const ctlFlags = {
     geometry: showCtl('geometry'),
     rotate: showCtl('rotate') && !roomGeomActive,
     reset: showCtl('reset'),
     env: showCtl('env'),
     screenshot: showCtl('screenshot'),
+    record: showCtl('record') && canRecord,
     settings: showCtl('settings'),
     fullscreen: showCtl('fullscreen')
   };
@@ -1238,7 +1247,7 @@ function MaterialViewerApp({
   // Non-chromeless HUD cluster layout: geometry/env/settings moved
   // into the sidebar's Scene/Environment cards in the browser, so
   // only IN_VSCODE (no sidebar there) keeps those in its clusters.
-  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen']] : [['rotate', 'cameraReset'], ['screenshot', 'shaderCode', 'sendToGraph'], ['presets', 'fullscreen']];
+  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen']] : [['rotate', 'cameraReset'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'fullscreen']];
   // Page-transparency CSS: requested AND resolved away from the
   // room. Belt-and-suspenders alongside resolveViewerGeom's own
   // guard above, in case geom ever drifts back to the room.
@@ -1566,6 +1575,8 @@ function MaterialViewerApp({
     viewEpoch: viewEpoch,
     onScreenshot: takeScreenshot,
     showScreenshot: ctlFlags.screenshot,
+    onRecord: () => setRecordOpen(true),
+    showRecord: ctlFlags.record,
     showSettings: ctlFlags.settings,
     isFullscreen: isFullscreen,
     onToggleFullscreen: onToggleFullscreen,
@@ -1607,7 +1618,9 @@ function MaterialViewerApp({
     viewRef: viewRef,
     viewEpoch: viewEpoch,
     onScreenshot: takeScreenshot,
-    showScreenshot: showCtl('screenshot')
+    showScreenshot: showCtl('screenshot'),
+    onRecord: () => setRecordOpen(true),
+    showRecord: showCtl('record') && canRecord
     // Settings cog's only content (the transparency
     // toggle) moved into the sidebar's Scene card.
     ,
@@ -1771,6 +1784,12 @@ function MaterialViewerApp({
         label,
         targetKey
       })
+    }), recordOpen && /*#__PURE__*/React.createElement(RecordGifDialog, {
+      open: recordOpen,
+      onClose: () => setRecordOpen(false),
+      viewRef: viewRef,
+      baseName: getSnapshotBase(),
+      transparent: transparentActive
     }))
   );
 }

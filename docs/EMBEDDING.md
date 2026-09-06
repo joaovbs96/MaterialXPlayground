@@ -52,7 +52,7 @@ in-page, for reference while you work.
 | `autorotate` | boolean | off | Turntable auto-rotation. If the visitor's OS has "reduce motion" turned on, rotation starts paused regardless of this value; the Rotate HUD control, if shown, still starts it on request. |
 | `wheel` | `scroll`, `zoom`, `none` | `scroll` | Plain mouse-wheel behavior over the viewport. `scroll` (the default) leaves a plain wheel event to scroll the *host page*, since an embed has no business hijacking the scroll of the page it's sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there's no host page left to scroll at that point. `zoom` restores plain-wheel zooming everywhere. `none` disables zooming entirely (wheel, Ctrl+wheel and touch pinch); dragging to orbit still works and a plain wheel scrolls the host page. An unrecognized value falls back to `scroll` and is reported through `mtlx-error`. |
 | `camera` | `"px,py,pz,tx,ty,tz"` (six comma-separated numbers) | *(the engine's default framing)* | Initial camera position (`px,py,pz`) and orbit target (`tx,ty,tz`), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. It also becomes the pose the HUD Reset button and the `resetCamera` message return to, in place of the engine's authored default framing; a later `setCamera` call, or a live `.camera` attribute change, rebases that pose again to wherever it moved the camera. A malformed value (wrong count, non-numeric) is ignored and reported through `mtlx-error`. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with `el.getCamera()` (see [Methods](#methods)). The site's Embed Builder page does this for you: its "Use current view" button reads the live preview's pose and fills it into the generated snippets, so the resulting embed's Reset returns to that captured view. |
-| `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the eight names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
+| `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the nine names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
 | `backdrop` | `studio`, `environment`, `none` | `studio` | What surrounds the preview geometry. `studio` is a plain white photo-studio room, the new default look for every geometry except `shaderball-scene` (which has its own authored room and ignores this param entirely, see the `geometry` row above). `environment` shows the HDRI environment map itself as the visible backdrop, identical to the legacy `background=1`. `none` is a plain dark void, identical to the legacy `background=0`. The environment's own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. `transparent` below overrides `backdrop` entirely, forcing it off so the host page shows through instead of any of the three. An unrecognized value falls back to `studio` and is reported through `mtlx-error`. |
 | `background` | boolean | off | Legacy alias for `backdrop` above, kept working for existing embeds. With no `backdrop` param present, `background=1` resolves to `backdrop=environment` and `background=0` resolves to `backdrop=none`, exactly this param's old meaning. If `backdrop` is present, it wins and this param is ignored. One deliberate change either way: leaving *both* params unset used to mean the old dark void and now means the new `studio` room, since `studio` is `backdrop`'s default. New embeds should set `backdrop` directly. |
 | `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `backdrop` is `environment`) the visible backdrop; the current `env`/`exposure`/`backdrop` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
@@ -90,6 +90,7 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | `reset` | A "reset camera" button. Returns to the pose set via `camera`/`setCamera` (or the `.camera` attribute), if one was ever provided, instead of the engine's default framing; also restores the host-provided `env`/`exposure` values, if any. |
 | `env` | The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle). |
 | `screenshot` | A "save PNG" button. |
+| `record` | A "Record" button that exports a 360° turntable GIF of the current view. |
 | `settings` | The settings popover (force-transparency, etc.). |
 | `fullscreen` | A fullscreen toggle button. Requires `allowfullscreen` on the `<iframe>` itself, see [Limitations](#limitations). |
 
@@ -100,7 +101,7 @@ Two extra keywords, both case-insensitive (`ALL`/`None` work the same as `all`/`
 - **`none`** - no controls at all. This is also what an absent `controls` param means, so
   `controls=none` and omitting the param entirely are exactly the same thing; `none` just
   makes that choice explicit and self-documenting in the URL.
-- **`all`** - every control above, equivalent to spelling out all eight names. It's derived
+- **`all`** - every control above, equivalent to spelling out all nine names. It's derived
   from the actual list of controls internally, so it stays correct automatically if a control
   is ever added or removed.
 
@@ -109,8 +110,8 @@ always reported through the `mtlx-error` event so the mistake isn't silent:
 
 | Combination | Result | Why |
 | --- | --- | --- |
-| `none,all` (either order) | All eight controls | A direct contradiction between the two keywords; `all` is the more permissive reading, so it wins. |
-| `all,geometry` (`all` plus specific names) | All eight controls | The named controls are already included in `all`, so they're redundant rather than conflicting - reported, then ignored. |
+| `none,all` (either order) | All nine controls | A direct contradiction between the two keywords; `all` is the more permissive reading, so it wins. |
+| `all,geometry` (`all` plus specific names) | All nine controls | The named controls are already included in `all`, so they're redundant rather than conflicting - reported, then ignored. |
 | `none,geometry` (`none` plus specific names) | Just `geometry` | Contradictory, but naming a control is a clear, specific positive intent, so the explicit name(s) win over `none`. |
 
 ### Transparent background
@@ -416,7 +417,7 @@ shows in place of the plain placeholder until that instance actually activates.
 | Configuration | Bytes transferred |
 | --- | --- |
 | `?geometry=sphere` (no HUD, no geometry download) | 5,628,322 (~5.37 MiB) |
-| `?geometry=shaderball&controls=geometry,rotate,reset,env,screenshot,settings,fullscreen` (full HUD) | ~5.79 MiB |
+| `?geometry=shaderball&controls=geometry,rotate,reset,env,screenshot,record,settings,fullscreen` (full HUD) | ~5.79 MiB |
 
 The floor is the ~3.84 MB WASM module itself; every *live* iframe pays that once. Compare
 against the ~10.8 MB the same material costs inside the full playground app (Babel, Tailwind,

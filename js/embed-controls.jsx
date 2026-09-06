@@ -4,7 +4,7 @@
 
 // Below EMBED_CTL_ICON_BELOW: icons only, no labels. Below
 // EMBED_CTL_HIDE_BELOW: no strip at all (a strip that doesn't fit is
-// worse than none). Keeps all seven controls usable down to 200px wide.
+// worse than none). Keeps all eight controls usable down to 200px wide.
 const EMBED_CTL_HIDE_BELOW = 150;
 const EMBED_CTL_ICON_BELOW = 480;
 
@@ -37,6 +37,7 @@ const EmbedControls = ({
     initialEnvRotation, initialEnvExposure,
     viewRef, viewEpoch,
     onScreenshot, showScreenshot,
+    onRecord, showRecord,
     showSettings,
     isFullscreen, onToggleFullscreen, showFullscreen,
 }) => {
@@ -173,6 +174,12 @@ const EmbedControls = ({
                     <button type="button" className="mtlx-ec-btn" onClick={onScreenshot} title="Save a PNG preview of the current view">
                         <MtlxIcon name="camera" className="mtlx-ec-icon" />
                         {!compact && <span>Screenshot</span>}
+                    </button>
+                )}
+                {showRecord && (
+                    <button type="button" className="mtlx-ec-btn" onClick={onRecord} title="Record a 360° turntable GIF">
+                        <MtlxIcon name="player-record" className="mtlx-ec-icon" />
+                        {!compact && <span>Record</span>}
                     </button>
                 )}
                 {showSettings && (

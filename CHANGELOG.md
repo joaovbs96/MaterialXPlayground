@@ -2,6 +2,16 @@
 
 Notable changes to MaterialX Playground, newest first. Versions are calendar-based (`YYYY.M.patch`); see [Versioning](README.md#versioning) in the README.
 
+## Unreleased
+
+### Material Viewer
+
+- Record button: export a 360° turntable GIF (size, duration, frame rate and dithering options; encoded off the main thread).
+
+### USD Scene Viewer
+
+- Record button with the same 360° turntable GIF export.
+
 ## 2026.8.0 (2026-08-01)
 
 First public release, built on MaterialX v1.39.5.
