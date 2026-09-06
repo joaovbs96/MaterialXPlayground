@@ -65,8 +65,27 @@ function recordTurntableGif(view, options) {
             throw new Error('recordTurntableGif: beginCapture() failed, capture already active or the view is gone.');
         }
 
+        // Transparent capture forces the None backdrop for the duration of
+        // the recording, restored below in the same finally block that
+        // restores the camera/controls (Cancel/abort included). When the
+        // caller didn't ask for transparency but the backdrop is already
+        // None, the encoder still gets a transparent flag so it doesn't
+        // encode a solid black background.
+        const canSwitchBackdrop = transparent && typeof view.setBackdrop === 'function';
+        const prevBackdrop = canSwitchBackdrop && typeof view.getBackdrop === 'function'
+            ? view.getBackdrop() : null;
+        if (canSwitchBackdrop) {
+            view.setBackdrop('none');
+            // captureFrame() renders synchronously and picks up the new
+            // backdrop on its own, but a render here guarantees the switch
+            // has taken effect before the very first captured frame.
+            if (typeof view.renderNow === 'function') view.renderNow();
+        }
+        const effectiveTransparent = transparent
+            || (typeof view.getBackdrop === 'function' && view.getBackdrop() === 'none');
+
         const recorder = window.createGifRecorder({
-            width, height, dither, transparent,
+            width, height, dither, transparent: effectiveTransparent,
             delayMs: Math.round(1000 / fps),
             repeat: 0,
             onProgress: (p) => onProgress({ phase: 'encode', done: p.encoded, total: frames, queued: p.queued }),
@@ -95,6 +114,7 @@ function recordTurntableGif(view, options) {
         } finally {
             view.endCapture();
             view.setCamera(pose);
+            if (canSwitchBackdrop && prevBackdrop) view.setBackdrop(prevBackdrop);
             if (controls) { controls.autoRotate = prevAutoRotate; controls.enabled = prevEnabled; }
         }
 

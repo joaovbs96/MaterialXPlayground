@@ -163,9 +163,12 @@ function RecSegRow({ label, options, value, onChange, disabled }) {
 // Defaults merged with whatever's in localStorage; wrapped in try/catch
 // since localStorage can throw (private mode, disabled site data).
 const RECORD_GIF_KEY = 'mtlxRecordGif';
-const loadRecordGifSettings = () => {
+const loadRecordGifSettings = (transparentDefault) => {
     const d = window.TURNTABLE_DEFAULTS || {};
-    const defaults = { size: d.size || 720, aspect: 'square', duration: d.seconds || 4, fps: d.fps || 25, dither: d.dither !== false };
+    const defaults = {
+        size: d.size || 720, aspect: 'square', duration: d.seconds || 4, fps: d.fps || 25,
+        dither: d.dither !== false, transparent: !!transparentDefault,
+    };
     try {
         const raw = localStorage.getItem(RECORD_GIF_KEY);
         if (raw) return Object.assign({}, defaults, JSON.parse(raw));
@@ -177,7 +180,7 @@ const loadRecordGifSettings = () => {
 // No Tailwind (its own mtlx-rec- CSS above) since this also mounts inside
 // the Tailwind-less embed via ViewportControls'/EmbedControls' Record button.
 const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
-    const [settings, setSettings] = React.useState(loadRecordGifSettings);
+    const [settings, setSettings] = React.useState(() => loadRecordGifSettings(transparent));
     const [state, setState] = React.useState('idle'); // idle | recording | done | error
     const [progress, setProgress] = React.useState({ phase: 'capture', done: 0, total: 0 });
     const [savedMB, setSavedMB] = React.useState(null);
@@ -255,7 +258,7 @@ const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
                 frames: frameCount,
                 fps: settings.fps,
                 dither: settings.dither,
-                transparent: !!transparent,
+                transparent: !!settings.transparent,
                 clockwise: true,
                 onProgress: setProgress,
                 onFrame: drawPreviewFrame,
@@ -311,7 +314,13 @@ const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
                     <RecSegRow label="Dithering" value={settings.dither} disabled={recording}
                         onChange={setField('dither')}
                         options={[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
+                    <RecSegRow label="Transparent" value={settings.transparent} disabled={recording}
+                        onChange={setField('transparent')}
+                        options={[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
                     <div className="mtlx-rec-hint">{frameCount} frames, about {outWidth}×{outHeight} px</div>
+                    {settings.transparent && (
+                        <div className="mtlx-rec-hint">Records with the None backdrop and restores your backdrop afterwards.</div>
+                    )}
                     {recording && (
                         <React.Fragment>
                             <div className="mtlx-rec-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>

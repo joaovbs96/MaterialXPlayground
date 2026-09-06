@@ -1232,6 +1232,7 @@ const createMtlxSceneView = async ({
                 applyStudioPolarClamp();
                 return result;
             },
+            getBackdrop: () => environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : 'studio',
             setAutoRotate: (value) => { if (controls) controls.autoRotate = !!value; return !!(controls && controls.autoRotate); },
             setActive: (value) => {
                 active = !!value;
