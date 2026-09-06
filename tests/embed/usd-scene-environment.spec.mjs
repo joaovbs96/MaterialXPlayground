@@ -203,7 +203,7 @@ test('@scene environment controls change the presented pixels and studio shadow'
   await page.waitForTimeout(100);
   const shadowImage = decodePNG(await canvas.screenshot());
   expect(changedPixels(noShadowImage, shadowImage)).toBeGreaterThan(studioImage.width * studioImage.height * 0.001);
-  await page.getByRole('button', { name: 'Reset environment', exact: true }).click();
+  await page.getByRole('button', { name: 'Reset', exact: true }).click();
   await page.waitForTimeout(200);
   fs.mkdirSync('docs/local', { recursive: true });
   await page.getByTestId('usd-scene-canvas').screenshot({ path: 'docs/local/usd-scene-environment.png' });
@@ -250,7 +250,7 @@ test('@scene latest environment import wins while renderer creation is deferred'
     window.__pendingUsdEnvironments['second.hdr']([30, 40, 220]);
     window.__pendingUsdEnvironments['first.hdr']([220, 40, 30]);
   });
-  await expect(page.locator('aside span[title="second.hdr"]')).toBeVisible();
+  await expect(page.getByTestId('usd-scene-sidebar').locator('[title="second.hdr"]')).toBeVisible();
   expect(await page.evaluate(() => window.getEnvOverride().radiance.image.data[2])).toBe(220);
   await page.evaluate(() => { window.__releaseUsdSceneFactory(); });
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });

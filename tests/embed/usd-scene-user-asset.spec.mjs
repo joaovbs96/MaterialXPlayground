@@ -15,15 +15,16 @@ test('@scene renders supplied Teapot USD with its external assets', async ({ pag
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
   await page.locator('input[type=file][webkitdirectory]').setInputFiles(suppliedDir);
   await expect(page.getByTestId('usd-scene-root-select')).toBeVisible({ timeout: 30000 });
-  const rootSelect = page.getByTestId('usd-scene-root-select').locator('select');
-  let selectedRoot = rootName;
-  if (await rootSelect.count()) {
-    const labels = await rootSelect.locator('option').allTextContents();
-    selectedRoot = labels.find((label) => label.endsWith('/' + rootName) || label === rootName) || labels.find((label) => label.toLowerCase().endsWith('.usda'));
-    await rootSelect.selectOption({ label: selectedRoot });
-    await expect(rootSelect).toHaveValue(selectedRoot);
+  const rootSelectWrap = page.getByTestId('usd-scene-root-select');
+  const rootCombobox = rootSelectWrap.getByRole('combobox');
+  if (await rootCombobox.count()) {
+    await rootCombobox.click();
+    const options = await page.getByRole('option').allTextContents();
+    const selectedRoot = options.find((label) => label.endsWith('/' + rootName) || label === rootName) || options.find((label) => label.toLowerCase().endsWith('.usda'));
+    await page.getByRole('option', { name: selectedRoot, exact: true }).click();
+    await expect(rootCombobox).toContainText(selectedRoot);
   }
-  await page.locator('aside').getByRole('button', { name: /^Load (?!example)/ }).click();
+  await page.getByTestId('usd-scene-sidebar').getByRole('button', { name: /^Load (?!example)/ }).click();
   await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes: 3', { timeout: 120000 });
   await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials: 2');
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });

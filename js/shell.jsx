@@ -1142,7 +1142,7 @@ function Shell() {
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
-            scene: 'MaterialX Playground - USD Scene Viewer',
+            scene: 'MaterialX Playground — USD Scene Viewer',
             compare: 'MaterialX Playground — Material Compare',
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
@@ -1169,7 +1169,7 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
-            scene: 'flex-1 min-h-0',
+            scene: '',
             // The builder means to fill the viewport and let only its
             // sidebar scroll, but min-h-0 alone never enforced that: any
             // overflow reached the document, and since the preview stage
@@ -1258,8 +1258,6 @@ function Shell() {
                 ) : (
                     <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>
                 );
-            } else if (view === 'scene') {
-                content = <div className="w-full h-full min-h-0">{rendered}</div>;
             } else if (view === 'viewer') {
                 // Browser: no wrapper — MaterialViewerApp's `absolute
                 // inset-0` root positions directly against #root. VS

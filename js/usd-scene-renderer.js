@@ -270,7 +270,9 @@ const createMtlxSceneView = async ({
     const creationDisplayRevision = displayRevision;
     const creationDisplayTransform = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
     const canvas = document.createElement('canvas');
-    canvas.className = 'w-full h-full block';
+    canvas.className = 'w-full h-full block cursor-grab active:cursor-grabbing';
+    canvas.tabIndex = -1;
+    canvas.style.outline = 'none';
     container.appendChild(canvas);
     let renderer = null;
     let environmentBridge = null;

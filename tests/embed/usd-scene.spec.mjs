@@ -32,7 +32,8 @@ test('@scene renders the nested USD example with subset materials', async ({ pag
   await expect(page.getByTestId('usd-material-warnings')).toHaveCount(0);
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
   const studioImage = decodePNG(await canvas.screenshot());
-  const backdrop = page.locator('aside').getByRole('combobox').last();
+  const sidebar = page.getByTestId('usd-scene-sidebar');
+  const backdrop = sidebar.getByRole('combobox').last();
   await expect(backdrop).toBeEnabled();
   await expect(backdrop).toContainText('Studio');
   await backdrop.click();
@@ -44,16 +45,19 @@ test('@scene renders the nested USD example with subset materials', async ({ pag
   await page.getByRole('option', { name: 'Studio (Dark)', exact: true }).click();
   await expect(backdrop).toContainText('Studio (Dark)');
   const exposure = page.getByText('Exposure', { exact: true }).locator('../..').getByRole('slider');
-  await exposure.fill('4');
+  await exposure.fill('3');
   await page.waitForTimeout(100);
   const highExposureImage = decodePNG(await canvas.screenshot());
   expect(changedPixels(noBackdropImage, highExposureImage)).toBeGreaterThan(studioImage.width * studioImage.height * 0.01);
-  await expect(page.getByRole('button', { name: 'Auto rotate', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Snapshot', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Rotate', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Screenshot', exact: true })).toBeEnabled();
   const diagnostics = page.getByTestId('usd-material-provenance');
-  expect(await diagnostics.evaluate((node) => node.open)).toBe(false);
-  await diagnostics.locator('summary').click();
-  expect(await diagnostics.evaluate((node) => node.open)).toBe(true);
+  const diagnosticsToggle = diagnostics.locator('button').first();
+  await expect(diagnostics.getByText('nested/materials/red.mtlx')).toBeVisible();
+  await diagnosticsToggle.click();
+  await expect(diagnostics.getByText('nested/materials/red.mtlx')).toBeHidden();
+  await diagnosticsToggle.click();
+  await expect(diagnostics.getByText('nested/materials/red.mtlx')).toBeVisible();
   await expect(canvas).toHaveCount(1);
   await page.getByText('Prim selection', { exact: true }).click();
   await expect(page.getByText('/Scene/RootTransform/NestedAsset/QuadWithSubset/Quad')).toBeVisible();
@@ -191,13 +195,14 @@ test('@scene exposes explicit root selection and can cancel then reopen', async 
     { name: 'two.usda', mimeType: 'text/plain', buffer: Buffer.from(root) },
   ]);
   await expect(page.getByTestId('usd-scene-root-select')).toBeVisible();
-  await page.getByTestId('usd-scene-root-select').locator('select').selectOption('one.usda');
+  await page.getByTestId('usd-scene-root-select').getByRole('combobox').click();
+  await page.getByRole('option', { name: 'one.usda', exact: true }).click();
   await page.getByRole('button', { name: 'Load one.usda' }).click();
   await expect(page.getByTestId('usd-scene-progress')).toBeVisible({ timeout: 30000 });
   await expect(page.getByTestId('usd-scene-progress').getByRole('progressbar')).toBeVisible();
   await expect(page.getByTestId('usd-scene-cancel')).toBeVisible({ timeout: 30000 });
   await page.getByTestId('usd-scene-cancel').click();
-  await expect(page.getByTestId('usd-scene-progress')).toContainText('Cancelled');
+  await expect(page.getByText('Cancelled', { exact: true })).toBeVisible();
   await page.getByTestId('usd-scene-load-example').click();
   await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes: 2', { timeout: 120000 });
 });
@@ -287,7 +292,7 @@ test('@scene refreshes display transform without reloading the USD stage', async
   await page.getByRole('link', { name: 'Viewer', exact: true }).click();
   await expect(page.getByTestId('usd-scene-viewer')).toBeHidden();
   await page.evaluate(() => window.setDisplayTransform('lin_rec709'));
-  await page.getByRole('link', { name: 'Scene Viewer', exact: true }).click();
+  await page.getByRole('link', { name: 'Scene Viewer' }).click();
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
   await page.waitForFunction(() => {
     const state = window.__usdRouteState;

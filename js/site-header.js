@@ -139,6 +139,15 @@
             '<path d="M8.7 10.7l6.6 -3.4" />' +
             '<path d="M8.7 13.3l6.6 3.4" />' +
         '</svg>';
+    // Matches MTLX_ICON_PATHS.cube (js/shared/ui-commons.js) - a distinct
+    // glyph from the Viewer's so the Scene Viewer reads as its own tool.
+    var ICON_NAV_SCENE =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M21 16.008v-8.018a1.98 1.98 0 0 0 -1 -1.717l-7 -4.008a2.016 2.016 0 0 0 -2 0l-7 4.008c-.619 .355 -1 1.01 -1 1.718v8.018c0 .709 .381 1.363 1 1.717l7 4.008a2.016 2.016 0 0 0 2 0l7 -4.008c.619 -.355 1 -1.01 1 -1.718z" />' +
+            '<path d="M12 22v-10" />' +
+            '<path d="M12 12l8.73 -5.04" />' +
+            '<path d="M3.27 6.96l8.73 5.04" />' +
+        '</svg>';
     var ICON_NAV_COMPARE =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
             '<path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" />' +
@@ -200,7 +209,7 @@
         { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME, mobileOnly: true },
         { id: 'docs', label: 'Node Specs', shellHref: '#!docs', icon: ICON_NAV_DOCS },
         { id: 'viewer', label: 'Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
-        { id: 'scene', label: 'Scene Viewer', shellHref: '#!scene', icon: ICON_NAV_VIEWER },
+        { id: 'scene', label: 'Scene Viewer', shellHref: '#!scene', icon: ICON_NAV_SCENE, badge: 'Experimental' },
         { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
         { id: 'graph', label: 'Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
         { id: 'learn', label: 'Learn', group: true, icon: ICON_NAV_LEARN, items: [
@@ -343,6 +352,11 @@
         }
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
+        // The badge is intentionally desktop-tab-only skipped: a top-level
+        // tab (unlike a group's dropdown items) sits directly in the
+        // measured-collapse header bar below, and the extra pill width
+        // pushes it into overflow at ordinary desktop widths. The mobile
+        // list has room, so the badge still renders there.
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
@@ -360,12 +374,14 @@
         }
         var active = item.id === activeId;
         var href = item.shellHref; // shellHref-only, see NAV's own comment above
+        var badge = item.badge ? '<span class="mtlx-menu-badge">' + item.badge + '</span>' : '';
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="mtlx-tab-mobile' + (active ? ' is-active' : '') + '">' +
             item.icon +
             '<span>' + item.label + '</span>' +
+            badge +
             '</a>';
     }).join('');
 

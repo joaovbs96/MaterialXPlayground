@@ -1,5 +1,8 @@
 // Scene Viewer route. This page owns file selection and lifecycle only. USD
 // composition and rendering stay behind the two small runtime contracts.
+// UI skeleton mirrors js/viewer-app.jsx (docked sidebar, HUD, pinned
+// statistics panel like js/compare-app.jsx) so the Scene Viewer looks and
+// behaves like the rest of the toolset.
 (() => {
     const ROOT_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz'];
     const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
@@ -9,13 +12,21 @@
         'tests/fixtures/usd-scene/nested/materials/red.mtlx',
         'tests/fixtures/usd-scene/nested/materials/blue.mtlx',
     ];
+    // Self-authored (not imported from js/compare-app.jsx per the ground
+    // rule against importing across apps): the same grid-mask empty-stage
+    // treatment as Compare's own empty slot.
+    const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
+    const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
+    // Same translucent-over-solid card surface as SectionCard/compare's
+    // stats panel (js/shared/mtlx-ui.jsx CARD_SURFACE).
+    const PANEL_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
 
     const asPath = (file) => String(file.webkitRelativePath || file.relativePath || file.name || '').replace(/\\/g, '/');
     const ext = (path) => { const i = path.lastIndexOf('.'); return i < 0 ? '' : path.slice(i).toLowerCase(); };
     const rootCandidates = (files) => {
         // Keep every supplied USD layer selectable. A nested layer may be the
         // intentional root of a folder upload, while the default still picks
-        // a conventional top-level root in chooseFiles().
+        // a conventional top-level root in applyChosenFiles().
         return files.filter((f) => ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
     };
     const stageMeshes = (stage) => Array.isArray(stage && stage.meshes) ? stage.meshes : [];
@@ -47,24 +58,10 @@
         });
     };
     const readFiles = async (fileList) => Array.from(fileList || []).map((file) => ({ path: asPath(file), data: file }));
-    const readDroppedItems = async (items) => {
-        const output = [];
-        const visit = (entry, prefix = '') => new Promise((resolve, reject) => {
-            if (!entry) return resolve();
-            if (entry.isFile) return entry.file((file) => { file.relativePath = prefix + file.name; output.push(file); resolve(); }, reject);
-            if (!entry.isDirectory) return resolve();
-            const reader = entry.createReader();
-            const readBatch = () => reader.readEntries(async (entries) => {
-                if (!entries.length) return resolve();
-                for (const child of entries) await visit(child, prefix + entry.name + '/');
-                readBatch();
-            }, reject);
-            readBatch();
-        });
-        const entries = Array.from(items || []).map((item) => item.webkitGetAsEntry && item.webkitGetAsEntry()).filter(Boolean);
-        for (const entry of entries) await visit(entry, '');
-        return output;
-    };
+    // Window drop hands over a { relPath: File } map (js/mtlx-engine.js's
+    // readDroppedItems, which preserves nested directory paths); flatten it
+    // to the same { path, data } shape readFiles() produces.
+    const filesFromMap = (map) => Object.keys(map || {}).map((path) => ({ path: String(path).replace(/\\/g, '/'), data: map[path] }));
     const progressValue = (value) => {
         if (typeof value === 'number') return { phase: 'Loading', fraction: Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null, done: 0, total: 0, message: '' };
         const p = value && typeof value === 'object' ? value : { message: String(value || '') };
@@ -81,6 +78,10 @@
     };
 
     function SceneViewerApp({ active = true }) {
+        const narrow = useNarrowPane();
+        const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
+        const sidebarOpenRef = React.useRef(sidebarOpen);
+        sidebarOpenRef.current = sidebarOpen;
         const [files, setFiles] = React.useState([]);
         const [rootPath, setRootPath] = React.useState('');
         const [status, setStatus] = React.useState('idle');
@@ -88,29 +89,34 @@
         const [stage, setStage] = React.useState(null);
         const [handle, setHandle] = React.useState(null);
         const [error, setError] = React.useState('');
-        const [dragging, setDragging] = React.useState(false);
+        const [dragOver, setDragOver] = React.useState(false);
         const [selectedPrim, setSelectedPrim] = React.useState('');
         const [rootTouched, setRootTouched] = React.useState(false);
         const [envFileName, setEnvFileName] = React.useState('');
+        const [envImportError, setEnvImportError] = React.useState(null);
         const [envRotation, setEnvRotation] = React.useState(0);
-        const [envExposure, setEnvExposure] = React.useState(0);
+        const [envExposureLinear, setEnvExposureLinear] = React.useState(1);
         const [backdrop, setBackdrop] = React.useState('studio');
-        const [autoRotate, setAutoRotate] = React.useState(false);
-        const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false);
-        const envSettingsRef = React.useRef({ rotation: 0, exposure: 0, backdrop: 'studio', autoRotate: false });
+        const [textureSizeTick, setTextureSizeTick] = React.useState(0);
+        const [displayTransform, setDisplayTransformState] = React.useState(
+            () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
+        );
+        const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const envOverrideRef = React.useRef(null);
         const currentEnvironmentRef = React.useRef(null);
         const containerRef = React.useRef(null);
-        const inputRef = React.useRef(null);
-        const folderRef = React.useRef(null);
+        const viewportRef = containerRef;
+        const activeRef = React.useRef(active);
+        activeRef.current = active;
         const abortRef = React.useRef(null);
         const mountedRef = React.useRef(true);
         const filesRef = React.useRef(files);
         const handleRef = React.useRef(null);
         const generationRef = React.useRef(0);
         const environmentGenerationRef = React.useRef(0);
+        const [rotating, toggleRotating] = useViewToggle(handleRef, 'setAutoRotate', false);
         filesRef.current = files;
-        envSettingsRef.current = { rotation: envRotation, exposure: envExposure, backdrop, autoRotate };
+        envSettingsRef.current = { rotation: envRotation, exposureLinear: envExposureLinear, backdrop, autoRotate: rotating };
         const updateProgress = (value, generation) => { if (mountedRef.current && (generation == null || generation === generationRef.current)) setProgress(progressValue(value)); };
 
         React.useEffect(() => () => {
@@ -120,12 +126,35 @@
             handleRef.current = null;
         }, []);
 
-        const chooseFiles = async (list) => {
-            const generation = ++generationRef.current;
-            if (abortRef.current) abortRef.current.abort();
-            if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
-            handleRef.current = null; setHandle(null); setStage(null);
-            const next = await readFiles(list);
+        // Compact-mode auto-collapse, same idiom as js/viewer-app.jsx.
+        const prevNarrowRef = React.useRef(narrow);
+        const preNarrowOpenRef = React.useRef(true);
+        React.useEffect(() => {
+            const was = prevNarrowRef.current;
+            prevNarrowRef.current = narrow;
+            if (narrow === was) return;
+            if (narrow) {
+                preNarrowOpenRef.current = sidebarOpenRef.current;
+                setSidebarOpen(false);
+            } else {
+                setSidebarOpen(preNarrowOpenRef.current);
+            }
+        }, [narrow]);
+
+        React.useEffect(() => {
+            const onDisplayTransform = () => {
+                const v = window.getDisplayTransform ? window.getDisplayTransform() : null;
+                if (v) setDisplayTransformState(v);
+            };
+            window.addEventListener('mtlx-display-transform', onDisplayTransform);
+            return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+        }, []);
+        const pickDisplayTransform = (mode) => {
+            setDisplayTransformState(mode);
+            if (window.setDisplayTransform) window.setDisplayTransform(mode);
+        };
+
+        const applyChosenFiles = (next, generation) => {
             if (!mountedRef.current || generation !== generationRef.current) return;
             setFiles(next);
             const candidates = rootCandidates(next);
@@ -135,6 +164,21 @@
             setStage(null);
             setStatus(next.length ? 'ready-to-load' : 'idle');
             setError('');
+        };
+        const chooseFiles = async (list) => {
+            const generation = ++generationRef.current;
+            if (abortRef.current) abortRef.current.abort();
+            if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
+            handleRef.current = null; setHandle(null); setStage(null);
+            const next = await readFiles(list);
+            applyChosenFiles(next, generation);
+        };
+        const chooseFilesFromMap = async (map) => {
+            const generation = ++generationRef.current;
+            if (abortRef.current) abortRef.current.abort();
+            if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
+            handleRef.current = null; setHandle(null); setStage(null);
+            applyChosenFiles(filesFromMap(map), generation);
         };
         const load = async (loadFiles = filesRef.current, loadRoot = rootPath) => {
             const loader = apiFunction('loadUsdStage');
@@ -206,7 +250,7 @@
                     handleRef.current = nextHandle;
                     const settings = envSettingsRef.current;
                     callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
-                    callHandle('setEnvExposure', Math.pow(2, settings.exposure));
+                    callHandle('setEnvExposure', settings.exposureLinear);
                     callHandle('setBackdrop', settings.backdrop);
                     callHandle('setAutoRotate', settings.autoRotate);
                     if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
@@ -221,6 +265,17 @@
             const observer = new ResizeObserver(() => { if (handle && handle.resize) handle.resize(); });
             observer.observe(containerRef.current); return () => observer.disconnect();
         }, [handle]);
+
+        // Page-wide drag & drop: files can drop anywhere, not just a sidebar
+        // drop zone. The engine's readDroppedItems (js/mtlx-engine.js:880,
+        // used inside useWindowFileDrop) preserves nested directory-relative
+        // paths, which the USD loader needs, so no local walker is kept here.
+        useWindowFileDrop({
+            activeRef,
+            onFiles: (map) => { chooseFilesFromMap(map); },
+            onDragState: setDragOver,
+        });
+
         const candidates = rootCandidates(files);
         const meshes = stageMeshes(stage);
         const materials = stageMaterials(stage);
@@ -245,7 +300,8 @@
             const file = list && list[0];
             if (!file) return;
             const loader = apiFunction('loadEnvironmentFromFile');
-            if (typeof loader !== 'function') { setError('Environment import is unavailable in this build.'); return; }
+            if (typeof loader !== 'function') { setEnvImportError('Environment import is unavailable in this build.'); return; }
+            setEnvImportError(null);
             try {
                 const env = await loader(file.data || file);
                 if (!mountedRef.current || generation !== environmentGenerationRef.current) { disposeUnusedEnvironment(env); return; }
@@ -254,12 +310,13 @@
                 currentEnvironmentRef.current = env;
                 callHandle('setEnvironment', env);
                 setEnvFileName(file.name || file.path || 'Imported environment');
-            } catch (e) { if (mountedRef.current && generation === environmentGenerationRef.current) setError(String(e && e.message || e)); }
+            } catch (e) { if (mountedRef.current && generation === environmentGenerationRef.current) setEnvImportError(String(e && e.message || e)); }
         };
         const clearImportedEnvironment = async () => {
             const generation = ++environmentGenerationRef.current;
             envOverrideRef.current = null;
             currentEnvironmentRef.current = null;
+            setEnvImportError(null);
             const reset = apiFunction('setEnvOverride');
             if (reset) reset(null);
             const getter = apiFunction('getEnvironment');
@@ -270,6 +327,7 @@
             const generation = ++environmentGenerationRef.current;
             envOverrideRef.current = null;
             currentEnvironmentRef.current = null;
+            setEnvImportError(null);
             const reset = apiFunction('setEnvOverride');
             if (reset) reset(null);
             const getter = apiFunction('getEnvironment');
@@ -277,64 +335,371 @@
             if (getter) { try { env = await getter(); } catch (e) {} }
             if (!mountedRef.current || generation !== environmentGenerationRef.current) return;
             if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
-            setEnvFileName(''); setEnvRotation(0); setEnvExposure(0); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1); setBackdrop('studio'); callHandle('setBackdrop', 'studio');
+            setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1); setBackdrop('studio'); callHandle('setBackdrop', 'studio');
         };
-        const downloadSnapshot = () => {
-            const value = handleRef.current && handleRef.current.snapshot && handleRef.current.snapshot();
-            if (!value) { setError('Snapshot is unavailable until a scene is rendered.'); return; }
-            const link = document.createElement('a'); link.href = value; link.download = 'usd-scene.png'; link.click();
-        };
+        const setEnvExposureVal = (linear) => { setEnvExposureLinear(linear); callHandle('setEnvExposure', linear); };
         const cancel = () => { generationRef.current += 1; if (abortRef.current) abortRef.current.abort(); setStatus('cancelled'); setProgress((p) => ({ ...p, message: 'Cancelled' })); };
-        const frame = () => { if (handle && handle.frameAll) { handle.frameAll(); if (handle.renderNow) handle.renderNow(); } };
+        const frameAll = () => { if (handle && handle.frameAll) { handle.frameAll(); if (handle.renderNow) handle.renderNow(); } };
         const select = (mesh) => { const path = String(mesh && (mesh.primPath || mesh.path || mesh.name) || ''); setSelectedPrim(path); if (handle && handle.selectPrim) handle.selectPrim(path); if (handle && handle.renderNow) handle.renderNow(); };
+        const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
+        const rootBasename = rootPath ? rootPath.split('/').pop() : '';
+        const takeScreenshot = () => { if (handleRef.current && handleRef.current.snapshot) downloadSnapshot(handleRef.current, rootBasename || 'usd-scene'); };
+        const pickTextureMaxSize = (px) => {
+            callHandle('setTextureMaxSize', Number(px));
+            setTextureSizeTick((t) => t + 1);
+        };
+        const textureMaxSize = (handle && typeof handle.getTextureMaxSize === 'function')
+            ? handle.getTextureMaxSize()
+            : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
+        // Referenced so the memo below re-reads getTextureMaxSize() after a
+        // mutation that doesn't otherwise touch React state.
+        void textureSizeTick;
+
         const fraction = progress.fraction;
         const phaseLabels = { worker: 'Loading stage', parse: 'Composing stage', geometry: 'Preparing geometry', material: 'Compiling materials', texture: 'Loading textures', renderer: 'Preparing viewport', 'gpu-program': 'Checking GPU programs' };
         const progressLabel = phaseLabels[progress.phase] || (progress.phase ? progress.phase.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : (status === 'rendered' ? 'Ready' : 'Loading'));
         const progressText = progress.total ? (progress.done + '/' + progress.total) : (/texture|material/i.test(progress.phase) ? '' : progress.message);
-        const warningSummary = warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' + warningDetails[0].label : 'None';
+        const busy = status === 'loading' || status === 'loading-example' || status === 'loaded';
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';
-        return <div data-testid="usd-scene-viewer" className="h-full min-h-0 w-full flex flex-col bg-gray-950 text-gray-100">
-            <div className="flex flex-wrap items-center gap-2 border-b border-gray-800 bg-gray-900 px-3 py-2">
-                <strong className="mr-2 text-sm">USD Scene Viewer</strong>
-                <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className="h-7 rounded bg-blue-600 px-3 text-xs hover:bg-blue-500">Load example</button>
-                <button type="button" onClick={() => inputRef.current && inputRef.current.click()} className="h-7 rounded border border-gray-700 px-3 text-xs hover:bg-gray-800">Choose files</button>
-                <button type="button" onClick={() => folderRef.current && folderRef.current.click()} className="h-7 rounded border border-gray-700 px-3 text-xs hover:bg-gray-800">Choose folder</button>
-                <button type="button" data-testid="usd-scene-frame" onClick={frame} disabled={!handle} className="h-7 rounded border border-gray-700 px-3 text-xs disabled:opacity-40">Frame all</button>
-                <button type="button" onClick={() => setAutoRotate((value) => { const next = !value; callHandle('setAutoRotate', next); return next; })} disabled={!handle} className={'h-7 rounded border px-3 text-xs disabled:opacity-40 ' + (autoRotate ? 'border-blue-500 bg-blue-600/70' : 'border-gray-700 hover:bg-gray-800')}>Auto rotate</button>
-                <button type="button" onClick={downloadSnapshot} disabled={!handle} className="h-7 rounded border border-gray-700 px-3 text-xs disabled:opacity-40">Snapshot</button>
-                {(status === 'loading' || status === 'loading-example' || status === 'loaded') ? <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className="h-7 rounded border border-red-700 px-3 text-xs text-red-300">Cancel</button> : null}
-                <input ref={inputRef} data-testid="usd-scene-file-picker" className="hidden" type="file" multiple onChange={(e) => chooseFiles(e.target.files)} />
-                <input ref={folderRef} className="hidden" type="file" multiple webkitdirectory="true" directory="true" onChange={(e) => chooseFiles(e.target.files)} />
-            </div>
-            <div className="flex flex-1 min-h-0 flex-col md:flex-row">
-                <aside className="w-full md:w-80 shrink-0 min-w-0 overflow-x-hidden overflow-y-auto custom-scrollbar border-b md:border-b-0 md:border-r border-gray-800 bg-gray-900/70 p-3.5 space-y-3.5">
-                    <SectionCard icon="file" title="Stage" summary={rootPath ? rootPath.split('/').pop() : 'No stage'} defaultOpen>
-                        <div data-testid="usd-scene-dropzone" onDragEnter={(e) => { e.preventDefault(); setDragging(true); }} onDragOver={(e) => e.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={async (e) => { e.preventDefault(); setDragging(false); const dropped = await readDroppedItems(e.dataTransfer.items); chooseFiles(dropped.length ? dropped : e.dataTransfer.files); }} className={'rounded-lg border border-dashed p-3 text-xs ' + (dragging ? 'border-blue-400 bg-blue-950/30' : 'border-gray-700')}>
-                            Drop a USD stage and its referenced assets here.
+        const envSummary = (envRotation === 0 && envExposureLinear === 1)
+            ? 'Default environment'
+            : Math.round(envRotation) + '°, ' + formatEv(linearToEv(envExposureLinear));
+        const renderedPrimCount = (handle && Array.isArray(handle.prims)) ? handle.prims.length : meshes.length;
+        const hasStage = !!stage || files.length > 0;
+
+        const sidebarBody = (
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
+                <SectionCard icon="file" title="Stage" summary={rootBasename || 'No stage'} defaultOpen>
+                    <div className="flex items-center gap-1">
+                        <div className="flex-1 min-w-0">
+                            <FilePickerField
+                                value={files.length ? files.length + ' file' + (files.length === 1 ? '' : 's') : ''}
+                                placeholder="No stage loaded"
+                                multiple
+                                icon="files"
+                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                onFiles={chooseFiles}
+                                inputTestId="usd-scene-file-picker"
+                            />
                         </div>
-                        {candidates.length > 1 ? <label className="mt-3 block text-xs text-gray-300" data-testid="usd-scene-root-select">USD root layer<select className="mt-1 h-8 w-full rounded border border-gray-700 bg-gray-900 px-2 text-xs" value={rootPath} onChange={(e) => { setRootPath(e.target.value); setRootTouched(true); }}><option value="">Select a root layer</option>{candidates.map((f) => <option key={f.path} value={f.path}>{f.path}</option>)}</select></label> : null}
-                        {files.length && rootPath ? <button type="button" onClick={() => load()} className="mt-3 w-full rounded bg-emerald-700 px-3 py-2 text-xs hover:bg-emerald-600">Load {rootPath.split('/').pop()}</button> : null}
-                        {files.length ? <details className="mt-3 text-xs"><summary className="cursor-pointer text-gray-400">{files.length} input files</summary><div className="mt-2 max-h-40 overflow-auto space-y-1 text-gray-500">{files.map((f) => <div key={f.path} className="truncate" title={f.path}>{f.path}</div>)}</div></details> : null}
+                        <label
+                            title="Choose a folder"
+                            className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+                        >
+                            <MtlxIcon name="folder" className="w-3.5 h-3.5" />
+                            <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => chooseFiles(e.target.files)} />
+                        </label>
+                    </div>
+                    <div className="text-xs text-gray-500">or drag-and-drop anywhere on the page</div>
+
+                    {candidates.length > 1 && (
+                        <div data-testid="usd-scene-root-select">
+                            <FieldLabel label="Root layer" />
+                            <MtlxSelect
+                                value={rootPath}
+                                options={candidates.map((f) => f.path)}
+                                onChange={(v) => { setRootPath(v); setRootTouched(true); }}
+                                defValue={null}
+                                size="lg"
+                                variant="field"
+                                block
+                            />
+                        </div>
+                    )}
+
+                    {files.length > 0 && (
+                        <div className="text-xs text-gray-500">{files.length} input file{files.length === 1 ? '' : 's'}</div>
+                    )}
+
+                    {files.length > 0 && rootPath && (
+                        <button type="button" onClick={() => load()} className={BTN_PRIMARY + ' w-full'}>Load {rootBasename}</button>
+                    )}
+                    {busy && (
+                        <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className={BTN_SECONDARY + ' w-full'}>Cancel</button>
+                    )}
+                    <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' w-full'}>Load example</button>
+
+                    {meshes.length > 0 && (
+                        <details>
+                            <summary className="cursor-pointer text-xs text-gray-400">Prim selection</summary>
+                            <div className="mt-2 max-h-48 overflow-y-auto custom-scrollbar space-y-0.5">
+                                {meshes.map((mesh, i) => {
+                                    const path = String(mesh.primPath || mesh.path || mesh.name || ('mesh ' + (i + 1)));
+                                    const isSelected = selectedPrim === path;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={path + i}
+                                            onClick={() => select(mesh)}
+                                            className={'block w-full truncate rounded px-2 py-1 text-left text-[11px] font-mono '
+                                                + (isSelected ? 'bg-blue-500/[0.12] text-blue-300 ring-1 ring-blue-500/60' : 'text-gray-300 hover:bg-gray-800')}
+                                        >
+                                            {path}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </details>
+                    )}
+                </SectionCard>
+
+                <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
+                    <FilePickerField
+                        value={envFileName}
+                        placeholder="Default environment"
+                        accept=".hdr,.exr"
+                        icon="file"
+                        onFiles={importEnvironment}
+                        onClear={clearImportedEnvironment}
+                    />
+                    {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                    <SliderField
+                        disabled={!canTuneEnvironment}
+                        label="Environment rotation" unit="deg"
+                        value={envRotation} min={0} max={360} step={1}
+                        onSlider={(v) => { const n = Number(v); setEnvRotation(n); callHandle('setEnvRotation', n * Math.PI / 180); }}
+                        onNumber={(v) => { const n = Number(v); setEnvRotation(n); callHandle('setEnvRotation', n * Math.PI / 180); }}
+                    />
+                    <SliderField
+                        disabled={!canTuneEnvironment}
+                        label="Exposure" unit="EV"
+                        value={linearToEv(envExposureLinear)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                        onSlider={(v) => setEnvExposureVal(evToLinear(v))}
+                        onNumber={(v) => setEnvExposureVal(evToLinear(v))}
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                        <MtlxSelect
+                            value={backdrop}
+                            options={['studio', 'studio-dark', 'environment', 'none']}
+                            labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
+                            onChange={(value) => { setBackdrop(value); callHandle('setBackdrop', value); }}
+                            defValue="studio"
+                            size="sm"
+                            disabled={!handle || typeof handle.setBackdrop !== 'function'}
+                        />
+                    </div>
+                    <button type="button" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
+                </SectionCard>
+
+                <SectionCard icon="settings-cog" title="Rendering" summary={displayTransform === 'srgb' ? 'sRGB' : displayTransform === 'aces' ? 'ACES' : 'lin_rec709'} dense>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                            Display transform
+                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                        </span>
+                        <MtlxSelect
+                            value={displayTransform}
+                            options={['srgb', 'aces', 'lin_rec709']}
+                            labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
+                            onChange={pickDisplayTransform}
+                            defValue="srgb"
+                            title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+                            size="sm"
+                        />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-400">Texture resolution</span>
+                        <MtlxSelect
+                            value={textureMaxSize}
+                            options={[512, 1024, 2048]}
+                            labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px' }}
+                            onChange={pickTextureMaxSize}
+                            defValue={2048}
+                            size="sm"
+                            disabled={!handle || typeof handle.setTextureMaxSize !== 'function'}
+                        />
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        Higher resolutions sharpen normal and roughness maps, at the cost of memory and load time.
+                    </div>
+                </SectionCard>
+
+                <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
+                    <SectionCard icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen dense>
+                        {warnings.length ? (
+                            <div className="space-y-2" data-testid="usd-material-warnings">
+                                {warningDetails.map((record, i) => (
+                                    <div key={'w' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all">
+                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                        <div>
+                                            <span>{record.label}</span>
+                                            {record.raw !== record.label && (
+                                                <details className="mt-1 text-gray-500">
+                                                    <summary className="cursor-pointer">Raw diagnostic</summary>
+                                                    <div className="mt-1 break-all">{record.raw}</div>
+                                                </details>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="text-xs text-gray-500">No warnings.</div>
+                        )}
+                        {materials.map((material, i) => (
+                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
+                            </div>
+                        ))}
                     </SectionCard>
-                    <SectionCard icon="sun" title="Environment" summary={envFileName || 'Default environment'} defaultOpen dense>
-                        <FilePickerField value={envFileName} placeholder="Default environment" accept=".hdr,.exr" icon="file" onFiles={importEnvironment} onClear={clearImportedEnvironment} />
-                        <SliderField disabled={!canTuneEnvironment} label="Environment rotation" unit="deg" value={envRotation} min={0} max={360} step={1} onSlider={(v) => { const n = Number(v); setEnvRotation(n); callHandle('setEnvRotation', n * Math.PI / 180); }} onNumber={(v) => { const n = Number(v); setEnvRotation(n); callHandle('setEnvRotation', n * Math.PI / 180); }} />
-                        <SliderField disabled={!canTuneEnvironment || typeof handle.setEnvExposure !== 'function'} label="Exposure" unit="EV" value={envExposure} min={-4} max={4} step={0.1} onSlider={(v) => { const n = Number(v); setEnvExposure(n); callHandle('setEnvExposure', Math.pow(2, n)); }} onNumber={(v) => { const n = Number(v); setEnvExposure(n); callHandle('setEnvExposure', Math.pow(2, n)); }} />
-                        <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-gray-400">Backdrop</span><MtlxSelect value={backdrop} options={['studio', 'studio-dark', 'environment', 'none']} labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }} onChange={(value) => { setBackdrop(value); callHandle('setBackdrop', value); }} defValue="studio" size="sm" disabled={!handle || typeof handle.setBackdrop !== 'function'} /></div>
-                        <button type="button" onClick={resetEnvironment} className="w-full rounded border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700">Reset environment</button>
-                    </SectionCard>
-                    <SectionCard icon="cube" title="Scene summary" summary={meshes.length + ' meshes, ' + materials.length + ' materials'} defaultOpen dense>
-                        <div className="grid grid-cols-2 gap-2 text-xs text-gray-300" data-testid="usd-stage-counts"><div>Meshes: <strong>{meshes.length}</strong></div><div>Materials: <strong>{materials.length}</strong></div><div>Warnings: <strong>{warningSummary}</strong></div><div>Root: <strong className="break-all" data-testid="usd-stage-root">{rootPath ? rootPath : 'None'}</strong></div><div data-testid="usd-scene-status">Status: <strong>{status}</strong></div></div>
-                        {meshes.length ? <details className="mt-2"><summary className="cursor-pointer text-gray-400">Prim selection</summary><div className="mt-2 space-y-1">{meshes.map((mesh, i) => <button type="button" key={String(mesh.primPath || mesh.path || i)} onClick={() => select(mesh)} className={'block w-full truncate rounded px-2 py-1 text-left ' + (selectedPrim === String(mesh.primPath || mesh.path || mesh.name || '') ? 'bg-blue-900 text-blue-100' : 'text-gray-300 hover:bg-gray-800')}>{String(mesh.primPath || mesh.path || mesh.name || ('mesh ' + (i + 1)))}</button>)}</div></details> : null}
-                    </SectionCard>
-                    {(materials.length || warnings.length) ? <details data-testid={materials.length ? 'usd-material-provenance' : undefined} open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)} className="rounded-lg border border-gray-800 bg-gray-900/60 px-3.5 py-3 text-xs"><summary className="cursor-pointer text-gray-400">Diagnostics and material sources</summary><div className="mt-2 space-y-2 break-words text-gray-500">{warnings.length ? <div data-testid="usd-material-warnings">{warningDetails.map((record, i) => <div key={'w' + i} className="text-amber-300/90 break-all"><div>{record.label}</div>{record.raw !== record.label ? <details className="mt-1 text-gray-600"><summary className="cursor-pointer">Raw diagnostic</summary><div className="mt-1 break-all">{record.raw}</div></details> : null}</div>)}</div> : <div>No warnings.</div>}{materials.map((material, i) => <div key={'m' + i} className="break-all">{String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}</div>)}</div></details> : null}
-                </aside>
-                <main ref={containerRef} data-testid="usd-scene-canvas" className="relative min-h-[24rem] flex-1 bg-gray-900" aria-label="Rendered USD scene">
-                    {(status === 'loading' || status === 'loading-example' || status === 'loaded') ? <div data-testid="usd-scene-progress" className="pointer-events-none absolute left-4 right-4 top-4 z-10 rounded-lg border border-gray-700 bg-gray-900/85 p-3 shadow-lg"><div className="flex items-center justify-between gap-3 text-xs text-gray-300"><span>{progressLabel}</span><span className="truncate text-gray-500">{progressText}</span></div><div role="progressbar" aria-label={progressLabel} aria-valuemin="0" aria-valuemax="100" {...(fraction == null ? {} : { 'aria-valuenow': Math.round(fraction * 100) })} className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-700">{fraction == null ? <div className="mtlx-loading-bar w-full" /> : <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: (fraction * 100) + '%' }} />}</div></div> : null}
-                    {status === 'cancelled' ? <div data-testid="usd-scene-progress" className="absolute left-4 right-4 top-4 z-10 rounded-lg border border-gray-700 bg-gray-900/85 p-3 text-xs text-gray-300">Cancelled</div> : null}
-                </main>
+                </div>
             </div>
-            {error ? <div role="alert" data-testid="usd-scene-error" className="border-t border-red-800 bg-red-950/60 px-3 py-2 text-xs text-red-200 break-words">{error}</div> : null}
+        );
+
+        return <div data-testid="usd-scene-viewer" className="absolute inset-0 overflow-hidden flex bg-gray-900">
+            <span className="sr-only" data-testid="usd-scene-status">{status}</span>
+            {dragOver && (
+                <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
+                    <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
+                        <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                            <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {sidebarOpen && (
+                <div data-testid="usd-scene-sidebar" className="flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
+                    <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
+                        <span className="text-[13px] font-semibold text-gray-200">Scene Viewer</span>
+                        <button
+                            onClick={() => setSidebarOpen(false)}
+                            title="Collapse the scene viewer panel"
+                            className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
+                        ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
+                    </div>
+                    {sidebarBody}
+                    <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
+                        <div className="flex items-center gap-2 mb-1.5">
+                            <MtlxIcon name="cube" className="w-4 h-4 text-gray-400 shrink-0" />
+                            <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
+                        </div>
+                        <div className="space-y-1 text-[11px] text-gray-300">
+                            <div className="flex justify-between">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Meshes</span>{': '}
+                                <span className="font-mono tabular-nums">{meshes.length}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Materials</span>{': '}
+                                <span className="font-mono tabular-nums">{materials.length}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Rendered prims</span>{': '}
+                                <span className="font-mono tabular-nums">{renderedPrimCount}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Warnings</span>{': '}
+                                <span className="font-mono tabular-nums">{warnings.length}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 shrink-0">Root</span>{': '}
+                                <span className="font-mono tabular-nums break-all text-right" data-testid="usd-stage-root">{rootPath || 'None'}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
+                        Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
+                    </div>
+                </div>
+            )}
+
+            <div className="relative flex-1 min-w-0">
+                <div ref={containerRef} data-testid="usd-scene-canvas" className="absolute inset-0 bg-gray-900" aria-label="Rendered USD scene">
+                    <LoadingOverlay
+                        show={busy}
+                        label={progressLabel + (progressText ? ' ' + progressText : '')}
+                        fraction={fraction}
+                        testId="usd-scene-progress"
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
+                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        barWidthClass="w-56"
+                    >
+                        <button type="button" onClick={cancel} className={HUD_PILL + ' pointer-events-auto'}>Cancel</button>
+                    </LoadingOverlay>
+
+                    {!hasStage && !busy && (
+                        <React.Fragment>
+                            <div
+                                aria-hidden="true"
+                                className="absolute inset-0 pointer-events-none"
+                                style={{
+                                    backgroundImage: EMPTY_STAGE_GRID_IMAGE,
+                                    backgroundSize: '40px 40px',
+                                    maskImage: EMPTY_STAGE_GRID_MASK,
+                                    WebkitMaskImage: EMPTY_STAGE_GRID_MASK,
+                                }}
+                            />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
+                                <div className="text-gray-500 text-sm max-w-sm">
+                                    Drop a USD stage (.usd, .usda, .usdc, .usdz) and its referenced files
+                                </div>
+                                <button type="button" onClick={loadExample} className={PILL_ACTION}>
+                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
+                                </button>
+                            </div>
+                        </React.Fragment>
+                    )}
+
+                    {handle && (
+                        <ViewportControls
+                            containerClassName="absolute top-2 right-2 z-10 flex items-center gap-2.5 flex-wrap justify-end max-w-[calc(100%-5rem)]"
+                            clusterClassName="flex items-center gap-1"
+                            selectSize="md"
+                            buttonClassName={(isActive) => isActive ? HUD_PILL_ACTIVE : HUD_PILL}
+                            showGeomSelect={false}
+                            envAvail={false}
+                            showBackdropPicker={false}
+                            showSettings={false}
+                            showRotate
+                            rotating={rotating}
+                            onToggleRotating={toggleRotating}
+                            onCameraReset={frameAll}
+                            showScreenshot
+                            onScreenshot={takeScreenshot}
+                            isFullscreen={isFullscreen}
+                            onToggleFullscreen={toggleFullscreen}
+                            showLabels
+                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'fullscreen']]}
+                        />
+                    )}
+
+                    {handle && (() => {
+                        const segments = [rootBasename, meshes.length + ' meshes'];
+                        const mtlxVersion = (window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION) || window.__mtlxVersion;
+                        if (mtlxVersion) segments.push('v' + mtlxVersion);
+                        return (
+                            <div className="absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
+                                <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                                {segments.filter(Boolean).map((seg, i) => (
+                                    <React.Fragment key={i}>
+                                        {i > 0 && <span className="text-white/40">/</span>}
+                                        <span className={seg.charAt(0) === 'v' && i === segments.length - 1 ? 'font-mono' : undefined}>{seg}</span>
+                                    </React.Fragment>
+                                ))}
+                            </div>
+                        );
+                    })()}
+                </div>
+            </div>
+
+            {status === 'cancelled' && !busy && (
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg">Cancelled</div>
+            )}
+            {error && (
+                <div role="alert" data-testid="usd-scene-error" className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
+            )}
+
+            {!sidebarOpen && (
+                <button
+                    onClick={() => setSidebarOpen(true)}
+                    title="Expand the scene viewer panel"
+                    className={'absolute top-2 left-2 z-30 ' + HUD_PILL}
+                >
+                    <MtlxIcon name="chevrons-right" className="w-4 h-4" />
+                    <span className="max-w-[5rem] md:max-w-[8rem] truncate">Scene</span>
+                </button>
+            )}
         </div>;
     }
     window.SceneViewerApp = SceneViewerApp;

@@ -28,10 +28,8 @@ function assetText() {
 }
 
 async function openDiagnostics(page) {
-  const diagnostics = page.getByTestId('usd-material-provenance');
-  if (await diagnostics.count() && !(await diagnostics.evaluate((node) => node.open))) {
-    await diagnostics.locator('summary').click();
-  }
+  // The Diagnostics card (js/usd-scene-app.jsx) is a SectionCard, open by
+  // default, not a native <details> — nothing to expand before reading it.
   return page.getByTestId('usd-material-warnings');
 }
 
