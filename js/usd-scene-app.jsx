@@ -26,9 +26,86 @@
     const rootCandidates = (files) => {
         // Keep every supplied USD layer selectable. A nested layer may be the
         // intentional root of a folder upload, while the default still picks
-        // a conventional top-level root in applyChosenFiles().
+        // a conventional top-level root in pickDefaultRootLayer().
         return files.filter((f) => ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
     };
+    const dirOf = (path) => { const i = String(path).lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); };
+    // Collapses '.' and '..' segments without touching the filesystem, the
+    // same way a USD composer resolves an asset path relative to the layer
+    // that references it.
+    const normalizeRelativePath = (path) => {
+        const out = [];
+        String(path).split('/').forEach((part) => {
+            if (part === '' || part === '.') return;
+            if (part === '..') { if (out.length && out[out.length - 1] !== '..') out.pop(); else out.push('..'); return; }
+            out.push(part);
+        });
+        return out.join('/');
+    };
+    const rootNamePattern = /(^|\/)root\.(usd|usda|usdc|usdz)$/i;
+    const oldDefaultRoot = (candidates) => {
+        const preferred = candidates.find((f) => rootNamePattern.test(f.path));
+        return preferred ? preferred.path : (candidates.length === 1 ? candidates[0].path : '');
+    };
+    // A candidate's data may be a File/Blob (file picker, window drop) or an
+    // ArrayBuffer/typed array (loadExample's fetch results); normalize both
+    // to a Blob so slice()/text() work the same way.
+    const blobOfCandidate = (file) => {
+        const data = file && file.data !== undefined ? file.data : file;
+        if (typeof Blob !== 'undefined' && data instanceof Blob) return data;
+        if (data instanceof ArrayBuffer) return new Blob([data]);
+        if (ArrayBuffer.isView(data)) return new Blob([data.buffer]);
+        return null;
+    };
+    const ASCII_SCAN_SKIP_BYTES = 64 * 1024 * 1024;
+    const ASCII_SCAN_MAX_CHARS = 32 * 1024 * 1024;
+    const isAsciiUsdBlob = async (blob) => {
+        if (!blob || typeof blob.slice !== 'function') return false;
+        try { return /^#usda\b/.test(await blob.slice(0, 8).text()); } catch (e) { return false; }
+    };
+    // Scans every ASCII USD candidate once for `@asset@` tokens (references,
+    // payloads, subLayers) to tell top-level layers from layers something
+    // else pulls in, then picks the shallowest unreferenced one so a folder
+    // like the Teapot's (root usda referencing Geometry/* and Looks/*)
+    // defaults to the actual root instead of leaving the picker empty.
+    async function pickDefaultRootLayer(files) {
+        const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const candidates = rootCandidates(files);
+        if (candidates.length === 0) return '';
+        if (candidates.length === 1) return candidates[0].path;
+        const referenced = new Set();
+        for (const file of candidates) {
+            const blob = blobOfCandidate(file);
+            if (!blob || !(await isAsciiUsdBlob(blob))) continue;
+            const size = typeof blob.size === 'number' ? blob.size : 0;
+            if (size > ASCII_SCAN_SKIP_BYTES) { console.info('pickDefaultRootLayer: skipping oversized USD layer', file.path, size); continue; }
+            let text;
+            try { text = await blob.text(); } catch (e) { continue; }
+            if (text.length > ASCII_SCAN_MAX_CHARS) text = text.slice(0, ASCII_SCAN_MAX_CHARS);
+            const dir = dirOf(file.path);
+            const tokenPattern = /@([^@\n]+)@/g;
+            let match;
+            while ((match = tokenPattern.exec(text))) {
+                let ref = match[1].replace(/:SDF_FORMAT_ARGS:.*$/, '').trim();
+                if (!ref || ref.indexOf('anon:') === 0 || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(ref)) continue;
+                ref = ref.replace(/\\/g, '/');
+                if (ROOT_EXTENSIONS.indexOf(ext(ref.split(/[?#]/)[0])) < 0) continue;
+                const resolved = ref.charAt(0) === '/' ? normalizeRelativePath(ref) : normalizeRelativePath(dir ? dir + '/' + ref : ref);
+                referenced.add(resolved.toLowerCase());
+            }
+        }
+        const topLevel = candidates.filter((f) => !referenced.has(String(f.path).replace(/\\/g, '/').toLowerCase()));
+        const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
+        console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms');
+        if (topLevel.length === 0) return oldDefaultRoot(candidates);
+        const named = topLevel.filter((f) => rootNamePattern.test(f.path));
+        const pool = named.length ? named : topLevel;
+        pool.sort((a, b) => {
+            const depthDiff = String(a.path).split('/').length - String(b.path).split('/').length;
+            return depthDiff !== 0 ? depthDiff : String(a.path).localeCompare(String(b.path));
+        });
+        return pool[0].path;
+    }
     // Root-layer candidates from a shared upload often share one long
     // prefix (a zip's top folder), so the basename alone tells them apart
     // in most cases. When two candidates share a basename, extend both by
@@ -183,16 +260,20 @@
             if (window.setDisplayTransform) window.setDisplayTransform(mode);
         };
 
-        const applyChosenFiles = (next, generation) => {
+        const applyChosenFiles = async (next, generation) => {
             if (!mountedRef.current || generation !== generationRef.current) return;
             setFiles(next);
-            const candidates = rootCandidates(next);
-            const preferred = candidates.find((f) => /(^|\/)root\.(usd|usda|usdc|usdz)$/i.test(f.path));
-            setRootPath(preferred ? preferred.path : (candidates.length === 1 ? candidates[0].path : ''));
+            const preferredRoot = await pickDefaultRootLayer(next);
+            if (!mountedRef.current || generation !== generationRef.current) return;
+            setRootPath(preferredRoot);
             setRootTouched(false);
             setStage(null);
             setStatus(next.length ? 'ready-to-load' : 'idle');
             setError('');
+            // A root only auto-loads when one could actually be determined;
+            // an empty result (no candidates, or an unresolved fallback)
+            // leaves today's behavior of waiting on an explicit pick.
+            if (preferredRoot) await load(next, preferredRoot);
         };
         const chooseFiles = async (list) => {
             const generation = ++generationRef.current;
@@ -556,7 +637,7 @@
                 </SectionCard>
 
                 <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
-                    <SectionCard icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen dense>
+                    <SectionCard key={warnings.length > 0} icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen={warnings.length > 0} dense>
                         {warnings.length ? (
                             <div className="space-y-2" data-testid="usd-material-warnings">
                                 {warningDetails.map((record, i) => (
@@ -617,23 +698,23 @@
                         </div>
                         <div className="space-y-1 text-[11px] text-gray-300">
                             <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Meshes</span>{': '}
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Meshes</span>
                                 <span className="font-mono tabular-nums">{meshes.length}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Materials</span>{': '}
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Materials</span>
                                 <span className="font-mono tabular-nums">{materials.length}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Rendered prims</span>{': '}
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Rendered prims</span>
                                 <span className="font-mono tabular-nums">{renderedPrimCount}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Warnings</span>{': '}
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Warnings</span>
                                 <span className="font-mono tabular-nums">{warnings.length}</span>
                             </div>
                             <div className="flex justify-between gap-2">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 shrink-0">Root</span>{': '}
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 shrink-0">Root</span>
                                 <span className="font-mono tabular-nums break-all text-right" data-testid="usd-stage-root">{rootPath || 'None'}</span>
                             </div>
                         </div>

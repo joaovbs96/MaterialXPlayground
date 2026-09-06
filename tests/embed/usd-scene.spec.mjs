@@ -1,5 +1,13 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from './lib/test-base.mjs';
 import { decodePNG } from './lib/png.mjs';
+
+const fixtureRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'usd-scene');
+function fixtureFile(relativePath) {
+  return { name: relativePath, mimeType: 'text/plain', buffer: fs.readFileSync(path.join(fixtureRoot, relativePath)) };
+}
 
 function changedPixels(before, after) {
   expect(after.width).toBe(before.width);
@@ -22,11 +30,14 @@ test('@scene renders the nested USD example with subset materials', async ({ pag
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
   await page.getByTestId('usd-scene-load-example').click();
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes: 2', { timeout: 120000 });
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials: 2');
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes2', { timeout: 120000 });
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials2');
   await expect(page.getByTestId('usd-stage-root')).toContainText('root.usda');
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
+  // Diagnostics defaults collapsed when there are no warnings; open it to
+  // read the material provenance list underneath.
+  await page.getByTestId('usd-material-provenance').locator('button').first().click();
   await expect(page.getByTestId('usd-material-provenance')).toContainText('nested/materials/red.mtlx');
   await expect(page.getByTestId('usd-material-provenance')).toContainText('nested/materials/blue.mtlx');
   await expect(page.getByTestId('usd-material-warnings')).toHaveCount(0);
@@ -195,16 +206,53 @@ test('@scene exposes explicit root selection and can cancel then reopen', async 
     { name: 'two.usda', mimeType: 'text/plain', buffer: Buffer.from(root) },
   ]);
   await expect(page.getByTestId('usd-scene-root-select')).toBeVisible();
+  // Neither layer references the other, so both are top-level and the
+  // auto-pick lands on 'one.usda' (alphabetically first). Override it with
+  // 'two.usda' to prove an explicit pick still wins over the auto-load.
+  await expect(page.getByTestId('usd-scene-root-select').getByRole('combobox')).toContainText('one.usda');
   await page.getByTestId('usd-scene-root-select').getByRole('combobox').click();
-  await page.getByRole('option', { name: 'one.usda', exact: true }).click();
-  await page.getByRole('button', { name: 'Load one.usda' }).click();
+  await page.getByRole('option', { name: 'two.usda', exact: true }).click();
+  await page.getByRole('button', { name: 'Load two.usda' }).click();
   await expect(page.getByTestId('usd-scene-progress')).toBeVisible({ timeout: 30000 });
   await expect(page.getByTestId('usd-scene-progress').getByRole('progressbar')).toBeVisible();
   await expect(page.getByTestId('usd-scene-cancel')).toBeVisible({ timeout: 30000 });
   await page.getByTestId('usd-scene-cancel').click();
   await expect(page.getByText('Cancelled', { exact: true })).toBeVisible();
   await page.getByTestId('usd-scene-load-example').click();
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes: 2', { timeout: 120000 });
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes2', { timeout: 120000 });
+});
+
+// pickDefaultRootLayer (js/usd-scene-app.jsx) scans every ASCII candidate for
+// @asset@ reference tokens so a folder like the Teapot's (a named root usda
+// referencing Geometry/* and Looks/*, none of them named root.*) still
+// auto-selects the actual root instead of leaving the picker empty.
+test('@scene defaults the root layer to the layer nothing else references, and auto-loads it', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await page.getByTestId('usd-scene-file-picker').setInputFiles([
+    fixtureFile('instanced-root.usda'),
+    fixtureFile('nested/instanced.usda'),
+    fixtureFile('nested/prototype.usda'),
+    fixtureFile('nested/materials/red.mtlx'),
+    fixtureFile('nested/materials/blue.mtlx'),
+  ]);
+  await expect(page.getByTestId('usd-scene-root-select').getByRole('combobox')).toContainText('instanced-root.usda');
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
+});
+
+test('@scene still defaults to a conventional root.usda name when one is present', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await page.getByTestId('usd-scene-file-picker').setInputFiles([
+    fixtureFile('root.usda'),
+    fixtureFile('nested/nested.usda'),
+    fixtureFile('nested/materials/red.mtlx'),
+    fixtureFile('nested/materials/blue.mtlx'),
+  ]);
+  await expect(page.getByTestId('usd-stage-root')).toContainText('root.usda');
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
 });
 
 test('@scene refreshes display transform without reloading the USD stage', async ({ page, embedURL }) => {

@@ -25,8 +25,8 @@ test('@scene renders supplied Teapot USD with its external assets', async ({ pag
     await expect(rootCombobox).toContainText(selectedRoot);
   }
   await page.getByTestId('usd-scene-sidebar').getByRole('button', { name: /^Load (?!example)/ }).click();
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes: 3', { timeout: 120000 });
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials: 2');
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes3', { timeout: 120000 });
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials2');
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   await expect(page.getByTestId('usd-scene-canvas').locator('canvas')).toHaveCount(1);
   await expect(page.getByTestId('usd-material-provenance')).toBeVisible();

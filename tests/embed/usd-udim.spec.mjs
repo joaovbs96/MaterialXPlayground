@@ -28,8 +28,9 @@ function assetText() {
 }
 
 async function openDiagnostics(page) {
-  // The Diagnostics card (js/usd-scene-app.jsx) is a SectionCard, open by
-  // default, not a native <details> — nothing to expand before reading it.
+  // The Diagnostics card (js/usd-scene-app.jsx) is a SectionCard that opens
+  // by default whenever a warning exists, so these callers never need to
+  // click its header before reading the warnings list.
   return page.getByTestId('usd-material-warnings');
 }
 
@@ -67,8 +68,8 @@ test('@scene resolves multiple UDIM tiles with face subsets and material reuse',
   await page.goto(embedURL + '/index.html#!scene');
   await page.getByTestId('usd-scene-file-picker').setInputFiles(fixtureFiles());
   await page.getByRole('button', { name: 'Load root.usda', exact: true }).click();
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes: 2', { timeout: 120000 });
-  await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials: 1');
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Meshes2', { timeout: 120000 });
+  await expect(page.getByTestId('usd-stage-counts')).toContainText('Materials1');
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   await expect(page.getByTestId('usd-material-warnings')).toHaveCount(0);
 
