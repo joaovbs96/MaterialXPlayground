@@ -4398,7 +4398,8 @@ const effectiveFullSceneVFov = (authoredFovDeg, authoredAspect, canvasAspect) =>
 // shadow, the third mode of the background switch alongside bgMesh's
 // 'environment'/'none'. Tunables gathered here for one-place tuning.
 // ------------------------------------------------------------------
-const STUDIO_WALL_R = 16; // must exceed OrbitControls' maxDistance (9)
+const STUDIO_MAX_ORBIT_DISTANCE = 9; // OrbitControls.maxDistance in studio mode
+const STUDIO_WALL_R = 16; // must exceed STUDIO_MAX_ORBIT_DISTANCE
 const STUDIO_WALL_H = 10; // must clear the top of frame at the polar clamp
 const STUDIO_FLOOR_R = 13; // flat floor radius, before the fillet starts
 const STUDIO_FILLET_R = 3; // STUDIO_FLOOR_R + STUDIO_FILLET_R == STUDIO_WALL_R, for a tangent join
@@ -4720,6 +4721,7 @@ window.MtlxStudio = Object.assign(window.MtlxStudio || {}, {
   backdropRotationSign: BG_SIGN,
   keyLightRotationMatrix: rad => keyLightRotationMatrix(rad),
   studioMaxPolar: STUDIO_MAX_POLAR,
+  studioMaxOrbitDistance: STUDIO_MAX_ORBIT_DISTANCE,
   studioFloorClearance: STUDIO_FLOOR_CLEARANCE
 });
 const createMtlxRenderView = async ({
@@ -5253,7 +5255,7 @@ const createMtlxRenderView = async ({
       controls.enablePan = false;
       controls.enableZoom = wheelMode !== 'none';
       controls.minDistance = 1.4;
-      controls.maxDistance = 9;
+      controls.maxDistance = STUDIO_MAX_ORBIT_DISTANCE;
       // Camera auto-orbit (off by default): pins the
       // specular highlight to the same spot on the model
       // (showcase look); the visible environment pans as a tradeoff.
