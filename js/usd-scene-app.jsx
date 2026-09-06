@@ -29,6 +29,34 @@
         // a conventional top-level root in applyChosenFiles().
         return files.filter((f) => ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
     };
+    // Root-layer candidates from a shared upload often share one long
+    // prefix (a zip's top folder), so the basename alone tells them apart
+    // in most cases. When two candidates share a basename, extend both by
+    // one more parent directory at a time until their labels differ.
+    const distinctRootLabels = (paths) => {
+        const segs = paths.map((p) => String(p).split('/').filter(Boolean));
+        const labels = segs.map((s) => s[s.length - 1] || '');
+        const groups = new Map();
+        labels.forEach((label, i) => {
+            if (!groups.has(label)) groups.set(label, []);
+            groups.get(label).push(i);
+        });
+        groups.forEach((idxs) => {
+            if (idxs.length < 2) return;
+            let depth = 1;
+            for (;;) {
+                const tries = idxs.map((i) => segs[i].slice(-1 - depth).join('/'));
+                const unique = new Set(tries).size === tries.length;
+                const exhausted = idxs.every((i) => depth + 1 >= segs[i].length);
+                if (unique || exhausted) {
+                    idxs.forEach((i, j) => { labels[i] = tries[j]; });
+                    break;
+                }
+                depth += 1;
+            }
+        });
+        return labels;
+    };
     const stageMeshes = (stage) => Array.isArray(stage && stage.meshes) ? stage.meshes : [];
     const stageMaterials = (stage) => Array.isArray(stage && stage.materials) ? stage.materials : [];
     const materialWarningList = (stage) => {
@@ -392,20 +420,31 @@
                     </div>
                     <div className="text-xs text-gray-500">or drag-and-drop anywhere on the page</div>
 
-                    {candidates.length > 1 && (
-                        <div data-testid="usd-scene-root-select">
-                            <FieldLabel label="Root layer" />
-                            <MtlxSelect
-                                value={rootPath}
-                                options={candidates.map((f) => f.path)}
-                                onChange={(v) => { setRootPath(v); setRootTouched(true); }}
-                                defValue={null}
-                                size="lg"
-                                variant="field"
-                                block
-                            />
-                        </div>
-                    )}
+                    {candidates.length > 1 && (() => {
+                        const candidatePaths = candidates.map((f) => f.path);
+                        const shortLabels = distinctRootLabels(candidatePaths);
+                        const rootLabels = {};
+                        const rootTitles = {};
+                        candidatePaths.forEach((p, i) => { rootLabels[p] = shortLabels[i]; rootTitles[p] = p; });
+                        return (
+                            <div data-testid="usd-scene-root-select">
+                                <FieldLabel label="Root layer" />
+                                <MtlxSelect
+                                    value={rootPath}
+                                    options={candidatePaths}
+                                    labels={rootLabels}
+                                    titles={rootTitles}
+                                    title={rootPath || undefined}
+                                    popWidth={320}
+                                    onChange={(v) => { setRootPath(v); setRootTouched(true); }}
+                                    defValue={null}
+                                    size="lg"
+                                    variant="field"
+                                    block
+                                />
+                            </div>
+                        );
+                    })()}
 
                     {files.length > 0 && (
                         <div className="text-xs text-gray-500">{files.length} input file{files.length === 1 ? '' : 's'}</div>
