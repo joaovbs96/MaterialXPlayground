@@ -264,6 +264,11 @@ const createMtlxSceneView = async ({
     let stopped = false;
     let active = true;
     let raf = 0;
+    // Turntable/GIF capture state: while true, resize() is a no-op so the
+    // fixed capture resolution set by beginCapture() sticks between frames.
+    let resizeSuspended = false;
+    let captureState = null;
+    let __captureCanvas = null, __captureCtx = null;
     const materials = new Set();
     const geometries = new Set();
     const textureCache = new Map();
@@ -810,7 +815,7 @@ const createMtlxSceneView = async ({
         }
         applyMaterialEnvironment();
         const resize = () => {
-            if (!renderer || !container) return;
+            if (!renderer || !container || resizeSuspended) return;
             const w = Math.max(1, container.clientWidth || 640);
             const h = Math.max(1, container.clientHeight || 480);
             renderer.setSize(w, h, false);
@@ -1061,6 +1066,76 @@ const createMtlxSceneView = async ({
                 if (active) { startLoop(); if (displayDirty && queueDisplayRebuild && isMounted()) queueDisplayRebuild(); }
             },
             selectPrim: (primPath) => prims.find((o) => o.userData.primPath === primPath) || null,
+            // Current camera pose for a turntable recorder or URL/state
+            // persistence. null when there is no OrbitControls rig.
+            // Rounded to 4 decimals, same contract as the shader-preview handle.
+            getCamera: () => {
+                if (!controls) return null;
+                const r4 = (n) => Math.round(n * 10000) / 10000;
+                return {
+                    position: [camera.position.x, camera.position.y, camera.position.z].map(r4),
+                    target: [controls.target.x, controls.target.y, controls.target.z].map(r4),
+                };
+            },
+            // Applies a saved pose from getCamera(); invalid input is
+            // silently ignored, same validation as the shader-preview handle.
+            setCamera: (pose) => {
+                if (!controls || !pose) return false;
+                const isVec3 = (v) => Array.isArray(v) && v.length === 3
+                    && v.every((n) => typeof n === 'number' && isFinite(n));
+                if (pose.position !== undefined && !isVec3(pose.position)) return false;
+                if (pose.target !== undefined && !isVec3(pose.target)) return false;
+                if (pose.position) camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+                if (pose.target) controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+                controls.update();
+                return true;
+            },
+            // Enters fixed-resolution, off-screen capture mode: same
+            // sizing resize() would apply, just pinned and hidden on-screen.
+            // Returns false if the view is gone or already capturing.
+            beginCapture: ({ width, height }) => {
+                if (stopped || captureState) return false;
+                captureState = {
+                    prevPixelRatio: renderer.getPixelRatio(),
+                    prevVisibility: canvas.style.visibility,
+                    width, height,
+                };
+                resizeSuspended = true;
+                renderer.setPixelRatio(1);
+                renderer.setSize(width, height, false);
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+                canvas.style.visibility = 'hidden';
+                return true;
+            },
+            // Renders one frame at the capture resolution and reads it
+            // back as ImageData via a lazily created, cached 2D canvas.
+            captureFrame: () => {
+                if (!captureState) throw new Error('captureFrame() called with no active beginCapture().');
+                if (environmentBridge && environmentBridge.update) environmentBridge.update();
+                renderer.render(scene, camera);
+                const { width: w, height: h } = captureState;
+                if (!__captureCanvas) {
+                    __captureCanvas = document.createElement('canvas');
+                    __captureCtx = __captureCanvas.getContext('2d', { willReadFrequently: true });
+                }
+                if (__captureCanvas.width !== w || __captureCanvas.height !== h) {
+                    __captureCanvas.width = w; __captureCanvas.height = h;
+                }
+                __captureCtx.clearRect(0, 0, w, h);
+                __captureCtx.drawImage(renderer.domElement, 0, 0, w, h);
+                return __captureCtx.getImageData(0, 0, w, h);
+            },
+            // Leaves capture mode: restores on-screen visibility, pixel
+            // ratio and layout-driven sizing. Idempotent, safe to call twice.
+            endCapture: () => {
+                if (!captureState) return;
+                canvas.style.visibility = captureState.prevVisibility;
+                renderer.setPixelRatio(captureState.prevPixelRatio);
+                captureState = null;
+                resizeSuspended = false;
+                resize();
+            },
             renderNow: () => {
                 if (stopped) return;
                 if (environmentBridge && environmentBridge.update) environmentBridge.update();
@@ -1093,6 +1168,7 @@ const createMtlxSceneView = async ({
                 textureCache.clear();
                 try { renderer.dispose(); } catch (e) {}
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+                __captureCanvas = null; __captureCtx = null;
             },
         };
         return handle;

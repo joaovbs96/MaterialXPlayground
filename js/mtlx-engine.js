@@ -4057,6 +4057,10 @@ const createMtlxRenderView = async ({
     // image smoothly instead of reallocating GL every frame.
     let resizeSuspended = false;
     let syncSizeRef = function () { /* set once the canvas sizing closure exists */ };
+    // Turntable/GIF capture state: non-null while beginCapture()/endCapture()
+    // bracket an off-screen render at a caller-chosen fixed resolution.
+    let captureState = null;
+    let __captureCanvas = null, __captureCtx = null;
     let controls = null;
     let stopped = false;
     // Reused by snapshotPixels below, avoids a fresh canvas/2D-context
@@ -4553,13 +4557,10 @@ const createMtlxRenderView = async ({
                     geometry.computeBoundingSphere();
                 };
 
-                // Keeps the drawing buffer + aspect in sync with layout
-                // (panel reflow, mobile rotation/resize), without this
-                // the sphere stretches on any reflow.
-                const syncSize = () => {
-                    if (resizeSuspended) return;
-                    const w = canvas.clientWidth || cw;
-                    const h = canvas.clientHeight || ch;
+                // Applies a target drawing-buffer size to the renderer AND
+                // the camera/quad-fit, shared by the layout path (syncSize)
+                // and the fixed-resolution capture path (beginCapture).
+                const applySize = (w, h) => {
                     renderer.setSize(w, h, false);
                     // Depth-peel render targets are sized to the drawing
                     // buffer (see allocPeel further down), just free them
@@ -4580,6 +4581,16 @@ const createMtlxRenderView = async ({
                     // so this must be recomputed every resize, not once.
                     recomputeCameraFov();
                     camera.updateProjectionMatrix();
+                };
+
+                // Keeps the drawing buffer + aspect in sync with layout
+                // (panel reflow, mobile rotation/resize), without this
+                // the sphere stretches on any reflow.
+                const syncSize = () => {
+                    if (resizeSuspended) return;
+                    const w = canvas.clientWidth || cw;
+                    const h = canvas.clientHeight || ch;
+                    applySize(w, h);
                 };
                 syncSizeRef = syncSize;
                 if (window.ResizeObserver) {
@@ -5991,6 +6002,50 @@ const createMtlxRenderView = async ({
             // to remove one-frame lag between two mirrored views. Optional
             // ts: pass the driving rAF timestamp so several views read one tick.
             renderNow: (ts) => { clockTick(ts); setUniforms(); renderFrame(); },
+            // Fixed-resolution capture mode for the turntable recorder:
+            // syncSize's buffer pinned to width x height, canvas hidden.
+            // Returns false if the view is gone or already capturing.
+            beginCapture: ({ width, height }) => {
+                if (stopped || captureState) return false;
+                captureState = {
+                    prevPixelRatio: renderer.getPixelRatio(),
+                    prevVisibility: canvas.style.visibility,
+                    width, height,
+                };
+                resizeSuspended = true;
+                renderer.setPixelRatio(1);
+                applySize(width, height);
+                canvas.style.visibility = 'hidden';
+                return true;
+            },
+            // Renders one frame at the capture resolution and reads it
+            // back as ImageData, same cached-canvas path as snapshotPixels.
+            captureFrame: () => {
+                if (!captureState) throw new Error('captureFrame() called with no active beginCapture().');
+                setUniforms();
+                renderFrame();
+                const { width: w, height: h } = captureState;
+                if (!__captureCanvas) {
+                    __captureCanvas = document.createElement('canvas');
+                    __captureCtx = __captureCanvas.getContext('2d', { willReadFrequently: true });
+                }
+                if (__captureCanvas.width !== w || __captureCanvas.height !== h) {
+                    __captureCanvas.width = w; __captureCanvas.height = h;
+                }
+                __captureCtx.clearRect(0, 0, w, h);
+                __captureCtx.drawImage(renderer.domElement, 0, 0, w, h);
+                return __captureCtx.getImageData(0, 0, w, h);
+            },
+            // Leaves capture mode: restores on-screen visibility, pixel
+            // ratio and layout-driven sizing. Idempotent, safe to call twice.
+            endCapture: () => {
+                if (!captureState) return;
+                canvas.style.visibility = captureState.prevVisibility;
+                renderer.setPixelRatio(captureState.prevPixelRatio);
+                captureState = null;
+                resizeSuspended = false;
+                syncSizeRef();
+            },
             // Reads the live `uniforms` closure binding (same one setUniforms
             // uses), so a material swap is reflected without a stale copy.
             isAnimated: () => !!(uniforms && (uniforms.u_time || uniforms.u_frame)),
