@@ -4,6 +4,21 @@
 // composition and produces typed mesh data; this module owns one Three.js
 // renderer, per-object transforms, and MaterialX material instances.
 
+// Ordinary (non-UDIM) scene texture resolution cap, persisted separately
+// from the UDIM tile size (which stays fixed per scene). Mirrors the
+// engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
+const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
+const SCENE_TEXTURE_MAX_SIZE_VALUES = [512, 1024, 2048];
+const SCENE_TEXTURE_MAX_SIZE_DEFAULT = 2048;
+
+const storedSceneTextureMaxSize = () => {
+    if (window.top !== window) return SCENE_TEXTURE_MAX_SIZE_DEFAULT;
+    try {
+        const stored = Number(localStorage.getItem(SCENE_TEXTURE_MAX_SIZE_KEY));
+        return SCENE_TEXTURE_MAX_SIZE_VALUES.includes(stored) ? stored : SCENE_TEXTURE_MAX_SIZE_DEFAULT;
+    } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
+};
+
 const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
 
 const sceneFileMap = (files, stage) => {
@@ -233,7 +248,7 @@ const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
 const createMtlxSceneView = async ({
     container, stage, files = [], version, onProgress, isMounted = () => true,
     udimTileSize = 512, udimMaxTiles = 256,
-    udimMaxBytes = 256 * 1024 * 1024,
+    udimMaxBytes = 256 * 1024 * 1024, textureMaxSize,
 }) => {
     if (!container) throw new Error('USD scene view requires a container.');
     if (!stage || !Array.isArray(stage.meshes)) throw new Error('USD scene snapshot is missing meshes.');
@@ -280,14 +295,33 @@ const createMtlxSceneView = async ({
         udimTileSize: Math.max(128, Number(udimTileSize) || 512),
         udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 256),
         udimMaxBytes: Math.max(4 * 1024 * 1024, Number(udimMaxBytes) || 256 * 1024 * 1024),
+        textureMaxSize: Math.max(128, Number(textureMaxSize) || storedSceneTextureMaxSize()),
     };
     const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0 };
     const textureReservations = new Set();
+    // Ordinary textures request sceneOptions.textureMaxSize, but a scene
+    // with many large maps can blow the shared byte budget before every
+    // material is bound. When that happens, halve the size for this and
+    // every remaining ordinary texture (never below 512) and warn once;
+    // UDIM tiles keep their own fixed budget and size untouched.
+    let ordinaryTextureSize = sceneOptions.textureMaxSize;
+    let textureBudgetWarned = false;
     const reserveTexture = (path, isUdim = false) => {
         const key = String(path || '');
         if (textureReservations.has(key)) return true;
-        const estimate = Math.ceil(4 * sceneOptions.udimTileSize * sceneOptions.udimTileSize * 4 / 3);
-        if (textureStats.bytesReserved + estimate > sceneOptions.udimMaxBytes) return false;
+        const size = isUdim ? sceneOptions.udimTileSize : ordinaryTextureSize;
+        const estimate = Math.ceil(4 * size * size * 4 / 3);
+        if (textureStats.bytesReserved + estimate > sceneOptions.udimMaxBytes) {
+            if (!isUdim && ordinaryTextureSize > 512) {
+                ordinaryTextureSize = Math.max(512, Math.floor(ordinaryTextureSize / 2));
+                if (!textureBudgetWarned) {
+                    textureBudgetWarned = true;
+                    warnings.push('Texture budget exceeded, remaining textures loaded at ' + ordinaryTextureSize + ' px');
+                }
+                return reserveTexture(path, isUdim);
+            }
+            return false;
+        }
         textureReservations.add(key);
         textureStats.bytesReserved += estimate;
         if (isUdim) { textureStats.udimTiles += 1; textureStats.udimBytes += estimate; }
@@ -481,7 +515,7 @@ const createMtlxSceneView = async ({
                     introspected: [u],
                     textureCache,
                     textureQueue,
-                    maxTextureSize: sceneOptions.udimTileSize,
+                    maxTextureSize: ordinaryTextureSize,
                     isAlive: () => !stopped && isMounted(),
                     }, { [hit.path]: hit.blob });
                     pendingTextures.push(...(binding && binding.pending || []));
@@ -1045,6 +1079,37 @@ const createMtlxSceneView = async ({
             applyMaterialEnvironment();
             return envExposure;
         };
+        // Changes the ordinary-texture resolution cap, persists it (top
+        // realm only) and drops every cached ordinary/UDIM texture and its
+        // budget reservation so the display-rebuild path below decodes
+        // fresh textures at the new size while keeping camera, environment
+        // and the loaded stage untouched.
+        const setTextureMaxSize = (px) => {
+            const next = Math.round(Number(px));
+            if (!SCENE_TEXTURE_MAX_SIZE_VALUES.includes(next) || next === sceneOptions.textureMaxSize) {
+                return sceneOptions.textureMaxSize;
+            }
+            sceneOptions.textureMaxSize = next;
+            ordinaryTextureSize = next;
+            textureBudgetWarned = false;
+            if (window.top === window) {
+                try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, String(next)); } catch (e) { /* privacy mode */ }
+            }
+            textureCache.forEach((texture) => {
+                try { texture.dispose && texture.dispose(); } catch (e) {}
+                try { texture.image && texture.image.close && texture.image.close(); } catch (e) {}
+            });
+            textureCache.clear();
+            textureReservations.clear();
+            textureStats.bytesReserved = 0;
+            textureStats.udimTiles = 0;
+            textureStats.udimBytes = 0;
+            udimVariantByMaterial.clear();
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return sceneOptions.textureMaxSize;
+        };
         const handle = {
             scene, camera, renderer, controls, prims, warnings, textureStats,
             udimStats: {
@@ -1056,6 +1121,22 @@ const createMtlxSceneView = async ({
             },
             resize, frameAll,
             setEnvironment, setEnvRotation, setEnvExposure,
+            // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
+            // resolution cap (512/1024/2048, persisted under
+            // mtlx_scene_texture_size in the top realm); setTextureMaxSize
+            // re-runs the display-rebuild path so new textures load at the
+            // new size. getTextureStats reports the current cap alongside
+            // the UDIM tile size and the budget counters reserveTexture
+            // already tracks.
+            getTextureMaxSize: () => sceneOptions.textureMaxSize,
+            setTextureMaxSize,
+            getTextureStats: () => ({
+                textureMaxSize: sceneOptions.textureMaxSize,
+                udimTileSize: sceneOptions.udimTileSize,
+                reservedBytes: textureStats.bytesReserved,
+                textureCount: textureReservations.size,
+                udimTileCount: textureStats.udimTiles,
+            }),
             setBackdrop: (mode) => environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode,
             setAutoRotate: (value) => { if (controls) controls.autoRotate = !!value; return !!(controls && controls.autoRotate); },
             setActive: (value) => {
