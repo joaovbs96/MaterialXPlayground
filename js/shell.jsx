@@ -143,6 +143,10 @@ const VIEW_DEPS = {
         css: [],
         scripts: [
             'vendor/jszip/jszip.min.js',
+            // RecordGifDialog (mtlx-ui.jsx) calls window.recordTurntableGif;
+            // embed/viewer.html loads these two itself.
+            'js/shared/gif-encoder.js',
+            'js/shared/mtlx-turntable.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -242,7 +246,7 @@ const VIEW_DEPS = {
     },
     scene: {
         css: [],
-        scripts: ['js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-renderer.js'],
+        scripts: ['js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
         babelScripts: ['js/shared/mtlx-ui.jsx'],
         app: 'js/usd-scene-app.jsx',
         globalName: 'SceneViewerApp',
