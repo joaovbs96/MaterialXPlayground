@@ -241,6 +241,22 @@ test('@scene defaults the root layer to the layer nothing else references, and a
   await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
 });
 
+// A self reference in assetInfo (asset identifier = @kettle.usda@) must not
+// count as "referenced by something else", or the real root gets excluded
+// and the pick falls to an unrelated standalone leaf like an LOD variant.
+test('@scene ignores a self reference in assetInfo when picking the default root', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await page.getByTestId('usd-scene-file-picker').setInputFiles([
+    fixtureFile('kettle.usda'),
+    fixtureFile('nested/kettle.usda'),
+    fixtureFile('kettle_subd_0.usda'),
+  ]);
+  await expect(page.getByTestId('usd-scene-root-select').getByRole('combobox')).toContainText('kettle.usda');
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
+});
+
 test('@scene still defaults to a conventional root.usda name when one is present', async ({ page, embedURL }) => {
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();

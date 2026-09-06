@@ -73,8 +73,14 @@
         const candidates = rootCandidates(files);
         if (candidates.length === 0) return '';
         if (candidates.length === 1) return candidates[0].path;
+        const candidateKeys = new Set(candidates.map((f) => String(f.path).replace(/\\/g, '/').toLowerCase()));
         const referenced = new Set();
+        // Which OTHER candidates a layer references, keyed by the scanning
+        // layer's own normalized path. Used to prefer composition roots
+        // (layers that pull in other candidates) over standalone leaves.
+        const outgoing = new Map();
         for (const file of candidates) {
+            const selfKey = String(file.path).replace(/\\/g, '/').toLowerCase();
             const blob = blobOfCandidate(file);
             if (!blob || !(await isAsciiUsdBlob(blob))) continue;
             const size = typeof blob.size === 'number' ? blob.size : 0;
@@ -85,26 +91,39 @@
             const dir = dirOf(file.path);
             const tokenPattern = /@([^@\n]+)@/g;
             let match;
+            const outs = new Set();
             while ((match = tokenPattern.exec(text))) {
                 let ref = match[1].replace(/:SDF_FORMAT_ARGS:.*$/, '').trim();
                 if (!ref || ref.indexOf('anon:') === 0 || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(ref)) continue;
                 ref = ref.replace(/\\/g, '/');
                 if (ROOT_EXTENSIONS.indexOf(ext(ref.split(/[?#]/)[0])) < 0) continue;
                 const resolved = ref.charAt(0) === '/' ? normalizeRelativePath(ref) : normalizeRelativePath(dir ? dir + '/' + ref : ref);
-                referenced.add(resolved.toLowerCase());
+                const resolvedKey = resolved.toLowerCase();
+                if (resolvedKey === selfKey) continue; // self references never count as "referenced by something else"
+                referenced.add(resolvedKey);
+                if (candidateKeys.has(resolvedKey)) outs.add(resolvedKey);
             }
+            if (outs.size) outgoing.set(selfKey, outs);
         }
         const topLevel = candidates.filter((f) => !referenced.has(String(f.path).replace(/\\/g, '/').toLowerCase()));
         const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
         console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms');
         if (topLevel.length === 0) return oldDefaultRoot(candidates);
-        const named = topLevel.filter((f) => rootNamePattern.test(f.path));
-        const pool = named.length ? named : topLevel;
-        pool.sort((a, b) => {
+        const isComposition = (f) => outgoing.has(String(f.path).replace(/\\/g, '/').toLowerCase());
+        const isNamedRoot = (f) => rootNamePattern.test(f.path);
+        topLevel.sort((a, b) => {
+            const compDiff = (isComposition(b) ? 1 : 0) - (isComposition(a) ? 1 : 0);
+            if (compDiff !== 0) return compDiff;
+            const namedDiff = (isNamedRoot(b) ? 1 : 0) - (isNamedRoot(a) ? 1 : 0);
+            if (namedDiff !== 0) return namedDiff;
             const depthDiff = String(a.path).split('/').length - String(b.path).split('/').length;
-            return depthDiff !== 0 ? depthDiff : String(a.path).localeCompare(String(b.path));
+            if (depthDiff !== 0) return depthDiff;
+            const lenDiff = String(a.path).length - String(b.path).length;
+            if (lenDiff !== 0) return lenDiff;
+            const aPath = String(a.path), bPath = String(b.path);
+            return aPath < bPath ? -1 : (aPath > bPath ? 1 : 0);
         });
-        return pool[0].path;
+        return topLevel[0].path;
     }
     // Root-layer candidates from a shared upload often share one long
     // prefix (a zip's top folder), so the basename alone tells them apart

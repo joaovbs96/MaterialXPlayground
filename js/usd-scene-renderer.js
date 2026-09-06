@@ -282,6 +282,8 @@ const createMtlxSceneView = async ({
     let active = true;
     let raf = 0;
     let studioPolarApplied = false;
+    let studioDistanceApplied = false;
+    let lastFrameDistance = 0;
     // Turntable/GIF capture state: while true, resize() is a no-op so the
     // fixed capture resolution set by beginCapture() sticks between frames.
     let resizeSuspended = false;
@@ -927,9 +929,14 @@ const createMtlxSceneView = async ({
             const halfY = THREE.MathUtils.degToRad(camera.fov * 0.5);
             const halfX = Math.atan(Math.tan(halfY) * Math.max(camera.aspect, 0.01));
             const distance = Math.max(radius / Math.tan(halfY), radius / Math.tan(halfX)) * 1.25;
+            lastFrameDistance = distance;
             camera.position.copy(center).add(new THREE.Vector3(0, 0.25, 1).normalize().multiplyScalar(distance));
             camera.near = Math.max(radius / 1000, 0.001);
-            camera.far = Math.max(distance + radius * 4, 100);
+            // Studio wall sits at STUDIO_WALL_R + STUDIO_MAX_ORBIT_DISTANCE (world
+            // units, at studioScale 1), so the far plane must also cover that
+            // wall once the studio is scaled to the scene, not just the scene.
+            const studioScale = environmentBridge && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
+            camera.far = Math.max(distance + radius * 4, 100, studioScale * 36);
             camera.updateProjectionMatrix();
             if (controls) { controls.target.copy(center); controls.update(); }
         };
@@ -1136,11 +1143,28 @@ const createMtlxSceneView = async ({
             controls.maxPolarAngle = Math.min(maxPolar, limit);
             studioPolarApplied = true;
         };
+        // Keeps the orbit from zooming out past the studio backdrop: the wall
+        // sits at studioMaxOrbitDistance * studioScale (matching the Viewer's
+        // own maxDistance-vs-STUDIO_WALL_R relationship), scaled down 10% so
+        // the top-down clamp still stays under the studio ceiling.
+        const applyStudioDistanceClamp = () => {
+            if (!controls) return;
+            if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
+                if (studioDistanceApplied) { controls.maxDistance = Infinity; studioDistanceApplied = false; }
+                return;
+            }
+            const studio = window.MtlxStudio;
+            const maxOrbitDistance = (studio && Number(studio.studioMaxOrbitDistance)) || 9;
+            const studioScale = environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 1;
+            controls.maxDistance = Math.max(lastFrameDistance, maxOrbitDistance * studioScale * 0.9);
+            studioDistanceApplied = true;
+        };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
             applyStudioPolarClamp();
+            applyStudioDistanceClamp();
             if (controls) controls.update();
             renderer.render(scene, camera);
             raf = requestAnimationFrame(render);
@@ -1230,6 +1254,7 @@ const createMtlxSceneView = async ({
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
                 applyStudioPolarClamp();
+                applyStudioDistanceClamp();
                 return result;
             },
             getBackdrop: () => environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : 'studio',

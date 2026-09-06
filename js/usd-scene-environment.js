@@ -143,7 +143,10 @@
             const size = bounds.getSize(new THREE.Vector3());
             const radius = Math.max(size.x, size.y, size.z) || 1;
             const center = bounds.getCenter(new THREE.Vector3());
-            studioScale = radius / 8;
+            // The Viewer's studio surrounds a shaderball of diameter about 2 at
+            // scale 1, so treat the scene's largest extent as that diameter
+            // (radius / 2) instead of radius / 8, matching the Viewer's ratio.
+            studioScale = radius / 2;
             if (studioMesh) {
                 studioMesh.scale.setScalar(studioScale);
                 studioMesh.position.set(center.x, bounds.min.y - radius * 0.03, center.z);
@@ -206,6 +209,7 @@
             getEnvExposure: () => exposure,
             updateBounds,
             update,
+            getStudioScale: () => studioScale,
             reset,
             dispose: () => {
                 if (disposed) return;

@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "Kettle"
+    upAxis = "Y"
+    assetInfo = {
+        asset identifier = @kettle.usda@
+    }
+)
+
+def Xform "Kettle" (
+    prepend references = @nested/kettle.usda@
+) {
+}
