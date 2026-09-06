@@ -6,12 +6,13 @@
     const createUsdSceneEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE } = {}) => {
         if (!scene || !renderer || !THREE) throw new Error('USD scene environment requires a Three.js scene and renderer.');
         const studio = window.MtlxStudio;
-        if (!studio || typeof studio.createUsdSceneStudioMaterial !== 'function') {
+        if (!studio || typeof studio.createUsdSceneStudioMaterial !== 'function'
+            || typeof studio.createUsdSceneStudioLight !== 'function' || typeof studio.placeUsdSceneStudioLight !== 'function') {
             throw new Error('MaterialX studio environment is unavailable in this build.');
         }
         if (renderer.shadowMap) {
             renderer.shadowMap.enabled = true;
-            renderer.shadowMap.type = THREE.VSMShadowMap || THREE.PCFSoftShadowMap;
+            renderer.shadowMap.type = THREE.VSMShadowMap;
         }
         const root = new THREE.Group();
         root.name = '__usd-scene-environment';
@@ -39,22 +40,15 @@
             root.add(studioCatcher);
         }
 
-        const studioLight = new THREE.SpotLight(0xffffff, 1.4);
+        // Shared with the material viewer's studio backdrop so the cast
+        // shadow gets the engine's VSM softness and depth bracket instead
+        // of a hand copy (js/mtlx-engine.js createUsdSceneStudioLight).
+        const { light: studioLight, target: studioLightTarget } = studio.createUsdSceneStudioLight(1);
         studioLight.name = '__usd-scene-studio-key';
         studioLight.userData.usdSceneEnvironment = true;
         studioLight.userData.excludeFromFrame = true;
-        studioLight.castShadow = true;
-        studioLight.angle = Math.atan(5 / 7.5);
-        studioLight.penumbra = 0.5;
-        studioLight.shadow.mapSize.set(1024, 1024);
-        studioLight.shadow.camera.near = 3.5;
-        studioLight.shadow.camera.far = 30;
-        studioLight.shadow.bias = -0.0005;
-        studioLight.shadow.normalBias = 0.02;
-        const studioLightTarget = new THREE.Object3D();
         studioLightTarget.name = '__usd-scene-studio-key-target';
         studioLightTarget.userData.usdSceneEnvironment = true;
-        studioLight.target = studioLightTarget;
         root.add(studioLight, studioLightTarget);
 
         // The engine's prepared background texture has the correct flipY and
@@ -77,6 +71,7 @@
         let exposure = 1;
         let disposed = false;
         let bounds = null;
+        let studioScale = 1;
         const baseRotation = Number(studio.backdropBaseRotation) || Math.PI;
         const rotationSign = Number(studio.backdropRotationSign) || -1;
 
@@ -91,23 +86,16 @@
         };
         const updateLight = () => {
             if (!bounds) return;
-            const size = bounds.getSize(new THREE.Vector3());
-            const radius = Math.max(size.x, size.y, size.z) * 0.5 || 0.5;
             const center = bounds.getCenter(new THREE.Vector3());
             const direction = rotatedEnvDirection() || new THREE.Vector3(-0.4, -1.0, 0.7).normalize();
-            const distance = radius * 3.5;
-            studioLight.position.copy(center).addScaledVector(direction, -distance);
-            studioLightTarget.position.copy(center);
-            studioLight.shadow.camera.near = Math.max(radius * 0.04, 0.001);
-            studioLight.shadow.camera.far = Math.max(radius * 10, distance + radius * 4);
-            studioLight.shadow.bias = -Math.max(radius * 0.0002, 0.00001);
-            studioLight.shadow.normalBias = Math.max(radius * 0.008, 0.0005);
+            studio.placeUsdSceneStudioLight(studioLight, center, direction, studioScale);
         };
         const applyVisibility = () => {
             if (studioMesh) studioMesh.visible = isStudio();
             if (studioCatcher) studioCatcher.visible = isStudio();
             studioLight.visible = isStudio();
-            studioLight.intensity = isStudio() ? 1.4 : 0;
+            // Shadow only: MaterialX RawShaderMaterials ignore three lights.
+            studioLight.intensity = 0;
             environmentSky.visible = mode === 'environment' && !!skyMaterial.map;
             if (renderer.setClearColor) renderer.setClearColor(0x111827, mode === 'none' ? 0 : 1);
         };
@@ -155,12 +143,13 @@
             const size = bounds.getSize(new THREE.Vector3());
             const radius = Math.max(size.x, size.y, size.z) || 1;
             const center = bounds.getCenter(new THREE.Vector3());
+            studioScale = radius / 8;
             if (studioMesh) {
-                studioMesh.scale.setScalar(radius / 8);
+                studioMesh.scale.setScalar(studioScale);
                 studioMesh.position.set(center.x, bounds.min.y - radius * 0.03, center.z);
             }
             if (studioCatcher) {
-                studioCatcher.scale.setScalar(radius / 8);
+                studioCatcher.scale.setScalar(studioScale);
                 studioCatcher.position.set(center.x, bounds.min.y - radius * 0.03, center.z);
             }
             updateLight();

@@ -722,6 +722,9 @@ const createMtlxSceneView = async ({
             }
         };
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
+        // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
+        renderer.resetState();
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         renderer.setClearColor(0x111827, 1);
         const displayTransform = window.getDisplayTransform && window.getDisplayTransform();
