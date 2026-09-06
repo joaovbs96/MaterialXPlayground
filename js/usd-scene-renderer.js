@@ -309,6 +309,7 @@ const createMtlxSceneView = async ({
         textureMaxBytes: Math.max(64 * 1024 * 1024, Number(textureMaxBytes) || 1024 * 1024 * 1024),
     };
     const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0 };
+    let samplerReport = [];
     const textureReservations = new Set();
     // Ordinary textures and UDIM tiles are tracked against separate byte
     // budgets (textureMaxBytes / udimMaxBytes) so a scene with many ordinary
@@ -1118,6 +1119,23 @@ const createMtlxSceneView = async ({
             warnings.push('USD scene GPU program compilation failed: ' + String(error && error.message || error));
             report({ phase: 'gpu-program', status: 'error', error: String(error && error.message || error) });
         }
+        // Samplers still holding the engine's 1x1 default after every texture
+        // job settled, same warnings path the texture-tier budget uses so
+        // Diagnostics and DevTools both surface it.
+        samplerReport = [];
+        for (const [path, info] of byPath) {
+            if (!info || !info.compiled || !info.material) continue;
+            for (const u of info.compiled.introspected || []) {
+                if (u.type !== 'filename') continue;
+                if (window.samplerHoldsDefault(info.material.uniforms[u.name])) {
+                    samplerReport.push({ material: info.materialPath || path, uniform: u.name, file: u.data });
+                }
+            }
+        }
+        if (samplerReport.length) {
+            warnings.push(samplerReport.length + ' texture samplers fell back to MaterialX defaults (see console)');
+            console.warn('MaterialX sampler defaults:', samplerReport);
+        }
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
         // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
@@ -1251,6 +1269,7 @@ const createMtlxSceneView = async ({
                 textureCount: textureReservations.size,
                 udimTileCount: textureStats.udimTiles,
             }),
+            getSamplerReport: () => samplerReport.slice(),
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
                 applyStudioPolarClamp();

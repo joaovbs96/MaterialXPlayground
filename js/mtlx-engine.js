@@ -6348,7 +6348,7 @@ Object.assign(window, {
     loadExrTexture, loadHdrTexture, loadTifTexture,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
-    getFilenameDefaultTexture, rebindFilenameDefault, configureLoadedTexture,
+    getFilenameDefaultTexture, rebindFilenameDefault, configureLoadedTexture, samplerHoldsDefault,
     prepGeometry, normalizeGeometry, buildPreviewGeometry,
     loadCustomPreviewGeomFromFile, loadCustomPreviewGeomFromUrl,
     getCustomPreviewGeom, clearCustomPreviewGeom,
