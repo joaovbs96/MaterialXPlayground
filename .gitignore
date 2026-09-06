@@ -1,6 +1,9 @@
 *.py
 node_modules/
 vendor/materialx/
+# Pinned usd-wg-webview runtime (20 MB wasm), fetched by
+# scripts/setup-usd-webview-runtime.mjs with SHA-256 checks, never committed.
+vendor/usd-webview-bindings/
 *.vsix
 
 .gpu-render-out/**
@@ -42,3 +45,10 @@ gallery/
 
 # Claude Code local settings and agent worktrees
 .claude/
+
+.usd-chess-test-results/**
+.tmp-chess-stage.mjs
+.tmp-teapot-stage.mjs
+.tmp-teapot-diag.mjs
+*.log
+.tmp-chess-graph.mjs

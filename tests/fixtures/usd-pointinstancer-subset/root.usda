@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Scene" {
+    def Xform "ParentTransform" (
+        references = @nested/instanced.usda@</InstancedAsset>
+    ) {
+    }
+}

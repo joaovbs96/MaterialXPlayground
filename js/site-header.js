@@ -200,6 +200,7 @@
         { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME, mobileOnly: true },
         { id: 'docs', label: 'Node Specs', shellHref: '#!docs', icon: ICON_NAV_DOCS },
         { id: 'viewer', label: 'Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
+        { id: 'scene', label: 'Scene Viewer', shellHref: '#!scene', icon: ICON_NAV_VIEWER },
         { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
         { id: 'graph', label: 'Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
         { id: 'learn', label: 'Learn', group: true, icon: ICON_NAV_LEARN, items: [
@@ -233,6 +234,7 @@
     // the two can't drift; published on window since this script loads first.
     function shellRouteFor(hash) {
         if (hash === '#!viewer') { return 'viewer'; }
+        if (hash === '#!scene') { return 'scene'; }
         if (hash === '#!graph') { return 'graph'; }
         if (hash === '#!compare') { return 'compare'; }
         if (hash === '#!builder' || hash.indexOf('#!builder?') === 0) { return 'builder'; }

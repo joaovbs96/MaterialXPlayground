@@ -1,0 +1,18 @@
+#usda 1.0
+(
+    defaultPrim = "Asset"
+    upAxis = "Y"
+)
+
+def Xform "Asset" {
+    def PointInstancer "Instances" {
+        point3f[] positions = [(-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
+        int[] protoIndices = [0, 0]
+        rel prototypes = </Asset/Instances/Prototype>
+
+        def Xform "Prototype" (
+            references = @curved-prototype.usda@</Prototype>
+        ) {
+        }
+    }
+}

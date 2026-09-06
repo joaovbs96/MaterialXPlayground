@@ -1,0 +1,18 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Scene" {
+    def Xform "RootTransform" {
+        double3 xformOp:translate = (0.8, 0.25, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Xform "NestedAsset" (
+            references = @nested/nested.usda@</NestedAsset>
+        ) {
+        }
+    }
+}

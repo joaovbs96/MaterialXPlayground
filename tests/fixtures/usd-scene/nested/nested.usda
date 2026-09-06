@@ -1,0 +1,72 @@
+#usda 1.0
+(
+    defaultPrim = "NestedAsset"
+    upAxis = "Y"
+)
+
+def Xform "NestedAsset" {
+    double3 xformOp:rotateXYZ = (0.0, 0.0, 25.0)
+    uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+
+    def Scope "Looks" {
+        def Material "RedMaterial" (
+            references = @materials/red.mtlx@</MaterialX/Materials/red_material>
+        ) {
+        }
+        def Material "BlueMaterial" (
+            references = @materials/blue.mtlx@</MaterialX/Materials/blue_material>
+        ) {
+        }
+    }
+
+    def Xform "QuadWithSubset" {
+        double3 xformOp:translate = (-0.85, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Mesh "Quad" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        ) {
+            int[] faceVertexCounts = [4, 4]
+            int[] faceVertexIndices = [0, 1, 2, 3, 4, 5, 6, 7]
+            point3f[] points = [
+                (-0.65, -0.65, 0.0),
+                ( 0.0, -0.65, 0.0),
+                ( 0.0,  0.65, 0.0),
+                (-0.65,  0.65, 0.0),
+                ( 0.0, -0.65, 0.0),
+                ( 0.65, -0.65, 0.0),
+                ( 0.65,  0.65, 0.0),
+                ( 0.0,  0.65, 0.0)
+            ]
+            normal3f[] normals = [(0.0, 0.0, 1.0)] ( interpolation = "constant" )
+            uniform token subsetFamily:materialBind:familyType = "nonOverlapping"
+            rel material:binding = </NestedAsset/Looks/RedMaterial>
+
+            def GeomSubset "BlueFace" (
+                prepend apiSchemas = ["MaterialBindingAPI"]
+            ) {
+                uniform token elementType = "face"
+                uniform token familyName = "materialBind"
+                int[] indices = [1]
+                rel material:binding = </NestedAsset/Looks/BlueMaterial>
+            }
+        }
+    }
+
+    def Xform "SharedMaterialTriangle" {
+        double3 xformOp:translate = (0.85, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Mesh "Triangle" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        ) {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [
+                (-0.65, -0.65, 0.0),
+                ( 0.65, -0.65, 0.0),
+                ( 0.0,   0.65, 0.0)
+            ]
+            normal3f[] normals = [(0.0, 0.0, 1.0)] ( interpolation = "constant" )
+            rel material:binding = </NestedAsset/Looks/RedMaterial>
+        }
+    }
+}

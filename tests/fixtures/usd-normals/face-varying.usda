@@ -1,0 +1,14 @@
+#usda 1.0
+(
+    defaultPrim = "HardEdge"
+    upAxis = "Y"
+)
+
+def Mesh "HardEdge"
+{
+    uniform token subdivisionScheme = "none"
+    int[] faceVertexCounts = [3, 3]
+    int[] faceVertexIndices = [0, 1, 2, 0, 3, 1]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
+    normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 1, 0), (0, 1, 0), (0, 1, 0)] ( interpolation = "faceVarying" )
+}

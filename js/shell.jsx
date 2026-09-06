@@ -240,6 +240,13 @@ const VIEW_DEPS = {
             'js/graph/graph-preview.jsx',
         ],
     },
+    scene: {
+        css: [],
+        scripts: ['js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-renderer.js'],
+        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        app: 'js/usd-scene-app.jsx',
+        globalName: 'SceneViewerApp',
+    },
     compare: {
         css: [],
         scripts: ['vendor/jszip/jszip.min.js', 'js/shared/image-metrics.js'],
@@ -1021,6 +1028,7 @@ function Shell() {
         viewer: { mounted: false, status: 'idle' },
         graph: { mounted: false, status: 'idle' },
         compare: { mounted: false, status: 'idle' },
+        scene: { mounted: false, status: 'idle' },
         builder: { mounted: false, status: 'idle' },
         vscode: { mounted: false, status: 'idle' },
         whatIsMaterialx: { mounted: false, status: 'idle' },
@@ -1101,7 +1109,7 @@ function Shell() {
             // viewer/graph/compare hard-require WebGL2 — skip fetching
             // their dependency bundles and go straight to the blocking
             // message below instead. Docs works fine without it.
-            if ((activeView === 'viewer' || activeView === 'graph' || activeView === 'compare') && !hasWebGL2()) {
+            if ((activeView === 'viewer' || activeView === 'graph' || activeView === 'compare' || activeView === 'scene') && !hasWebGL2()) {
                 return { ...prev, [activeView]: { mounted: true, status: 'no-webgl2' } };
             }
             return { ...prev, [activeView]: { mounted: true, status: 'loading' } };
@@ -1134,6 +1142,7 @@ function Shell() {
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
+            scene: 'MaterialX Playground - USD Scene Viewer',
             compare: 'MaterialX Playground — Material Compare',
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
@@ -1160,6 +1169,7 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
+            scene: 'flex-1 min-h-0',
             // The builder means to fill the viewport and let only its
             // sidebar scroll, but min-h-0 alone never enforced that: any
             // overflow reached the document, and since the preview stage
@@ -1202,7 +1212,7 @@ function Shell() {
             content = (
                 <div className="flex items-center justify-center h-40 text-center text-gray-300 text-sm px-4">
                     {'WebGL2 is not available. The '
-                        + (view === 'viewer' ? 'Material Viewer' : view === 'compare' ? 'Material Compare' : 'Node Graph Editor')
+                        + (view === 'viewer' ? 'Material Viewer' : view === 'compare' ? 'Material Compare' : view === 'scene' ? 'USD Scene Viewer' : 'Node Graph Editor')
                         + ' needs a WebGL2-capable browser. Try a current Chrome, Firefox, Edge, or Safari, and make sure hardware acceleration is enabled.'}
                 </div>
             );
@@ -1248,6 +1258,8 @@ function Shell() {
                 ) : (
                     <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>
                 );
+            } else if (view === 'scene') {
+                content = <div className="w-full h-full min-h-0">{rendered}</div>;
             } else if (view === 'viewer') {
                 // Browser: no wrapper — MaterialViewerApp's `absolute
                 // inset-0` root positions directly against #root. VS
@@ -1296,6 +1308,7 @@ function Shell() {
             {renderView('viewer')}
             {renderView('graph')}
             {renderView('compare')}
+            {renderView('scene')}
             {renderView('builder')}
             {renderView('vscode')}
             {renderView('whatIsMaterialx')}

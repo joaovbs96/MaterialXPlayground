@@ -103,6 +103,13 @@ const getMxEnv = (version) => {
                 // (u, 1-v) for MaterialX's lower-left UV origin, without
                 // this, every image renders upside down.
                 try { genContext.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
+                // Keep the tangent-frame handedness emitted by Three rather
+                // than asking MaterialX to reconstruct bitangent with an
+                // unsigned cross product. Mirrored UV islands and mirrored
+                // object transforms otherwise invert tangent-space normal
+                // maps. Older bindings may omit this option; the geometry
+                // path still supplies i_bitangent as an additive fallback.
+                try { genContext.getOptions().hwImplicitBitangents = false; } catch (e) { /* option absent */ }
 
                 // Direct light, like the official viewer's registerLights():
                 // binds directional_light (id 1) from any <directional_light>
@@ -1061,11 +1068,41 @@ const loadTifTexture = async (blob) => {
     }
 };
 
+// Scene snapshots can contain many UDIM tiles.  When a caller supplies a
+// preview limit, decode/upload a bounded ImageBitmap while retaining the
+// source image's color and alpha semantics.  The normal viewer path does not
+// pass this option and keeps its existing TextureLoader behavior.
+const loadBoundedBitmapTexture = async (blob, maxSize) => {
+    if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap is unavailable for bounded scene texture preview');
+    const opts = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
+    let source;
+    try { source = await createImageBitmap(blob, opts); }
+    catch (error) { throw new Error('The source image could not be decoded for bounded scene preview.'); }
+    let image = source;
+    if (maxSize > 0 && Math.max(source.width, source.height) > maxSize) {
+        const scale = maxSize / Math.max(source.width, source.height);
+        const resizeOpts = Object.assign({}, opts, {
+            resizeWidth: Math.max(1, Math.round(source.width * scale)),
+            resizeHeight: Math.max(1, Math.round(source.height * scale)),
+            resizeQuality: 'high',
+        });
+        try { image = await createImageBitmap(blob, resizeOpts); }
+        catch (error) { if (source.close) source.close(); throw error; }
+        if (source.close) source.close();
+    }
+    const texture = new THREE.Texture(image);
+    configureLoadedTexture(texture);
+    return texture;
+};
+
 // Binds dropped textures onto the shader's filename sampler uniforms.
 // Cache hits assign synchronously; misses load async (TextureLoader, or
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
 const bindDroppedTextures = (view, fileMap, onBound) => {
     const bound = [], missing = [];
+    const pending = [];
+    const cache = view.textureCache || TEXTURE_CACHE;
+    const isAlive = () => typeof view.isAlive !== 'function' || view.isAlive();
     for (const u of view.introspected) {
         if (u.type !== 'filename') continue;
         let ref = '';
@@ -1078,35 +1115,63 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         if (!hit) { missing.push(ref); continue; }
         const blob = fileMap[hit.key];
         const cacheKey = textureCacheKey(blob, hit.key);
-        const cached = TEXTURE_CACHE.get(cacheKey);
+        const cached = cache.get(cacheKey);
         if (cached) {
-            if (view.uniforms[u.name]) view.uniforms[u.name].value = cached;
-            if (onBound) onBound();
+            if (isAlive()) {
+                if (view.uniforms[u.name]) view.uniforms[u.name].value = cached;
+                if (onBound) onBound();
+            }
         } else {
             const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
             if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
                 const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
-                parsePromise.then((tex) => {
+                const pendingLoad = parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
                     configureLoadedTexture(tex);
-                    TEXTURE_CACHE.set(cacheKey, tex);
+                    if (!isAlive()) { tex.dispose && tex.dispose(); return; }
+                    cache.set(cacheKey, tex);
                     if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
                     if (onBound) onBound();
-                });
+                }, (error) => ({ error }));
+                pending.push(pendingLoad);
+            } else if (view.maxTextureSize) {
+                const startBoundedLoad = () => {
+                    if (!isAlive()) return Promise.resolve(null);
+                    return typeof createImageBitmap === 'function'
+                        ? loadBoundedBitmapTexture(blob, Number(view.maxTextureSize))
+                        : Promise.reject(new Error('createImageBitmap is unavailable for bounded scene texture preview'));
+                };
+                let boundedLoad;
+                if (view.textureQueue && view.textureQueue.tail) {
+                    const previous = view.textureQueue.tail;
+                    boundedLoad = previous.catch(() => {}).then(startBoundedLoad);
+                    view.textureQueue.tail = boundedLoad;
+                } else boundedLoad = startBoundedLoad();
+                pending.push(boundedLoad.then((tex) => {
+                    if (!tex) return;
+                    if (!isAlive()) { tex.dispose && tex.dispose(); if (tex.image && tex.image.close) tex.image.close(); return; }
+                    cache.set(cacheKey, tex);
+                    if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                    if (onBound) onBound();
+                }, (error) => ({ error })));
             } else {
                 const url = URL.createObjectURL(blob);
-                new THREE.TextureLoader().load(url, (tex) => {
-                    configureLoadedTexture(tex);
-                    TEXTURE_CACHE.set(cacheKey, tex);
-                    if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
-                    URL.revokeObjectURL(url);
-                    if (onBound) onBound();
-                }, undefined, () => URL.revokeObjectURL(url));
+                pending.push(new Promise((resolve) => {
+                    new THREE.TextureLoader().load(url, (tex) => {
+                        configureLoadedTexture(tex);
+                        if (!isAlive()) { tex.dispose && tex.dispose(); URL.revokeObjectURL(url); resolve(); return; }
+                        cache.set(cacheKey, tex);
+                        if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                        URL.revokeObjectURL(url);
+                        if (onBound) onBound();
+                        resolve();
+                    }, undefined, (error) => { URL.revokeObjectURL(url); resolve({ error }); });
+                }));
             }
         }
         bound.push(ref + '  →  ' + hit.key);
     }
-    return { bound, missing };
+    return { bound, missing, pending };
 };
 
 // Extracts a plain JS array from a real array or an embind vector-like
@@ -1306,33 +1371,79 @@ const configureLoadedTexture = (t) => {
 // tangents (real when computable, constant +X fallback otherwise).
 const prepGeometry = (geometry) => {
     // Already prepped (e.g. a cached shaderball clone), skip re-running
-    // computeTangents on an already-tangented geometry.
-    if (geometry.getAttribute('i_tangent')) return geometry;
+    // computeTangents only after both members of the tangent frame exist.
+    // Older cached/custom geometry may carry i_tangent without the explicit
+    // bitangent added by the scene path, so that case is repaired below.
+    if (geometry.getAttribute('i_tangent') && geometry.getAttribute('i_bitangent')) return geometry;
+    const position = geometry.getAttribute('position');
+    if (!position) return geometry;
+    if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
     if (!geometry.getAttribute('uv')) {
         // MaterialX shaders read texcoords; give degenerate UVs
         // rather than an unbound attribute.
-        const count = geometry.getAttribute('position').count;
+        const count = position.count;
         geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
     }
     geometry.setAttribute('i_position', geometry.getAttribute('position'));
     geometry.setAttribute('i_normal', geometry.getAttribute('normal'));
     geometry.setAttribute('i_texcoord_0', geometry.getAttribute('uv'));
-    let iTangent = null;
+    let iTangent = null, iBitangent = null;
+    const normal = geometry.getAttribute('normal');
+    const writeFrame = (index, tx, ty, tz, sign, tangentOut, bitangentOut) => {
+        let nx = normal.getX(index), ny = normal.getY(index), nz = normal.getZ(index);
+        const nlen = Math.hypot(nx, ny, nz);
+        if (nlen > 1e-10) { nx /= nlen; ny /= nlen; nz /= nlen; }
+        else { nx = 0; ny = 0; nz = 1; }
+        const ndot = tx * nx + ty * ny + tz * nz;
+        tx -= ndot * nx; ty -= ndot * ny; tz -= ndot * nz;
+        let tlen = Math.hypot(tx, ty, tz);
+        if (tlen < 1e-10) {
+            // Pick an axis least parallel to N, then form an orthogonal T.
+            const ax = Math.abs(nx) < 0.9 ? 1 : 0;
+            const ay = ax ? 0 : 1;
+            tx = ay * nz; ty = ax * nz; tz = -ay * nx - ax * ny;
+            tlen = Math.hypot(tx, ty, tz) || 1;
+        }
+        tx /= tlen; ty /= tlen; tz /= tlen;
+        const bx = (ny * tz - nz * ty) * (sign < 0 ? -1 : 1);
+        const by = (nz * tx - nx * tz) * (sign < 0 ? -1 : 1);
+        const bz = (nx * ty - ny * tx) * (sign < 0 ? -1 : 1);
+        tangentOut[index * 3] = tx; tangentOut[index * 3 + 1] = ty; tangentOut[index * 3 + 2] = tz;
+        bitangentOut[index * 3] = bx; bitangentOut[index * 3 + 1] = by; bitangentOut[index * 3 + 2] = bz;
+    };
+    // Prefer Three's source tangent (vec4) when a legacy alias is already
+    // present, so its handedness survives repair of the missing bitangent.
+    const tangent = geometry.getAttribute('tangent') || geometry.getAttribute('i_tangent');
+    if (tangent) {
+        // Repair a geometry carrying the legacy 3-component tangent alias.
+        // A supplied vec4 tangent retains the authored/Three handedness in w.
+        const tangents = new Float32Array(position.count * 3);
+        const bitangents = new Float32Array(position.count * 3);
+        for (let i = 0; i < position.count; i++) {
+            const tx = tangent.getX(i), ty = tangent.getY(i), tz = tangent.getZ(i);
+            const sign = tangent.itemSize >= 4 ? (tangent.getW(i) < 0 ? -1 : 1) : 1;
+            writeFrame(i, tx, ty, tz, sign, tangents, bitangents);
+        }
+        iTangent = new THREE.BufferAttribute(tangents, 3);
+        iBitangent = new THREE.BufferAttribute(bitangents, 3);
+    }
     // r128's computeTangents CONSOLE.ERRORs (not throws) when
     // index/position/normal/uv are missing, precheck so an ineligible
     // geometry goes straight to the fallback without the scary log.
     const canTangent = !!(geometry.getIndex()
-        && geometry.getAttribute('position')
-        && geometry.getAttribute('normal')
+        && position
+        && normal
         && geometry.getAttribute('uv'));
-    if (canTangent) {
+    if (!iTangent && canTangent) {
         try {
             geometry.computeTangents();
             const t = geometry.getAttribute('tangent'); // vec4 (may be absent on silent failure)
             if (t) {
                 const tri = new Float32Array(t.count * 3);
+                const signs = new Float32Array(t.count);
                 for (let i = 0; i < t.count; i++) {
                     tri[i * 3] = t.getX(i); tri[i * 3 + 1] = t.getY(i); tri[i * 3 + 2] = t.getZ(i);
+                    signs[i] = t.itemSize >= 4 && t.getW(i) < 0 ? -1 : 1;
                 }
                 // Zero-UV-area triangles (and the sphere's poles) leave
                 // computeTangents' normalize() dividing by zero, writing a
@@ -1352,17 +1463,66 @@ const prepGeometry = (geometry) => {
                     }
                 }
                 if (repaired) console.warn('[mtlx] repaired ' + repaired + ' degenerate tangents (zero-UV-area triangles) on geometry');
+                const bitri = new Float32Array(t.count * 3);
+                for (let i = 0; i < t.count; i++) writeFrame(i, tri[i * 3], tri[i * 3 + 1], tri[i * 3 + 2], signs[i], tri, bitri);
                 iTangent = new THREE.BufferAttribute(tri, 3);
+                iBitangent = new THREE.BufferAttribute(bitri, 3);
             }
         } catch (e) { /* fall through to constant tangent */ }
     }
-    if (!iTangent) {
-        const vcount = geometry.getAttribute('position').count;
-        const tangents = new Float32Array(vcount * 3);
-        for (let i = 0; i < vcount; i++) tangents[i * 3] = 1;
+    // Three's computeTangents requires an index. For non-indexed USD meshes,
+    // derive a frame directly per triangle so normal maps remain useful and
+    // preserve mirrored-UV orientation instead of silently using +X.
+    if (!iTangent && !geometry.getIndex() && position.count >= 3) {
+        const uv = geometry.getAttribute('uv');
+        const tangents = new Float32Array(position.count * 3);
+        const bitangents = new Float32Array(position.count * 3);
+        for (let base = 0; base + 2 < position.count; base += 3) {
+            const ax = position.getX(base + 1) - position.getX(base);
+            const ay = position.getY(base + 1) - position.getY(base);
+            const az = position.getZ(base + 1) - position.getZ(base);
+            const bx = position.getX(base + 2) - position.getX(base);
+            const by = position.getY(base + 2) - position.getY(base);
+            const bz = position.getZ(base + 2) - position.getZ(base);
+            const du1 = uv.getX(base + 1) - uv.getX(base), dv1 = uv.getY(base + 1) - uv.getY(base);
+            const du2 = uv.getX(base + 2) - uv.getX(base), dv2 = uv.getY(base + 2) - uv.getY(base);
+            const det = du1 * dv2 - du2 * dv1;
+            if (Math.abs(det) < 1e-10) continue;
+            const inv = 1 / det;
+            const tx = (ax * dv2 - bx * dv1) * inv;
+            const ty = (ay * dv2 - by * dv1) * inv;
+            const tz = (az * dv2 - bz * dv1) * inv;
+            const cx = (bx * du1 - ax * du2) * inv;
+            const cy = (by * du1 - ay * du2) * inv;
+            const cz = (bz * du1 - az * du2) * inv;
+            for (let j = 0; j < 3; j++) {
+                const i = base + j;
+                tangents[i * 3] = tx; tangents[i * 3 + 1] = ty; tangents[i * 3 + 2] = tz;
+                bitangents[i * 3] = cx; bitangents[i * 3 + 1] = cy; bitangents[i * 3 + 2] = cz;
+            }
+        }
+        for (let i = 0; i < position.count; i++) {
+            const tx = tangents[i * 3], ty = tangents[i * 3 + 1], tz = tangents[i * 3 + 2];
+            const nx = normal.getX(i), ny = normal.getY(i), nz = normal.getZ(i);
+            const bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
+            const sign = bx * bitangents[i * 3] + by * bitangents[i * 3 + 1] + bz * bitangents[i * 3 + 2] < 0 ? -1 : 1;
+            writeFrame(i, tx, ty, tz, sign, tangents, bitangents);
+        }
         iTangent = new THREE.BufferAttribute(tangents, 3);
+        iBitangent = new THREE.BufferAttribute(bitangents, 3);
+    }
+    if (!iTangent) {
+        const vcount = position.count;
+        const tangents = new Float32Array(vcount * 3);
+        const bitangents = new Float32Array(vcount * 3);
+        for (let i = 0; i < vcount; i++) {
+            writeFrame(i, 1, 0, 0, 1, tangents, bitangents);
+        }
+        iTangent = new THREE.BufferAttribute(tangents, 3);
+        iBitangent = new THREE.BufferAttribute(bitangents, 3);
     }
     geometry.setAttribute('i_tangent', iTangent);
+    geometry.setAttribute('i_bitangent', iBitangent);
     return geometry;
 };
 
@@ -3083,6 +3243,12 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
                 mx.ShaderInterfaceType.SHADER_INTERFACE_COMPLETE;
         }
     } catch (e) { /* default interface */ }
+    // MaterialX's premultiplied BSDF-add mode combines a diffuse closure's
+    // initial throughput 0 with a zero-weight dielectric dummy's throughput 1
+    // as max(0 + 1 - 1, 0), erasing the substrate of layered materials (for
+    // example the supplied ceramic/Lion graphs). Preview and scene renders
+    // need ordinary throughput propagation semantics.
+    try { genContext.getOptions().premultipliedBsdfAdd = false; } catch (e) { /* option absent in older bindings */ }
     // Generated shaders use the generator's default FIS specular-
     // environment method. hwSpecularEnvironmentMethod is NOT settable
     // in this build, the embind setter rejects it. Don't retry.
@@ -3169,6 +3335,66 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
 // the shared wasm heap. Callers must go through THIS wrapper, never call
 // generatePreviewSourcesUnlocked directly, to avoid overlapping wasm ops.
 const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
+
+// Scene-view material compiler. This deliberately exposes the preview shader
+// generation slice without allocating a renderer, scene, or canvas. Scene
+// renderers can compile a unique source once, then create independent uniform
+// instances for each object that uses that source.
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true }) => {
+    if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
+    const srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+    if (!srcs) return null;
+    const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
+    return {
+        ...srcs,
+        declared,
+        // Program identity excludes uniforms and object transforms. Source
+        // text is already fully adapted by generatePreviewSources.
+        programKey: srcs.vs + '\\n/* scene-fs */\\n' + srcs.fs,
+        label,
+    };
+};
+
+// Create a detached uniform map for one scene object. Every call returns a
+// fresh map, so meshes may share the compiled Three.js program while retaining
+// independent world/normal matrices and MaterialX values.
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRotationRad = 0, envExposure = 1 }) => {
+    if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
+    const uniforms = {
+        u_worldMatrix: { value: new THREE.Matrix4() },
+        u_viewProjectionMatrix: { value: new THREE.Matrix4() },
+        u_worldInverseTransposeMatrix: { value: new THREE.Matrix4() },
+        u_viewPosition: { value: new THREE.Vector3() },
+        u_peelMode: { value: 0 },
+        u_peelHasPrev: { value: 0 },
+        u_peelPrevDepth: { value: getDummyTex() },
+        u_opaqueDepth: { value: getDummyTexWhite() },
+        u_peelLinear: { value: 0 },
+    };
+    applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
+    const declared = new Set((compiled.declared || []).map((u) => u.name));
+    const has = (name) => declared.has(name);
+    const radiance = (env && env.radiance) || getDummyTex();
+    const irradiance = (env && env.irradiance) || radiance;
+    const mips = env && env.mips != null ? env.mips : 1;
+    if (has('u_time')) uniforms.u_time = { value: MTLX_CLOCK.time };
+    if (has('u_frame')) uniforms.u_frame = { value: MTLX_CLOCK.frame };
+    if (has('u_envRadiance')) uniforms.u_envRadiance = { value: radiance };
+    if (has('u_envIrradiance')) uniforms.u_envIrradiance = { value: irradiance };
+    for (const u of compiled.declared || []) {
+        if (!/sampler/i.test(u.type) || !/env/i.test(u.name)) continue;
+        if (/radiance|specular|prefilter/i.test(u.name)) uniforms[u.name] = { value: radiance };
+        else if (/irradiance|diffuse/i.test(u.name)) uniforms[u.name] = { value: irradiance };
+    }
+    if (has('u_envMatrix')) uniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
+    if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
+    if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
+    if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure };
+    if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = { value: false };
+    if (has('u_lightData')) uniforms.u_lightData = { value: currentLights(lightData, env && env.keyLight, envRotationRad) };
+    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: (lightData || []).length + (env && env.keyLight ? 1 : 0) };
+    return uniforms;
+};
 
 // ------------------------------------------------------------------
 // Shader EXPORT (vs. PREVIEW above): generates canonical, non-browser-
@@ -3716,6 +3942,59 @@ const getStudioBackdropGeometry = () => {
     }
     return studioBackdropLatheGeometry;
 };
+
+// Small public bridge for the USD scene view. The scene renderer must use the
+// same cyclorama profile, gradient stops, and display-transform shader as the
+// material viewer, but it owns a clone of the cached geometry and its
+// material lifetime. Kept beside the source helpers so the two views cannot
+// drift into subtly different studio backgrounds.
+const createUsdSceneStudioMaterial = (dark = false) => {
+    const material = new THREE.ShaderMaterial({
+        uniforms: {
+            uStop0: { value: new THREE.Vector3() },
+            uStop1: { value: new THREE.Vector3() },
+            uStop2: { value: new THREE.Vector3() },
+            uStop3: { value: new THREE.Vector3() },
+            uHotspotColor: { value: new THREE.Vector3() },
+            uHotspotA: { value: 0 },
+            uLinearOut: { value: 0 },
+        },
+        vertexShader: STUDIO_GRADIENT_VERTEX_SHADER,
+        fragmentShader: STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform()),
+        side: THREE.BackSide,
+        fog: false,
+    });
+    applyStudioVariantUniforms(material, !!dark);
+    return material;
+};
+// Refresh the display-baked fragment stage on an existing USD backdrop. The
+// scene owns the material, so this only replaces its shader source and keeps
+// the shared studio geometry and variant uniforms alive.
+const refreshUsdSceneStudioMaterial = (material, dark = false) => {
+    if (!material) return false;
+    material.fragmentShader = STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform());
+    applyStudioVariantUniforms(material, !!dark);
+    material.needsUpdate = true;
+    return true;
+};
+const getUsdSceneStudioGeometry = () => {
+    const geometry = getStudioBackdropGeometry();
+    return geometry && geometry.clone ? geometry.clone() : geometry;
+};
+const getUsdSceneStudioCatcherGeometry = () => {
+    const geometry = getStudioGeometry();
+    return geometry && geometry.clone ? geometry.clone() : geometry;
+};
+window.MtlxStudio = Object.assign(window.MtlxStudio || {}, {
+    createUsdSceneStudioMaterial,
+    refreshUsdSceneStudioMaterial,
+    applyUsdSceneStudioVariant: applyStudioVariantUniforms,
+    getUsdSceneStudioGeometry,
+    getUsdSceneStudioCatcherGeometry,
+    backdropBaseRotation: BG_BASE,
+    backdropRotationSign: BG_SIGN,
+    keyLightRotationMatrix: (rad) => keyLightRotationMatrix(rad),
+});
 
 const createMtlxRenderView = async ({
     canvas, mx, gen, genContext, renderable, lightData,
@@ -5954,6 +6233,7 @@ const watchFullscreen = (cb) => {
 
 Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
+    MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
     parseUniforms, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
@@ -5975,8 +6255,9 @@ Object.assign(window, {
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
-    getKeyLightEnabled, setKeyLightEnabled,
-    createMtlxRenderView, tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
+    getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
+    createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
+    tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
 });

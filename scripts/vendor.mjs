@@ -120,6 +120,29 @@ const COPIES = [
 // caught as a verification failure instead of silently vendored.
 // ---------------------------------------------------------------------------
 const DOWNLOADS = [
+  // OpenUSD browser extraction runtime. This is the published usd-wg-webview
+  // build; keep the commit and byte hashes in this table so `vendor` and
+  // `vendor --check` cannot silently replace the native composition runtime.
+  {
+    url: "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/public/usd-webview-bindings/usdWebViewBindings.js",
+    dest: "usd-webview-bindings/usdWebViewBindings.js",
+    sha256: "1bd9d2349526e1fbb21a5f31ca2736efeeee04617c825e4e8f2c7094f9bcb6fc",
+  },
+  {
+    url: "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/public/usd-webview-bindings/usdWebViewBindingsModule.js",
+    dest: "usd-webview-bindings/usdWebViewBindingsModule.js",
+    sha256: "c6965098c59563c8023f4ba6771254fe98ee84cf2255594b8790973600768fce",
+  },
+  {
+    url: "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/public/usd-webview-bindings/usdWebViewBindingsModule.wasm",
+    dest: "usd-webview-bindings/usdWebViewBindingsModule.wasm",
+    sha256: "0f2f5f978655a7bfc0fe03c9ab2906f4bf9a97626d15384e5812296d3710f5de",
+  },
+  {
+    url: "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/LICENSE",
+    dest: "usd-webview-bindings/LICENSE",
+    sha256: "b70fc166eeff7a2dc9694fbdc8e7dc205d6f6ff86b4ae6972c074f631988dac8",
+  },
   {
     url: "https://cdn.tailwindcss.com/3.4.17",
     dest: "tailwind/tailwind-play.min.js",
