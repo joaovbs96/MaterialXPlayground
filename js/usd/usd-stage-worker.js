@@ -214,6 +214,7 @@ function copyMesh(mesh, assets, materials) {
     ...(uvs ? { uvs } : {}),
     ...(indices ? { indices } : {}),
     matrix: matrix ? Array.from(matrix) : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    orientation: mesh.orientation === "leftHanded" ? "leftHanded" : "rightHanded",
     ...(materialPath ? { materialPath } : {}),
     ...(groups.length ? { groups } : {}),
     ...(hasInstanceMatrices ? {
@@ -316,6 +317,63 @@ function sameCornerIndices(generated, ordinary, vertexCount) {
   return true;
 }
 
+// The native draw ignores UsdGeomMesh orientation = "leftHanded": it emits
+// clockwise winding and inward normals for such prims. getPrimAttributes
+// exposes the authored token so the worker can correct the stream itself.
+// Array-valued attributes from this API are truncated past 512 elements and
+// must never be read as data; the orientation token is always safe.
+function readOrientation(api, root, primPath) {
+  if (typeof api.getPrimAttributes !== "function" || !primPath) return "rightHanded";
+  try {
+    for (const record of arrayItems(api.getPrimAttributes(root, primPath))) {
+      if (text(record?.name) === "orientation") {
+        return text(record.value) === "leftHanded" ? "leftHanded" : "rightHanded";
+      }
+    }
+  } catch {
+    // Tolerate any native failure and fall back to the USD default.
+  }
+  return "rightHanded";
+}
+
+function swapCorners(array, triangleIndex, stride) {
+  const base = triangleIndex * 3 * stride;
+  for (let c = 0; c < stride; c++) {
+    const a = base + stride + c;
+    const b = base + 2 * stride + c;
+    const tmp = array[a];
+    array[a] = array[b];
+    array[b] = tmp;
+  }
+}
+
+// Corrects a leftHanded mesh so the renderer receives outward normals and
+// counter-clockwise winding, matching what rightHanded prims already get.
+// Never recomputes normals: the native smooth cage normals are correct up
+// to sign, only the winding and the sign need fixing.
+function applyOrientation(mesh) {
+  if (!mesh || mesh.orientation !== "leftHanded") return mesh;
+  const { positions, normals, uvs, indices } = mesh;
+  if (indices && indices.length) {
+    for (let k = 0; k + 2 < indices.length; k += 3) {
+      const tmp = indices[k + 1];
+      indices[k + 1] = indices[k + 2];
+      indices[k + 2] = tmp;
+    }
+  } else if (positions && positions.length >= 9) {
+    const triangleCount = Math.floor(positions.length / 9);
+    for (let t = 0; t < triangleCount; t++) {
+      swapCorners(positions, t, 3);
+      if (normals && normals.length === positions.length) swapCorners(normals, t, 3);
+      if (uvs && uvs.length === (positions.length / 3) * 2) swapCorners(uvs, t, 2);
+    }
+  }
+  if (normals) {
+    for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
+  }
+  return mesh;
+}
+
 function collectPrototypeTargets(value, result = []) {
   if (value == null) return result;
   if (typeof value === "string") {
@@ -405,6 +463,11 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
     for (const probe of probes.values()) {
       const probeRoot = probeRoots.find(item => item.target === probe.target);
       const probeName = probeRoot?.probeName;
+      // The orientation attribute lives on the composed prototype mesh prim
+      // in the real stage, not on the temporary probe layer or the generated
+      // __instances__ record, so it is read from the actual target path.
+      const actualMeshPath = probe.relativeMeshPath ? `${probe.target}/${probe.relativeMeshPath}` : probe.target;
+      const orientation = readOrientation(api, root, actualMeshPath);
       for (const generatedMesh of probe.meshes) {
         const marker = "/__instances__/";
         const tail = generatedMesh.path.slice(generatedMesh.path.indexOf(marker) + marker.length);
@@ -432,6 +495,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
           continue;
         }
         generatedMesh.normals = candidate.normals;
+        generatedMesh.orientation = orientation;
       }
     }
   } catch (error) {
@@ -548,16 +612,22 @@ async function load(request) {
   if (uniqueMeshPaths.length && api.stageDriverDrawSubtree) {
     drawSnapshot = { meshes: [] };
     const copiedMeshPaths = new Set();
+    // PointInstancer paths only ever produce generated __instances__ meshes
+    // (instanceOwnerPath set); their orientation is resolved later from the
+    // prototype mesh prim inside recoverInstanceNormals. Ordinary mesh prims
+    // get their own orientation token read here, once per drawn prim.
+    const pushMesh = mesh => {
+      if (!mesh.path || !copiedMeshPaths.has(mesh.path)) {
+        if (!mesh.instanceOwnerPath) mesh.orientation = readOrientation(api, root, mesh.path || path);
+        drawSnapshot.meshes.push(mesh);
+        if (mesh.path) copiedMeshPaths.add(mesh.path);
+      }
+    };
     for (let index = 0; index < uniqueMeshPaths.length; index++) {
       const path = uniqueMeshPaths[index];
       let subtree = api.stageDriverDrawSubtree(root, path, purposePolicy);
       try {
-        for (const mesh of snapshotDraw(subtree).meshes) {
-          if (!mesh.path || !copiedMeshPaths.has(mesh.path)) {
-            drawSnapshot.meshes.push(mesh);
-            if (mesh.path) copiedMeshPaths.add(mesh.path);
-          }
-        }
+        for (const mesh of snapshotDraw(subtree).meshes) pushMesh(mesh);
       } catch (error) {
         // Some large stages can leave the first subtree's view on a stale
         // heap generation even though no later API call was made. Reissue
@@ -566,12 +636,7 @@ async function load(request) {
         // view, which is impossible.
         if (!/detached|out-of-bounds/i.test(String(error?.message ?? error))) throw error;
         subtree = api.stageDriverDrawSubtree(root, path, purposePolicy);
-        for (const mesh of snapshotDraw(subtree).meshes) {
-          if (!mesh.path || !copiedMeshPaths.has(mesh.path)) {
-            drawSnapshot.meshes.push(mesh);
-            if (mesh.path) copiedMeshPaths.add(mesh.path);
-          }
-        }
+        for (const mesh of snapshotDraw(subtree).meshes) pushMesh(mesh);
       }
       postMessage({ id: request.id, type: "progress", value: {
         phase: "geometry", done: index + 1, total: uniqueMeshPaths.length,
@@ -595,6 +660,11 @@ async function load(request) {
   const normalRecoveryWarnings = await recoverInstanceNormals(
     api, root, pointInstancerPaths, drawSnapshot, purposePolicy
   );
+  // Orientation correction runs last, after recovery has copied normals from
+  // the (still unflipped) prototype draw into the generated instanced meshes
+  // and stamped their orientation, so every snapshot mesh is flipped exactly
+  // once here.
+  for (const mesh of drawSnapshot.meshes) applyOrientation(mesh);
   postMessage({ id: request.id, type: "progress", value: {
     phase: "material", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
   } });

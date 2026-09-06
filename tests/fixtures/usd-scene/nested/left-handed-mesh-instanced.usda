@@ -1,0 +1,30 @@
+#usda 1.0
+(
+    defaultPrim = "Asset"
+    upAxis = "Y"
+)
+
+def Xform "Asset" {
+    def Mesh "PrototypeMesh" {
+        uniform token orientation = "leftHanded"
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [
+            7, 6, 5, 4,
+            2, 3, 0, 1,
+            6, 2, 1, 5,
+            3, 7, 4, 0,
+            3, 2, 6, 7,
+            4, 5, 1, 0
+        ]
+        point3f[] points = [
+            (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5),
+            (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5)
+        ]
+    }
+    def PointInstancer "Instances" {
+        point3f[] positions = [(-1.5, 0, 0), (1.5, 0, 0)]
+        int[] protoIndices = [0, 0]
+        rel prototypes = </Asset/PrototypeMesh>
+    }
+}
