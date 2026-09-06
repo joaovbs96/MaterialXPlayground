@@ -164,6 +164,16 @@
             if (studioMesh && bounds) studioMesh.position.y = bounds.min.y - Math.max(0.01, Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003);
             if (studioCatcher && bounds) studioCatcher.position.y = bounds.min.y - Math.max(0.01, Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003);
         };
+        // Both updateBounds and update keep studioMesh/studioCatcher in sync
+        // at the same world Y, so reading either back gives the floor's
+        // current position without duplicating the offset math here.
+        const getFloorY = () => {
+            if (!bounds) return null;
+            if (studioMesh) return studioMesh.position.y;
+            if (studioCatcher) return studioCatcher.position.y;
+            return null;
+        };
+        const getFloorClearance = () => (Number(studio.studioFloorClearance) || 0) * studioScale;
         const reset = async () => {
             const getter = window.getEnvironment;
             if (typeof getter === 'function') {
@@ -184,6 +194,9 @@
             contentRoot,
             setBackdrop,
             getBackdrop: () => mode,
+            isStudio,
+            getFloorY,
+            getFloorClearance,
             setEnvironment,
             getEnvironment: () => currentEnv,
             setEnvRotation: setRotation,

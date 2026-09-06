@@ -4037,6 +4037,8 @@ window.MtlxStudio = Object.assign(window.MtlxStudio || {}, {
     backdropBaseRotation: BG_BASE,
     backdropRotationSign: BG_SIGN,
     keyLightRotationMatrix: (rad) => keyLightRotationMatrix(rad),
+    studioMaxPolar: STUDIO_MAX_POLAR,
+    studioFloorClearance: STUDIO_FLOOR_CLEARANCE,
 });
 
 const createMtlxRenderView = async ({

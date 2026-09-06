@@ -281,6 +281,7 @@ const createMtlxSceneView = async ({
     let stopped = false;
     let active = true;
     let raf = 0;
+    let studioPolarApplied = false;
     const materials = new Set();
     const geometries = new Set();
     const textureCache = new Map();
@@ -1052,11 +1053,35 @@ const createMtlxSceneView = async ({
         }
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
+        // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
+        // engine.js:4804-4819): the orbit target sits above the floor, so a
+        // fixed dip below the horizon drops the eye through the floor once
+        // the distance grows. Re-derived per frame from that distance.
+        const applyStudioPolarClamp = () => {
+            if (!controls) return;
+            const studio = window.MtlxStudio;
+            const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
+            if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
+                if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
+                return;
+            }
+            const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
+            if (floorY == null) return;
+            const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
+            const dist = camera.position.distanceTo(controls.target);
+            const rel = (floorY + clearance) - controls.target.y;
+            const limit = dist > 1e-3
+                ? Math.acos(Math.max(-1, Math.min(1, rel / dist)))
+                : maxPolar;
+            controls.maxPolarAngle = Math.min(maxPolar, limit);
+            studioPolarApplied = true;
+        };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
-            if (controls) controls.update();
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
+            applyStudioPolarClamp();
+            if (controls) controls.update();
             renderer.render(scene, camera);
             raf = requestAnimationFrame(render);
         };
@@ -1139,7 +1164,11 @@ const createMtlxSceneView = async ({
                 textureCount: textureReservations.size,
                 udimTileCount: textureStats.udimTiles,
             }),
-            setBackdrop: (mode) => environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode,
+            setBackdrop: (mode) => {
+                const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
+                applyStudioPolarClamp();
+                return result;
+            },
             setAutoRotate: (value) => { if (controls) controls.autoRotate = !!value; return !!(controls && controls.autoRotate); },
             setActive: (value) => {
                 active = !!value;
