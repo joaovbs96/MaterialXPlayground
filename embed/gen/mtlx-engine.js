@@ -7257,6 +7257,7 @@ Object.assign(window, {
   getFilenameDefaultTexture,
   rebindFilenameDefault,
   configureLoadedTexture,
+  samplerHoldsDefault,
   prepGeometry,
   normalizeGeometry,
   buildPreviewGeometry,
