@@ -97,6 +97,7 @@
         const [backdrop, setBackdrop] = React.useState('studio');
         const [autoRotate, setAutoRotate] = React.useState(false);
         const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false);
+        const [recordOpen, setRecordOpen] = React.useState(false);
         const envSettingsRef = React.useRef({ rotation: 0, exposure: 0, backdrop: 'studio', autoRotate: false });
         const envOverrideRef = React.useRef(null);
         const currentEnvironmentRef = React.useRef(null);
@@ -302,6 +303,7 @@
                 <button type="button" data-testid="usd-scene-frame" onClick={frame} disabled={!handle} className="h-7 rounded border border-gray-700 px-3 text-xs disabled:opacity-40">Frame all</button>
                 <button type="button" onClick={() => setAutoRotate((value) => { const next = !value; callHandle('setAutoRotate', next); return next; })} disabled={!handle} className={'h-7 rounded border px-3 text-xs disabled:opacity-40 ' + (autoRotate ? 'border-blue-500 bg-blue-600/70' : 'border-gray-700 hover:bg-gray-800')}>Auto rotate</button>
                 <button type="button" onClick={downloadSnapshot} disabled={!handle} className="h-7 rounded border border-gray-700 px-3 text-xs disabled:opacity-40">Snapshot</button>
+                <button type="button" onClick={() => setRecordOpen(true)} disabled={!handle} className="h-7 rounded border border-gray-700 px-3 text-xs disabled:opacity-40"><MtlxIcon name="player-record" className="w-3.5 h-3.5 inline mr-1" />Record GIF</button>
                 {(status === 'loading' || status === 'loading-example' || status === 'loaded') ? <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className="h-7 rounded border border-red-700 px-3 text-xs text-red-300">Cancel</button> : null}
                 <input ref={inputRef} data-testid="usd-scene-file-picker" className="hidden" type="file" multiple onChange={(e) => chooseFiles(e.target.files)} />
                 <input ref={folderRef} className="hidden" type="file" multiple webkitdirectory="true" directory="true" onChange={(e) => chooseFiles(e.target.files)} />
@@ -335,6 +337,8 @@
                 </main>
             </div>
             {error ? <div role="alert" data-testid="usd-scene-error" className="border-t border-red-800 bg-red-950/60 px-3 py-2 text-xs text-red-200 break-words">{error}</div> : null}
+            {recordOpen ? <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)} viewRef={handleRef}
+                baseName={rootPath ? rootPath.split('/').pop().replace(/\.[^.]+$/, '') : 'usd-scene'} transparent={false} /> : null}
         </div>;
     }
     window.SceneViewerApp = SceneViewerApp;

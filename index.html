@@ -219,6 +219,10 @@
          leaves import() native. -->
     <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
     <script src="js/shared/ui-commons.js"></script>
+    <!-- 360 GIF turntable recording: plain scripts, no JSX, used by
+         RecordGifDialog (js/shared/mtlx-ui.jsx) on demand. -->
+    <script src="js/shared/gif-encoder.js"></script>
+    <script src="js/shared/mtlx-turntable.js"></script>
     <!-- Session handoff: lets the graph editor's document survive the
          reload that picks up a new build. Eager and plain JS, so a view
          can register with it the moment that view's bundle runs. -->

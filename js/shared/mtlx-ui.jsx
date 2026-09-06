@@ -95,6 +95,248 @@ const DialogFrame = ({
     );
 };
 
+// RecordGifDialog's own CSS, injected once as a plain <style> element
+// (js/mtlx-engine.js pattern) since embeds load no Tailwind. Every rule
+// is scoped under mtlx-rec- so nothing leaks into the host page.
+(() => {
+    if (typeof document === 'undefined' || document.getElementById('mtlx-rec-css')) return;
+    const st = document.createElement('style');
+    st.id = 'mtlx-rec-css';
+    st.textContent = [
+        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(17,24,39,.7);font-family:inherit;}',
+        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:#111827;border:1px solid #374151;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);color:#f3f4f6;}',
+        '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #374151;background:#1f2937;border-radius:10px 10px 0 0;}',
+        '.mtlx-rec-title{font-size:13px;font-weight:700;color:#f3f4f6;}',
+        '.mtlx-rec-close{background:none;border:none;padding:4px;color:#9ca3af;cursor:pointer;line-height:0;}',
+        '.mtlx-rec-close:hover{color:#f3f4f6;}',
+        '.mtlx-rec-icon{width:16px;height:16px;display:block;}',
+        '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}',
+        '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}',
+        '.mtlx-rec-label{font-size:11px;color:#9ca3af;flex-shrink:0;}',
+        '.mtlx-rec-seg{display:inline-flex;border:1px solid #374151;border-radius:8px;overflow:hidden;}',
+        '.mtlx-rec-seg-btn{appearance:none;border:none;background:#1f2937;color:#9ca3af;font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid #374151;}',
+        '.mtlx-rec-seg-btn:last-child{border-right:none;}',
+        '.mtlx-rec-seg-btn:hover:not(:disabled){background:#374151;color:#f3f4f6;}',
+        '.mtlx-rec-seg-btn.is-active{background:#2563eb;color:#fff;}',
+        '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}',
+        '.mtlx-rec-hint{font-size:11px;color:#9ca3af;}',
+        '.mtlx-rec-error{font-size:11px;color:#dc2626;}',
+        '.mtlx-rec-success{font-size:11px;color:#9ca3af;}',
+        '.mtlx-rec-progress{height:6px;border-radius:4px;background:#374151;overflow:hidden;}',
+        '.mtlx-rec-progress-fill{height:100%;background:#2563eb;transition:width .15s ease;}',
+        '.mtlx-rec-progress-text{font-size:11px;color:#9ca3af;}',
+        '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid #374151;background:#000;}',
+        '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #374151;}',
+        '.mtlx-rec-btn{appearance:none;border:1px solid #374151;background:#1f2937;color:#f3f4f6;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}',
+        '.mtlx-rec-btn:hover:not(:disabled){background:#374151;}',
+        '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}',
+        '.mtlx-rec-btn--primary{background:#2563eb;border-color:#2563eb;color:#fff;}',
+        '.mtlx-rec-btn--primary:hover:not(:disabled){background:#1d4ed8;}',
+        '.mtlx-rec-btn--danger{background:#dc2626;border-color:#dc2626;color:#fff;}',
+        '.mtlx-rec-btn--danger:hover:not(:disabled){background:#b91c1c;}',
+    ].join('');
+    document.head.appendChild(st);
+})();
+
+// One segmented-pill row inside RecordGifDialog's body: a small label on
+// the left, a strip of options on the right. Plain function component,
+// not exported (RecordGifDialog-only), mirroring FieldLabel/Toggle below.
+function RecSegRow({ label, options, value, onChange, disabled }) {
+    return (
+        <div className="mtlx-rec-row">
+            <span className="mtlx-rec-label">{label}</span>
+            <div className="mtlx-rec-seg">
+                {options.map((opt) => (
+                    <button
+                        key={String(opt.value)}
+                        type="button"
+                        disabled={disabled}
+                        className={'mtlx-rec-seg-btn' + (value === opt.value ? ' is-active' : '')}
+                        onClick={() => onChange(opt.value)}
+                    >{opt.label}</button>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+// Defaults merged with whatever's in localStorage; wrapped in try/catch
+// since localStorage can throw (private mode, disabled site data).
+const RECORD_GIF_KEY = 'mtlxRecordGif';
+const loadRecordGifSettings = () => {
+    const d = window.TURNTABLE_DEFAULTS || {};
+    const defaults = { size: d.size || 720, aspect: 'square', duration: d.seconds || 4, fps: d.fps || 25, dither: d.dither !== false };
+    try {
+        const raw = localStorage.getItem(RECORD_GIF_KEY);
+        if (raw) return Object.assign({}, defaults, JSON.parse(raw));
+    } catch (e) { /* ignore, fall through to defaults */ }
+    return defaults;
+};
+
+// 360° turntable GIF recorder dialog: settings -> record -> download.
+// No Tailwind (its own mtlx-rec- CSS above) since this also mounts inside
+// the Tailwind-less embed via ViewportControls'/EmbedControls' Record button.
+const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
+    const [settings, setSettings] = React.useState(loadRecordGifSettings);
+    const [state, setState] = React.useState('idle'); // idle | recording | done | error
+    const [progress, setProgress] = React.useState({ phase: 'capture', done: 0, total: 0 });
+    const [savedMB, setSavedMB] = React.useState(null);
+    const [error, setError] = React.useState('');
+    const previewRef = React.useRef(null);
+    const offscreenRef = React.useRef(null);
+    const abortRef = React.useRef(null);
+
+    React.useEffect(() => {
+        try { localStorage.setItem(RECORD_GIF_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ }
+    }, [settings]);
+
+    // Aborts any in-flight recording on unmount, so a view/route switch
+    // mid-capture doesn't leave the encoder worker running unattended.
+    React.useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
+
+    const handleClose = () => {
+        if (abortRef.current) abortRef.current.abort();
+        onClose();
+    };
+    useEscapeToClose(handleClose, open);
+
+    if (!open) return null;
+
+    const view = viewRef && viewRef.current;
+    const canRecord = !!(view && typeof view.beginCapture === 'function'
+        && typeof view.getCamera === 'function' && view.getCamera());
+
+    const setField = (key) => (value) => setSettings((s) => Object.assign({}, s, { [key]: value }));
+
+    let outWidth = settings.size;
+    const outHeight = settings.size;
+    if (settings.aspect === 'viewport') {
+        const el = view && view.renderer && view.renderer.domElement;
+        if (el && el.clientWidth && el.clientHeight) {
+            const ratio = el.clientWidth / el.clientHeight;
+            outWidth = Math.max(16, Math.round((outHeight * ratio) / 2) * 2);
+        }
+    }
+    const frameCount = window.turntableFrameCount
+        ? window.turntableFrameCount(settings.duration, settings.fps)
+        : Math.round(settings.duration * settings.fps);
+
+    const drawPreviewFrame = (imageData) => {
+        const canvas = previewRef.current;
+        if (!canvas) return;
+        let off = offscreenRef.current;
+        if (!off || off.width !== imageData.width || off.height !== imageData.height) {
+            off = document.createElement('canvas');
+            off.width = imageData.width;
+            off.height = imageData.height;
+            offscreenRef.current = off;
+        }
+        off.getContext('2d').putImageData(imageData, 0, 0);
+        const h = Math.min(200, imageData.height);
+        const w = Math.round(h * (imageData.width / imageData.height));
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(off, 0, 0, w, h);
+    };
+
+    const handleRecord = async () => {
+        if (!canRecord || state === 'recording') return;
+        setError('');
+        setSavedMB(null);
+        setState('recording');
+        setProgress({ phase: 'capture', done: 0, total: frameCount });
+        const controller = new AbortController();
+        abortRef.current = controller;
+        try {
+            const blob = await window.recordTurntableGif(view, {
+                width: outWidth,
+                height: outHeight,
+                frames: frameCount,
+                fps: settings.fps,
+                dither: settings.dither,
+                transparent: !!transparent,
+                clockwise: true,
+                onProgress: setProgress,
+                onFrame: drawPreviewFrame,
+                signal: controller.signal,
+            });
+            downloadBlob(blob, (baseName || 'material') + '-turntable.gif');
+            setSavedMB((blob.size / (1024 * 1024)).toFixed(1));
+            setState('done');
+        } catch (e) {
+            if (e && e.name === 'AbortError') {
+                setState('idle');
+            } else {
+                setError(errMsg(e));
+                setState('error');
+            }
+        } finally {
+            abortRef.current = null;
+        }
+    };
+    const handleStop = () => { if (abortRef.current) abortRef.current.abort(); };
+
+    const recording = state === 'recording';
+    const pct = progress.total ? Math.max(0, Math.min(100, (progress.done / progress.total) * 100)) : 0;
+    const progressText = progress.phase === 'capture'
+        ? `Capturing frame ${progress.done}/${progress.total}`
+        : 'Encoding…';
+
+    return (
+        <div className="mtlx-rec-overlay" onMouseDown={handleClose}>
+            <div className="mtlx-rec-panel" onMouseDown={(e) => e.stopPropagation()}>
+                <div className="mtlx-rec-header">
+                    <span className="mtlx-rec-title">Record 360° GIF</span>
+                    <button className="mtlx-rec-close" onClick={handleClose} title="Close">
+                        <MtlxIcon name="x" className="mtlx-rec-icon" />
+                    </button>
+                </div>
+                <div className="mtlx-rec-body">
+                    {!canRecord && (
+                        <div className="mtlx-rec-error">Recording needs an orbit camera view.</div>
+                    )}
+                    <RecSegRow label="Size" value={settings.size} disabled={recording}
+                        onChange={setField('size')}
+                        options={[480, 720, 1080].map((v) => ({ value: v, label: String(v) }))} />
+                    <RecSegRow label="Aspect" value={settings.aspect} disabled={recording}
+                        onChange={setField('aspect')}
+                        options={[{ value: 'square', label: 'Square' }, { value: 'viewport', label: 'Viewport' }]} />
+                    <RecSegRow label="Duration" value={settings.duration} disabled={recording}
+                        onChange={setField('duration')}
+                        options={[3, 4, 6, 8].map((v) => ({ value: v, label: v + 's' }))} />
+                    <RecSegRow label="Frame rate" value={settings.fps} disabled={recording}
+                        onChange={setField('fps')}
+                        options={[15, 20, 25].map((v) => ({ value: v, label: String(v) }))} />
+                    <RecSegRow label="Dithering" value={settings.dither} disabled={recording}
+                        onChange={setField('dither')}
+                        options={[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
+                    <div className="mtlx-rec-hint">{frameCount} frames, about {outWidth}×{outHeight} px</div>
+                    {recording && (
+                        <React.Fragment>
+                            <div className="mtlx-rec-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+                                <div className="mtlx-rec-progress-fill" style={{ width: pct + '%' }} />
+                            </div>
+                            <div className="mtlx-rec-progress-text">{progressText}</div>
+                            <canvas ref={previewRef} className="mtlx-rec-preview" />
+                        </React.Fragment>
+                    )}
+                    {state === 'error' && <div className="mtlx-rec-error">{error}</div>}
+                    {state === 'done' && savedMB && <div className="mtlx-rec-success">Saved {savedMB} MB</div>}
+                </div>
+                <div className="mtlx-rec-footer">
+                    <button className="mtlx-rec-btn" onClick={handleClose}>Cancel</button>
+                    <button
+                        className={'mtlx-rec-btn ' + (recording ? 'mtlx-rec-btn--danger' : 'mtlx-rec-btn--primary')}
+                        disabled={!recording && !canRecord}
+                        onClick={recording ? handleStop : handleRecord}
+                    >{recording ? 'Stop' : 'Record'}</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // Curated example docs for the "Presets" button. Entries have either
 // `path` (relative to MTLX_PRESETS_BASE, the MaterialX repo examples) or
 // `src` (a site-relative URL to one of this repo's own examples/).
@@ -1546,6 +1788,10 @@ const ViewportControls = ({
     // Hides the screenshot button. Additive — every existing caller omits
     // this and keeps today's always-shown behavior.
     showScreenshot = true,
+    onRecord,
+    // Record (360° turntable GIF) button: shown only when the caller
+    // also passes onRecord, so existing callers see no new button.
+    showRecord = true,
     isFullscreen, onToggleFullscreen,
     children,
     trailingChildren,
@@ -1758,6 +2004,18 @@ const ViewportControls = ({
                         {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
                     </button>
                 ) : null;
+            case 'record':
+                return (showRecord && onRecord) ? (
+                    <button
+                        key="record"
+                        onClick={onRecord}
+                        title="Record a 360° turntable GIF"
+                        className={buttonClassName(false)}
+                    >
+                        <MtlxIcon name="player-record" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Record</span>}
+                    </button>
+                ) : null;
             case 'settings':
                 return showSettings ? (
                     <button
@@ -1788,7 +2046,7 @@ const ViewportControls = ({
         }
     };
 
-    const FLAT_ORDER = ['geom', 'rotate', 'cameraReset', 'env', 'screenshot'];
+    const FLAT_ORDER = ['geom', 'rotate', 'cameraReset', 'env', 'screenshot', 'record'];
     const TAIL_ORDER = ['settings', 'fullscreen'];
     const tail = typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren;
     const body = clusters
@@ -3053,6 +3311,7 @@ Object.assign(window, {
     BTN_MENUBAR,
     HUD_PILL, HUD_PILL_ACTIVE,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    RecordGifDialog,
     presetDocUrl, presetKey,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
     TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile, CustomModelTile, FilePickerField,

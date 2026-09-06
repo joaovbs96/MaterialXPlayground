@@ -98,7 +98,7 @@
         if (FALSE_WORDS.indexOf(s) !== -1) return false;
         return def;
     }
-    var KNOWN_CONTROLS = ['geometry', 'material', 'rotate', 'reset', 'env', 'screenshot', 'settings', 'fullscreen'];
+    var KNOWN_CONTROLS = ['geometry', 'material', 'rotate', 'reset', 'env', 'screenshot', 'record', 'settings', 'fullscreen'];
     // `none`/`all` are case-insensitive shorthands (TRUE_WORDS/FALSE_WORDS
     // spirit). `all` is derived from KNOWN_CONTROLS, not a second list, so
     // it can't drift if a control is added/removed later.
