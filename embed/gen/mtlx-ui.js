@@ -142,14 +142,15 @@ function RecSegRow({
 // Defaults merged with whatever's in localStorage; wrapped in try/catch
 // since localStorage can throw (private mode, disabled site data).
 const RECORD_GIF_KEY = 'mtlxRecordGif';
-const loadRecordGifSettings = () => {
+const loadRecordGifSettings = transparentDefault => {
   const d = window.TURNTABLE_DEFAULTS || {};
   const defaults = {
     size: d.size || 720,
     aspect: 'square',
     duration: d.seconds || 4,
     fps: d.fps || 25,
-    dither: d.dither !== false
+    dither: d.dither !== false,
+    transparent: !!transparentDefault
   };
   try {
     const raw = localStorage.getItem(RECORD_GIF_KEY);
@@ -168,7 +169,7 @@ const RecordGifDialog = ({
   baseName,
   transparent
 }) => {
-  const [settings, setSettings] = React.useState(loadRecordGifSettings);
+  const [settings, setSettings] = React.useState(() => loadRecordGifSettings(transparent));
   const [state, setState] = React.useState('idle'); // idle | recording | done | error
   const [progress, setProgress] = React.useState({
     phase: 'capture',
@@ -252,7 +253,7 @@ const RecordGifDialog = ({
         frames: frameCount,
         fps: settings.fps,
         dither: settings.dither,
-        transparent: !!transparent,
+        transparent: !!settings.transparent,
         clockwise: true,
         onProgress: setProgress,
         onFrame: drawPreviewFrame,
@@ -350,9 +351,23 @@ const RecordGifDialog = ({
       value: false,
       label: 'Off'
     }]
+  }), /*#__PURE__*/React.createElement(RecSegRow, {
+    label: "Transparent",
+    value: settings.transparent,
+    disabled: recording,
+    onChange: setField('transparent'),
+    options: [{
+      value: true,
+      label: 'On'
+    }, {
+      value: false,
+      label: 'Off'
+    }]
   }), /*#__PURE__*/React.createElement("div", {
     className: "mtlx-rec-hint"
-  }, frameCount, " frames, about ", outWidth, "\xD7", outHeight, " px"), recording && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, frameCount, " frames, about ", outWidth, "\xD7", outHeight, " px"), settings.transparent && /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-rec-hint"
+  }, "Records with the None backdrop and restores your backdrop afterwards."), recording && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "mtlx-rec-progress",
     role: "progressbar",
     "aria-valuenow": Math.round(pct),
