@@ -248,7 +248,7 @@ const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
 const createMtlxSceneView = async ({
     container, stage, files = [], version, onProgress, isMounted = () => true,
     udimTileSize = 512, udimMaxTiles = 256,
-    udimMaxBytes = 256 * 1024 * 1024, textureMaxSize,
+    udimMaxBytes = 256 * 1024 * 1024, textureMaxSize, textureMaxBytes,
 }) => {
     if (!container) throw new Error('USD scene view requires a container.');
     if (!stage || !Array.isArray(stage.meshes)) throw new Error('USD scene snapshot is missing meshes.');
@@ -299,35 +299,69 @@ const createMtlxSceneView = async ({
         udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 256),
         udimMaxBytes: Math.max(4 * 1024 * 1024, Number(udimMaxBytes) || 256 * 1024 * 1024),
         textureMaxSize: Math.max(128, Number(textureMaxSize) || storedSceneTextureMaxSize()),
+        textureMaxBytes: Math.max(64 * 1024 * 1024, Number(textureMaxBytes) || 1024 * 1024 * 1024),
     };
-    const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0 };
+    const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0 };
     const textureReservations = new Set();
-    // Ordinary textures request sceneOptions.textureMaxSize, but a scene
-    // with many large maps can blow the shared byte budget before every
-    // material is bound. When that happens, halve the size for this and
-    // every remaining ordinary texture (never below 512) and warn once;
-    // UDIM tiles keep their own fixed budget and size untouched.
+    // Ordinary textures and UDIM tiles are tracked against separate byte
+    // budgets (textureMaxBytes / udimMaxBytes) so a scene with many ordinary
+    // maps cannot starve UDIM tiles or vice versa. The ordinary size tier is
+    // decided once up front by planOrdinaryTextureSize (see below), not
+    // degraded mid-stream as textures are bound.
     let ordinaryTextureSize = sceneOptions.textureMaxSize;
-    let textureBudgetWarned = false;
+    let plannedTextureSize = sceneOptions.textureMaxSize;
+    // Counts the distinct ordinary (non-UDIM) texture files the given
+    // compiled materials reference, resolved against the file map and
+    // deduplicated by resolved path, then picks the largest size tier in
+    // [textureMaxSize, 1024, 512] whose estimated total fits textureMaxBytes.
+    // Falls back to 512 if even that does not fit; reservations beyond the
+    // budget still fail at bind time. Called before any ordinary texture is
+    // bound, and again by setTextureMaxSize before its display rebuild.
+    const planOrdinaryTextureSize = (compiledList) => {
+        const seen = new Set();
+        for (const compiled of compiledList) {
+            if (!compiled || !Array.isArray(compiled.introspected)) continue;
+            for (const u of compiled.introspected) {
+                if (u.type !== 'filename' || u.data == null) continue;
+                if (/<UDIM>/i.test(String(u.data))) continue;
+                const hit = sceneExactFile(fileMap, u.data, '');
+                if (hit) seen.add(hit.path);
+            }
+        }
+        const count = seen.size;
+        const tiers = Array.from(new Set([sceneOptions.textureMaxSize, 1024, 512]
+            .filter((value) => value <= sceneOptions.textureMaxSize))).sort((a, b) => b - a);
+        if (!tiers.length) tiers.push(512);
+        let chosen = tiers[tiers.length - 1];
+        for (const tier of tiers) {
+            const estimate = count * Math.ceil(4 * tier * tier * 4 / 3);
+            if (estimate <= sceneOptions.textureMaxBytes) { chosen = tier; break; }
+        }
+        ordinaryTextureSize = chosen;
+        plannedTextureSize = chosen;
+        if (chosen < sceneOptions.textureMaxSize) {
+            warnings.push('Texture budget: ' + count + ' textures loaded at ' + chosen
+                + ' px (requested ' + sceneOptions.textureMaxSize + ' px)');
+        }
+        return chosen;
+    };
     const reserveTexture = (path, isUdim = false) => {
         const key = String(path || '');
         if (textureReservations.has(key)) return true;
         const size = isUdim ? sceneOptions.udimTileSize : ordinaryTextureSize;
         const estimate = Math.ceil(4 * size * size * 4 / 3);
-        if (textureStats.bytesReserved + estimate > sceneOptions.udimMaxBytes) {
-            if (!isUdim && ordinaryTextureSize > 512) {
-                ordinaryTextureSize = Math.max(512, Math.floor(ordinaryTextureSize / 2));
-                if (!textureBudgetWarned) {
-                    textureBudgetWarned = true;
-                    warnings.push('Texture budget exceeded, remaining textures loaded at ' + ordinaryTextureSize + ' px');
-                }
-                return reserveTexture(path, isUdim);
-            }
-            return false;
+        if (isUdim) {
+            if (textureStats.udimBytes + estimate > sceneOptions.udimMaxBytes) return false;
+            textureReservations.add(key);
+            textureStats.udimTiles += 1;
+            textureStats.udimBytes += estimate;
+            textureStats.bytesReserved += estimate;
+            return true;
         }
+        if (textureStats.ordinaryBytes + estimate > sceneOptions.textureMaxBytes) return false;
         textureReservations.add(key);
+        textureStats.ordinaryBytes += estimate;
         textureStats.bytesReserved += estimate;
-        if (isUdim) { textureStats.udimTiles += 1; textureStats.udimBytes += estimate; }
         return true;
     };
     const udimWarnings = new Set();
@@ -419,51 +453,63 @@ const createMtlxSceneView = async ({
         material.uniformsNeedUpdate = true;
     };
 
-    const makeMtlxMaterial = async (record, forceCompile = false) => {
+    // Compiles (or returns the cached compile for) one material record,
+    // without binding any texture. Returns null when compileMtlxSceneMaterial
+    // itself yields nothing (hard failure, caller skips the record), or
+    // { compiled: null } for a setup/compile error (caller falls back to a
+    // neutral material), or { compiled, cacheKey } on success.
+    const ensureCompiledMaterial = async (record, forceCompile = false) => {
         const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
-        let renderable = record && (record.renderable || record.node);
         if (!window.compileMtlxSceneMaterial || !window.createMtlxSceneUniforms) {
             warnings.push('MaterialX material has no compiled renderable: ' + label);
-            return { material: sceneNeutralMaterial(label), compiled: null };
+            return { compiled: null };
         }
         const cacheKey = String(record.path || record.sourceAsset || label) + '|' + String(record.subIdentifier || '') + '|' + String(version || '');
         if (forceCompile) compiledByPath.delete(cacheKey);
         let compiled = compiledByPath.get(cacheKey);
-        if (!compiled) {
-            report({ phase: 'material', path: record.path, label, status: 'start' });
-            let sourceDocument = null;
-            try {
-                const loaded = await loadRenderable(record);
-                renderable = loaded.node;
-                sourceDocument = loaded.document;
-                compiled = await window.compileMtlxSceneMaterial({
-                    mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                    renderable, label, isMounted,
-                });
-                if (!compiled) return null;
-                // Reuse the engine's hidden KHR warm context before this
-                // scene's display WebGL context submits the same source.
-                if (window.prewarmShaderCompile) {
-                    await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
-                }
-                compiledByPath.set(cacheKey, compiled);
-                if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
-                report({ phase: 'material', path: record.path, label, status: 'ready' });
-            } catch (e) {
-                const detail = window.mxErr ? window.mxErr(mxEnv && mxEnv.mx, e) : ((e && e.message) || e);
-                warnings.push('MaterialX compile failed for ' + label + ': ' + detail);
-                report({ phase: 'material', path: record.path, label, status: 'error', error: String(detail) });
-                return { material: sceneNeutralMaterial(label), compiled: null };
-            } finally {
-                // Shader generation has detached its source and uniform data;
-                // the temporary embind document must not remain live per
-                // material for the lifetime of the scene.
-                if (sourceDocument) {
-                    documents.delete(sourceDocument);
-                    try { sourceDocument.delete && sourceDocument.delete(); } catch (e) {}
-                }
+        if (compiled) return { compiled, cacheKey };
+        report({ phase: 'material', path: record.path, label, status: 'start' });
+        let sourceDocument = null;
+        try {
+            const loaded = await loadRenderable(record);
+            const renderable = loaded.node;
+            sourceDocument = loaded.document;
+            compiled = await window.compileMtlxSceneMaterial({
+                mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
+                renderable, label, isMounted,
+            });
+            if (!compiled) return null;
+            // Reuse the engine's hidden KHR warm context before this
+            // scene's display WebGL context submits the same source.
+            if (window.prewarmShaderCompile) {
+                await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
+            }
+            compiledByPath.set(cacheKey, compiled);
+            if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
+            report({ phase: 'material', path: record.path, label, status: 'ready' });
+            return { compiled, cacheKey };
+        } catch (e) {
+            const detail = window.mxErr ? window.mxErr(mxEnv && mxEnv.mx, e) : ((e && e.message) || e);
+            warnings.push('MaterialX compile failed for ' + label + ': ' + detail);
+            report({ phase: 'material', path: record.path, label, status: 'error', error: String(detail) });
+            return { compiled: null };
+        } finally {
+            // Shader generation has detached its source and uniform data;
+            // the temporary embind document must not remain live per
+            // material for the lifetime of the scene.
+            if (sourceDocument) {
+                documents.delete(sourceDocument);
+                try { sourceDocument.delete && sourceDocument.delete(); } catch (e) {}
             }
         }
+    };
+
+    const makeMtlxMaterial = async (record, forceCompile = false) => {
+        const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+        const ensured = await ensureCompiledMaterial(record, forceCompile);
+        if (!ensured) return null;
+        if (!ensured.compiled) return { material: sceneNeutralMaterial(label), compiled: null };
+        const { compiled, cacheKey } = ensured;
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [],
         });
@@ -566,6 +612,15 @@ const createMtlxSceneView = async ({
             }
             return sceneNeutralMaterial(key || label || 'unbound');
         };
+        // Compile every material first (cheap on the second pass below, since
+        // it just hits compiledByPath) so the ordinary-texture size tier can
+        // be planned from the full reference count before any texture binds.
+        const precompiled = [];
+        for (const record of sceneArray(stage.materials)) {
+            const ensured = await ensureCompiledMaterial(record);
+            if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
+        }
+        planOrdinaryTextureSize(precompiled);
         for (const record of sceneArray(stage.materials)) {
             const result = await makeMtlxMaterial(record);
             if (result) {
@@ -1110,15 +1165,15 @@ const createMtlxSceneView = async ({
         // realm only) and drops every cached ordinary/UDIM texture and its
         // budget reservation so the display-rebuild path below decodes
         // fresh textures at the new size while keeping camera, environment
-        // and the loaded stage untouched.
+        // and the loaded stage untouched. Re-plans the size tier against the
+        // new cap (from the already-compiled materials) before that rebuild.
         const setTextureMaxSize = (px) => {
             const next = Math.round(Number(px));
             if (!SCENE_TEXTURE_MAX_SIZE_VALUES.includes(next) || next === sceneOptions.textureMaxSize) {
                 return sceneOptions.textureMaxSize;
             }
             sceneOptions.textureMaxSize = next;
-            ordinaryTextureSize = next;
-            textureBudgetWarned = false;
+            planOrdinaryTextureSize(Array.from(byPath.values()).map((info) => info.compiled));
             if (window.top === window) {
                 try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, String(next)); } catch (e) { /* privacy mode */ }
             }
@@ -1129,6 +1184,7 @@ const createMtlxSceneView = async ({
             textureCache.clear();
             textureReservations.clear();
             textureStats.bytesReserved = 0;
+            textureStats.ordinaryBytes = 0;
             textureStats.udimTiles = 0;
             textureStats.udimBytes = 0;
             udimVariantByMaterial.clear();
@@ -1159,8 +1215,10 @@ const createMtlxSceneView = async ({
             setTextureMaxSize,
             getTextureStats: () => ({
                 textureMaxSize: sceneOptions.textureMaxSize,
+                plannedTextureSize,
                 udimTileSize: sceneOptions.udimTileSize,
                 reservedBytes: textureStats.bytesReserved,
+                ordinaryBytes: textureStats.ordinaryBytes,
                 textureCount: textureReservations.size,
                 udimTileCount: textureStats.udimTiles,
             }),
