@@ -254,5 +254,11 @@ test('@scene latest environment import wins while renderer creation is deferred'
   expect(await page.evaluate(() => window.getEnvOverride().radiance.image.data[2])).toBe(220);
   await page.evaluate(() => { window.__releaseUsdSceneFactory(); });
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
-  expect(await page.evaluate(() => window.__usdSceneHandle.scene.environment.image.data[2])).toBe(220);
+  // usd-scene-environment.js no longer assigns the shared equirect to
+  // scene.environment (see js/usd-scene-environment.js), so check the
+  // sky mesh's material map instead, which still tracks the latest import.
+  expect(await page.evaluate(() => {
+    const skyMesh = window.__usdSceneHandle.scene.getObjectByName('__usd-scene-environment-sky');
+    return skyMesh.material.map.image.data[2];
+  })).toBe(220);
 });

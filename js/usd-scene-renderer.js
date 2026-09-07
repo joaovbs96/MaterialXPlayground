@@ -804,6 +804,13 @@ const createMtlxSceneView = async ({
         let envRotationRad = 0;
         let envExposure = 1;
         const applyMaterialEnvironment = () => {
+            const radiance = env && env.radiance;
+            if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
+                console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');
+                radiance.minFilter = THREE.LinearMipmapLinearFilter;
+                radiance.generateMipmaps = true;
+                radiance.needsUpdate = true;
+            }
             for (const material of materials) {
                 const compiled = material.userData && material.userData.mtlxSceneCompiled;
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
