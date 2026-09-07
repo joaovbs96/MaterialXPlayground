@@ -227,6 +227,15 @@ const VIEW_DEPS = {
         app: 'js/gallery-app.jsx',
         globalName: 'MtlxGalleryApp',
     },
+    // Fetches and renders ROADMAP.md at view time. No engine, no graph
+    // dependencies: mtlx-ui only, for SectionCard/MtlxIcon/pills.
+    roadmap: {
+        css: [],
+        scripts: [],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
+        app: 'js/roadmap-app.jsx',
+        globalName: 'MtlxRoadmapApp',
+    },
     // Dependency-only bundle (no app/globalName): loaded on demand via
     // mtlxLoadViewDeps('galleryDetail') on first overlay open. Never
     // routed to directly, so it's absent from Shell's viewState/render tree.
@@ -1044,6 +1053,7 @@ function Shell() {
         vscode: { mounted: false, status: 'idle' },
         whatIsMaterialx: { mounted: false, status: 'idle' },
         gallery: { mounted: false, status: 'idle' },
+        roadmap: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -1159,6 +1169,7 @@ function Shell() {
             vscode: 'MaterialX Playground - VS Code extension',
             whatIsMaterialx: 'MaterialX Playground - What is MaterialX?',
             gallery: 'MaterialX Playground - Material Gallery',
+            roadmap: 'MaterialX Playground - Roadmap',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -1194,6 +1205,7 @@ function Shell() {
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             whatIsMaterialx: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             gallery: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            roadmap: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -1291,6 +1303,10 @@ function Shell() {
                 // Same wrapper contract as vscode/whatIsMaterialx/home: a
                 // static, scrollable content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+            } else if (view === 'roadmap') {
+                // Same wrapper contract as gallery: a static, scrollable
+                // content page, not a full-bleed canvas.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
                 // directly via their own `absolute inset-0` root.
@@ -1322,6 +1338,7 @@ function Shell() {
             {renderView('vscode')}
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
+            {renderView('roadmap')}
             <DesktopCloseConfirmDialog />
             <DesktopNoticeBar />
             <DesktopSettingsDialog />
