@@ -79,6 +79,7 @@ test('@scene loadUsdStage extracts composed geometry and MaterialX in its Worker
         materialPath: mesh.materialPath,
         indexCount: mesh.indices?.length ?? null,
         vertexCount: mesh.positions?.length ?? 0,
+        indices: Array.from(mesh.indices ?? []),
         groups: (mesh.groups ?? []).map(group => ({
           start: group.start,
           count: group.count,
@@ -123,6 +124,13 @@ test('@scene loadUsdStage extracts composed geometry and MaterialX in its Worker
     [0, 6],
     [6, 6],
   ]);
+  // Quad is welded into an indexed vertex buffer: two triangle pairs share
+  // an edge, so the deduplicated vertex count is smaller than the corner
+  // (index) count, and every index resolves to a real vertex.
+  const quad = result.meshes[0];
+  const quadVertexCount = quad.vertexCount / 3;
+  expect(quadVertexCount).toBeLessThan(quad.indexCount);
+  expect(quad.indices.every(value => value >= 0 && value < quadVertexCount)).toBe(true);
   expect(result.materials.every(material => material.byteLength > 0)).toBe(true);
   expect(result.materials.map(material => material.sourceAsset)).toEqual([
     'nested/materials/red.mtlx',
@@ -259,8 +267,11 @@ test('@scene exposes composed prototype normals for safe instance recovery', asy
   expect(instanced.instances).toBe(2);
   expect(instanced.positions).toEqual(ordinary.positions);
   expect(instanced.uvs).toEqual(ordinary.uvs);
-  expect(instanced.indices.length).toBe(instanced.positions.length / 3);
-  expect(instanced.indices.every((value, index) => value === index)).toBe(true);
+  // Meshes are welded into an indexed vertex buffer, so the index stream
+  // (one entry per original corner) is longer than the deduplicated vertex
+  // count; both meshes weld the same corner stream identically.
+  expect(instanced.indices).toEqual(ordinary.indices);
+  expect(instanced.indices.every(value => value >= 0 && value < instanced.positions.length / 3)).toBe(true);
 
   // The duplicated U seam has distinct UVs, while the authored cap/body
   // normals at coincident boundary positions remain a deliberate hard edge.
@@ -298,6 +309,7 @@ test('@scene recovers normals when a PointInstancer targets a Mesh directly', as
         path: mesh.primPath,
         positions: Array.from(mesh.positions ?? []),
         normals: Array.from(mesh.normals ?? []),
+        indices: Array.from(mesh.indices ?? []),
         instances: mesh.instanceMatrices?.length ?? 0,
       })),
     };
@@ -311,6 +323,13 @@ test('@scene recovers normals when a PointInstancer targets a Mesh directly', as
   ordinary.normals.forEach((value, index) => expect(value).toBeCloseTo([0, 0.6, 0.8][index % 3], 5));
   expect(instanced.normals).toEqual(ordinary.normals);
   expect(instanced.instances).toBe(2);
+  // This direct-mesh fixture is a single triangle with three distinct
+  // corners (no shared position/normal/uv), so welding cannot reduce its
+  // vertex count below its corner count; still assert the weld produced a
+  // valid index buffer every corner in range.
+  const ordinaryVertexCount = ordinary.positions.length / 3;
+  expect(ordinary.indices.length).toBe(3);
+  expect(ordinary.indices.every(value => value >= 0 && value < ordinaryVertexCount)).toBe(true);
 });
 
 test('@scene keeps large native mesh views valid (optional Lion asset)', async ({ page, embedURL }) => {

@@ -19,6 +19,26 @@ const storedSceneTextureMaxSize = () => {
     } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
 };
 
+// Loop subdivision level for catmullClark/loop meshes, persisted the same
+// way as the texture size cap above.
+const SCENE_SUBDIVISION_KEY = 'mtlx_scene_subdivision';
+const SCENE_SUBDIVISION_VALUES = [0, 1, 2];
+const SCENE_SUBDIVISION_DEFAULT = 1;
+
+const storedSceneSubdivisionLevel = () => {
+    if (window.top !== window) return SCENE_SUBDIVISION_DEFAULT;
+    try {
+        const stored = Number(localStorage.getItem(SCENE_SUBDIVISION_KEY));
+        return SCENE_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_SUBDIVISION_DEFAULT;
+    } catch (e) { return SCENE_SUBDIVISION_DEFAULT; /* privacy mode */ }
+};
+
+const setStoredSceneSubdivisionLevel = (level) => {
+    if (window.top === window) {
+        try { localStorage.setItem(SCENE_SUBDIVISION_KEY, String(level)); } catch (e) { /* privacy mode */ }
+    }
+};
+
 const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
 
 const sceneFileMap = (files, stage) => {
@@ -309,6 +329,7 @@ const createMtlxSceneView = async ({
         textureMaxBytes: Math.max(64 * 1024 * 1024, Number(textureMaxBytes) || 1024 * 1024 * 1024),
     };
     const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0 };
+    let samplerReport = [];
     const textureReservations = new Set();
     // Ordinary textures and UDIM tiles are tracked against separate byte
     // budgets (textureMaxBytes / udimMaxBytes) so a scene with many ordinary
@@ -803,6 +824,13 @@ const createMtlxSceneView = async ({
         let envRotationRad = 0;
         let envExposure = 1;
         const applyMaterialEnvironment = () => {
+            const radiance = env && env.radiance;
+            if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
+                console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');
+                radiance.minFilter = THREE.LinearMipmapLinearFilter;
+                radiance.generateMipmaps = true;
+                radiance.needsUpdate = true;
+            }
             for (const material of materials) {
                 const compiled = material.userData && material.userData.mtlxSceneCompiled;
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
@@ -1118,6 +1146,23 @@ const createMtlxSceneView = async ({
             warnings.push('USD scene GPU program compilation failed: ' + String(error && error.message || error));
             report({ phase: 'gpu-program', status: 'error', error: String(error && error.message || error) });
         }
+        // Samplers still holding the engine's 1x1 default after every texture
+        // job settled, same warnings path the texture-tier budget uses so
+        // Diagnostics and DevTools both surface it.
+        samplerReport = [];
+        for (const [path, info] of byPath) {
+            if (!info || !info.compiled || !info.material) continue;
+            for (const u of info.compiled.introspected || []) {
+                if (u.type !== 'filename') continue;
+                if (window.samplerHoldsDefault(info.material.uniforms[u.name])) {
+                    samplerReport.push({ material: info.materialPath || path, uniform: u.name, file: u.data });
+                }
+            }
+        }
+        if (samplerReport.length) {
+            warnings.push(samplerReport.length + ' texture samplers fell back to MaterialX defaults (see console)');
+            console.warn('MaterialX sampler defaults:', samplerReport);
+        }
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
         // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
@@ -1251,6 +1296,7 @@ const createMtlxSceneView = async ({
                 textureCount: textureReservations.size,
                 udimTileCount: textureStats.udimTiles,
             }),
+            getSamplerReport: () => samplerReport.slice(),
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
                 applyStudioPolarClamp();

@@ -25,6 +25,7 @@ def Xform "NestedAsset" {
         def Mesh "Quad" (
             prepend apiSchemas = ["MaterialBindingAPI"]
         ) {
+            uniform token subdivisionScheme = "none"
             int[] faceVertexCounts = [4, 4]
             int[] faceVertexIndices = [0, 1, 2, 3, 4, 5, 6, 7]
             point3f[] points = [

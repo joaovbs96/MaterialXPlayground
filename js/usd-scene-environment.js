@@ -115,9 +115,10 @@
             updateLight();
             skyMaterial.map = env.background || env.radiance || null;
             skyMaterial.needsUpdate = true;
-            // `mips` is a count in the MaterialX environment shape. Use the
-            // actual prepared radiance texture for ordinary Three materials.
-            scene.environment = env.radiance || null;
+            // Do not assign the shared equirect to scene.environment: r128's
+            // WebGLCubeMaps uploads it via fromEquirectangularTexture, which
+            // swaps minFilter to LinearFilter for that first upload and never
+            // re-uploads, permanently stripping the mip chain FIS needs.
             applyVisibility();
             return true;
         };
@@ -215,7 +216,6 @@
                 if (disposed) return;
                 disposed = true;
                 scene.remove(root);
-                if (scene.environment === (currentEnv && currentEnv.radiance)) scene.environment = null;
                 if (studioMesh) { studioMesh.geometry.dispose(); studioMesh.material.dispose(); }
                 if (studioCatcher) { studioCatcher.geometry.dispose(); studioCatcher.material.dispose(); }
                 studioLight.shadow.map && studioLight.shadow.map.dispose();

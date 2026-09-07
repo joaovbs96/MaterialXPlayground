@@ -154,6 +154,11 @@
         return labels;
     };
     const stageMeshes = (stage) => Array.isArray(stage && stage.meshes) ? stage.meshes : [];
+    const stageTriangleCount = (stage) => stageMeshes(stage).reduce((sum, mesh) => {
+        if (!mesh) return sum;
+        const corners = Array.isArray(mesh.indices) || mesh.indices ? mesh.indices.length : (mesh.positions ? mesh.positions.length / 3 : 0);
+        return sum + Math.floor(corners / 3);
+    }, 0);
     const stageMaterials = (stage) => Array.isArray(stage && stage.materials) ? stage.materials : [];
     const materialWarningList = (stage) => {
         const out = [];
@@ -222,6 +227,11 @@
         const [envExposureLinear, setEnvExposureLinear] = React.useState(1);
         const [backdrop, setBackdrop] = React.useState('studio');
         const [textureSizeTick, setTextureSizeTick] = React.useState(0);
+        const [subdivisionLevel, setSubdivisionLevel] = React.useState(
+            () => (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 1)
+        );
+        const subdivisionLevelRef = React.useRef(subdivisionLevel);
+        subdivisionLevelRef.current = subdivisionLevel;
         const [displayTransform, setDisplayTransformState] = React.useState(
             () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
         );
@@ -324,7 +334,7 @@
             handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
             window.__mtlxUsdSceneHandle = null;
             try {
-                const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, onProgress: (value) => updateProgress(value, generation) });
+                const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
                 setStage(result); setStatus('loaded');
             } catch (e) {
@@ -484,6 +494,13 @@
             callHandle('setTextureMaxSize', Number(px));
             setTextureSizeTick((t) => t + 1);
         };
+        const pickSubdivisionLevel = (level) => {
+            const next = Number(level);
+            setSubdivisionLevel(next);
+            subdivisionLevelRef.current = next;
+            if (typeof setStoredSceneSubdivisionLevel === 'function') setStoredSceneSubdivisionLevel(next);
+            if (files.length && rootPath) load();
+        };
         const textureMaxSize = (handle && typeof handle.getTextureMaxSize === 'function')
             ? handle.getTextureMaxSize()
             : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
@@ -501,6 +518,7 @@
             ? 'Default environment'
             : Math.round(envRotation) + '°, ' + formatEv(linearToEv(envExposureLinear));
         const renderedPrimCount = (handle && Array.isArray(handle.prims)) ? handle.prims.length : meshes.length;
+        const triangleCount = stageTriangleCount(stage);
         const hasStage = !!stage || files.length > 0;
 
         const sidebarBody = (
@@ -660,6 +678,21 @@
                     <div className="mt-1 text-[11px] text-gray-400">
                         Higher resolutions sharpen normal and roughness maps, at the cost of memory and load time.
                     </div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-400">Subdivision</span>
+                        <MtlxSelect
+                            value={subdivisionLevel}
+                            options={[0, 1, 2]}
+                            labels={{ 0: 'Off', 1: '1', 2: '2' }}
+                            onChange={pickSubdivisionLevel}
+                            defValue={1}
+                            size="sm"
+                            disabled={busy}
+                        />
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface.
+                    </div>
                 </SectionCard>
 
                 <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
@@ -726,6 +759,10 @@
                             <div className="flex justify-between">
                                 <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Meshes</span>
                                 <span className="font-mono tabular-nums">{meshes.length}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Triangles</span>
+                                <span className="font-mono tabular-nums" data-testid="usd-stage-triangles">{triangleCount.toLocaleString()}</span>
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Materials</span>
