@@ -119,3 +119,55 @@ export function makeHotExr() {
 
   return Buffer.concat([magicVersion, header, offsetTable, ...chunks]);
 }
+
+/** Same uncompressed FLOAT RGBA scanline layout as makeHotExr, but every
+ * pixel of a WxH image is set to the same [r, g, b, a] (0..1, no overflow). */
+export function makeSolidExr(width, height, rgba) {
+  const W = width, H = height;
+  const chlistData = Buffer.concat([...CHANNEL_ORDER.map(chlistEntry), Buffer.from([0])]);
+  const attrs = Buffer.concat([
+    attr('channels', 'chlist', chlistData),
+    attr('compression', 'compression', Buffer.from([0])),
+    attr('dataWindow', 'box2i', box2i(0, 0, W - 1, H - 1)),
+    attr('displayWindow', 'box2i', box2i(0, 0, W - 1, H - 1)),
+    attr('lineOrder', 'lineOrder', Buffer.from([0])),
+    attr('pixelAspectRatio', 'float', (() => { const b = Buffer.alloc(4); b.writeFloatLE(1.0, 0); return b; })()),
+    attr('screenWindowCenter', 'v2f', (() => { const b = Buffer.alloc(8); b.writeFloatLE(0, 0); b.writeFloatLE(0, 4); return b; })()),
+    attr('screenWindowWidth', 'float', (() => { const b = Buffer.alloc(4); b.writeFloatLE(1.0, 0); return b; })()),
+  ]);
+  const header = Buffer.concat([attrs, Buffer.from([0])]);
+
+  const magicVersion = Buffer.alloc(8);
+  magicVersion.writeInt32LE(20000630, 0);
+  magicVersion.writeInt32LE(2, 4);
+
+  const headerLen = magicVersion.length + header.length;
+  const offsetTableLen = H * 8;
+  const firstChunkOffset = headerLen + offsetTableLen;
+
+  const dataSize = 4 * W * 4;
+  const chunkSize = 4 + 4 + dataSize;
+
+  const offsetTable = Buffer.alloc(offsetTableLen);
+  for (let y = 0; y < H; y++) {
+    offsetTable.writeBigUInt64LE(BigInt(firstChunkOffset + y * chunkSize), y * 8);
+  }
+
+  const [r, g, b, a] = rgba;
+  const byChannel = { R: r, G: g, B: b, A: a };
+  const chunks = [];
+  for (let y = 0; y < H; y++) {
+    const chunk = Buffer.alloc(chunkSize);
+    let o = 0;
+    chunk.writeInt32LE(y, o); o += 4;
+    chunk.writeInt32LE(dataSize, o); o += 4;
+    for (const ch of CHANNEL_ORDER) {
+      for (let x = 0; x < W; x++) {
+        chunk.writeFloatLE(byChannel[ch], o); o += 4;
+      }
+    }
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat([magicVersion, header, offsetTable, ...chunks]);
+}

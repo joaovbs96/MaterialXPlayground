@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Scene" {
+    def Scope "Looks" {
+        def Material "TifMaterial" (
+            references = @texture-formats-tif.mtlx@</MaterialX/Materials/tif_material>
+        ) {
+        }
+        def Material "ExrMaterial" (
+            references = @texture-formats-exr.mtlx@</MaterialX/Materials/exr_material>
+        ) {
+        }
+    }
+
+    def Mesh "QuadTif" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-2, -1, 0), (0, -1, 0), (0, 1, 0), (-2, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] ( interpolation = "vertex" )
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] ( interpolation = "faceVarying" )
+        rel material:binding = </Scene/Looks/TifMaterial>
+    }
+
+    def Mesh "QuadExr" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, -1, 0), (2, -1, 0), (2, 1, 0), (0, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] ( interpolation = "vertex" )
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] ( interpolation = "faceVarying" )
+        rel material:binding = </Scene/Looks/ExrMaterial>
+    }
+}

@@ -7,6 +7,10 @@
 // Ordinary (non-UDIM) scene texture resolution cap, persisted separately
 // from the UDIM tile size (which stays fixed per scene). Mirrors the
 // engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
+// Formats the engine's exr/hdr/tif loaders decode whole (never resized by
+// createImageBitmap, unlike the bounded PNG/JPEG path).
+const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff'];
+
 const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
 const SCENE_TEXTURE_MAX_SIZE_VALUES = [512, 1024, 2048];
 const SCENE_TEXTURE_MAX_SIZE_DEFAULT = 2048;
@@ -54,7 +58,10 @@ const sceneFileMap = (files, stage) => {
         // explicit ArrayBuffer slice or second JS heap allocation.
         const canonical = String(entry.path).replace(/\\/g, '/');
         const ext = canonical.split('.').pop().toLowerCase();
-        const typeByExtension = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+        const typeByExtension = {
+            png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+            tif: 'image/tiff', tiff: 'image/tiff', exr: 'image/x-exr', hdr: 'image/vnd.radiance',
+        };
         // Preserve the user's authored file when the Worker also returns a
         // composed/generated payload at the same path. Stage assets remain a
         // fallback for references that were not part of the original upload.
@@ -392,6 +399,23 @@ const createMtlxSceneView = async ({
         textureStats.bytesReserved += estimate;
         return true;
     };
+    // EXR/HDR/TIF are not resized by createImageBitmap (the bounded PNG/JPEG
+    // path), so their real decoded size must be known before budgeting.
+    const decodeUnboundedSceneTexture = async (blob, ext) => {
+        let tex = null;
+        try {
+            if (ext === 'exr') tex = await window.loadExrTexture(blob);
+            else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
+            else tex = await window.loadTifTexture(blob);
+        } catch (error) { return null; }
+        if (!tex || !tex.image) return null;
+        // TIF decodes to 8bpc RGBA (4 bytes/px); EXR/HDR decode float RGBA
+        // (4 channels x 4 bytes = 16 bytes/px).
+        const bytesPerPixel = (ext === 'exr' || ext === 'hdr') ? 16 : 4;
+        const bytes = (tex.image.width || 0) * (tex.image.height || 0) * bytesPerPixel;
+        window.configureLoadedTexture(tex);
+        return { tex, bytes };
+    };
     const udimWarnings = new Set();
     const compiledByPath = new Map();
     const programByKey = new Map();
@@ -581,23 +605,37 @@ const createMtlxSceneView = async ({
                 // basename or parent prefix: that can bind a duplicate file
                 // from an unrelated layer.
                 const hit = sceneExactFile(fileMap, u.data, '');
-                if (hit && reserveTexture(hit.path)) {
-                    const extension = String(hit.path).split('.').pop().toLowerCase();
-                    if (sceneOptions.udimTileSize && ['exr', 'hdr', 'tif', 'tiff'].includes(extension)) {
-                        warnings.push('Bounded scene texture preview does not decode ' + extension.toUpperCase() + ' tiles; using MaterialX default for ' + hit.path);
-                        continue;
-                    }
-                    const binding = window.bindDroppedTextures({
-                    uniforms,
-                    introspected: [u],
-                    textureCache,
-                    textureQueue,
-                    maxTextureSize: ordinaryTextureSize,
-                    isAlive: () => !stopped && isMounted(),
-                    }, { [hit.path]: hit.blob });
-                    pendingTextures.push(...(binding && binding.pending || []));
-                } else if (!hit) warnings.push('Texture file unavailable for ' + label + ': ' + u.data);
-                else warnings.push('Texture preview budget exceeded for ' + hit.path);
+                if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); continue; }
+                const extension = String(hit.path).split('.').pop().toLowerCase();
+                if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(extension)) {
+                    // Not resized by createImageBitmap, so the reserveTexture
+                    // estimate would be wrong-sized; decode first, account the
+                    // real bytes, and drop only when that exceeds the budget.
+                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension).then((result) => {
+                        if (!result) return;
+                        const { tex, bytes } = result;
+                        if (textureStats.ordinaryBytes + bytes > sceneOptions.textureMaxBytes) {
+                            warnings.push('Texture preview budget exceeded for ' + hit.path);
+                            tex.dispose && tex.dispose();
+                            return;
+                        }
+                        textureReservations.add(hit.path);
+                        textureStats.ordinaryBytes += bytes;
+                        textureStats.bytesReserved += bytes;
+                        if (uniforms[u.name]) uniforms[u.name].value = tex;
+                    }, (error) => ({ error })));
+                    continue;
+                }
+                if (!reserveTexture(hit.path)) { warnings.push('Texture preview budget exceeded for ' + hit.path); continue; }
+                const binding = window.bindDroppedTextures({
+                uniforms,
+                introspected: [u],
+                textureCache,
+                textureQueue,
+                maxTextureSize: ordinaryTextureSize,
+                isAlive: () => !stopped && isMounted(),
+                }, { [hit.path]: hit.blob });
+                pendingTextures.push(...(binding && binding.pending || []));
             }
         }
         return { material, compiled, pendingTextures, udimRefs, cacheKey,
@@ -683,16 +721,14 @@ const createMtlxSceneView = async ({
                 udimVariantByMaterial.set(key, fallback);
                 return fallback;
             }
-            const unboundedTile = tileHits.find((hit) => ['exr', 'hdr', 'tif', 'tiff'].includes(String(hit.path).split('.').pop().toLowerCase()));
-            if (unboundedTile) {
-                const warning = 'Bounded UDIM preview supports PNG/JPEG tiles only; skipped ' + unboundedTile.path;
-                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
-                const fallback = sceneNeutralMaterial(label + ' unsupported UDIM texture');
-                materials.add(fallback);
-                udimVariantByMaterial.set(key, fallback);
-                return fallback;
-            }
-            if (tileHits.some((hit) => !reserveTexture(hit.path, true))) {
+            // Real bytes for exr/hdr/tif tiles are only known after decode,
+            // so those hits skip this pre-emptive udimTileSize-based
+            // reservation and are budgeted individually below instead.
+            if (tileHits.some((hit) => {
+                const ext = String(hit.path).split('.').pop().toLowerCase();
+                if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) return false;
+                return !reserveTexture(hit.path, true);
+            })) {
                 const warning = 'UDIM preview budget exceeded for ' + label + ' tile ' + code;
                 if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                 const fallback = sceneNeutralMaterial(label + ' UDIM budget');
@@ -718,6 +754,23 @@ const createMtlxSceneView = async ({
             const pending = [];
             info.udimRefs.forEach((entry, index) => {
                 const hit = tileHits[index];
+                const ext = String(hit.path).split('.').pop().toLowerCase();
+                if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) {
+                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext).then((result) => {
+                        if (!result) return;
+                        const { tex, bytes } = result;
+                        if (textureStats.udimBytes + bytes > sceneOptions.udimMaxBytes) {
+                            const warning = 'UDIM preview budget exceeded for ' + label + ' tile ' + code;
+                            if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+                            tex.dispose && tex.dispose();
+                            return;
+                        }
+                        textureStats.udimBytes += bytes;
+                        textureStats.bytesReserved += bytes;
+                        if (uniforms[entry.uniform.name]) uniforms[entry.uniform.name].value = tex;
+                    }, (error) => ({ error })));
+                    return;
+                }
                 const bindingUniform = Object.assign({}, entry.uniform, { data: hit.path });
                 const binding = window.bindDroppedTextures({
                     uniforms,
