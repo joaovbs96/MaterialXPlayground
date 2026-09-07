@@ -345,7 +345,11 @@ test('@scene refreshes display transform without reloading the USD stage', async
       cameraPosition: handle.camera.position.toArray(),
       cameraQuaternion: handle.camera.quaternion.toArray(),
       sceneEnvironment: handle.scene.environment,
-      exposure: handle.renderer.toneMappingExposure,
+      // Exposure is applied through u_envLightIntensity, not
+      // renderer.toneMappingExposure (pinned to 1, matching the Viewer);
+      // check the setting survived the route swap via the uniform instead.
+      exposure: materials[0] && materials[0].envIntensity,
+      toneMappingExposure: handle.renderer.toneMappingExposure,
       materials,
       workerCalls: window.__usdWorkerCalls,
       factoryCalls: window.__usdFactoryCalls,
@@ -401,7 +405,8 @@ test('@scene refreshes display transform without reloading the USD stage', async
       cameraPosition: handle.camera.position.toArray(),
       cameraQuaternion: handle.camera.quaternion.toArray(),
       sameSceneEnvironment: handle.scene.environment === state.sceneEnvironment,
-      exposure: handle.renderer.toneMappingExposure,
+      exposure: materials[0] && materials[0].envIntensity,
+      toneMappingExposure: handle.renderer.toneMappingExposure,
       materials,
       workerCalls: window.__usdWorkerCalls,
       factoryCalls: window.__usdFactoryCalls,
@@ -415,7 +420,11 @@ test('@scene refreshes display transform without reloading the USD stage', async
   retained.cameraPosition.forEach((value, index) => expect(value).toBeCloseTo(routeState.cameraPosition[index], 10));
   retained.cameraQuaternion.forEach((value, index) => expect(value).toBeCloseTo(routeState.cameraQuaternion[index], 10));
   expect(retained.sameSceneEnvironment).toBe(true);
-  expect(retained.exposure).toBeCloseTo(2, 5);
+  expect(retained.exposure).toBeCloseTo(routeState.exposure, 5);
+  // Exposure applied exactly once: renderer.toneMappingExposure stays
+  // pinned at 1 (matching the Viewer) both before and after the route swap.
+  expect(routeState.toneMappingExposure).toBe(1);
+  expect(retained.toneMappingExposure).toBe(1);
   expect(retained.workerCalls).toBe(routeState.workerCalls);
   expect(retained.factoryCalls).toBe(1);
   expect(retained.backdrop).not.toBeNull();
@@ -454,9 +463,15 @@ test('@scene refreshes display transform without reloading the USD stage', async
         });
       }
     }
-    return { exposure: handle.renderer.toneMappingExposure, materials, backdrop: environment ? environment.children.map((child) => [child.name, child.visible]) : null };
+    return {
+      exposure: materials[0] && materials[0].envIntensity,
+      toneMappingExposure: handle.renderer.toneMappingExposure,
+      materials,
+      backdrop: environment ? environment.children.map((child) => [child.name, child.visible]) : null,
+    };
   });
   expect(postSwap.exposure).toBeCloseTo(routeState.exposure, 5);
+  expect(postSwap.toneMappingExposure).toBe(1);
   expect(postSwap.materials).toHaveLength(routeState.materials.length);
   expect(postSwap.materials.map((entry) => [entry.path, entry.envMatrix, entry.envIntensity])).toEqual(
     routeState.materials.map((entry) => [entry.path, entry.envMatrix, entry.envIntensity]),
