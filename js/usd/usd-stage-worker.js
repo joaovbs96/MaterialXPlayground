@@ -482,18 +482,25 @@ function subdivideMesh(mesh, levels) {
       if (idx !== undefined) return idx;
       const adj = edgeTriangles.get(ek);
       const pa = weldedPositions[a], pb = weldedPositions[b];
+      // Real-world meshes can have degenerate triangles (a collapsed
+      // diagonal) or non-manifold edges (shared by more than two
+      // triangles). Both break the textbook interior mask; fall back to
+      // the boundary midpoint rule rather than crashing on bad topology.
+      const oppOf = (ti) => triangles[ti]?.v.find(v => v !== a && v !== b);
+      let pc, pd;
+      if (adj.length === 2) {
+        pc = weldedPositions[oppOf(adj[0])];
+        pd = weldedPositions[oppOf(adj[1])];
+      }
       let pos;
-      if (adj.length === 1) {
-        pos = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2];
-      } else {
-        const [t0, t1] = adj;
-        const oppOf = (ti) => triangles[ti].v.find(v => v !== a && v !== b);
-        const pc = weldedPositions[oppOf(t0)], pd = weldedPositions[oppOf(t1)];
+      if (pc && pd) {
         pos = [
           0.375 * (pa[0] + pb[0]) + 0.125 * (pc[0] + pd[0]),
           0.375 * (pa[1] + pb[1]) + 0.125 * (pc[1] + pd[1]),
           0.375 * (pa[2] + pb[2]) + 0.125 * (pc[2] + pd[2]),
         ];
+      } else {
+        pos = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2];
       }
       idx = newPositions.length;
       newPositions.push(pos);
