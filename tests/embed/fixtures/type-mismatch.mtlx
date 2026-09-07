@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <constant name="mtlxcolorcorrect2" type="color3">
+    <input name="value" type="color3" value="0.5, 0.5, 0.5" />
+  </constant>
+  <surface_unlit name="SR_BrokenUnlit" type="surfaceshader">
+    <input name="emission" type="float" value="1.0" />
+    <input name="emission_color" type="color3" value="1, 1, 1" />
+    <input name="opacity" type="float" nodename="mtlxcolorcorrect2" />
+  </surface_unlit>
+  <surfacematerial name="BrokenUnlit" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_BrokenUnlit" />
+  </surfacematerial>
+  <surface_unlit name="SR_ValidUnlit" type="surfaceshader">
+    <input name="emission" type="float" value="1.0" />
+    <input name="emission_color" type="color3" value="1, 0, 0" />
+    <input name="opacity" type="float" value="1.0" />
+  </surface_unlit>
+  <surfacematerial name="ValidUnlit" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_ValidUnlit" />
+  </surfacematerial>
+</materialx>

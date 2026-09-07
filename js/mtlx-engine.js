@@ -3532,6 +3532,90 @@ const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
 };
 
 
+// MaterialX has no implicit type coercion; a mismatched connection compiles
+// as far as GLSL and fails deep inside an opaque nodegraph call with a line
+// number, not a name. Resolve one connected input's source type, following
+// nodename, nodegraph and (one hop of) interfacename bindings.
+const mxOutputTypeAndNode = (node, outputName) => {
+    let outs = [];
+    try { outs = vecToArray(node.getOutputs ? node.getOutputs() : null); } catch (e) { outs = []; }
+    if (outs.length > 1 || mxElType(node) === 'multioutput') {
+        const out = outputName
+            ? (mxSafe(() => node.getOutput(outputName), null) || outs.find((o) => mxElName(o) === outputName))
+            : outs[0];
+        if (!out) return null;
+        return { type: mxElType(out), producer: mxSafe(() => out.getConnectedNode(), null) };
+    }
+    return { type: mxElType(node), producer: node };
+};
+
+const mxResolveConnection = (input, doc) => {
+    const graphName = mxElAttr(input, 'nodegraph');
+    if (graphName) {
+        const ng = mxSafe(() => doc.getNodeGraph(graphName), null);
+        if (!ng) return null;
+        const resolved = mxOutputTypeAndNode(ng, mxElAttr(input, 'output'));
+        return resolved ? { type: resolved.type, sourceName: graphName, node: resolved.producer } : null;
+    }
+    const nodeName = mxElAttr(input, 'nodename');
+    if (nodeName) {
+        const node = mxSafe(() => input.getConnectedNode(), null);
+        if (!node) return null;
+        const resolved = mxOutputTypeAndNode(node, mxElAttr(input, 'output'));
+        return resolved ? { type: resolved.type, sourceName: nodeName, node: resolved.producer } : null;
+    }
+    const interfaceName = mxElAttr(input, 'interfacename');
+    if (interfaceName) {
+        // The promoted graph-level input: one hop only, its own value is
+        // the binding, not a further per-instance override to chase.
+        const iface = mxSafe(() => input.getInterfaceInput(), null);
+        if (iface && iface !== input) return mxResolveConnection(iface, doc);
+    }
+    return null;
+};
+
+// Depth-capped upstream walk from the renderable surface node, through every
+// nodename/nodegraph/interfacename-connected input, comparing each input's
+// declared type against its source's. Skips (never false-positives) when
+// either side, or the connection itself, cannot be resolved: a missing node,
+// an unreadable type, or a plain unconnected input with just a value.
+const MTLX_TYPE_WALK_MAX_DEPTH = 32;
+const findTypeMismatches = (renderable, mx) => {
+    let doc = null;
+    try { doc = renderable.getDocument(); } catch (e) { return null; }
+    if (!doc) return null;
+    const visited = new Set();
+    let found = null;
+    const walk = (node, depth) => {
+        if (found || !node || depth > MTLX_TYPE_WALK_MAX_DEPTH) return;
+        const nodeName = mxElName(node);
+        const visitKey = nodeName + '|' + mxElCat(node);
+        if (visited.has(visitKey)) return;
+        visited.add(visitKey);
+        const inputs = vecToArray(mxSafe(() => (node.getInputs ? node.getInputs() : null), []));
+        for (const input of inputs) {
+            if (found) return;
+            const connected = mxElAttr(input, 'nodename')
+                || mxElAttr(input, 'nodegraph')
+                || mxElAttr(input, 'interfacename');
+            if (!connected) continue;
+            const inputType = mxElType(input);
+            const resolved = mxResolveConnection(input, doc);
+            if (!resolved || !resolved.type || !inputType) continue;
+            if (resolved.type !== inputType) {
+                found = {
+                    nodeName, inputName: mxElName(input), inputType,
+                    sourceName: resolved.sourceName, sourceType: resolved.type,
+                };
+                return;
+            }
+            if (resolved.node) walk(resolved.node, depth + 1);
+        }
+    };
+    walk(renderable, 0);
+    return found;
+};
+
 // MaterialX reports an unresolved node by its INSTANCE name only ("could
 // not find a nodedef for node 'x'"), which is a name the author invented.
 // This adds the category, and whether that category exists here at all.
@@ -3619,6 +3703,16 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const colorspaceDoc = mxSafe(() => renderable.getDocument(), null) || documentArg;
     let colorspaceAliasResult = null;
     if (colorspaceDoc) colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+    // Catches a MaterialX type mismatch (no implicit coercion) BEFORE
+    // generation, which otherwise fails deep inside an opaque nodegraph
+    // call with a GLSL line number instead of naming the real culprit.
+    const mismatch = findTypeMismatches(renderable, mx);
+    if (mismatch) {
+        throw new Error(`Material "${label}": input "${mismatch.inputName}" on "${mismatch.nodeName}" `
+            + `(${mismatch.inputType}) is connected to "${mismatch.sourceName}" (${mismatch.sourceType}); `
+            + 'MaterialX requires matching types');
+    }
+
     let mxShader;
     const __genPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
     try {

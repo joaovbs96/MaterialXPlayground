@@ -74,15 +74,23 @@ Build MaterialX node graphs visually.
 
 ## Running locally
 
-A fresh clone is the complete, runnable site: there is nothing to build or install. Just serve the folder with any static file server:
+Requires Node 22.12 or newer (20.19 or newer also works).
+
+A fresh clone runs with one setup pass, then serve the folder with any static file server:
 
 ```bash
+npm ci
+npm run vendor
+npm run build
+
 # Python 3
 python -m http.server 8000
 
 # or Node
 npx serve .
 ```
+
+`npm run vendor` needs network access once; it also fetches the ~20 MB OpenUSD Scene Viewer runtime into `vendor/usd-webview-bindings/`. If your clone lives inside a OneDrive-synced folder, `npm run vendor` can fail with `EPERM`; clone outside synced folders instead.
 
 Then open <http://localhost:8000/>. Serving over HTTP is required; opening `index.html` via `file://` won't work, because the app fetches its `.jsx`, WASM, and library files.
 
