@@ -14,6 +14,24 @@
       "bytes": 1106
     },
     {
+      "path": "basis-encoder/basis_encoder.js",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.js",
+      "sha256": "d225ce1e7012609bcfbe338351c8778d95eb1c19d404314d513b2b2df94a6ffb",
+      "bytes": 103878
+    },
+    {
+      "path": "basis-encoder/basis_encoder.wasm",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.wasm",
+      "sha256": "48d4e39ccaa1e290a17d00c13b353a728227bb439108d5e6c944fe6ab80552db",
+      "bytes": 3287321
+    },
+    {
+      "path": "basis-encoder/LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE",
+      "sha256": "065fcf48d6af21c0b75e23be5ed5753aee75c892e1c2cf178fa6736305614a5c",
+      "bytes": 11347
+    },
+    {
       "path": "dagre/dagre.min.js",
       "source": "dagre@0.8.5",
       "sha256": "62eb9787ccfdbdf4148d4d99d31dbf9ee4770eafee81e637d759b52aac22cd51",
@@ -240,6 +258,18 @@
       "source": "https://cdn.tailwindcss.com/3.4.17",
       "sha256": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15",
       "bytes": 407279
+    },
+    {
+      "path": "three/basis/basis_transcoder.js",
+      "source": "three@0.128.0",
+      "sha256": "b352d4fb1b2b5f66877a37c418d061693cee99245bdaf38e6b6ba17c9f34a964",
+      "bytes": 62997
+    },
+    {
+      "path": "three/basis/basis_transcoder.wasm",
+      "source": "three@0.128.0",
+      "sha256": "e7dcac729b9e38208a1382f17da3d64a3108a8390e95c912d24bd95b7bc2fb5b",
+      "bytes": 440267
     },
     {
       "path": "three/draco/draco_decoder.wasm",
