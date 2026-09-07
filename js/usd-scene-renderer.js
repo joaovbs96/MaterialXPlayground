@@ -1153,7 +1153,10 @@ const createMtlxSceneView = async ({
         for (const [path, info] of byPath) {
             if (!info || !info.compiled || !info.material) continue;
             for (const u of info.compiled.introspected || []) {
-                if (u.type !== 'filename') continue;
+                if (u.type !== 'filename' || u.data == null) continue;
+                // UDIM tiles bind on per-partition variant materials, so the
+                // base material keeps its <UDIM> sampler at the default by design.
+                if (/<UDIM>/i.test(String(u.data))) continue;
                 if (window.samplerHoldsDefault(info.material.uniforms[u.name])) {
                     samplerReport.push({ material: info.materialPath || path, uniform: u.name, file: u.data });
                 }
