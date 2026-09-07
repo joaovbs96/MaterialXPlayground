@@ -419,6 +419,40 @@ const parseUniforms = src => {
 // generated version line to avoid a duplicate-directive compile error.
 const stripVersion = src => src.replace(/^\s*#version[^\n]*\n/, '');
 
+// Scrapes `in <type> i_<name>;` vertex attribute declarations from the
+// vertex stage. Returns [{ type, name }, ...].
+const parseVertexInputs = vs => {
+  const out = [];
+  const re = /^\s*in\s+(\w+)\s+(i_\w+)\s*;/gm;
+  let m;
+  while ((m = re.exec(vs)) !== null) out.push({
+    type: m[1],
+    name: m[2]
+  });
+  return out;
+};
+
+// ESSL's geompropvalue node names both the vertex input and the vertex-data
+// connector "i_geomprop_<name>" (the GLSL generator hides this behind a
+// vd. struct; ESSL emits flat varyings), producing a redefinition of the
+// "out" declaration and an invalid self-assignment connector line. Renames
+// only the connector side to "vd_geomprop_<name>" in both stages. No match
+// is a no-op (fail-soft): shaders without geompropvalue are untouched.
+const patchGeompropVaryings = (vs, fs) => {
+  const outRe = /^\s*out\s+(\w+)\s+i_geomprop_(\w+)\s*;/gm;
+  const hasOut = outRe.test(vs);
+  const inRe = /^\s*in\s+\w+\s+i_geomprop_\w+\s*;/m;
+  if (!hasOut && inRe.test(vs)) {
+    mtlxWarn('mtlx-engine: found a vertex "in i_geomprop_*" without a matching "out", patchGeompropVaryings skipped.');
+  }
+  const patchedVs = vs.replace(/^\s*out\s+(\w+)\s+i_geomprop_(\w+)\s*;/gm, 'out $1 vd_geomprop_$2;').replace(/^(\s*)i_geomprop_(\w+)\s*=\s*i_geomprop_\2\s*;/gm, '$1vd_geomprop_$2 = i_geomprop_$2;');
+  const patchedFs = fs.replace(/\bi_geomprop_(\w+)\b/g, 'vd_geomprop_$1');
+  return {
+    vs: patchedVs,
+    fs: patchedFs
+  };
+};
+
 // Hair helper pbrlib nodes pull in the full BSDF/lighting include chain,
 // which the generator only emits for LIT shaders, leaving an unlit
 // preview referencing undefined symbols; this patches in no-op stubs.
@@ -1541,12 +1575,26 @@ const configureLoadedTexture = t => {
 // ---- Preview geometry ----
 // Aliases three's attributes to MaterialX vertex-shader names, providing
 // tangents (real when computable, constant +X fallback otherwise).
+// Conventional UV geomprop names aliased to the "uv" attribute so
+// geompropvalue(vector2) reads real texcoords instead of zeros.
+const UV_GEOMPROP_ALIASES = ['i_geomprop_st', 'i_geomprop_uv', 'i_geomprop_UV0', 'i_geomprop_st0', 'i_geomprop_uv0', 'i_geomprop_map1'];
+const aliasUvGeomprops = geometry => {
+  const uv = geometry.getAttribute('uv');
+  if (!uv) return;
+  for (const name of UV_GEOMPROP_ALIASES) {
+    if (!geometry.getAttribute(name)) geometry.setAttribute(name, uv);
+  }
+};
 const prepGeometry = geometry => {
   // Already prepped (e.g. a cached shaderball clone), skip re-running
   // computeTangents only after both members of the tangent frame exist.
   // Older cached/custom geometry may carry i_tangent without the explicit
   // bitangent added by the scene path, so that case is repaired below.
-  if (geometry.getAttribute('i_tangent') && geometry.getAttribute('i_bitangent')) return geometry;
+  if (geometry.getAttribute('i_tangent') && geometry.getAttribute('i_bitangent')) {
+    aliasUvGeomprops(geometry);
+    return geometry;
+  }
+  aliasUvGeomprops(geometry);
   const position = geometry.getAttribute('position');
   if (!position) return geometry;
   if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
@@ -1556,6 +1604,7 @@ const prepGeometry = geometry => {
     const count = position.count;
     geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
   }
+  aliasUvGeomprops(geometry);
   geometry.setAttribute('i_position', geometry.getAttribute('position'));
   geometry.setAttribute('i_normal', geometry.getAttribute('normal'));
   geometry.setAttribute('i_texcoord_0', geometry.getAttribute('uv'));
@@ -1737,6 +1786,43 @@ const prepGeometry = geometry => {
   }
   geometry.setAttribute('i_tangent', iTangent);
   geometry.setAttribute('i_bitangent', iBitangent);
+  return geometry;
+};
+
+// Sizes for the geomprop types this viewer can zero-fill (int types read
+// zero already at the GL default and are skipped, only noted).
+const GEOMPROP_ITEM_SIZE = {
+  float: 1,
+  vec2: 2,
+  vec3: 3,
+  vec4: 4
+};
+// Binds each declared geompropvalue vertex input that the geometry does not
+// already carry: vec2 aliases "uv", other float types get a zero-filled
+// attribute, integer types are skipped. `notify(text)` receives one notice
+// per unbound geomprop; callers dedupe and surface it to the user.
+const bindGeompropAttributes = (geometry, geomprops, notify) => {
+  if (!geometry || !geomprops || !geomprops.length) return geometry;
+  const uv = geometry.getAttribute('uv');
+  for (const {
+    name,
+    type
+  } of geomprops) {
+    const attrName = 'i_geomprop_' + name;
+    if (geometry.getAttribute(attrName)) continue;
+    if (type === 'vec2' && uv) {
+      geometry.setAttribute(attrName, uv);
+      continue;
+    }
+    const itemSize = GEOMPROP_ITEM_SIZE[type];
+    if (itemSize) {
+      const count = geometry.getAttribute('position') ? geometry.getAttribute('position').count : 0;
+      geometry.setAttribute(attrName, new THREE.BufferAttribute(new Float32Array(count * itemSize), itemSize));
+    }
+    if (typeof notify === 'function') {
+      notify(`geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads zeros`);
+    }
+  }
   return geometry;
 };
 
@@ -3803,12 +3889,22 @@ const generatePreviewSourcesUnlocked = ({
   // just the strings "vertex"/"pixel", which getSourceCode accepts.
   const VERTEX_STAGE = mx.Stage && mx.Stage.VERTEX || 'vertex';
   const PIXEL_STAGE = mx.Stage && mx.Stage.PIXEL || 'pixel';
-  const vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
+  let vs = stripVersion(mxShader.getSourceCode(VERTEX_STAGE));
   // hwSrgbEncodeOutput=false means raw linear output, so encodeDisplay()'s
   // (runtime-gated) epilogue is injected below unless the FRAGMENT
   // OUTPUT's own assignment already encodes srgb, checking the whole
   // shader string false-positives.
   let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
+  ({
+    vs,
+    fs
+  } = patchGeompropVaryings(vs, fs));
+  const vertexInputs = parseVertexInputs(vs);
+  const geomprops = vertexInputs.filter(v => v.name.startsWith('i_geomprop_')).map(v => ({
+    name: v.name.slice('i_geomprop_'.length),
+    type: v.type
+  }));
+  const notices = [];
   fs = patchUnlitLightingRefs(fs);
   const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
   const outVar = outDeclMatch ? outDeclMatch[1] : null;
@@ -3857,7 +3953,10 @@ const generatePreviewSourcesUnlocked = ({
     vs,
     fs,
     introspected,
-    transparent
+    transparent,
+    vertexInputs,
+    geomprops,
+    notices
   };
 };
 
@@ -5083,7 +5182,9 @@ const createMtlxRenderView = async ({
       vs,
       fs,
       introspected,
-      transparent
+      transparent,
+      geomprops,
+      notices
     } = __srcs;
 
     // Pre-warms the driver compile BEFORE the display renderer
@@ -6001,6 +6102,12 @@ const createMtlxRenderView = async ({
     // the bad one BEFORE throwing, see the badProg branch below.
     // ------------------------------------------------------
     const applyMaterialInternal = (srcs, applyLabel) => {
+      if (geometry && srcs.geomprops && srcs.geomprops.length) {
+        bindGeompropAttributes(geometry, srcs.geomprops, text => {
+          if (!srcs.notices) srcs.notices = [];
+          if (!srcs.notices.includes(text)) srcs.notices.push(text);
+        });
+      }
       const newUniforms = bindMaterialUniforms(srcs);
       // Transparency verdict is srcs.transparent, gated on
       // FORCE_TRANSPARENCY. When on, translucency is produced
@@ -6098,7 +6205,9 @@ const createMtlxRenderView = async ({
       vs,
       fs,
       introspected,
-      transparent
+      transparent,
+      geomprops,
+      notices
     }, label);
 
     // Contact-shadow casters, only when a studioGroup exists
@@ -6604,6 +6713,7 @@ const createMtlxRenderView = async ({
       fs,
       controls,
       renderer,
+      notices: notices || [],
       isTransparent: !!transparent,
       // Live auto-orbit toggle (no regen needed). No-op in
       // full-scene mode by contract: every caller hides the rotate
@@ -6887,6 +6997,7 @@ const createMtlxRenderView = async ({
         handle.introspected = srcs.introspected;
         handle.vs = srcs.vs;
         handle.fs = srcs.fs;
+        handle.notices = srcs.notices || [];
         handle.isTransparent = !!srcs.transparent;
         if (window.MTLX_PERF_LOG) {
           console.log('[mtlx-perf] applyMaterial total: ' + (performance.now() - __applyPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
@@ -7257,6 +7368,7 @@ Object.assign(window, {
   getForceTransparency,
   setForceTransparency,
   parseUniforms,
+  parseVertexInputs,
   stripVersion,
   encodeDisplay,
   mxErr,
@@ -7300,6 +7412,7 @@ Object.assign(window, {
   prepGeometry,
   normalizeGeometry,
   buildPreviewGeometry,
+  bindGeompropAttributes,
   loadCustomPreviewGeomFromFile,
   loadCustomPreviewGeomFromUrl,
   getCustomPreviewGeom,
