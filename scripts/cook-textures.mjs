@@ -84,6 +84,8 @@ async function findSources(dir, force) {
     const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       const abs = path.join(current, entry.name);
+      // macOS side files (AppleDouble ._x, __MACOSX, .DS_Store) are not textures.
+      if (/^(\._|__MACOSX$|\.DS_Store$)/.test(entry.name)) continue;
       if (entry.isDirectory()) {
         await walk(abs);
         continue;
