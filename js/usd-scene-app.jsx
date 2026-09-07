@@ -225,6 +225,8 @@
         const [error, setError] = React.useState('');
         const [dragOver, setDragOver] = React.useState(false);
         const [selectedPrim, setSelectedPrim] = React.useState('');
+        const [selectedCamera, setSelectedCamera] = React.useState('default');
+        React.useEffect(() => { setSelectedCamera('default'); }, [stage]);
         const [rootTouched, setRootTouched] = React.useState(false);
         const [envFileName, setEnvFileName] = React.useState('');
         const [envImportError, setEnvImportError] = React.useState(null);
@@ -443,6 +445,7 @@
 
         const candidates = rootCandidates(files);
         const meshes = stageMeshes(stage);
+        const cameras = Array.isArray(stage && stage.cameras) ? stage.cameras : [];
         const materials = stageMaterials(stage);
         const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
         const warnings = warningDetails.map((record) => record.label);
@@ -509,6 +512,11 @@
         const cancel = () => { generationRef.current += 1; if (abortRef.current) abortRef.current.abort(); setStatus('cancelled'); setProgress((p) => ({ ...p, message: 'Cancelled' })); };
         const frameAll = () => { if (handle && handle.frameAll) { handle.frameAll(); if (handle.renderNow) handle.renderNow(); } };
         const select = (mesh) => { const path = String(mesh && (mesh.primPath || mesh.path || mesh.name) || ''); setSelectedPrim(path); if (handle && handle.selectPrim) handle.selectPrim(path); if (handle && handle.renderNow) handle.renderNow(); };
+        const selectCamera = (value) => {
+            setSelectedCamera(value);
+            callHandle('applyCamera', value === 'default' ? null : value);
+            if (handle && handle.renderNow) handle.renderNow();
+        };
         const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
         const rootBasename = rootPath ? rootPath.split('/').pop() : '';
         const takeScreenshot = () => { if (handleRef.current && handleRef.current.snapshot) downloadSnapshot(handleRef.current, rootBasename || 'usd-scene'); };
@@ -599,6 +607,28 @@
                                     popWidth={320}
                                     onChange={(v) => { setRootPath(v); setRootTouched(true); }}
                                     defValue={null}
+                                    size="lg"
+                                    variant="field"
+                                    block
+                                />
+                            </div>
+                        );
+                    })()}
+
+                    {cameras.length > 0 && (() => {
+                        const cameraOptions = ['default', ...cameras.map((c) => c.primPath)];
+                        const cameraLabels = { default: 'Default (auto framing)' };
+                        const cameraTitles = {};
+                        cameras.forEach((c) => { cameraLabels[c.primPath] = c.name || c.primPath; cameraTitles[c.primPath] = c.primPath; });
+                        return (
+                            <div data-testid="usd-scene-camera-select">
+                                <FieldLabel label="Camera" />
+                                <MtlxSelect
+                                    value={selectedCamera}
+                                    options={cameraOptions}
+                                    labels={cameraLabels}
+                                    titles={cameraTitles}
+                                    onChange={selectCamera}
                                     size="lg"
                                     variant="field"
                                     block
@@ -907,7 +937,7 @@
                             showRotate
                             rotating={rotating}
                             onToggleRotating={toggleRotating}
-                            onCameraReset={frameAll}
+                            onCameraReset={() => { if (handle && handle.resetCamera) { handle.resetCamera(); if (handle.renderNow) handle.renderNow(); } else frameAll(); }}
                             showScreenshot
                             onScreenshot={takeScreenshot}
                             onRecord={() => setRecordOpen(true)}

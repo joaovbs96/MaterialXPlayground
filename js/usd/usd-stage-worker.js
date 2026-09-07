@@ -351,6 +351,202 @@ function readMeshTokens(api, root, primPath) {
   return tokens;
 }
 
+// --- Camera transform composition --------------------------------------
+// ExtractTransformsAtTime only covers meshes; camera world matrices are
+// composed here from raw xformOp attributes using plain row-major USD
+// matrix math (row vectors: p' = p * M), matching the layout mesh.matrix
+// already uses so the renderer can treat both the same way.
+
+function parseOpOrderList(value) {
+  const inner = String(value ?? "").replace(/^\s*\[/, "").replace(/\]\s*$/, "");
+  if (!inner.trim()) return [];
+  return inner.split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+}
+
+function parseNumbers(value) {
+  const matches = String(value ?? "").match(/-?\d+\.?\d*(?:[eE][-+]?\d+)?/g);
+  return matches ? matches.map(Number) : [];
+}
+
+function identity4() { return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; }
+
+function mul4(a, b) {
+  const r = new Array(16);
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      let sum = 0;
+      for (let k = 0; k < 4; k++) sum += a[i * 4 + k] * b[k * 4 + j];
+      r[i * 4 + j] = sum;
+    }
+  }
+  return r;
+}
+
+function translateM(x, y, z) { return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]; }
+function scaleM(x, y, z) { return [x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]; }
+
+function rotateXM(deg) {
+  const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1];
+}
+function rotateYM(deg) {
+  const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  return [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1];
+}
+function rotateZM(deg) {
+  const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+}
+
+function orientM(w, x, y, z) {
+  return [
+    1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+    2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+    2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+    0, 0, 0, 1,
+  ];
+}
+
+// Generic 4x4 inverse via Gauss-Jordan elimination on an augmented matrix;
+// used only for the rare `!invert!` xformOp prefix.
+function invert4(m) {
+  const a = m.slice();
+  const inv = identity4();
+  for (let col = 0; col < 4; col++) {
+    let pivot = col;
+    for (let row = col + 1; row < 4; row++) {
+      if (Math.abs(a[row * 4 + col]) > Math.abs(a[pivot * 4 + col])) pivot = row;
+    }
+    if (Math.abs(a[pivot * 4 + col]) < 1e-12) return identity4();
+    if (pivot !== col) {
+      for (let k = 0; k < 4; k++) {
+        [a[col * 4 + k], a[pivot * 4 + k]] = [a[pivot * 4 + k], a[col * 4 + k]];
+        [inv[col * 4 + k], inv[pivot * 4 + k]] = [inv[pivot * 4 + k], inv[col * 4 + k]];
+      }
+    }
+    const div = a[col * 4 + col];
+    for (let k = 0; k < 4; k++) { a[col * 4 + k] /= div; inv[col * 4 + k] /= div; }
+    for (let row = 0; row < 4; row++) {
+      if (row === col) continue;
+      const factor = a[row * 4 + col];
+      if (!factor) continue;
+      for (let k = 0; k < 4; k++) {
+        a[row * 4 + k] -= factor * a[col * 4 + k];
+        inv[row * 4 + k] -= factor * inv[col * 4 + k];
+      }
+    }
+  }
+  return inv;
+}
+
+const ROTATE_TRIPLE_AXES = {
+  rotateXYZ: ["X", "Y", "Z"], rotateXZY: ["X", "Z", "Y"], rotateYXZ: ["Y", "X", "Z"],
+  rotateYZX: ["Y", "Z", "X"], rotateZXY: ["Z", "X", "Y"], rotateZYX: ["Z", "Y", "X"],
+};
+const ROTATE_AXIS_FN = { X: rotateXM, Y: rotateYM, Z: rotateZM };
+
+// Composes one prim's local matrix from its own xformOpOrder tokens.
+// Returns { matrix, unsupported } where unsupported names the first op kind
+// this worker cannot compose (the caller drops the camera in that case).
+function composeLocalMatrix(orderTokens, attrMap, primPath, warn) {
+  let m = identity4();
+  for (const token of orderTokens) {
+    if (token === "!resetXformStack!") continue;
+    let name = token;
+    let invert = false;
+    if (name.startsWith("!invert!")) { invert = true; name = name.slice("!invert!".length); }
+    const withoutPrefix = name.startsWith("xformOp:") ? name.slice("xformOp:".length) : name;
+    const kind = withoutPrefix.split(":")[0];
+    const record = attrMap.get(name);
+    const nums = record ? parseNumbers(record.value) : [];
+    let opM;
+    if (kind === "translate") opM = translateM(nums[0] || 0, nums[1] || 0, nums[2] || 0);
+    else if (kind === "scale") opM = scaleM(nums[0] ?? 1, nums[1] ?? 1, nums[2] ?? 1);
+    else if (kind === "rotateX") opM = rotateXM(nums[0] || 0);
+    else if (kind === "rotateY") opM = rotateYM(nums[0] || 0);
+    else if (kind === "rotateZ") opM = rotateZM(nums[0] || 0);
+    else if (ROTATE_TRIPLE_AXES[kind]) {
+      const [a1, a2, a3] = ROTATE_TRIPLE_AXES[kind];
+      opM = mul4(mul4(ROTATE_AXIS_FN[a1](nums[0] || 0), ROTATE_AXIS_FN[a2](nums[1] || 0)), ROTATE_AXIS_FN[a3](nums[2] || 0));
+    } else if (kind === "orient") {
+      opM = orientM(nums[0] || 0, nums[1] || 0, nums[2] || 0, nums[3] || 0);
+    } else if (kind === "transform") {
+      opM = nums.length >= 16 ? nums.slice(0, 16) : identity4();
+    } else {
+      warn(`Camera ${primPath}: unsupported transform op ${name}, camera skipped`);
+      return { matrix: identity4(), unsupported: true };
+    }
+    if (invert) opM = invert4(opM);
+    m = mul4(m, opM);
+  }
+  return { matrix: m, unsupported: false };
+}
+
+function readPrimAttrMap(api, root, primPath) {
+  const map = new Map();
+  if (typeof api.getPrimAttributes !== "function" || !primPath) return map;
+  try {
+    for (const record of arrayItems(api.getPrimAttributes(root, primPath))) {
+      const name = text(record?.name);
+      if (name) map.set(name, record);
+    }
+  } catch {
+    // Tolerate any native failure; the prim contributes an identity matrix.
+  }
+  return map;
+}
+
+function collectCameras(api, root, graph, warn) {
+  const cameraEntries = arrayItems(graph).filter(entry => {
+    if ((text(entry?.typeName) ?? "").toLowerCase() !== "camera") return false;
+    if (!text(entry?.path)) return false;
+    if (entry?.active === false || entry?.isActive === false) return false;
+    return true;
+  });
+  const cameras = [];
+  for (const entry of cameraEntries) {
+    const primPath = text(entry.path);
+    const segments = primPath.split("/").filter(Boolean);
+    let running = "";
+    const ancestorPaths = segments.map(seg => (running += "/" + seg, running));
+    let worldSoFar = identity4();
+    let skip = false;
+    let leafMap = null;
+    for (const path of ancestorPaths) {
+      const attrMap = readPrimAttrMap(api, root, path);
+      if (path === primPath) leafMap = attrMap;
+      const orderRecord = attrMap.get("xformOpOrder");
+      const orderTokens = orderRecord ? parseOpOrderList(orderRecord.value) : [];
+      if (orderTokens.includes("!resetXformStack!")) worldSoFar = identity4();
+      const { matrix, unsupported } = composeLocalMatrix(orderTokens, attrMap, primPath, warn);
+      if (unsupported) { skip = true; break; }
+      worldSoFar = mul4(matrix, worldSoFar);
+    }
+    if (skip) continue;
+    const map = leafMap ?? readPrimAttrMap(api, root, primPath);
+    const numberOf = (name, fallback) => {
+      const record = map.get(name);
+      const nums = record ? parseNumbers(record.value) : [];
+      return nums.length ? nums[0] : fallback;
+    };
+    const clipRecord = map.get("clippingRange");
+    const clipNums = clipRecord ? parseNumbers(clipRecord.value) : [];
+    const projectionRecord = map.get("projection");
+    cameras.push({
+      primPath,
+      name: segments[segments.length - 1] || primPath,
+      matrix: worldSoFar,
+      focalLength: numberOf("focalLength", 50),
+      horizontalAperture: numberOf("horizontalAperture", 36),
+      verticalAperture: numberOf("verticalAperture", 24),
+      clippingRange: [clipNums[0] ?? 0.1, clipNums[1] ?? 1000000],
+      focusDistance: numberOf("focusDistance", 0),
+      projection: projectionRecord ? text(projectionRecord.value) : "perspective",
+    });
+  }
+  return cameras;
+}
+
 function swapCorners(array, triangleIndex, stride) {
   const base = triangleIndex * 3 * stride;
   for (let c = 0; c < stride; c++) {
@@ -769,7 +965,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   return warnings;
 }
 
-function copyStageResult(summary, draw, payloads) {
+function copyStageResult(summary, draw, payloads, cameras) {
   const assets = new Map();
   const materials = new Map();
   for (const entry of arrayItems(payloads)) {
@@ -816,6 +1012,7 @@ function copyStageResult(summary, draw, payloads) {
     meshes,
     materials: materialList,
     assets: assetList,
+    cameras: cameras ?? [],
     warnings: Array.from(new Set(warnings)),
     transfer,
   };
@@ -992,7 +1189,10 @@ async function load(request) {
   postMessage({ id: request.id, type: "progress", value: {
     phase: "material", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
   } });
-  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot);
+  const cameraWarnings = [];
+  const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
+  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras);
+  result.warnings.push(...cameraWarnings);
   result.warnings.push(...normalRecoveryWarnings);
   if (drawSnapshot.warnings?.length) result.warnings.push(...drawSnapshot.warnings);
   const extractedOwners = new Set(result.meshes.map(mesh => mesh.instanceOwnerPath).filter(Boolean));

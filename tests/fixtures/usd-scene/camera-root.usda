@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Scene" {
+    def Xform "RootTransform" {
+        double3 xformOp:translate = (0.8, 0.25, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Xform "NestedAsset" (
+            references = @nested/nested.usda@</NestedAsset>
+        ) {
+        }
+    }
+
+    def Camera "CamFront" {
+        double3 xformOp:translate = (0.8, 0.25, 5.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 50
+        float horizontalAperture = 36
+        float verticalAperture = 24
+        float2 clippingRange = (0.1, 1000)
+        float focusDistance = 5
+        token projection = "perspective"
+    }
+
+    def Xform "CamRig" {
+        double3 xformOp:translate = (2.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Camera "CamSide" {
+            double3 xformOp:translate = (0.0, 0.5, 3.0)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            float focalLength = 50
+            float horizontalAperture = 36
+            float verticalAperture = 24
+            float2 clippingRange = (0.1, 1000)
+            float focusDistance = 3
+            token projection = "perspective"
+        }
+    }
+}

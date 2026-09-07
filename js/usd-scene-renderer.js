@@ -358,6 +358,9 @@ const createMtlxSceneView = async ({
     let studioPolarApplied = false;
     let studioDistanceApplied = false;
     let lastFrameDistance = 0;
+    // null = the Default (auto framing) entry; otherwise a stage.cameras
+    // primPath. resetCamera() re-applies whichever of these is selected.
+    let selectedCameraPath = null;
     // Turntable/GIF capture state: while true, resize() is a no-op so the
     // fixed capture resolution set by beginCapture() sticks between frames.
     let resizeSuspended = false;
@@ -1125,6 +1128,9 @@ const createMtlxSceneView = async ({
         };
         const frameAll = () => {
             // Backdrops/skyboxes are deliberately excluded from framing.
+            // A USD camera may have left a non-default fov/aperture-derived
+            // fov behind; the auto-framing entry always uses the plain 45.
+            camera.fov = 45;
             const box = new THREE.Box3().setFromObject(sceneRoot);
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
@@ -1144,6 +1150,57 @@ const createMtlxSceneView = async ({
             camera.updateProjectionMatrix();
             if (controls) { controls.target.copy(center); controls.update(); }
         };
+        const getCameras = () => sceneArray(stage.cameras).map((record) => ({
+            primPath: String(record.primPath || ''),
+            name: String(record.name || record.primPath || ''),
+        }));
+        // Positions the camera/controls rig at a USD camera prim's composed
+        // world pose. Fov is set directly from the aperture/focal length
+        // ratio (setFocalLength assumes the aperture aspect matches the
+        // viewport, which is not true here).
+        const applyCamera = (primPath) => {
+            selectedCameraPath = primPath || null;
+            if (!primPath) { frameAll(); return true; }
+            const record = sceneArray(stage.cameras).find((c) => c.primPath === primPath);
+            if (!record) return false;
+            sceneRoot.updateMatrixWorld(true);
+            const local = sceneMatrix(record.matrix);
+            const world = new THREE.Matrix4().multiplyMatrices(sceneRoot.matrixWorld, local);
+            const position = new THREE.Vector3();
+            const quaternion = new THREE.Quaternion();
+            const scale = new THREE.Vector3();
+            world.decompose(position, quaternion, scale);
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion).normalize();
+            const meters = Number.isFinite(Number(stage.metersPerUnit)) && Number(stage.metersPerUnit) > 0
+                ? Number(stage.metersPerUnit) : 1;
+            const box = new THREE.Box3().setFromObject(sceneRoot);
+            const boxCenter = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+            const boxRadius = box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length() * 0.5 || 1;
+            const focusDistance = Number(record.focusDistance);
+            let distance = Number.isFinite(focusDistance) && focusDistance > 0 ? focusDistance * meters : NaN;
+            if (!Number.isFinite(distance)) {
+                const toCenter = boxCenter.clone().sub(position);
+                const projected = toCenter.dot(forward);
+                distance = Number.isFinite(projected) && projected > 0 ? projected : boxRadius;
+            }
+            const target = position.clone().add(forward.multiplyScalar(distance));
+            const verticalAperture = Number(record.verticalAperture) || 24;
+            const focalLength = Number(record.focalLength) || 50;
+            camera.fov = 2 * Math.atan(verticalAperture / (2 * focalLength)) * 180 / Math.PI;
+            const clip = Array.isArray(record.clippingRange) ? record.clippingRange : [0.1, 100000];
+            camera.near = Math.max(Number(clip[0]) * meters, boxRadius / 1000, 0.001);
+            camera.far = Math.max(Number(clip[1]) * meters, camera.near + 1);
+            camera.position.copy(position);
+            camera.quaternion.copy(quaternion);
+            camera.updateProjectionMatrix();
+            if (controls) {
+                controls.target.copy(target);
+                controls.update();
+            }
+            lastFrameDistance = distance;
+            return true;
+        };
+        const resetCamera = () => { applyCamera(selectedCameraPath); };
         const updateRendererDisplayTransform = () => {
             const mode = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
             if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
@@ -1503,6 +1560,7 @@ const createMtlxSceneView = async ({
                 get bytes() { return textureStats.udimBytes; },
             },
             resize, frameAll,
+            getCameras, applyCamera, resetCamera,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
@@ -1551,6 +1609,7 @@ const createMtlxSceneView = async ({
                 return {
                     position: [camera.position.x, camera.position.y, camera.position.z].map(r4),
                     target: [controls.target.x, controls.target.y, controls.target.z].map(r4),
+                    cameraPath: selectedCameraPath,
                 };
             },
             // Applies a saved pose from getCamera(); invalid input is
