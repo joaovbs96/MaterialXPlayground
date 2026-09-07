@@ -2846,6 +2846,26 @@ const floatToHalf = val => {
   if (exp >= 31) return sign | 0x7BFF; // clamp to max half
   return sign | exp << 10 | (x & 0x7FFFFF) >> 13;
 };
+// r128's toHalfFloat does not clamp: a finite float above the half
+// range comes back as an Inf/NaN pattern with an unreliable sign, so
+// the unrecoverable overflow always clamps to the max finite half.
+const sanitizeHalfEnvData = (data, stride) => {
+  let replaced = 0;
+  for (let i = 0; i < data.length; i += stride) {
+    for (let c = 0; c < 3; c++) {
+      const h = data[i + c];
+      if ((h & 0x7C00) === 0x7C00) {
+        data[i + c] = 0x7BFF;
+        replaced++;
+      } else if (h & 0x8000) {
+        data[i + c] = 0;
+        replaced++;
+      }
+    }
+    if (stride === 4) data[i + 3] = 0x3C00; // half 1.0: an EXR's own alpha must not reach the backdrop
+  }
+  return replaced;
+};
 const halfToFloat = h => {
   const sign = h & 0x8000 ? -1 : 1;
   const exp = h >> 10 & 0x1F;
@@ -2978,9 +2998,9 @@ const shIrradianceFromEquirect = tex => {
           g += aw * c[i * 3 + 1];
           b += aw * c[i * 3 + 2];
         }
-        r = Math.max(0, r / Math.PI);
-        g = Math.max(0, g / Math.PI);
-        b = Math.max(0, b / Math.PI);
+        r = Number.isFinite(r) ? Math.max(0, r / Math.PI) : 0;
+        g = Number.isFinite(g) ? Math.max(0, g / Math.PI) : 0;
+        b = Number.isFinite(b) ? Math.max(0, b / Math.PI) : 0;
         const o = (y * OW + x) * 4;
         out[o] = floatToHalf(r);
         out[o + 1] = floatToHalf(g);
@@ -3010,6 +3030,8 @@ const parseEnvBuffer = (buf, ext) => {
       // HalfFloatType makes it decode to linear float at parse.
       const d = new THREE.RGBELoader().setDataType(THREE.HalfFloatType).parse(buf);
       if (!d || !d.data) return null;
+      const replaced = sanitizeHalfEnvData(d.data, d.data.length / (d.width * d.height));
+      if (replaced) console.info('[env-sanitize] clamped ' + replaced + ' overflowed half-float texel channel(s) in .hdr environment');
       const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
       // RGBELoader keeps rows top-first, which already matches
       // MaterialX's v=0-at-top, no flip.
@@ -3023,6 +3045,8 @@ const parseEnvBuffer = (buf, ext) => {
       // while RGBA32F needs optional extensions.
       const d = new THREE.EXRLoader().setDataType(THREE.HalfFloatType).parse(buf);
       if (!d || !d.data) return null;
+      const replaced = sanitizeHalfEnvData(d.data, d.data.length / (d.width * d.height));
+      if (replaced) console.info('[env-sanitize] clamped ' + replaced + ' overflowed half-float texel channel(s) in .exr environment');
       const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
       // EXRLoader flips rows at decode (data row 0 = image bottom),
       // so flip at upload to restore MaterialX's v=0-at-top.
@@ -3078,11 +3102,13 @@ const extractKeyLight = tex => {
       const dOmega = Math.sin(theta) * (2 * Math.PI / W) * (Math.PI / H);
       for (let x = 0; x < W; x++) {
         const idx = (y * W + x) * stride;
-        const L = 0.2126 * rd(idx) + 0.7152 * rd(idx + 1) + 0.0722 * rd(idx + 2);
+        const Lraw = 0.2126 * rd(idx) + 0.7152 * rd(idx + 1) + 0.0722 * rd(idx + 2);
+        const finiteL = Number.isFinite(Lraw);
+        const L = finiteL ? Lraw : 0; // stray non-finite texel: 0 for sums, never the peak
         lum[y * W + x] = L;
         sumW += dOmega;
         sumLW += L * dOmega;
-        if (L > peakL) {
+        if (finiteL && L > peakL) {
           peakL = L;
           peakX = x;
           peakY = y;
@@ -3126,6 +3152,7 @@ const extractKeyLight = tex => {
         const ang = Math.acos(Math.min(1, Math.max(-1, cosAng)));
         const idx = (y * W + x) * stride;
         const L = lum[y * W + x];
+        if (!Number.isFinite(L)) continue; // stray non-finite texel: excluded from cluster and annulus
         if (ang <= KEYLIGHT_RADIUS_RAD && L >= Lfloor) {
           const r = rd(idx),
             g = rd(idx + 1),
@@ -3214,7 +3241,7 @@ const extractSoftKeyDir = tex => {
         cW += w;
       }
     }
-    if (cW <= 0) return null;
+    if (!Number.isFinite(cW) || cW <= 0) return null;
     return dataDirToWorld(tex, cxW / cW, cyW / cW, W, H);
   } catch (e) {
     return null;
