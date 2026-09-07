@@ -21,11 +21,13 @@
 // vendor/basis-encoder/basis_encoder.js (see scripts/vendor.mjs DOWNLOADS),
 // which runs directly under plain Node (no DOM dependency).
 
-import { readFile, writeFile, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, readdir, stat, mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { spawnSync } from "node:child_process";
 import { chromium } from "@playwright/test";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,20 +37,44 @@ const SOURCE_EXTS = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".exr", "
 const SRGB_NAME_HINTS = /(basecolor|albedo|diffuse|color|emissive)/i;
 
 function parseArgs(argv) {
-  const args = { folder: null, quality: "default", jobs: 1, dryRun: false, force: false };
+  const args = { folder: null, quality: "default", jobs: 1, dryRun: false, force: false, encoder: "auto" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--quality") args.quality = argv[++i];
     else if (a === "--jobs") args.jobs = Math.max(1, parseInt(argv[++i], 10) || 1);
     else if (a === "--dry-run") args.dryRun = true;
     else if (a === "--force") args.force = true;
+    else if (a === "--encoder") args.encoder = argv[++i];
     else if (!args.folder) args.folder = a;
   }
-  if (!args.folder) {
-    console.error("usage: node scripts/cook-textures.mjs <folder> [--quality fast|default|high] [--jobs N] [--dry-run] [--force]");
+  if (!args.folder || !["auto", "toktx", "basis"].includes(args.encoder)) {
+    console.error("usage: node scripts/cook-textures.mjs <folder> [--quality fast|default|high] [--jobs N] [--dry-run] [--force] [--encoder auto|toktx|basis]");
     process.exit(1);
   }
   return args;
+}
+
+// Resolves a usable toktx binary: KTX_TOKTX env var, the repo-local install
+// from scripts/setup-ktx.mjs, then PATH. Returns null if none is found.
+function resolveToktx() {
+  if (process.env.KTX_TOKTX && existsSync(process.env.KTX_TOKTX)) return process.env.KTX_TOKTX;
+
+  const local = path.join(REPO_ROOT, "tools", "ktx", "bin", process.platform === "win32" ? "toktx.exe" : "toktx");
+  if (existsSync(local)) return local;
+
+  const which = spawnSync(process.platform === "win32" ? "where" : "which", ["toktx"], { encoding: "utf8" });
+  if (which.status === 0) {
+    const first = which.stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+    if (first) return first;
+  }
+  return null;
+}
+
+// Maps our fast/default/high knob to toktx's --uastc_quality 1..4 levels.
+function qualityToUastcLevel(quality) {
+  if (quality === "fast") return 1;
+  if (quality === "high") return 4;
+  return 2;
 }
 
 /** Recursively find source texture files under `dir`, skipping .ktx2 siblings unless --force. */
@@ -86,9 +112,10 @@ function qualityToEffort(quality) {
 // Worker-thread entry point: owns one Chromium page + one Basis encoder
 // instance and cooks a static slice of the file list handed to it.
 // ---------------------------------------------------------------------------
-async function runWorkerSlice({ files, quality, dryRun }) {
+async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
   const results = [];
   if (files.length === 0) return results;
+  const useToktx = encoder === "toktx";
 
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -97,11 +124,18 @@ async function runWorkerSlice({ files, quality, dryRun }) {
   await page.addScriptTag({ path: path.join(REPO_ROOT, "node_modules/three/examples/js/loaders/EXRLoader.js") });
   await page.addScriptTag({ path: path.join(REPO_ROOT, "vendor/utif/UTIF.js") });
 
-  const basisMod = await import(pathToFileURL(path.join(REPO_ROOT, "vendor/basis-encoder/basis_encoder.js")).href);
-  const BASIS = basisMod.default;
-  global.self = global.self || global;
-  const basis = await BASIS();
-  basis.initializeBasis();
+  // The basis wasm encoder is only needed for the fallback path; skip its
+  // (non-trivial) init cost when every file in this slice uses toktx.
+  let basis = null;
+  if (!useToktx) {
+    const basisMod = await import(pathToFileURL(path.join(REPO_ROOT, "vendor/basis-encoder/basis_encoder.js")).href);
+    const BASIS = basisMod.default;
+    global.self = global.self || global;
+    basis = await BASIS();
+    basis.initializeBasis();
+  }
+
+  const tmpDir = useToktx ? await mkdtemp(path.join(os.tmpdir(), "cook-textures-")) : null;
 
   for (const file of files) {
     const started = Date.now();
@@ -109,7 +143,7 @@ async function runWorkerSlice({ files, quality, dryRun }) {
     const b64 = bytes.toString("base64");
 
     const decoded = await page.evaluate(
-      async ({ b64, ext }) => {
+      async ({ b64, ext, skipCap, needsPngExport }) => {
         function b64ToBuf(s) {
           const bin = atob(s);
           const arr = new Uint8Array(bin.length);
@@ -183,7 +217,7 @@ async function runWorkerSlice({ files, quality, dryRun }) {
         // sources — this only affects the ENCODED .ktx2, never the source.
         const MAX_SOURCE_PIXELS = 12582912;
         let downscaledFrom = null;
-        if (width * height > MAX_SOURCE_PIXELS) {
+        if (!skipCap && width * height > MAX_SOURCE_PIXELS) {
           const scale = Math.sqrt(MAX_SOURCE_PIXELS / (width * height));
           const newW = Math.max(1, Math.floor(width * scale));
           const newH = Math.max(1, Math.floor(height * scale));
@@ -200,13 +234,25 @@ async function runWorkerSlice({ files, quality, dryRun }) {
           width = newW; height = newH;
         }
 
-        return { width, height, rgbaB64: bufToB64(rgba), downscaledFrom };
+        // For toktx, non-PNG/JPEG sources (TIFF/EXR/HDR) are handed over as
+        // a temporary 8-bit PNG rather than raw pixels: toktx reads PNG and
+        // JPEG directly and we reuse the same decode path for every format.
+        let pngB64 = null;
+        if (needsPngExport) {
+          const canvas = document.createElement("canvas");
+          canvas.width = width; canvas.height = height;
+          canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+          const buf = new Uint8Array(await blob.arrayBuffer());
+          pngB64 = bufToB64(buf);
+        }
+
+        return { width, height, rgbaB64: needsPngExport ? null : bufToB64(rgba), pngB64, downscaledFrom };
       },
-      { b64, ext: file.ext }
+      { b64, ext: file.ext, skipCap: useToktx, needsPngExport: useToktx && ![".png", ".jpg", ".jpeg"].includes(file.ext) }
     );
 
     const { width, height, downscaledFrom } = decoded;
-    const rgba = new Uint8Array(Buffer.from(decoded.rgbaB64, "base64"));
     if (downscaledFrom) {
       console.log(`  note: ${path.basename(file.srcPath)} is ${downscaledFrom.width}x${downscaledFrom.height} (${downscaledFrom.width * downscaledFrom.height} texels), above the encoder's 12,582,912-texel limit; downscaled to ${width}x${height} for the .ktx2 only`);
     }
@@ -218,24 +264,59 @@ async function runWorkerSlice({ files, quality, dryRun }) {
     }
 
     const isColor = SRGB_NAME_HINTS.test(path.basename(file.srcPath));
-    const enc = new basis.BasisEncoder();
-    enc.setSliceSourceImage(0, rgba, width, height, basis.ktx2_supercompression ? 0 : 0);
-    enc.setCreateKTX2File(true);
-    enc.setUASTC(true);
-    enc.setMipGen(true);
-    enc.setPerceptual(isColor);
-    enc.setKTX2AndBasisSRGBTransferFunc(isColor);
-    enc.setYFlip(false);
-    enc.setQualityLevel(qualityToEffort(quality));
-    enc.setPrintStats(false);
-    enc.setDebug(false);
-    enc.setStatusOutput(false);
+    let outBytes;
 
-    const outVec = new Uint8Array(width * height * 8 + 1024 * 1024);
-    const actualSize = enc.encode(outVec);
-    const outBytes = Buffer.from(outVec.buffer, outVec.byteOffset, actualSize);
-    await writeFile(file.ktx2Path, outBytes);
-    enc.delete();
+    if (useToktx) {
+      let toktxInput = file.srcPath;
+      let tempPng = null;
+      if (decoded.pngB64) {
+        tempPng = path.join(tmpDir, `${path.basename(file.srcPath)}.png`);
+        await writeFile(tempPng, Buffer.from(decoded.pngB64, "base64"));
+        toktxInput = tempPng;
+        if ([".tif", ".tiff"].includes(file.ext)) {
+          console.log(`  note: ${path.basename(file.srcPath)} was written as an 8-bit PNG for toktx (16-bit sources are truncated)`);
+        }
+      }
+
+      const toktxArgs = [
+        "--t2",
+        "--encode", "uastc",
+        "--uastc_quality", String(qualityToUastcLevel(quality)),
+        "--genmipmap",
+        "--zcmp", "18",
+        "--assign_oetf", isColor ? "srgb" : "linear",
+        file.ktx2Path,
+        toktxInput,
+      ];
+      const result = spawnSync(toktxPath, toktxArgs, { encoding: "utf8" });
+      if (tempPng) await rm(tempPng, { force: true });
+      if (result.status !== 0) {
+        throw new Error(`toktx failed for ${file.srcPath}: ${result.stderr || result.stdout}`);
+      }
+      const st = await stat(file.ktx2Path);
+      outBytes = { length: st.size };
+    } else {
+      const rgba = new Uint8Array(Buffer.from(decoded.rgbaB64, "base64"));
+      const enc = new basis.BasisEncoder();
+      enc.setSliceSourceImage(0, rgba, width, height, basis.ktx2_supercompression ? 0 : 0);
+      enc.setCreateKTX2File(true);
+      enc.setUASTC(true);
+      enc.setMipGen(true);
+      enc.setPerceptual(isColor);
+      enc.setKTX2AndBasisSRGBTransferFunc(isColor);
+      enc.setYFlip(false);
+      enc.setQualityLevel(qualityToEffort(quality));
+      enc.setPrintStats(false);
+      enc.setDebug(false);
+      enc.setStatusOutput(false);
+
+      const outVec = new Uint8Array(width * height * 8 + 1024 * 1024);
+      const actualSize = enc.encode(outVec);
+      const encoded = Buffer.from(outVec.buffer, outVec.byteOffset, actualSize);
+      await writeFile(file.ktx2Path, encoded);
+      enc.delete();
+      outBytes = encoded;
+    }
 
     const totalSeconds = (Date.now() - started) / 1000;
     results.push({ file, width, height, seconds: totalSeconds, outBytes: outBytes.length, dryRun: false });
@@ -243,6 +324,7 @@ async function runWorkerSlice({ files, quality, dryRun }) {
 
   await page.close();
   await browser.close();
+  if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
   return results;
 }
 
@@ -281,19 +363,40 @@ async function main() {
   const jobs = Math.min(args.jobs, sources.length);
   const slices = splitEvenly(sources, jobs);
 
-  console.log(`cooking ${sources.length} texture(s) from ${folder} with ${slices.length} worker(s), quality=${args.quality}${args.dryRun ? " (dry run)" : ""} ...`);
+  // Resolve the encoder once for the whole run: toktx when requested/found,
+  // the wasm fallback otherwise (loudly, since it caps source pixels).
+  let encoder = args.encoder;
+  let toktxPath = null;
+  if (encoder === "toktx" || encoder === "auto") {
+    toktxPath = resolveToktx();
+    if (toktxPath) {
+      encoder = "toktx";
+    } else if (encoder === "toktx") {
+      console.error("error: --encoder toktx requested but no toktx binary found (KTX_TOKTX, tools/ktx/bin, or PATH). Run `npm run setup:ktx`.");
+      process.exit(1);
+    } else {
+      console.warn("");
+      console.warn("WARNING: toktx not found, falling back to the vendored wasm encoder.");
+      console.warn("WARNING: the wasm encoder hard-caps source images at 12,582,912 pixels (e.g. 4096x4096 will be downscaled to ~3547x3547).");
+      console.warn("WARNING: run `npm run setup:ktx` to install toktx and get true 4096x4096 output.");
+      console.warn("");
+      encoder = "basis";
+    }
+  }
+
+  console.log(`cooking ${sources.length} texture(s) from ${folder} with ${slices.length} worker(s), quality=${args.quality}, encoder=${encoder}${args.dryRun ? " (dry run)" : ""} ...`);
 
   const allResults = [];
   if (slices.length === 1 && jobs === 1) {
     // Run in-process (still through the same code path) to avoid a worker
     // thread's startup cost for the common single-job case.
-    const results = await runWorkerSlice({ files: slices[0], quality: args.quality, dryRun: args.dryRun });
+    const results = await runWorkerSlice({ files: slices[0], quality: args.quality, dryRun: args.dryRun, encoder, toktxPath });
     allResults.push(...results);
   } else {
     const workerPromises = slices.map(
       (slice) =>
         new Promise((resolve, reject) => {
-          const worker = new Worker(fileURLToPath(import.meta.url), { workerData: { files: slice, quality: args.quality, dryRun: args.dryRun } });
+          const worker = new Worker(fileURLToPath(import.meta.url), { workerData: { files: slice, quality: args.quality, dryRun: args.dryRun, encoder, toktxPath } });
           worker.on("message", (msg) => {
             if (msg.ok) resolve(msg.results);
             else reject(new Error(msg.error));
