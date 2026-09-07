@@ -578,6 +578,51 @@ function subdivideMesh(mesh, levels) {
   };
 }
 
+// Welds per-corner streams (positions/normals/uvs bitwise equal) into an
+// indexed vertex buffer so computeTangents can average tangents across every
+// face sharing a vertex instead of computing one tangent per lone corner.
+// UV seams and hard normal edges stay split naturally since their corners
+// differ. Corner order is preserved in the output indices, so material
+// subset start/count ranges (which are ranges over corners) stay valid.
+function weldMesh(mesh) {
+  const positions = mesh.positions;
+  const normals = mesh.normals;
+  if (!positions || !normals) return mesh;
+  const cornerCount = Math.floor(positions.length / 3);
+  if (cornerCount < 3 || normals.length !== positions.length) return mesh;
+  const uvs = mesh.uvs;
+  const hasUV = uvs && uvs.length === cornerCount * 2;
+  const vertexMap = new Map();
+  const outPositions = [];
+  const outNormals = [];
+  const outUVs = hasUV ? [] : undefined;
+  const indices = new Uint32Array(cornerCount);
+  for (let c = 0; c < cornerCount; c++) {
+    const px = positions[c * 3], py = positions[c * 3 + 1], pz = positions[c * 3 + 2];
+    const nx = normals[c * 3], ny = normals[c * 3 + 1], nz = normals[c * 3 + 2];
+    const key = hasUV
+      ? `${px},${py},${pz}|${nx},${ny},${nz}|${uvs[c * 2]},${uvs[c * 2 + 1]}`
+      : `${px},${py},${pz}|${nx},${ny},${nz}`;
+    let vi = vertexMap.get(key);
+    if (vi === undefined) {
+      vi = outPositions.length / 3;
+      outPositions.push(px, py, pz);
+      outNormals.push(nx, ny, nz);
+      if (hasUV) outUVs.push(uvs[c * 2], uvs[c * 2 + 1]);
+      vertexMap.set(key, vi);
+    }
+    indices[c] = vi;
+  }
+  mesh.positions = Float32Array.from(outPositions);
+  mesh.normals = Float32Array.from(outNormals);
+  if (hasUV) mesh.uvs = Float32Array.from(outUVs);
+  mesh.indices = indices;
+  mesh.welded = true;
+  mesh.weldedCornerCount = cornerCount;
+  mesh.weldedVertexCount = outPositions.length / 3;
+  return mesh;
+}
+
 function collectPrototypeTargets(value, result = []) {
   if (value == null) return result;
   if (typeof value === "string") {
@@ -926,6 +971,13 @@ async function load(request) {
         }
       }
     }
+  }
+  // Weld every ordinary mesh (with or without subdivision) so the renderer
+  // gets an indexed vertex buffer and computeTangents averages tangents
+  // across shared faces instead of per lone corner.
+  for (const mesh of drawSnapshot.meshes) {
+    if (mesh.instanceOwnerPath && !mesh.normals) continue;
+    weldMesh(mesh);
   }
   postMessage({ id: request.id, type: "progress", value: {
     phase: "material", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",

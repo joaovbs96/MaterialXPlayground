@@ -64,13 +64,16 @@ test('@scene Loop subdivision rounds catmullClark cages and leaves none meshes u
   expect(cc1).toBeTruthy();
   expect(none1).toBeTruthy();
 
-  const triCount0 = cc0.positions.length / 9;
-  const triCount1 = cc1.positions.length / 9;
+  // Meshes are welded into an indexed vertex buffer, so triangle count comes
+  // from the index stream (corners), not from the deduplicated position count.
+  const triCount0 = cc0.indexCount / 3;
+  const triCount1 = cc1.indexCount / 3;
   expect(triCount1).toBeCloseTo(triCount0 * 4, 5);
 
   // Level 0 leaves both meshes untouched.
-  expect(cc0.positions.length / 9).toBe(12); // 6 quads * 2 tris
-  expect(none0.positions.length / 9).toBe(12);
+  expect(cc0.indexCount / 3).toBe(12); // 6 quads * 2 tris
+  expect(none0.indexCount / 3).toBe(12);
+  expect(none1.indexCount).toBe(none0.indexCount);
   expect(none1.positions.length).toBe(none0.positions.length);
   for (let i = 0; i < none0.positions.length; i++) {
     expect(none1.positions[i]).toBeCloseTo(none0.positions[i], 5);
