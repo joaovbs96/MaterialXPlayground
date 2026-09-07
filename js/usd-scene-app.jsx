@@ -514,11 +514,16 @@
         const takeScreenshot = () => { if (handleRef.current && handleRef.current.snapshot) downloadSnapshot(handleRef.current, rootBasename || 'usd-scene'); };
         const pickTextureMaxSize = (px) => {
             const value = px === Infinity || String(px).toLowerCase() === 'infinity' ? Infinity : Number(px);
-            callHandle('setTextureMaxSize', value);
+            if (!callHandle('setTextureMaxSize', value) && typeof setStoredSceneTextureMaxSize === 'function') {
+                setStoredSceneTextureMaxSize(value);
+            }
             setTextureSizeTick((t) => t + 1);
         };
         const pickTextureBudgetGib = (gib) => {
-            callHandle('setTextureBudgetBytes', Number(gib) * 1024 * 1024 * 1024);
+            const bytes = Number(gib) * 1024 * 1024 * 1024;
+            if (!callHandle('setTextureBudgetBytes', bytes) && typeof setStoredSceneTextureBudgetBytes === 'function') {
+                setStoredSceneTextureBudgetBytes(bytes);
+            }
             setTextureSizeTick((t) => t + 1);
         };
         const pickSubdivisionLevel = (level) => {
@@ -533,7 +538,7 @@
             : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
         const textureBudgetGib = (handle && typeof handle.getTextureBudgetBytes === 'function')
             ? Math.round(handle.getTextureBudgetBytes() / (1024 * 1024 * 1024))
-            : 1;
+            : Math.round((typeof storedSceneTextureBudgetBytes === 'function' ? storedSceneTextureBudgetBytes() : (1024 * 1024 * 1024)) / (1024 * 1024 * 1024));
         // Referenced so the memo below re-reads getTextureMaxSize() after a
         // mutation that doesn't otherwise touch React state.
         void textureSizeTick;
@@ -702,7 +707,7 @@
                             onChange={pickTextureMaxSize}
                             defValue={2048}
                             size="sm"
-                            disabled={!handle || typeof handle.setTextureMaxSize !== 'function'}
+                            disabled={busy}
                         />
                     </div>
                     <div className="mt-1 text-[11px] text-gray-400">
@@ -717,7 +722,7 @@
                             onChange={pickTextureBudgetGib}
                             defValue={1}
                             size="sm"
-                            disabled={!handle || typeof handle.setTextureBudgetBytes !== 'function'}
+                            disabled={busy}
                         />
                     </div>
                     <div className="mt-1 text-[11px] text-gray-400">

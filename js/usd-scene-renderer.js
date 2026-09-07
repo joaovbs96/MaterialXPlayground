@@ -43,6 +43,20 @@ const storedSceneTextureBudgetBytes = () => {
     } catch (e) { return SCENE_TEXTURE_BUDGET_DEFAULT_GIB * GIB; /* privacy mode */ }
 };
 
+const setStoredSceneTextureMaxSize = (value) => {
+    if (window.top !== window) return;
+    const next = value === Infinity || String(value).toLowerCase() === 'original' ? Infinity : Math.round(Number(value));
+    if (!SCENE_TEXTURE_MAX_SIZE_VALUES.includes(next)) return;
+    try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, next === Infinity ? 'original' : String(next)); } catch (e) { /* privacy mode */ }
+};
+
+const setStoredSceneTextureBudgetBytes = (bytes) => {
+    if (window.top !== window) return;
+    const gib = Number(bytes) / GIB;
+    if (!SCENE_TEXTURE_BUDGET_VALUES.includes(gib)) return;
+    try { localStorage.setItem(SCENE_TEXTURE_BUDGET_KEY, String(gib)); } catch (e) { /* privacy mode */ }
+};
+
 const formatGB = (bytes) => (bytes / GIB).toFixed(2) + ' GB';
 const formatMB = (bytes) => Math.round(bytes / (1024 * 1024)) + ' MB';
 

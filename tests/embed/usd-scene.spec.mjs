@@ -505,3 +505,24 @@ test('@scene refreshes display transform without reloading the USD stage', async
   }
   await page.evaluate(() => window.setDisplayTransform('srgb'));
 });
+
+test('@scene lets texture resolution and memory be picked before a stage loads', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  const sidebar = page.getByTestId('usd-scene-sidebar');
+  const renderingHeader = sidebar.getByRole('button', { name: /Rendering/ });
+  if (!(await sidebar.getByText('Texture resolution').isVisible().catch(() => false))) {
+    await renderingHeader.click();
+  }
+  const resolutionSelect = sidebar.getByText('Texture resolution').locator('..').getByRole('combobox');
+  await resolutionSelect.click();
+  await page.getByRole('option', { name: '1024 px', exact: true }).click();
+  const memorySelect = sidebar.getByText('Texture memory').locator('..').getByRole('combobox');
+  await memorySelect.click();
+  await page.getByRole('option', { name: '2 GB', exact: true }).click();
+  await page.getByTestId('usd-scene-load-example').click();
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  const stats = await page.evaluate(() => window.__mtlxUsdSceneHandle.getTextureStats());
+  expect(stats.textureMaxSize).toBe(1024);
+  expect(stats.budgetBytes).toBe(2 * 1024 * 1024 * 1024);
+  await page.evaluate(() => { try { localStorage.clear(); } catch (e) { /* ignore */ } });
+});
