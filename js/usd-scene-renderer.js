@@ -816,6 +816,12 @@ const createMtlxSceneView = async ({
                     const material = bucket.crossing ? sceneNeutralMaterial('UDIM UV crossing')
                         : (bucket.tile ? udimMaterial(info, bucket.tile.code, materialPath) : materialForPath(materialPath, record.primPath || record.name));
                     materials.add(material);
+                    const bucketCompiled = material.userData && material.userData.mtlxSceneCompiled;
+                    if (window.bindGeompropAttributes && bucketCompiled && bucketCompiled.geomprops) {
+                        window.bindGeompropAttributes(geometry, bucketCompiled.geomprops, (text) => {
+                            if (!warnings.includes(text)) warnings.push(text);
+                        });
+                    }
                     parts.push({ geometry, material });
                 });
             }
@@ -900,6 +906,18 @@ const createMtlxSceneView = async ({
                 geometries.add(part.geometry);
                 const partMaterials = Array.isArray(part.material) ? part.material : [part.material];
                 partMaterials.forEach((material) => materials.add(material));
+                if (window.bindGeompropAttributes) {
+                    const seen = new Map();
+                    for (const material of partMaterials) {
+                        const compiled = material.userData && material.userData.mtlxSceneCompiled;
+                        for (const gp of (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
+                    }
+                    if (seen.size) {
+                        window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (text) => {
+                            if (!warnings.includes(text)) warnings.push(text);
+                        });
+                    }
+                }
                 if (part.material.userData && part.material.userData.mtlxScenePendingTextures) {
                     pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
                     delete part.material.userData.mtlxScenePendingTextures;

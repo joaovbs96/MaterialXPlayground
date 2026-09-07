@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <geompropvalue name="gp_st" type="vector2">
+    <input name="geomprop" type="string" value="st" />
+  </geompropvalue>
+  <separate2 name="sep_st" type="multioutput">
+    <input name="in" type="vector2" nodename="gp_st" />
+  </separate2>
+  <combine3 name="comb_st" type="color3">
+    <input name="in1" type="float" output="outx" nodename="sep_st" />
+    <input name="in2" type="float" output="outy" nodename="sep_st" />
+    <input name="in3" type="float" value="0.0" />
+  </combine3>
+  <surface_unlit name="SR_GeompropSt" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="comb_st" />
+  </surface_unlit>
+  <surfacematerial name="GeompropSt" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_GeompropSt" />
+  </surfacematerial>
+</materialx>

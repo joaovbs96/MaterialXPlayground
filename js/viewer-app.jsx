@@ -354,6 +354,7 @@
                 if (onErrorRef.current) onErrorRef.current(msg);
             };
             const [texReport, setTexReport] = React.useState(null);
+            const [materialNotices, setMaterialNotices] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             // Compact-mode threshold: drives the toolbar's label/icon switch
             // and the Files sidebar auto-collapse. Declared above sidebarOpen
@@ -515,6 +516,7 @@
                     setRenderables([]);
                     setChosenMat(0);
                     setTexReport(null);
+                    setMaterialNotices(null);
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
                 }
@@ -907,6 +909,7 @@
                     }
                     setError(null);
                     setTexReport(null);
+                    setMaterialNotices(null);
                     setBusy(true);
                     setStatus('Generating shader…');
                     try {
@@ -953,6 +956,10 @@
                         setRenderedVersion(loaded.version);
                         const report = bindDroppedTextures(view, fileMapRef.current);
                         setTexReport(report);
+                        setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
+                        if (chromeless && view.notices && view.notices.length) {
+                            view.notices.forEach((n) => console.info('[mtlx] ' + n));
+                        }
                         setStatus(null);
                         setBusy(false);
                         if (onViewRef.current) onViewRef.current(view);
@@ -1432,6 +1439,18 @@
                                     </div>
                                 ))}
                                 <div className="text-xs text-gray-500">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
+                            </div>
+                        </SectionCard>
+                    )}
+
+                    {materialNotices && materialNotices.length > 0 && (
+                        <SectionCard icon="info" title="Material notices" summary={materialNotices.length + ''} defaultOpen>
+                            <div className="space-y-2">
+                                {materialNotices.map((n, i) => (
+                                    <div key={'n' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all">
+                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{n}</span>
+                                    </div>
+                                ))}
                             </div>
                         </SectionCard>
                     )}
