@@ -537,6 +537,37 @@ const patchTransmissionAlpha = fs => {
   return out;
 };
 
+// Screen-space footprint floor for the environment FIS LOD: the sampling-pdf
+// based lod alone minifies a low-roughness reflection on a large curved
+// surface down to mip 0, aliasing into per-pixel sparkle. Floors it with a
+// derivative-based texel footprint of the reflection direction. No-ops if
+// the anchors aren't found (MaterialX codegen changed the function/call shape).
+const patchEnvFootprintLod = fs => {
+  const callRe = /float lod = mx_latlong_compute_lod\([^;]*\);/;
+  const callMatch = callRe.exec(fs);
+  if (!callMatch) {
+    if (DEBUG_SHADERS) console.warn('patchEnvFootprintLod: could not locate the "float lod = mx_latlong_compute_lod(...)" call, skipping the footprint LOD floor.');
+    return fs;
+  }
+  const callIdx = callMatch.index;
+  const fnRe = /vec3\s+mx_environment_\w+\s*\([^)]*\)\s*\n?\s*\{/g;
+  let m;
+  let fnMatch = null;
+  while ((m = fnRe.exec(fs)) && m.index < callIdx) fnMatch = m;
+  if (!fnMatch) {
+    if (DEBUG_SHADERS) console.warn('patchEnvFootprintLod: could not locate the enclosing "mx_environment_*" function, skipping the footprint LOD floor.');
+    return fs;
+  }
+  const bodyStart = fnMatch.index + fnMatch[0].length;
+  const footprintCode = '\n    // Derivative-based texel footprint of the reflection direction, used\n' + '    // below as a LOD floor so a minified reflection on a large curved\n' + '    // surface cannot alias to mip 0 (see patchEnvFootprintLod).\n' + '    vec3 mxfp_R = reflect(-V, N);\n' + '    float mxfp_px = max(length(dFdx(mxfp_R)), length(dFdy(mxfp_R)));\n' + '    float mxfp_lod = log2(max(mxfp_px, 1e-8) * exp2(float(u_envRadianceMips - 1)) / 6.28318530718);\n';
+  let out = fs.slice(0, bodyStart) + footprintCode + fs.slice(bodyStart);
+  const shiftedCallIdx = callIdx + footprintCode.length;
+  const innerCall = callMatch[0].slice('float lod = '.length, -1);
+  const newCall = 'float lod = max(' + innerCall + ', mxfp_lod);';
+  out = out.slice(0, shiftedCallIdx) + newCall + out.slice(shiftedCallIdx + callMatch[0].length);
+  return out;
+};
+
 // injectPeelDiscard(src), bakes the depth-peel OIT machinery into
 // EVERY generated fragment shader unconditionally, gated behind a
 // runtime uniform (u_peelMode, default 0 = no-op) so toggling Force
@@ -3826,6 +3857,8 @@ const generatePreviewSourcesUnlocked = ({
   }
   // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
   fs = patchTransmissionAlpha(fs);
+  // Floors the environment FIS sample LOD by reflection screen-space footprint (sparkle fix).
+  fs = patchEnvFootprintLod(fs);
   // Depth-peel machinery: baked into every fragment shader
   // UNCONDITIONALLY (not just when Force Transparency is on), see
   // injectPeelDiscard's header comment above for why this keeps
