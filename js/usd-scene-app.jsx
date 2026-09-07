@@ -249,6 +249,7 @@
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && typeof handleRef.current.dispose === 'function') handleRef.current.dispose();
             handleRef.current = null;
+            window.__mtlxUsdSceneHandle = null;
         }, []);
 
         // Compact-mode auto-collapse, same idiom as js/viewer-app.jsx.
@@ -299,6 +300,7 @@
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null);
+            window.__mtlxUsdSceneHandle = null;
             const next = await readFiles(list);
             applyChosenFiles(next, generation);
         };
@@ -307,6 +309,7 @@
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null);
+            window.__mtlxUsdSceneHandle = null;
             applyChosenFiles(filesFromMap(map), generation);
         };
         const load = async (loadFiles = filesRef.current, loadRoot = rootPath) => {
@@ -319,6 +322,7 @@
             abortRef.current = controller;
             if (handleRef.current && typeof handleRef.current.dispose === 'function') handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
+            window.__mtlxUsdSceneHandle = null;
             try {
                 const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
@@ -333,6 +337,7 @@
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null);
+            window.__mtlxUsdSceneHandle = null;
             setStatus('loading-example'); setError('');
             try {
                 const loaded = await Promise.all(EXAMPLE_FILES.map(async (path) => {
@@ -349,6 +354,7 @@
             if (handleRef.current && handleRef.current.__sceneStage !== stage) {
                 handleRef.current.dispose && handleRef.current.dispose();
                 handleRef.current = null; setHandle(null);
+                window.__mtlxUsdSceneHandle = null;
             }
             if (!active) {
                 if (handleRef.current && handleRef.current.setActive) handleRef.current.setActive(false);
@@ -377,6 +383,7 @@
                     nextHandle.__sceneStage = stage;
                     adopted = true;
                     handleRef.current = nextHandle;
+                    window.__mtlxUsdSceneHandle = nextHandle; // test and console access to the live scene handle.
                     const settings = envSettingsRef.current;
                     callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
                     callHandle('setEnvExposure', settings.exposureLinear);
