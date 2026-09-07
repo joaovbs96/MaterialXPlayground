@@ -6124,6 +6124,9 @@ const createMtlxRenderView = async ({
                 LIVE_VIEWS.delete(handle);
                 disposePartial();
             },
+            // Debug hook: raw GPU state for a headed diagnosis harness.
+            // Not for production UI code.
+            __debug: () => ({ renderer, scene, camera, material: mesh ? mesh.material : material }),
         };
         LIVE_VIEWS.add(handle);
         return handle;

@@ -1369,6 +1369,9 @@ const createMtlxSceneView = async ({
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
                 __captureCanvas = null; __captureCtx = null;
             },
+            // Debug hook: raw GPU state for a headed diagnosis harness.
+            // Not for production UI code.
+            __debug: () => ({ renderer, scene, camera, materials: Array.from(materials) }),
         };
         return handle;
     } catch (e) {

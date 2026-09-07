@@ -931,6 +931,7 @@
                         if (!view) return; // superseded: the new run drives `busy`
                         if (!mounted) { view.dispose(); return; }
                         viewRef.current = view;
+                        window.__mtlxViewerHandle = view; // test and console access to the live shaderball handle.
                         if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
                         // Initial env rotation/exposure controlled props —
                         // applied once per (re)build, same as autoRotate/
