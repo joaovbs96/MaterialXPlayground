@@ -25,7 +25,14 @@ function runtime() {
     runtimePromise = import("../../vendor/usd-webview-bindings/usdWebViewBindings.js")
       .then(() => globalThis.UsdWebViewBindings.createRuntime({
         locateFile: path => new URL(path, RUNTIME_DIR).href,
-      }));
+      }))
+      .catch(error => {
+        console.error(error);
+        runtimePromise = null;
+        throw new Error(
+          'USD runtime is not installed: vendor/usd-webview-bindings/ is missing or unreachable. Run "npm run vendor" (or "npm run build") in the repository root, then reload.'
+        );
+      });
   }
   return runtimePromise;
 }
@@ -1019,9 +1026,12 @@ async function load(request) {
 self.onmessage = event => {
   const request = event.data;
   if (!request || request.type !== "load") return;
-load(request).catch(error => postMessage({
-    id: request.id,
-    type: "error",
-    error: error instanceof Error ? (error.stack || error.message) : String(error),
-  }));
+load(request).catch(error => {
+    if (error instanceof Error) console.error(error.stack || error.message);
+    postMessage({
+      id: request.id,
+      type: "error",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 };
