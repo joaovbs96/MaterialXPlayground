@@ -186,7 +186,12 @@
             return true;
         });
     };
-    const readFiles = async (fileList) => Array.from(fileList || []).map((file) => ({ path: asPath(file), data: file }));
+    const readFiles = async (fileList) => {
+        const all = Array.from(fileList || []);
+        const kept = all.filter((file) => !isHiddenSideFile(asPath(file)));
+        if (kept.length !== all.length) console.info('readFiles: skipped ' + (all.length - kept.length) + ' side file(s)');
+        return kept.map((file) => ({ path: asPath(file), data: file }));
+    };
     // Window drop hands over a { relPath: File } map (js/mtlx-engine.js's
     // readDroppedItems, which preserves nested directory paths); flatten it
     // to the same { path, data } shape readFiles() produces.
