@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <geompropvalue name="gp_matid" type="integer">
+    <input name="geomprop" type="string" value="matid" />
+  </geompropvalue>
+  <convert name="conv_matid" type="float">
+    <input name="in" type="integer" nodename="gp_matid" />
+  </convert>
+  <surface_unlit name="bad_surface" type="surfaceshader">
+    <input name="emission" type="float" nodename="conv_matid" />
+  </surface_unlit>
+  <surfacematerial name="bad_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="bad_surface" />
+  </surfacematerial>
+</materialx>

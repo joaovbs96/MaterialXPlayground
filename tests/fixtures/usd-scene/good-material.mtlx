@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <surface_unlit name="good_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" value="0.2, 0.6, 0.9" />
+  </surface_unlit>
+  <surfacematerial name="good_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="good_surface" />
+  </surfacematerial>
+</materialx>

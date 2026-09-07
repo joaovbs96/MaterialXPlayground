@@ -317,6 +317,26 @@ const createMtlxSceneView = async ({
     let captureState = null;
     let __captureCanvas = null, __captureCtx = null;
     const materials = new Set();
+    // Exact per-material bad-program attribution: r128 sets
+    // properties.get(material).currentProgram in setProgram() for every
+    // material renderer.compile()/render() actually touches, so a material
+    // is warned about only when ITS OWN program is not runnable, never the
+    // first bad program found anywhere in the scene. A material renderer
+    // hasn't touched yet (no currentProgram) is skipped silently.
+    const reportBadPrograms = (materialsIterable, contextSuffix) => {
+        for (const material of materialsIterable) {
+            if (!material || !material.userData || !material.userData.mtlxSceneCompiled) continue;
+            const props = renderer.properties.get(material);
+            const program = props && props.currentProgram;
+            if (!program || !program.diagnostics || program.diagnostics.runnable !== false) continue;
+            const diagnostics = program.diagnostics;
+            const label = material.userData.mtlxSceneSourceAsset || material.name || 'material';
+            const log = diagnostics.programLog || (diagnostics.fragmentShader && diagnostics.fragmentShader.log) || (diagnostics.vertexShader && diagnostics.vertexShader.log);
+            warnings.push('GPU program compilation failed for MaterialX material: ' + label + (contextSuffix || '')
+                + (log ? ' (' + String(log).slice(0, 180) + ')' : ''));
+            report({ phase: 'gpu-program', label, status: 'error', error: log || 'program is not runnable' });
+        }
+    };
     const geometries = new Set();
     const textureCache = new Map();
     const textureQueue = { tail: Promise.resolve() };
@@ -1158,14 +1178,7 @@ const createMtlxSceneView = async ({
                 if (!displayDirty) {
                     rebuildingProvisional = null;
                     renderer.compile(scene, camera);
-                    const badPrograms = (renderer.info.programs || []).filter((program) => program.diagnostics && program.diagnostics.runnable === false);
-                    if (badPrograms.length) {
-                        const diagnostics = badPrograms[0].diagnostics;
-                        const log = diagnostics && (diagnostics.programLog || (diagnostics.fragmentShader && diagnostics.fragmentShader.log) || (diagnostics.vertexShader && diagnostics.vertexShader.log));
-                        const detail = log ? ' (' + String(log).slice(0, 180) + ')' : '';
-                        warnings.push('GPU program compilation failed after display-transform refresh' + detail);
-                        report({ phase: 'gpu-program', status: 'error', error: log || 'program is not runnable' });
-                    }
+                    reportBadPrograms(materials, ' after display-transform refresh');
                     report({ phase: 'display-transform', status: 'ready', value: targetMode });
                     return;
                 }
@@ -1200,19 +1213,7 @@ const createMtlxSceneView = async ({
         // program handles into per-material diagnostics.
         try {
             renderer.compile(scene, camera);
-            const badPrograms = (renderer.info.programs || []).filter(
-                (program) => program.diagnostics && program.diagnostics.runnable === false
-            );
-            for (const material of materials) {
-                if (!material.userData || !material.userData.mtlxSceneCompiled) continue;
-                if (badPrograms.length) {
-                    const label = material.userData.mtlxSceneSourceAsset || material.name || 'material';
-                    const diagnostics = badPrograms[0].diagnostics;
-                    const log = diagnostics && (diagnostics.programLog || (diagnostics.fragmentShader && diagnostics.fragmentShader.log) || (diagnostics.vertexShader && diagnostics.vertexShader.log));
-                    warnings.push('GPU program compilation failed for MaterialX material: ' + label + (log ? ' (' + String(log).slice(0, 180) + ')' : ''));
-                    report({ phase: 'gpu-program', label, status: 'error', error: log || 'program is not runnable' });
-                }
-            }
+            reportBadPrograms(materials, '');
         } catch (error) {
             warnings.push('USD scene GPU program compilation failed: ' + String(error && error.message || error));
             report({ phase: 'gpu-program', status: 'error', error: String(error && error.message || error) });

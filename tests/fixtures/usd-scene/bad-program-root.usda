@@ -1,0 +1,42 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Scene" {
+    def Scope "Looks" {
+        def Material "GoodMaterial" (
+            references = @good-material.mtlx@</MaterialX/Materials/good_material>
+        ) {
+        }
+        def Material "BadMaterial" (
+            references = @bad-program.mtlx@</MaterialX/Materials/bad_material>
+        ) {
+        }
+    }
+
+    def Mesh "QuadGood" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-2, -1, 0), (0, -1, 0), (0, 1, 0), (-2, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] ( interpolation = "vertex" )
+        rel material:binding = </Scene/Looks/GoodMaterial>
+    }
+
+    def Mesh "QuadBad" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, -1, 0), (2, -1, 0), (2, 1, 0), (0, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] ( interpolation = "vertex" )
+        int[] primvars:matid = [0, 1, 2, 3] ( interpolation = "vertex" )
+        rel material:binding = </Scene/Looks/BadMaterial>
+    }
+}
