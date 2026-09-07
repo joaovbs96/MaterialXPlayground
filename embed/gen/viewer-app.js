@@ -1299,7 +1299,7 @@ function MaterialViewerApp({
     placeholder: "No document loaded",
     multiple: true,
     icon: "files",
-    accept: ".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff",
+    accept: ".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2",
     onFiles: onPickFileList
   })), /*#__PURE__*/React.createElement("label", {
     title: "Choose a folder",
