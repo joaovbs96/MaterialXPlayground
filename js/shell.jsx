@@ -228,7 +228,7 @@ const VIEW_DEPS = {
     roadmap: {
         css: [],
         scripts: [],
-        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
         app: 'js/roadmap-app.jsx',
         globalName: 'MtlxRoadmapApp',
     },

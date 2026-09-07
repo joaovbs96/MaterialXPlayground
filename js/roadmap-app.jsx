@@ -180,7 +180,14 @@ function MtlxRoadmapApp({ active } = {}) {
 
     const totalItems = ROADMAP_STATUSES.reduce((sum, s) => sum + (counts[s.id] || 0), 0);
 
+    // Hero grid backdrop, same recipe as the VS Code and gallery pages: the
+    // grid spans the shell's view wrapper and fades out below the title block.
+    const rootRef = React.useRef(null);
+    const fadeRef = React.useRef(null);
+
     return (
+        <div ref={rootRef} className="relative">
+        <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="top" />
         <div className="relative max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-6">
             <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-gray-500">
                 <a href="#!home" className="hover:text-gray-300 transition-colors">Home</a>
@@ -190,7 +197,7 @@ function MtlxRoadmapApp({ active } = {}) {
                 <span className="text-gray-400">Roadmap</span>
             </nav>
 
-            <div className="space-y-2">
+            <div ref={fadeRef} className="space-y-2">
                 <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-gray-100 text-balance">
                     {parsed ? parsed.title : 'Roadmap'}
                 </h1>
@@ -248,6 +255,7 @@ function MtlxRoadmapApp({ active } = {}) {
                     </p>
                 </>
             )}
+        </div>
         </div>
     );
 }

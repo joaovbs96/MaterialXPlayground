@@ -5,32 +5,33 @@ Format: one item per bullet, `- [status] **Title**: one or two sentences.` Statu
 
 # Roadmap
 
-Where MaterialX Playground is heading: the rendering engine shared by the Material Viewer and the USD Scene Viewer, the tools around them, and the desktop and editor integrations. Items marked idea are open for discussion, planned items have an agreed shape, and in progress items have a branch.
+Where MaterialX Playground is heading, grouped by area: the rendering engine shared by the Material Viewer and the Scene Viewer, the tools around them, and the desktop and editor integrations. Everything here is open for discussion, including the order and whether an item belongs at all. Missing something? Open an issue on the [GitHub issues page](https://github.com/joaovbs96/MaterialXPlayground/issues) to suggest, question or voice your support for an item.
 
 ## Rendering Engine
 
-- [planned] **Material Viewer and Scene render session**: pull the view layer out of the Viewer closure into shared, scene-capable modules (peel pipeline done; texture pipeline, environment bridge, diagnostics, one handle contract) so feature parity is structural. Includes environment broadcast, key light toggle, GIF transparent option, HUD parity, anisotropic filtering and one decode colour policy.
-- [in progress] **KTX2 compressed textures**: cook script that bakes `.ktx2` siblings next to source textures, resolver that prefers them, planner that counts compressed bytes. Branch `ktx2-textures`, pending the toktx verification at 4096.
-- [planned] **Displacement**: Loop subdivision removed the tessellation blocker; remaining shape is bake the displacement network to a UV-space target, displace on the CPU with seam averaging, recompute normals, in Viewer and Scene.
-- [planned] **Upstream MaterialXView parity gaps**: close the open gaps recorded in the parity audit against MaterialXView (desktop and web viewer): per-image sampler state, shadow maps, document-authored lights, `doc.validate()`, mipmaps on float textures, extra vertex streams.
-- [planned] **Document validation at load**: report duplicate input names, unknown colorspaces, type mismatches and out-of-range mix weights in one Diagnostics list instead of letting MaterialX drop them silently.
-- [planned] **Linear compositing for transparency**: the depth-peel composite runs in display space today; the linear path needs a linear-output mode for opaque MaterialX materials during the merged pass.
-- [planned] **Texture pipeline in a worker with a quiet load**: both viewers decode textures on the main thread today; decode off the main thread, hold prims neutral until their textures bind, one progress line, cancelable texture work.
+- [planned] **One renderer for both viewers**: the Material Viewer and the Scene Viewer still keep separate copies of some rendering code. Move it into shared modules so every feature (transparency, textures, environment, diagnostics) works the same in both.
+- [in progress] **KTX2 compressed textures**: GPU-compressed textures cut memory use by about four times, so large scenes can load at full resolution. Includes a script that converts a folder of textures once. Branch `ktx2-textures`.
+- [planned] **Displacement**: render MaterialX displacement by baking it to a texture and moving the mesh vertices on the CPU, in both viewers.
+- [planned] **MaterialXView parity**: close the known differences to the reference MaterialX viewer: per-image sampler settings, shadows, lights authored in the document, document validation, mipmaps on float textures, extra vertex streams.
+- [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces, type mismatches and mix weights outside 0 to 1 instead of letting MaterialX drop them silently.
+- [planned] **Correct transparency blending**: blend transparent layers in linear light instead of display space.
+- [planned] **Faster, quieter texture loading**: decode textures off the main thread, keep objects neutral until their textures are ready, show one progress line, allow cancelling.
 
 ## Scene Viewer
 
-- [planned] **UsdPreviewSurface to MaterialX**: convert the runtime's flattened UsdPreviewSurface payload into a MaterialX document using the standard `UsdPreviewSurface` and `UsdUVTexture` nodes, so both material kinds render through one pipeline.
-- [idea] **glTF scenes through MaterialX**: a second stage adapter that reads glTF or GLB (hierarchy, meshes, cameras) and converts glTF PBR materials to `gltf_pbr` MaterialX, sharing the renderer with USD.
-- [planned] **Runtime recovery after a wasm abort**: a malformed prim currently kills the whole USD module; recreate the module per stage and skip the offending prim, or rebuild the runtime with exception handling.
-- [idea] **Triangle and prim budgets with GPU instancing**: nothing bounds geometry today; repeated meshes should share GPU buffers and instance matrices.
-- [idea] **Variants and purposes in the UI**: the runtime exposes variant selection and a purpose policy; the viewer uses neither.
-- [idea] **Stage lights**: read `UsdLux` lights and drive the MaterialX light rig from them (`extractStageLights` exists in the runtime).
-- [idea] **Camera UX**: show camera frustums, open on a stage's single authored camera, expose field of view and clipping.
-- [idea] **Scene embeds, compare and gallery**: the Scene route has no embed or compare mode and no gallery entry. Gallery would, likely, have to work differently for full scenes, in relation to individual materials.
-- [idea] **Stage reload robustness**: repeated reloads in one long browser session hung twice during diagnosis runs; not yet reproduced or investigated.
+- [planned] **UsdPreviewSurface materials**: convert UsdPreviewSurface materials to MaterialX so they render through the same pipeline as MaterialX materials.
+- [idea] **glTF scenes**: load glTF and GLB files, converting their PBR materials to MaterialX and sharing the renderer with USD.
+- [planned] **Survive broken stages**: a malformed prim currently takes down the whole USD runtime. Recover and skip the offending prim instead.
+- [idea] **Geometry budgets and instancing**: bound the amount of geometry a stage can load and draw repeated meshes with GPU instancing.
+- [idea] **Variants and purposes**: let the user pick variant selections and render purposes; the runtime already supports both.
+- [idea] **Stage lights**: read UsdLux lights from the stage and use them for lighting.
+- [idea] **Camera tools**: show camera frustums, open on the stage's authored camera, expose field of view and clipping.
+- [idea] **Embeds, compare and gallery for scenes**: none of these exist for the Scene Viewer yet. A scene gallery would likely work differently from the material gallery.
+- [idea] **Reload robustness**: reloading stages many times in one session has hung twice; not yet reproduced.
 
 ## Material Viewer
 
+- [planned] **Path tracing mode**: a physically based path tracer next to the real-time view, so materials can be checked against a ground-truth render of the same document, with progressive refinement while the camera is still.
 - [idea] **More backdrop options**: something similar to the backdrop of the Standard Shaderball.
 - [idea] **Support for ShadingLanguageX (SLX) viewing**: via SLX WASM bindings, support for directly rendering a .slx file.
 
