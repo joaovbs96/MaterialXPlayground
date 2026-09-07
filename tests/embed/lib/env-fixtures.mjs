@@ -36,6 +36,29 @@ export function makeFlatHdr(value) {
   return Buffer.concat([header, pixels]);
 }
 
+/** A WxH flat (uncompressed) Radiance RGBE file with a deterministic
+ * high-frequency pseudo-random pattern (alternating near-black/near-white
+ * texels), used to give environment sampling real per-pixel contrast to
+ * alias against (see env-footprint-lod.spec.mjs). */
+export function makeNoiseHdr(w, h) {
+  const header = Buffer.from(`#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y ${h} +X ${w}\n`, 'ascii');
+  const pixels = Buffer.alloc(w * h * 4);
+  let state = 12345;
+  const rand = () => {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    return state / 0x7fffffff;
+  };
+  for (let i = 0; i < w * h; i++) {
+    const bright = rand() > 0.5;
+    const mantissa = bright ? 255 : 0;
+    pixels[i * 4 + 0] = mantissa;
+    pixels[i * 4 + 1] = mantissa;
+    pixels[i * 4 + 2] = mantissa;
+    pixels[i * 4 + 3] = bright ? 128 : 0;
+  }
+  return Buffer.concat([header, pixels]);
+}
+
 const CHANNEL_ORDER = ['A', 'B', 'G', 'R'];
 
 function chlistEntry(name) {
