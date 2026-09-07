@@ -477,7 +477,9 @@ function composeLocalMatrix(orderTokens, attrMap, primPath, warn) {
       return { matrix: identity4(), unsupported: true };
     }
     if (invert) opM = invert4(opM);
-    m = mul4(m, opM);
+    // xformOpOrder lists the outermost op first: a point meets the last op
+    // first, so each op is prepended (row vectors: p' = p * opN * ... * op1).
+    m = mul4(opM, m);
   }
   return { matrix: m, unsupported: false };
 }
