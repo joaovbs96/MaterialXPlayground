@@ -3383,8 +3383,10 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRota
     if (has('u_envIrradiance')) uniforms.u_envIrradiance = { value: irradiance };
     for (const u of compiled.declared || []) {
         if (!/sampler/i.test(u.type) || !/env/i.test(u.name)) continue;
-        if (/radiance|specular|prefilter/i.test(u.name)) uniforms[u.name] = { value: radiance };
-        else if (/irradiance|diffuse/i.test(u.name)) uniforms[u.name] = { value: irradiance };
+        // "u_envIrradiance" contains "radiance", so the irradiance test
+        // must run first or the diffuse term binds the sharp radiance map.
+        if (/irradiance|diffuse/i.test(u.name)) uniforms[u.name] = { value: irradiance };
+        else if (/radiance|specular|prefilter/i.test(u.name)) uniforms[u.name] = { value: radiance };
     }
     if (has('u_envMatrix')) uniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
     if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
@@ -5041,8 +5043,8 @@ const createMtlxRenderView = async ({
                     // Finds a declared sampler by pattern, ALWAYS anchored
                     // to /env/i first, without it, a material sampler
                     // named e.g. "specular" could false-match (a real past bug).
-                    const findSampler = (re) =>
-                        declared.find((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && re.test(u.name));
+                    const findSampler = (re, exclude) =>
+                        declared.find((u) => /sampler/i.test(u.type) && /env/i.test(u.name) && re.test(u.name) && !(exclude && exclude.test(u.name)));
 
                     if (DEBUG_SHADERS) {
                         console.group(`MaterialX preview: ${label}`);
@@ -5057,7 +5059,9 @@ const createMtlxRenderView = async ({
                     // shell-level env textures to whatever sampler names
                     // THIS shader uses, matched loosely against version drift.
                     if (needsLighting) {
-                        const radSampler = findSampler(/radiance|specular|prefilter/i);
+                        // "u_envIrradiance" also matches /radiance/i, so the
+                        // radiance pattern must exclude it explicitly here.
+                        const radSampler = findSampler(/radiance|specular|prefilter/i, /irradiance/i);
                         const irrSampler = findSampler(/irradiance|diffuse/i);
                         if (radSampler) newUniforms[radSampler.name] = { value: envRadiance };
                         if (irrSampler) newUniforms[irrSampler.name] = { value: envIrradiance };

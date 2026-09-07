@@ -25,9 +25,13 @@ function halfStats(image, side) {
     }
   }
   values.sort((a, b) => a - b);
-  const p95 = values[Math.floor(values.length * 0.95)];
-  const brightFraction = values.filter((v) => v > 200).length / values.length;
-  return { p95, brightFraction };
+  const max = values[values.length - 1];
+  // With the correct SH irradiance now driving diffuse (see the
+  // u_envIrradiance/u_envRadiance swap fix), a matte sphere's whole lit
+  // face sits near-uniformly bright, so >200 no longer isolates specular.
+  // A tight highlight fraction near full clip still isolates it.
+  const highlightFraction = values.filter((v) => v > 245).length / values.length;
+  return { max, highlightFraction };
 }
 
 // Root cause: r128's WebGLCubeMaps converts an equirect scene.environment
@@ -58,6 +62,6 @@ test('@scene roughness affects specular sharpness in the scene view', async ({ p
   const image = decodePNG(await canvas.screenshot());
   const rough = halfStats(image, 'left');
   const glossy = halfStats(image, 'right');
-  expect(rough.brightFraction).toBeLessThanOrEqual(glossy.brightFraction * 0.5);
-  expect(rough.p95).toBeLessThan(glossy.p95);
+  expect(rough.highlightFraction).toBeLessThanOrEqual(glossy.highlightFraction * 0.5);
+  expect(rough.max).toBeLessThan(glossy.max);
 });
