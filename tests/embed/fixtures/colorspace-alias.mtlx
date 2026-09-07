@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <surface_unlit name="SR_ColorspaceAlias" type="surfaceshader">
+    <input name="emission_color" type="color3" value="0.5, 0.5, 0.5" colorspace="srgb_tx" />
+  </surface_unlit>
+  <surfacematerial name="ColorspaceAlias" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_ColorspaceAlias" />
+  </surfacematerial>
+</materialx>

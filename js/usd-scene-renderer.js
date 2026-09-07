@@ -504,7 +504,7 @@ const createMtlxSceneView = async ({
             sourceDocument = loaded.document;
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, isMounted,
+                renderable, label, isMounted, document: sourceDocument,
             });
             if (!compiled) return null;
             // Reuse the engine's hidden KHR warm context before this
