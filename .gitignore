@@ -2,7 +2,7 @@
 node_modules/
 vendor/materialx/
 # Pinned usd-wg-webview runtime (20 MB wasm), fetched by
-# scripts/setup-usd-webview-runtime.mjs with SHA-256 checks, never committed.
+# npm run vendor (scripts/vendor.mjs) with SHA-256 checks, never committed.
 vendor/usd-webview-bindings/
 *.vsix
 
