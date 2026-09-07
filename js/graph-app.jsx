@@ -6123,7 +6123,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     defValue={null}
                                     title="Which .mtlx document to display"
                                     size="md"
-                                    className="max-w-[10rem] md:max-w-[14rem] shrink-0"
+                                    className="max-w-[10rem] md:max-w-[28rem] shrink-0"
                                 />
                             )}
                             {/* What stays out of the menus: the canvas verbs

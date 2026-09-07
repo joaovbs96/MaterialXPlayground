@@ -1120,9 +1120,12 @@ const openInGraphEditor = ({ xml, name, files, select }) => {
 // alongside a document's XML, as opposed to the .mtlx itself.
 const looseFilesFrom = (fileMap) => {
     const files = {};
+    let skipped = 0;
     Object.keys(fileMap || {}).forEach((k) => {
+        if (window.isHiddenSideFile && window.isHiddenSideFile(k)) { skipped++; return; }
         if (!/\.mtlx$/i.test(k)) files[k] = fileMap[k];
     });
+    if (skipped) console.info('looseFilesFrom: skipped ' + skipped + ' side file(s)');
     return files;
 };
 
@@ -2372,6 +2375,42 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 // colorspaces, geometry, and more). Portaled to fullscreenPortalRoot():
 // native fullscreen, and ancestor backdrop-blur mispositions position:fixed.
 const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
+// Fit-to-text caps: a trigger/popover grows with its longest label but
+// never past these (about 28rem / 32rem at the default 16px root).
+const SELECT_TRIGGER_MAX_PX = 448;
+const SELECT_POP_MAX_PX = 512;
+
+// One cached offscreen canvas for text measurement (module-level so every
+// MtlxSelect instance shares it instead of allocating its own).
+let __mtlxSelectMeasureCanvas = null;
+const measureLabelWidth = (text, font) => {
+    if (!text) return 0;
+    if (!__mtlxSelectMeasureCanvas) __mtlxSelectMeasureCanvas = document.createElement('canvas');
+    const ctx = __mtlxSelectMeasureCanvas.getContext('2d');
+    if (!ctx) return 0;
+    ctx.font = font || '11px sans-serif';
+    return ctx.measureText(String(text)).width;
+};
+
+// Approximate chrome (padding, gaps, chevron, optional icon/dot) added
+// around the trigger's label so the fit-to-text width isn't razor-thin.
+const selectTriggerChromePx = (size, hasIcon, hasDot) => {
+    const pad = size === 'lg' ? 20 : 16; // horizontal padding, both sides
+    let px = pad + 4 /* gap */ + 12 /* chevron */ + 6 /* rounding slack */;
+    if (hasIcon) px += 18;
+    if (hasDot) px += 12;
+    return px;
+};
+
+// Same idea for a popover row: check gutter, padding, gaps, optional
+// icon/badge.
+const selectRowChromePx = (hasIcon, hasDot, hasBadge) => {
+    let px = 20 /* padding */ + 14 /* check gutter */ + 8 /* gap */ + 8 /* rounding slack */;
+    if (hasIcon) px += 14 + 8;
+    if (hasDot) px += 8 + 8;
+    if (hasBadge) px += 40 + 8;
+    return px;
+};
 
 // NUL-prefixed so no real option value can ever collide with it; keeps
 // selected-row lookups and openPopover's findIndex inert for this row.
@@ -2517,7 +2556,7 @@ const normalizeSelectOptions = (options, labels, extras) => {
 const MtlxSelect = ({
     value, options, labels = {}, badges, dots, defValue, onChange, title, className, popWidth,
     icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
-    size = 'sm', variant = 'toolbar', block, font,
+    size = 'sm', variant = 'toolbar', block, font, maxWidth,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
     // Optional integrated model-picker footer: a selectable row once a
@@ -2572,9 +2611,40 @@ const MtlxSelect = ({
         }]);
     }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder, modelFooter]);
 
-    // Wider popover when badge pills share the rows with the labels,
-    // unless the caller knows its content is narrower and overrides it.
-    const popW = popWidth || (badges ? 240 : SELECT_POP_W);
+    // Re-measure once after mount: Tailwind Play's async CSS injection can
+    // change the trigger's resolved font after the first paint (the same
+    // reason reposition() takes a second RAF pass below).
+    const [measureTick, setMeasureTick] = React.useState(0);
+    React.useEffect(() => {
+        const raf = window.requestAnimationFrame(() => setMeasureTick((t) => t + 1));
+        return () => window.cancelAnimationFrame(raf);
+    }, []);
+
+    // Longest label pixel width at the trigger's actual computed font, so
+    // the trigger and popover can both size to fit instead of truncating.
+    const longestLabelPx = React.useMemo(() => {
+        const font = btnRef.current ? window.getComputedStyle(btnRef.current).font : undefined;
+        let max = 0;
+        normalized.forEach((o) => { if (!o.isFooter) max = Math.max(max, measureLabelWidth(o.label, font)); });
+        if (placeholder) max = Math.max(max, measureLabelWidth(placeholder, font));
+        return max;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [normalized, placeholder, measureTick]);
+
+    const hasIcon = !!icon;
+    const hasRowIcon = normalized.some((o) => o.icon);
+    const hasDot = normalized.some((o) => o.dot);
+    const hasBadge = normalized.some((o) => o.badge);
+    // Fit-to-text popover width before the trigger rect is known (capped
+    // at the viewport too); reposition() below widens this to at least
+    // the trigger's own rect.width once the popover is actually open.
+    const popFitWidth = Math.min(
+        Math.max(longestLabelPx + selectRowChromePx(hasRowIcon, hasDot, hasBadge), badges ? 240 : SELECT_POP_W),
+        SELECT_POP_MAX_PX,
+        Math.max(0, window.innerWidth - 16),
+    );
+    // Explicit popWidth prop always wins (version pickers, USD root list).
+    const popPreMeasureWidth = popWidth || popFitWidth;
 
     // Next/previous ENABLED row from `from`, walking in `dir` (+1/-1),
     // clamped at the array ends without wrapping. Returns null when every
@@ -2609,10 +2679,13 @@ const MtlxSelect = ({
         // there's more room above, otherwise stay below and clamp.
         const flip = desired > spaceBelow && spaceAbove > spaceBelow;
         const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
-        const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+        // Grows past the trigger's own width up to the fit-to-text cap; an
+        // explicit popWidth prop always wins (version pickers, USD root).
+        const width = popWidth || Math.max(rect.width, popFitWidth);
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
         setPos(flip
-            ? { left, bottom: window.innerHeight - rect.top + 4, maxHeight }
-            : { left, top: rect.bottom + 4, maxHeight });
+            ? { left, bottom: window.innerHeight - rect.top + 4, maxHeight, width }
+            : { left, top: rect.bottom + 4, maxHeight, width });
     };
     // A ref mirror so the scroll/resize effect (subscribed once per open,
     // not per render) always calls the LATEST reposition closure.
@@ -2779,9 +2852,11 @@ const MtlxSelect = ({
     // drops justify-between so icon+label pack flush left; the chevron
     // gets ml-auto below to stay pinned at the right edge instead.
     const alignLeft = align === 'left';
+    // `block` always means full width now, regardless of `align`; the
+    // "centered" justify-between split still applies unless align="left".
     const triggerClassName = [
         chrome, 'inline-flex items-center gap-1',
-        block && (alignLeft ? 'w-full' : 'justify-between'),
+        block && ('w-full' + (alignLeft ? '' : ' justify-between')),
         fontCls,
         disabled && 'opacity-50 pointer-events-none',
         className,
@@ -2798,12 +2873,31 @@ const MtlxSelect = ({
             : (triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE),
         borderColor: MXS_BORDER,
     };
-    const triggerStyle = Object.assign({}, defaultChromeStyle, selectThemeStyle(theme), fontStyle);
+    // Fit-to-text sizing, skipped for `block` triggers (w-full already
+    // owns their width) and for callers that already declare their own
+    // `max-w-*` utility: an inline style attribute always beats a class
+    // in the cascade, so setting our own inline max-width here would
+    // silently override a caller's (e.g. the graph document picker's
+    // narrow-viewport `max-w-[10rem]`) instead of deferring to it.
+    const triggerCap = typeof maxWidth === 'number' ? maxWidth : SELECT_TRIGGER_MAX_PX;
+    const hasCallerMaxW = typeof className === 'string' && /(^|\s)max-w-/.test(className);
+    // size="lg" is already full-width via SELECT_SIZE_CLS (sidebar
+    // fields): the plan keeps those at their container's width, only
+    // letting the LIST widen past them.
+    const fitStyle = (block || size === 'lg' || hasCallerMaxW) ? undefined : {
+        minWidth: Math.min(longestLabelPx + selectTriggerChromePx(size, hasIcon, hasDot), triggerCap),
+        maxWidth: triggerCap,
+    };
+    const triggerStyle = Object.assign({}, defaultChromeStyle, fitStyle, selectThemeStyle(theme), fontStyle);
 
     const selected = normalized.find((o) => o.value === value);
     const selectedLabel = selected ? selected.label : (labels[value] || value);
     const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
     const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
+    // Tooltip: always includes the full selected label (a truncated
+    // trigger otherwise has no way to reveal it), plus the caller's own
+    // `title` when one is set.
+    const triggerTitle = [title, selectedLabel].filter((s) => s != null && s !== '').join('\n') || undefined;
 
     // POPOVER font: explicit font prop or theme.font wins; else the
     // ambient value captured off the trigger (fixes the portal losing
@@ -2812,9 +2906,12 @@ const MtlxSelect = ({
     const popFontFamily = font === 'mono' ? undefined
         : (explicitFont || 'var(--mx-select-font, ' + ambientFont + ')');
 
+    // Before reposition() has measured the trigger rect, fall back to the
+    // fit-to-text estimate (or the legacy fallback when there's no text
+    // yet to measure) so the hidden probe render is already close.
     const popStyle = Object.assign(
         {
-            position: 'fixed', zIndex: 9999, width: popW,
+            position: 'fixed', zIndex: 9999, width: pos ? pos.width : popPreMeasureWidth,
             visibility: pos ? 'visible' : 'hidden',
             maxHeight: pos ? pos.maxHeight : 'none',
             overflowY: 'auto',
@@ -2853,7 +2950,7 @@ const MtlxSelect = ({
                         type="button"
                         role="option"
                         aria-selected={rowSelected}
-                        title={o.title}
+                        title={o.title ? (o.title + '\n' + o.label) : o.label}
                         aria-disabled={o.disabled || undefined}
                         onMouseEnter={() => { if (!o.disabled) setHi(i); }}
                         onClick={() => commitRow(o)}
@@ -2953,7 +3050,7 @@ const MtlxSelect = ({
                 aria-haspopup="listbox"
                 aria-expanded={open}
                 aria-controls={listboxId}
-                title={title}
+                title={triggerTitle}
                 disabled={!!disabled}
                 aria-disabled={disabled || undefined}
                 aria-label={ariaLabel}

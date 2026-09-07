@@ -876,27 +876,38 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 const normPath = (p) => String(p || '')
     .replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
 
+// AppleDouble and Finder metadata entries: never real documents, only
+// noise dropped alongside them by a macOS zip/folder export.
+const isHiddenSideFile = (relPath) => /(^|\/)(__MACOSX\/|\._[^/]*$|\.DS_Store$)/i.test(String(relPath || ''));
+
 // Directory-aware DataTransfer traversal. Returns { relPath: File }.
 const readDroppedItems = async (dataTransfer) => {
     const map = {};
+    let skipped = 0;
     const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
     const entries = items
         .map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry() : null))
         .filter(Boolean);
     if (!entries.length) {
         // Fallback: flat file list (no folder structure available).
-        for (const f of Array.from(dataTransfer.files || [])) map[f.name] = f;
+        for (const f of Array.from(dataTransfer.files || [])) {
+            if (isHiddenSideFile(f.name)) { skipped++; continue; }
+            map[f.name] = f;
+        }
+        if (skipped) console.info('readDroppedItems: skipped ' + skipped + ' side file(s)');
         return map;
     }
     const readEntry = (entry, prefix) => new Promise((resolve) => {
+        const relPath = prefix + entry.name;
+        if (isHiddenSideFile(relPath)) { skipped++; resolve(); return; }
         if (entry.isFile) {
-            entry.file((f) => { map[prefix + entry.name] = f; resolve(); }, () => resolve());
+            entry.file((f) => { map[relPath] = f; resolve(); }, () => resolve());
         } else if (entry.isDirectory) {
             const reader = entry.createReader();
             const sub = [];
             const readBatch = () => reader.readEntries((batch) => {
                 if (!batch.length) {
-                    Promise.all(sub.map((e2) => readEntry(e2, prefix + entry.name + '/'))).then(resolve);
+                    Promise.all(sub.map((e2) => readEntry(e2, relPath + '/'))).then(resolve);
                     return;
                 }
                 sub.push(...batch);
@@ -906,11 +917,13 @@ const readDroppedItems = async (dataTransfer) => {
         } else resolve();
     });
     await Promise.all(entries.map((e) => readEntry(e, '')));
+    if (skipped) console.info('readDroppedItems: skipped ' + skipped + ' side file(s)');
     return map;
 };
 
 // Expand any .zip files in the map into their contents (in place).
 const expandZips = async (map) => {
+    let skipped = 0;
     for (const key of Object.keys(map)) {
         if (!/\.zip$/i.test(key)) continue;
         const file = map[key];
@@ -923,9 +936,11 @@ const expandZips = async (map) => {
         for (const name of names) {
             const entry = zip.files[name];
             if (entry.dir) continue;
+            if (isHiddenSideFile(name)) { skipped++; continue; }
             map[name] = await entry.async('blob');
         }
     }
+    if (skipped) console.info('expandZips: skipped ' + skipped + ' side file(s)');
     return map;
 };
 
@@ -6371,7 +6386,7 @@ Object.assign(window, {
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
-    normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText,
+    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture,
     collectMxUniforms, mxValueToThreeUniform,
