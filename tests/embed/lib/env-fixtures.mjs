@@ -20,6 +20,22 @@ export function makeHotHdr() {
   return Buffer.concat([header, pixels]);
 }
 
+/** A 4x2 flat (uncompressed) Radiance RGBE file with every pixel equal
+ * to `value` (0..1). Used to isolate environment sampling: a constant
+ * radiance cannot itself produce per-pixel noise. */
+export function makeFlatHdr(value) {
+  const header = Buffer.from('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 4\n', 'ascii');
+  const mantissa = Math.max(0, Math.min(1, value));
+  const rgbe = mantissa <= 0 ? [0, 0, 0, 0] : [
+    Math.round(mantissa * 256),
+    Math.round(mantissa * 256),
+    Math.round(mantissa * 256),
+    128,
+  ];
+  const pixels = Buffer.from(Array(8).fill(rgbe).flat());
+  return Buffer.concat([header, pixels]);
+}
+
 const CHANNEL_ORDER = ['A', 'B', 'G', 'R'];
 
 function chlistEntry(name) {
