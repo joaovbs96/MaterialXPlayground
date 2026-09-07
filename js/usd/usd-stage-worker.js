@@ -399,7 +399,10 @@ function subdivideMesh(mesh, levels) {
   if (cornerCount < 3 || cornerCount % 3 !== 0) return null;
   const hasUV = mesh.uvs && mesh.uvs.length === (positions.length / 3) * 2;
 
-  const posKey = (x, y, z) => `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
+  // Normalize -0 so sign noise near zero cannot split a weld (toFixed keeps
+  // the sign of a tiny negative value, e.g. (-1e-7).toFixed(5) === "-0.00000").
+  const noSignZero = (v) => (v === 0 ? 0 : v);
+  const posKey = (x, y, z) => `${noSignZero(x).toFixed(5)},${noSignZero(y).toFixed(5)},${noSignZero(z).toFixed(5)}`;
   const posMap = new Map();
   let weldedPositions = [];
   const cornerVertex = (cornerIndex) => {
