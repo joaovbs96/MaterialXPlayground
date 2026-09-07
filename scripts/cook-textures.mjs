@@ -118,6 +118,17 @@ async function runWorkerSlice({ files, quality, dryRun }) {
         }
         const buf = b64ToBuf(b64);
 
+        // Returns rgba as a base64 string, never a plain array: a plain
+        // array of a 4096x4096 RGBA buffer (67M numbers) blows Playwright's
+        // evaluate() JSON round-trip past a worker's heap limit.
+        function bufToB64(u8) {
+          let binary = "";
+          const chunk = 0x8000;
+          for (let i = 0; i < u8.length; i += chunk) binary += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+          return btoa(binary);
+        }
+
+        let width, height, rgba;
         if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
           const mime = ext === ".png" ? "image/png" : "image/jpeg";
           const blob = new Blob([buf], { type: mime });
@@ -128,54 +139,77 @@ async function runWorkerSlice({ files, quality, dryRun }) {
           const ctx = canvas.getContext("2d");
           ctx.drawImage(bitmap, 0, 0);
           const img = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-          return { width: bitmap.width, height: bitmap.height, rgba: Array.from(img.data) };
-        }
-
-        if (ext === ".tif" || ext === ".tiff") {
+          width = bitmap.width; height = bitmap.height; rgba = img.data;
+        } else if (ext === ".tif" || ext === ".tiff") {
           const ifds = UTIF.decode(buf);
           UTIF.decodeImage(buf, ifds[0]);
-          const rgba = UTIF.toRGBA8(ifds[0]);
-          return { width: ifds[0].width, height: ifds[0].height, rgba: Array.from(rgba) };
-        }
-
-        if (ext === ".hdr") {
+          width = ifds[0].width; height = ifds[0].height; rgba = UTIF.toRGBA8(ifds[0]);
+        } else if (ext === ".hdr") {
           const parsed = new THREE.RGBELoader().parse(buf);
           // parsed.data is Float32Array RGBE->RGB already resolved by the loader (RGB, 3 comps);
           // widen to RGBA8 via a simple Reinhard tonemap so it survives an 8bpc UASTC transcode
           // path the same way our runtime bounded-tier decode already clamps unbounded HDR data.
-          const { width, height, data } = parsed;
-          const out = new Uint8ClampedArray(width * height * 4);
-          for (let i = 0; i < width * height; i++) {
+          const { width: w, height: h, data } = parsed;
+          const out = new Uint8ClampedArray(w * h * 4);
+          for (let i = 0; i < w * h; i++) {
             const r = data[i * 3], g = data[i * 3 + 1], b = data[i * 3 + 2];
             out[i * 4] = Math.round((r / (1 + r)) * 255);
             out[i * 4 + 1] = Math.round((g / (1 + g)) * 255);
             out[i * 4 + 2] = Math.round((b / (1 + b)) * 255);
             out[i * 4 + 3] = 255;
           }
-          return { width, height, rgba: Array.from(out) };
-        }
-
-        if (ext === ".exr") {
+          width = w; height = h; rgba = out;
+        } else if (ext === ".exr") {
           const parsed = new THREE.EXRLoader().setDataType(THREE.FloatType).parse(buf);
-          const { width, height, data } = parsed;
-          const out = new Uint8ClampedArray(width * height * 4);
-          for (let i = 0; i < width * height; i++) {
+          const { width: w, height: h, data } = parsed;
+          const out = new Uint8ClampedArray(w * h * 4);
+          for (let i = 0; i < w * h; i++) {
             const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2], a = data[i * 4 + 3];
             out[i * 4] = Math.round((r / (1 + r)) * 255);
             out[i * 4 + 1] = Math.round((g / (1 + g)) * 255);
             out[i * 4 + 2] = Math.round((b / (1 + b)) * 255);
             out[i * 4 + 3] = Math.round((a ?? 1) * 255);
           }
-          return { width, height, rgba: Array.from(out) };
+          width = w; height = h; rgba = out;
+        } else {
+          throw new Error(`unsupported extension ${ext}`);
         }
 
-        throw new Error(`unsupported extension ${ext}`);
+        // The vendored basis_encoder.wasm hard-caps total source texels at
+        // BASISU_ENCODER_MAX_SOURCE_IMAGE_PIXELS (12,582,912 = 4096x3072):
+        // above that, encode() fails silently (returns 0). Box-downscale via
+        // canvas to the largest size under the cap that preserves aspect
+        // ratio, rather than fail the whole cook for large (e.g. 4096x4096)
+        // sources — this only affects the ENCODED .ktx2, never the source.
+        const MAX_SOURCE_PIXELS = 12582912;
+        let downscaledFrom = null;
+        if (width * height > MAX_SOURCE_PIXELS) {
+          const scale = Math.sqrt(MAX_SOURCE_PIXELS / (width * height));
+          const newW = Math.max(1, Math.floor(width * scale));
+          const newH = Math.max(1, Math.floor(height * scale));
+          const srcCanvas = document.createElement("canvas");
+          srcCanvas.width = width; srcCanvas.height = height;
+          srcCanvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+          const dstCanvas = document.createElement("canvas");
+          dstCanvas.width = newW; dstCanvas.height = newH;
+          const dstCtx = dstCanvas.getContext("2d");
+          dstCtx.imageSmoothingQuality = "high";
+          dstCtx.drawImage(srcCanvas, 0, 0, width, height, 0, 0, newW, newH);
+          downscaledFrom = { width, height };
+          rgba = dstCtx.getImageData(0, 0, newW, newH).data;
+          width = newW; height = newH;
+        }
+
+        return { width, height, rgbaB64: bufToB64(rgba), downscaledFrom };
       },
       { b64, ext: file.ext }
     );
 
-    const { width, height } = decoded;
-    const rgba = new Uint8Array(decoded.rgba);
+    const { width, height, downscaledFrom } = decoded;
+    const rgba = new Uint8Array(Buffer.from(decoded.rgbaB64, "base64"));
+    if (downscaledFrom) {
+      console.log(`  note: ${path.basename(file.srcPath)} is ${downscaledFrom.width}x${downscaledFrom.height} (${downscaledFrom.width * downscaledFrom.height} texels), above the encoder's 12,582,912-texel limit; downscaled to ${width}x${height} for the .ktx2 only`);
+    }
     const seconds = (Date.now() - started) / 1000;
 
     if (dryRun) {
