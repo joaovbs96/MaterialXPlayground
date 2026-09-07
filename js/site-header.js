@@ -191,6 +191,13 @@
             '<path d="M4 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
             '<path d="M14 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
         '</svg>';
+    // Matches MTLX_ICON_PATHS['route'] style checklist glyph, used for the
+    // Roadmap nav entry.
+    var ICON_NAV_ROADMAP =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M9 6l11 0" /><path d="M9 12l11 0" /><path d="M9 18l11 0" />' +
+            '<path d="M5 6l0 .01" /><path d="M5 12l0 .01" /><path d="M5 18l0 .01" />' +
+        '</svg>';
     var ICON_CHEVRON_DOWN =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-tab-chevron">' +
             '<path d="M6 9l6 6l6 -6" />' +
@@ -216,6 +223,7 @@
             { id: 'whatIsMaterialx', label: 'What is MaterialX?', shellHref: '#!what-is-materialx', icon: '<span class="mtlx-menu-logo" aria-hidden="true"></span>' },
             { id: 'gallery', label: 'Material Gallery', shellHref: '#!gallery', icon: ICON_NAV_GALLERY },
             { id: 'tutorials', label: 'Tutorials', icon: ICON_NAV_LEARN, status: 'soon' },
+            { id: 'roadmap', label: 'Roadmap', shellHref: '#!roadmap', icon: ICON_NAV_ROADMAP },
         ] },
         { id: 'integrate', label: 'Integrate', group: true, icon: ICON_NAV_INTEGRATE, items: [
             { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER, badge: 'Experimental' },
@@ -250,6 +258,7 @@
         if (hash === '#!vscode') { return 'vscode'; }
         if (hash === '#!what-is-materialx') { return 'whatIsMaterialx'; }
         if (hash === '#!gallery' || hash.indexOf('#!gallery?') === 0) { return 'gallery'; }
+        if (hash === '#!roadmap') { return 'roadmap'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
     }

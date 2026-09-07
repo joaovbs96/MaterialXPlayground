@@ -202,6 +202,8 @@ Some files in this repo are produced by scripts rather than written by hand: the
 
 ## Roadmap
 
+The full, current roadmap lives in [ROADMAP.md](ROADMAP.md) and renders on the site's [Roadmap page](#!roadmap) at view time.
+
 - Custom geometry load support as GLB/GLTF/OBJ for all tools (USD/USDZ TBD).
 - **Interactive tutorials subsite**: a guided, hands-on set of MaterialX tutorials, served alongside the app (in progress).
 - **VS Code extension**: a custom `.mtlx` editor with live preview, validation, and hover docs, built on the same engine as the web app (in progress — [early experimental builds](#vs-code-extension-experimental) are available from the releases page).
