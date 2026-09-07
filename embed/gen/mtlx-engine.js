@@ -840,6 +840,54 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
   return stripped;
 };
 
+// MaterialX 1.39 colorspace names an author may still write from older
+// docs or other DCCs; not-a-color aliases map to null and are removed
+// (the element then inherits the document colorspace, i.e. no conversion).
+const COLORSPACE_ALIASES = {
+  srgb_tx: 'srgb_texture',
+  sRGB: 'srgb_texture',
+  srgb: 'srgb_texture',
+  Raw: null,
+  raw: null,
+  none: null
+};
+
+// Depth-capped walk (stripValuesFromConnectedInputs idiom) rewriting any
+// non-1.39 `colorspace` attribute in place, document root included.
+// Returns { restore, rewrites }; caller MUST call restore() in a finally
+// so the authored document never actually changes.
+const applyColorspaceAliases = (doc, maxDepth) => {
+  mxWarnIfLocked('applyColorspaceAliases'); // exported doc-mutating helper, see mxWarnIfLocked's header comment
+  const cap = typeof maxDepth === 'number' ? maxDepth : 10;
+  const rewrites = new Map();
+  const restores = [];
+  const visit = (el, depth) => {
+    if (!el || depth > cap) return;
+    if (mxElHasAttr(el, 'colorspace')) {
+      const cs = mxElAttr(el, 'colorspace');
+      if (Object.prototype.hasOwnProperty.call(COLORSPACE_ALIASES, cs)) {
+        const to = COLORSPACE_ALIASES[cs];
+        const ok = to ? mxSetAttr(el, 'colorspace', to) : mxRemoveAttr(el, 'colorspace');
+        if (ok) {
+          restores.push(() => mxSetAttr(el, 'colorspace', cs));
+          const key = cs + ' -> ' + (to || '(removed)');
+          rewrites.set(key, (rewrites.get(key) || 0) + 1);
+        }
+      }
+    }
+    const children = vecToArray(mxSafe(() => el.getChildren(), []));
+    for (const child of children) visit(child, depth + 1);
+  };
+  visit(doc, 0);
+  const restore = () => {
+    for (let i = restores.length - 1; i >= 0; i--) restores[i]();
+  };
+  return {
+    restore,
+    rewrites
+  };
+};
+
 // Doc-level renderable scan: returns [{ name, node }], one entry per
 // renderable surface. Scans by TYPE rather than getMaterialNodes(),
 // which isn't bound in every JS build. Live-doc callers need mxExclusive.
@@ -3830,7 +3878,8 @@ const generatePreviewSourcesUnlocked = ({
   genContext,
   renderable,
   label,
-  isMounted = () => true
+  isMounted = () => true,
+  document: documentArg = null
 }) => {
   // OFFICIAL PARITY: per-material generation options on SHARED
   // module-scope genContext. hwTransparency is reset FIRST,
@@ -3869,16 +3918,26 @@ const generatePreviewSourcesUnlocked = ({
   // build was superseded (mounted flipped while awaiting above),
   // nothing GL-side exists yet, so there's nothing to dispose.
   if (!isMounted()) return null;
+  // Colorspace aliases are normalized on the LIVE document for the
+  // duration of gen.generate only; restore in finally so the authored
+  // document (and any export of it) never actually changes.
+  const colorspaceDoc = mxSafe(() => renderable.getDocument(), null) || documentArg;
+  let colorspaceAliasResult = null;
+  if (colorspaceDoc) colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
   let mxShader;
   const __genPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
   try {
-    mxShader = gen.generate('PreviewShader', renderable, genContext);
-  } catch (genErr) {
-    // Decode the REAL MaterialX error (Emscripten throws
-    // numeric pointers) instead of a generic string, then name the
-    // node types behind it, which MaterialX's own message omits.
-    const detail = unresolvedNodesText(describeUnresolvedNodes(renderable));
-    throw new Error(`Shader generation failed for "${label}": ${mxErr(mx, genErr)}` + (detail ? `. ${detail}` : ''));
+    try {
+      mxShader = gen.generate('PreviewShader', renderable, genContext);
+    } catch (genErr) {
+      // Decode the REAL MaterialX error (Emscripten throws
+      // numeric pointers) instead of a generic string, then name the
+      // node types behind it, which MaterialX's own message omits.
+      const detail = unresolvedNodesText(describeUnresolvedNodes(renderable));
+      throw new Error(`Shader generation failed for "${label}": ${mxErr(mx, genErr)}` + (detail ? `. ${detail}` : ''));
+    }
+  } finally {
+    if (colorspaceAliasResult) colorspaceAliasResult.restore();
   }
   if (window.MTLX_PERF_LOG) {
     console.log('[mtlx-perf] gen.generate: ' + (performance.now() - __genPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
@@ -3905,6 +3964,12 @@ const generatePreviewSourcesUnlocked = ({
     type: v.type
   }));
   const notices = [];
+  if (colorspaceAliasResult) {
+    for (const [key, count] of colorspaceAliasResult.rewrites) {
+      const [from, to] = key.split(' -> ');
+      notices.push(`Colorspace "${from}" is not a MaterialX 1.39 name; ${count} inputs treated as ` + (to === '(removed)' ? 'no conversion' : to));
+    }
+  }
   fs = patchUnlitLightingRefs(fs);
   const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
   const outVar = outDeclMatch ? outDeclMatch[1] : null;
@@ -3975,7 +4040,8 @@ const compileMtlxSceneMaterial = async ({
   genContext,
   renderable,
   label = 'material',
-  isMounted = () => true
+  isMounted = () => true,
+  document: documentArg = null
 }) => {
   if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
   const srcs = await generatePreviewSources({
@@ -3984,7 +4050,8 @@ const compileMtlxSceneMaterial = async ({
     genContext,
     renderable,
     label,
-    isMounted
+    isMounted,
+    document: documentArg
   });
   if (!srcs) return null;
   const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
