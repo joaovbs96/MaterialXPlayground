@@ -1233,7 +1233,7 @@ const getKtx2Loader = view => {
 // textures already upload with flipY=false, relying on the MaterialX
 // generator to flip UVs in the shader, so KTX2 data must match — top row
 // first, same as the source image.
-const loadKtx2Texture = async (blob, view) => {
+const loadKtx2Texture = async (blob, view, warnPath) => {
   const loader = getKtx2Loader(view);
   if (!loader) {
     console.warn('mtlx-engine: THREE.KTX2Loader unavailable (script blocked/offline); .ktx2 textures keep the node default color.');
@@ -1241,10 +1241,25 @@ const loadKtx2Texture = async (blob, view) => {
   }
   try {
     const buf = await blob.arrayBuffer();
-    return await new Promise((resolve, reject) => {
+    const tex = await new Promise((resolve, reject) => {
       loader.parse(buf, resolve, reject);
     });
+    // Block-compressed WebGL formats reject a base level whose width or
+    // height isn't a multiple of 4 (GL_INVALID_OPERATION), which then
+    // samples solid black; fall back to the original source instead.
+    const w = tex && tex.image ? tex.image.width : 0;
+    const h = tex && tex.image ? tex.image.height : 0;
+    const blockCompressed = !!(tex && tex.isCompressedTexture);
+    if (blockCompressed && (w % 4 !== 0 || h % 4 !== 0)) {
+      tex.dispose && tex.dispose();
+      mtlxWarn(`mtlx-engine: KTX2 texture ${warnPath || ''} has ${w}x${h}, not a multiple of 4; ignoring the .ktx2 sibling`);
+      const err = new Error('ktx2 base level not a multiple of 4');
+      err.ktx2InvalidBaseLevel = true;
+      throw err;
+    }
+    return tex;
   } catch (e) {
+    if (e && e.ktx2InvalidBaseLevel) throw e;
     console.warn('mtlx-engine: failed to parse dropped .ktx2 texture, keeping the node default color:', e);
     return null;
   }
@@ -1290,6 +1305,29 @@ const loadTifTexture = async blob => {
     console.warn('mtlx-engine: failed to parse dropped .tif texture, keeping the node default color:', e);
     return null;
   }
+};
+
+// Loads the original (non-.ktx2) source for a resolved hit, used when a
+// .ktx2 sibling is rejected (e.g. an invalid base level) after having
+// already been preferred over this file.
+const loadTextureForHit = async (hit, blob, view) => {
+  const ext = (hit.key.split('.').pop() || '').toLowerCase();
+  if (ext === 'exr') return loadExrTexture(blob);
+  if (ext === 'hdr') return loadHdrTexture(blob);
+  if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob);
+  if (view && view.maxTextureSize && typeof createImageBitmap === 'function') {
+    return loadBoundedBitmapTexture(blob, Number(view.maxTextureSize));
+  }
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(blob);
+    new THREE.TextureLoader().load(url, tex => {
+      URL.revokeObjectURL(url);
+      resolve(tex);
+    }, undefined, () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    });
+  });
 };
 
 // Scene snapshots can contain many UDIM tiles.  When a caller supplies a
@@ -1602,6 +1640,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
       missing.push(ref);
       continue;
     }
+    const originalHit = hit;
     hit = preferKtx2Sibling(fileMap, hit);
     if (hit.substituted) ktx2Substituted += 1;
     const blob = fileMap[hit.key];
@@ -1615,8 +1654,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     } else {
       const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
       if (ext === 'ktx2') {
-        const pendingLoad = loadKtx2Texture(blob, view).then(tex => {
-          if (!tex) return; // unsupported/corrupt, the node default color stands
+        const bindTex = tex => {
+          if (!tex) return;
           configureLoadedTexture(tex);
           if (!isAlive()) {
             tex.dispose && tex.dispose();
@@ -1625,9 +1664,19 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
           cache.set(cacheKey, tex);
           if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
           if (onBound) onBound();
-        }, error => ({
-          error
-        }));
+        };
+        const pendingLoad = loadKtx2Texture(blob, view, hit.key).then(bindTex, error => {
+          if (error && error.ktx2InvalidBaseLevel && originalHit.key !== hit.key) {
+            const notice = `KTX2 texture ${hit.key} is not a multiple of 4; falling back to ${originalHit.key}`;
+            if (view.notices) view.notices.push(notice);
+            return loadTextureForHit(originalHit, fileMap[originalHit.key], view).then(bindTex, e2 => ({
+              error: e2
+            }));
+          }
+          return {
+            error
+          };
+        });
         pending.push(pendingLoad);
       } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
         const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
@@ -7879,6 +7928,7 @@ Object.assign(window, {
   loadTifTexture,
   loadKtx2Texture,
   capKtx2MipLevels,
+  loadBoundedBitmapTexture,
   readImageDimensions,
   boundDecodedTexture,
   collectMxUniforms,
