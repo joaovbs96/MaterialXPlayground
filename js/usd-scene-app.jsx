@@ -240,6 +240,20 @@
         const [displayTransform, setDisplayTransformState] = React.useState(
             () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
         );
+        // Local mirror of the engine's persisted Force Transparency flag
+        // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
+        // toggle from the Viewer or Compare tab reflects here too.
+        const [forceTransparency, setForceTransparencyState] = React.useState(
+            () => !!(window.getForceTransparency && window.getForceTransparency())
+        );
+        React.useEffect(() => {
+            const onSettingsChanged = (e) => {
+                if (!e.detail || e.detail.key !== 'forceTransparency') return;
+                setForceTransparencyState(!!e.detail.value);
+            };
+            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+        }, []);
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
@@ -456,10 +470,13 @@
             try {
                 const env = await loader(file.data || file);
                 if (!mountedRef.current || generation !== environmentGenerationRef.current) { disposeUnusedEnvironment(env); return; }
+                // setEnvOverride now broadcasts to every LIVE_VIEWS member
+                // (the Scene handle joined that registry at creation), so
+                // the manual callHandle('setEnvironment', env) this used to
+                // need right after is redundant.
                 if (apiFunction('setEnvOverride')) apiFunction('setEnvOverride')(env);
                 envOverrideRef.current = env;
                 currentEnvironmentRef.current = env;
-                callHandle('setEnvironment', env);
                 setEnvFileName(file.name || file.path || 'Imported environment');
             } catch (e) { if (mountedRef.current && generation === environmentGenerationRef.current) setEnvImportError(String(e && e.message || e)); }
         };
@@ -706,6 +723,25 @@
                     <div className="mt-1 text-[11px] text-gray-400">
                         Higher values can exhaust GPU memory and lose the WebGL context on smaller GPUs
                     </div>
+                    <label
+                        className="flex items-center justify-between cursor-pointer"
+                        title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
+                    >
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                            Force Transparency
+                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                        </span>
+                        <Toggle
+                            checked={forceTransparency}
+                            onChange={(next) => {
+                                setForceTransparencyState(next);
+                                window.setForceTransparency && window.setForceTransparency(next);
+                            }}
+                        />
+                    </label>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        Render opacity/transmission with real alpha blending in the Scene. When off, transparent materials render opaque. Applies immediately.
+                    </div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Subdivision</span>
                         <MtlxSelect
@@ -862,7 +898,7 @@
                             showGeomSelect={false}
                             envAvail={false}
                             showBackdropPicker={false}
-                            showSettings={false}
+                            showSettings
                             showRotate
                             rotating={rotating}
                             onToggleRotating={toggleRotating}
@@ -874,7 +910,7 @@
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreen}
                             showLabels
-                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'record', 'fullscreen']]}
+                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'record', 'settings', 'fullscreen']]}
                         />
                     )}
 

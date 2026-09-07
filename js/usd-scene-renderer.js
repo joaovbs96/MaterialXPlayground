@@ -331,6 +331,12 @@ const createMtlxSceneView = async ({
     let renderer = null;
     let environmentBridge = null;
     let controls = null;
+    // Depth-peel OIT pipeline (js/mtlx-engine.js createPeelPipeline) and its
+    // cached list of transparent meshes under sceneRoot; the cache is
+    // invalidated on every material create/replace and on refreshRenderMode.
+    let peelPipeline = null;
+    let transparentMeshCache = null;
+    const invalidateTransparentMeshCache = () => { transparentMeshCache = null; };
     let resizeObserver = null;
     let stopped = false;
     let active = true;
@@ -663,7 +669,12 @@ const createMtlxSceneView = async ({
         material.userData.mtlxSceneSourceAsset = record.sourceAsset || '';
         material.userData.mtlxSceneSubIdentifier = record.subIdentifier || '';
         material.userData.mtlxSceneMaterialPath = String(record.path || '');
+        material.userData.mtlxSceneTransparent = !!compiled.transparent;
+        if (window.applyPeelMaterialMode) {
+            window.applyPeelMaterialMode(material, material.userData.mtlxSceneTransparent && window.getForceTransparency && window.getForceTransparency());
+        }
         materials.add(material);
+        invalidateTransparentMeshCache();
         const pendingTextures = [];
         const udimRefs = [];
         // Existing filename binding understands the generated introspection
@@ -823,7 +834,12 @@ const createMtlxSceneView = async ({
             material.userData.mtlxSceneSourceAsset = label;
             material.userData.mtlxSceneMaterialPath = info.materialPath || '';
             material.userData.mtlxSceneUdimTile = code;
+            material.userData.mtlxSceneTransparent = !!info.compiled.transparent;
+            if (window.applyPeelMaterialMode) {
+                window.applyPeelMaterialMode(material, material.userData.mtlxSceneTransparent && window.getForceTransparency && window.getForceTransparency());
+            }
             materials.add(material);
+            invalidateTransparentMeshCache();
             const pending = [];
             info.udimRefs.forEach((entry, index) => {
                 const hit = tileHits[index];
@@ -992,6 +1008,10 @@ const createMtlxSceneView = async ({
             renderer.toneMapping = displayTransform === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
             renderer.toneMappingExposure = 1;
         }
+        // linearComposite:false forces the display-space peel path (the
+        // Scene's u_peelLinear stays hard 0, see createMtlxSceneUniforms);
+        // a linear merged pass is a recorded follow-up, not this pass.
+        peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, { linearComposite: false }) : null;
         if (THREE.OrbitControls) {
             controls = new THREE.OrbitControls(camera, canvas);
             controls.enableDamping = true;
@@ -1133,6 +1153,7 @@ const createMtlxSceneView = async ({
                     object.material = object.material.map((material) => replacements.get(material) || material);
                 } else if (replacements.has(object.material)) object.material = replacements.get(object.material);
             });
+            invalidateTransparentMeshCache();
         };
         const rebuildDisplayMaterials = async () => {
             // Every material regenerates below, so drop stale reservations
@@ -1223,6 +1244,17 @@ const createMtlxSceneView = async ({
                     return;
                 }
                 replaceMaterialReferences(replacements);
+                // finalMat bakes the display transform at alloc time, so a
+                // rebuild (which can be triggered by a transform change)
+                // must drop the pipeline; re-apply modes from each new
+                // material's own userData so the peel/opaque split survives.
+                if (window.applyPeelMaterialMode) {
+                    const forceOn = window.getForceTransparency && window.getForceTransparency();
+                    replacements.forEach((material) => {
+                        window.applyPeelMaterialMode(material, !!(material.userData && material.userData.mtlxSceneTransparent) && forceOn);
+                    });
+                }
+                if (peelPipeline) peelPipeline.dispose();
                 const oldInfo = new Map(byPath);
                 byPath.clear();
                 replacementInfo.forEach((info, path) => {
@@ -1346,6 +1378,28 @@ const createMtlxSceneView = async ({
             controls.maxDistance = Math.max(lastFrameDistance, maxOrbitDistance * studioScale * 0.9);
             studioDistanceApplied = true;
         };
+        // renderFrame(): the one chokepoint for every display render (loop,
+        // captureFrame, renderNow, snapshot). Routes through the peel
+        // pipeline only when Force Transparency is on and at least one
+        // mesh under sceneRoot currently carries a transparent material;
+        // the mesh list is cached and invalidated on material rebuild.
+        const collectTransparentMeshes = () => {
+            if (transparentMeshCache) return transparentMeshCache;
+            const list = [];
+            sceneRoot.traverse((object) => {
+                if (!object || !object.isMesh || !object.material) return;
+                const mats = Array.isArray(object.material) ? object.material : [object.material];
+                if (mats.some((m) => m && m.userData && m.userData.mtlxSceneTransparent)) list.push(object);
+            });
+            transparentMeshCache = list;
+            return list;
+        };
+        const renderFrame = () => {
+            const forceOn = window.getForceTransparency && window.getForceTransparency();
+            const list = forceOn ? collectTransparentMeshes() : [];
+            if (peelPipeline && forceOn && list.length) peelPipeline.render(scene, camera, list);
+            else renderer.render(scene, camera);
+        };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
@@ -1353,7 +1407,7 @@ const createMtlxSceneView = async ({
             applyStudioPolarClamp();
             applyStudioDistanceClamp();
             if (controls) controls.update();
-            renderer.render(scene, camera);
+            renderFrame();
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
@@ -1521,7 +1575,7 @@ const createMtlxSceneView = async ({
             captureFrame: () => {
                 if (!captureState) throw new Error('captureFrame() called with no active beginCapture().');
                 if (environmentBridge && environmentBridge.update) environmentBridge.update();
-                renderer.render(scene, camera);
+                renderFrame();
                 const { width: w, height: h } = captureState;
                 if (!__captureCanvas) {
                     __captureCanvas = document.createElement('canvas');
@@ -1547,13 +1601,31 @@ const createMtlxSceneView = async ({
             renderNow: () => {
                 if (stopped) return;
                 if (environmentBridge && environmentBridge.update) environmentBridge.update();
-                renderer.render(scene, camera);
+                renderFrame();
             },
             snapshot: () => {
                 if (stopped || !renderer.domElement || !renderer.domElement.toDataURL) return null;
                 if (environmentBridge && environmentBridge.update) environmentBridge.update();
-                renderer.render(scene, camera);
+                renderFrame();
                 return renderer.domElement.toDataURL('image/png');
+            },
+            // Re-applies peel/opaque mode on every compiled material from
+            // its own userData.mtlxSceneTransparent verdict against the
+            // current Force Transparency flag; called by setForceTransparency
+            // through LIVE_VIEWS. Drops the pipeline when peeling turns off
+            // or nothing in the scene is transparent (nothing to free by
+            // keeping it allocated).
+            refreshRenderMode: () => {
+                if (stopped) return;
+                const forceOn = window.getForceTransparency && window.getForceTransparency();
+                let anyTransparent = false;
+                materials.forEach((material) => {
+                    const transparent = !!(material.userData && material.userData.mtlxSceneTransparent);
+                    if (transparent) anyTransparent = true;
+                    if (window.applyPeelMaterialMode) window.applyPeelMaterialMode(material, transparent && forceOn);
+                });
+                invalidateTransparentMeshCache();
+                if (peelPipeline && (!forceOn || !anyTransparent)) peelPipeline.dispose();
             },
             dispose: () => {
                 if (stopped) return;
@@ -1574,6 +1646,8 @@ const createMtlxSceneView = async ({
                     try { t.image && t.image.close && t.image.close(); } catch (e) {}
                 });
                 textureCache.clear();
+                if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
+                if (window.unregisterLiveView) window.unregisterLiveView(handle);
                 try { renderer.dispose(); } catch (e) {}
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
                 __captureCanvas = null; __captureCtx = null;
@@ -1582,6 +1656,7 @@ const createMtlxSceneView = async ({
             // Not for production UI code.
             __debug: () => ({ renderer, scene, camera, materials: Array.from(materials) }),
         };
+        if (window.registerLiveView) window.registerLiveView(handle);
         return handle;
     } catch (e) {
         stopped = true;
@@ -1599,6 +1674,7 @@ const createMtlxSceneView = async ({
         });
         textureCache.clear();
         geometries.forEach((g) => { try { g.dispose(); } catch (err) {} });
+        if (peelPipeline) { try { peelPipeline.dispose(); } catch (err) {} }
         if (controls) controls.dispose();
         if (environmentBridge && environmentBridge.dispose) environmentBridge.dispose();
         if (renderer) renderer.dispose();

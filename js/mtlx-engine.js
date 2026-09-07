@@ -2776,6 +2776,11 @@ let defaultEnvSource = null, overrideEnvSource = null;
 // broadcast to EVERY live view, not just the visible one, otherwise a
 // hidden keep-alive view keeps its stale baked-in environment.
 const LIVE_VIEWS = new Set();
+// registerLiveView/unregisterLiveView: window-exported wrappers so a
+// handle outside this module (the USD Scene) can join the same
+// environment/settings broadcast as createMtlxRenderView's own handles.
+const registerLiveView = (handle) => { if (handle) LIVE_VIEWS.add(handle); };
+const unregisterLiveView = (handle) => { if (handle) LIVE_VIEWS.delete(handle); };
 // ---- Environment preparation: OFFICIAL VIEWER PARITY ----
 // Conventions (see also makeBackgroundTexture, shIrradianceFromEquirect,
 // BG_BASE/BG_SIGN): MaterialX latlong has v=0 at +Y (u=atan2(x,-z)/2PI+0.5);
@@ -4449,11 +4454,14 @@ const applyPeelMaterialMode = (material, active) => {
 // peelLinearOk (mirrors the Viewer's own setSceneLinear/sceneLinearOn
 // bookkeeping, which callers that manage that transition themselves,
 // like the Viewer, should NOT also pass here).
-const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransformOpt } = {}) => {
+const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransformOpt, linearComposite } = {}) => {
     const getDT = getDisplayTransformOpt || getDisplayTransform;
     // Hoisted once: gates half-float peel/accum storage, the merged
     // linear-opaque pass, and finalMat's shader choice (see allocPeel).
-    const peelLinearOk = !!renderer.extensions.get('EXT_color_buffer_float');
+    // linearComposite === false forces the RGBA8 display-space path
+    // regardless of EXT_color_buffer_float (Scene callers not yet wired
+    // for a linear merged pass); undefined keeps the auto behaviour.
+    const peelLinearOk = linearComposite === false ? false : !!renderer.extensions.get('EXT_color_buffer_float');
     let peel = null;
 
     // freePeel: releases this pipeline's GPU resources (render targets,
@@ -4600,7 +4608,10 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
     // to a plain renderer.render when `transparentMeshes` is empty, so a
     // caller can route every frame through this unconditionally.
     const render = (scene, camera, transparentMeshes, opts = {}) => {
-        const meshes = (transparentMeshes || []).filter(Boolean);
+        // Neutral fallbacks (e.g. MeshNormalMaterial) have no uniforms
+        // object at all, so they never carry u_peelMode; they stay in
+        // the opaque set instead of being treated as peel participants.
+        const meshes = (transparentMeshes || []).filter((m) => m && m.material && m.material.uniforms && m.material.uniforms.u_peelMode);
         if (!meshes.length) { renderer.render(scene, camera); return; }
         if (opts.setSceneLinear) opts.setSceneLinear(peelLinearOk);
 
@@ -4610,6 +4621,12 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
         const prevAutoClear = renderer.autoClear;
         const prevClearColor = renderer.getClearColor(new THREE.Color());
         const prevClearAlpha = renderer.getClearAlpha();
+        // The shadow map only needs to be built once for this whole
+        // multi-pass peel frame, not once per underlying renderer.render
+        // call (opaque pass plus PEEL_LAYERS peel passes plus the tail).
+        const prevShadowAutoUpdate = renderer.shadowMap.autoUpdate;
+        renderer.shadowMap.autoUpdate = false;
+        renderer.shadowMap.needsUpdate = true;
         renderer.autoClear = false;
         const hidden = [];
 
@@ -4720,6 +4737,7 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             renderer.setRenderTarget(null);
             renderer.autoClear = prevAutoClear;
             renderer.setClearColor(prevClearColor, prevClearAlpha);
+            renderer.shadowMap.autoUpdate = prevShadowAutoUpdate;
             meshes.forEach((m) => {
                 if (m.material.uniforms && m.material.uniforms.u_peelMode) m.material.uniforms.u_peelMode.value = 0;
             });
@@ -4730,6 +4748,7 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
     return {
         render,
         setMeshMode: applyPeelMaterialMode,
+        peelLinearOk,
         dispose: () => { freePeel(); },
     };
 };
@@ -6630,7 +6649,7 @@ Object.assign(window, {
     loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
-    createPeelPipeline, applyPeelMaterialMode,
+    createPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
