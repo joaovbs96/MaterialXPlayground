@@ -1183,6 +1183,203 @@ const loadBoundedBitmapTexture = async (blob, maxSize) => {
     return texture;
 };
 
+// Reads pixel dimensions straight out of an encoded image blob's header,
+// without decoding the pixels. Returns { width, height } or null when the
+// format/box cannot be parsed; callers then assume a conservative 4096
+// square. Covers PNG, JPEG (SOF0/1/2, skipping APPn/COM segments), TIFF
+// (both byte orders, tags 256/257 as SHORT or LONG), OpenEXR (dataWindow
+// box2i) and Radiance HDR (the "-Y h +X w" resolution line).
+const readImageDimensions = async (blob) => {
+    try {
+        const buf = new Uint8Array(await blob.slice(0, 65536).arrayBuffer());
+        if (buf.length < 8) return null;
+        // PNG: 8-byte signature, then an IHDR chunk with width/height at a
+        // fixed offset (big-endian uint32 each).
+        if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            if (buf.length >= 24) return { width: dv.getUint32(16), height: dv.getUint32(20) };
+            return null;
+        }
+        // JPEG: walk markers; skip APPn/COM/other segments by their length
+        // field, stop at the first SOFn (0..2) marker for width/height.
+        if (buf[0] === 0xff && buf[1] === 0xd8) {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            let offset = 2;
+            while (offset + 9 < buf.length) {
+                if (buf[offset] !== 0xff) { offset += 1; continue; }
+                const marker = buf[offset + 1];
+                if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+                if (marker === 0xd9) break; // EOI
+                const segLen = dv.getUint16(offset + 2);
+                if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+                    return { height: dv.getUint16(offset + 5), width: dv.getUint16(offset + 7) };
+                }
+                offset += 2 + segLen;
+            }
+            return null;
+        }
+        // TIFF: byte-order mark, then a 4-byte IFD offset, then the IFD
+        // entry count and entries; tags 256 (width) and 257 (height) can be
+        // SHORT (3) or LONG (4).
+        const isLE = buf[0] === 0x49 && buf[1] === 0x49;
+        const isBE = buf[0] === 0x4d && buf[1] === 0x4d;
+        if (isLE || isBE) {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            const ifdOffset = dv.getUint32(4, isLE);
+            if (ifdOffset + 2 > buf.length) return null;
+            const count = dv.getUint16(ifdOffset, isLE);
+            let width = null, height = null;
+            for (let i = 0; i < count; i += 1) {
+                const entryOffset = ifdOffset + 2 + i * 12;
+                if (entryOffset + 12 > buf.length) break;
+                const tag = dv.getUint16(entryOffset, isLE);
+                const type = dv.getUint16(entryOffset + 2, isLE);
+                const value = type === 3 ? dv.getUint16(entryOffset + 8, isLE) : dv.getUint32(entryOffset + 8, isLE);
+                if (tag === 256) width = value;
+                else if (tag === 257) height = value;
+            }
+            return (width != null && height != null) ? { width, height } : null;
+        }
+        // OpenEXR: magic 0x76, 0x2f, 0x31, 0x01, then a version int, then a
+        // sequence of null-terminated "name/type/size/data" attributes; the
+        // dataWindow attribute is a box2i (4 int32: xMin,yMin,xMax,yMax).
+        if (buf[0] === 0x76 && buf[1] === 0x2f && buf[2] === 0x31 && buf[3] === 0x01) {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            let offset = 8;
+            const readCString = () => {
+                const start = offset;
+                while (offset < buf.length && buf[offset] !== 0) offset += 1;
+                const str = String.fromCharCode.apply(null, buf.subarray(start, offset));
+                offset += 1;
+                return str;
+            };
+            while (offset < buf.length) {
+                const name = readCString();
+                if (!name) break;
+                const type = readCString();
+                if (offset + 4 > buf.length) break;
+                const size = dv.getUint32(offset, true);
+                offset += 4;
+                if (name === 'dataWindow' && type === 'box2i' && offset + 16 <= buf.length) {
+                    const xMin = dv.getInt32(offset, true), yMin = dv.getInt32(offset + 4, true);
+                    const xMax = dv.getInt32(offset + 8, true), yMax = dv.getInt32(offset + 12, true);
+                    return { width: xMax - xMin + 1, height: yMax - yMin + 1 };
+                }
+                offset += size;
+            }
+            return null;
+        }
+        // Radiance HDR: text header ending in a blank line, then a
+        // resolution line such as "-Y 1024 +X 2048".
+        if (buf[0] === 0x23 || String.fromCharCode(buf[0]) === '#') {
+            const text = String.fromCharCode.apply(null, buf.subarray(0, Math.min(buf.length, 4096)));
+            const m = text.match(/^[-+][XY]\s+(\d+)\s+[-+][XY]\s+(\d+)/m);
+            if (m) {
+                const first = Number(m[1]), second = Number(m[2]);
+                // "-Y h +X w" is the common orientation; a leading X line
+                // instead means the numbers are already width then height.
+                if (/^-Y|^\+Y/.test(text.match(/^[-+][XY]\s+\d+\s+[-+][XY]\s+\d+/m)[0])) {
+                    return { width: second, height: first };
+                }
+                return { width: first, height: second };
+            }
+            return null;
+        }
+        return null;
+    } catch (e) { return null; }
+};
+
+// Resizes a decoded scene texture that came from an unbounded format loader
+// (TIF/EXR/HDR: never resized by createImageBitmap the way PNG/JPEG are) so
+// it fits the planner's chosen tier. Returns the same texture unchanged when
+// it is already at or below maxSize. TIF (UnsignedByteType RGBA DataTexture)
+// is rebuilt through createImageBitmap for real mipmapped trilinear
+// filtering, matching PNG/JPEG; EXR/HDR (FloatType) get an integer-factor
+// box filter into a new DataTexture, keeping LinearFilter (no mips).
+const boundDecodedTexture = async (tex, maxSize) => {
+    if (!tex || !tex.image) return tex;
+    const w = tex.image.width || 0, h = tex.image.height || 0;
+    const longest = Math.max(w, h);
+    const needsResize = Number.isFinite(maxSize) && maxSize > 0 && longest > maxSize;
+    if (tex.type === THREE.UnsignedByteType) {
+        // Give TIF real mipmaps even when no resize is needed, so it
+        // filters like PNG/JPEG instead of the DataTexture's LinearFilter.
+        const scale = needsResize ? maxSize / longest : 1;
+        const outW = needsResize ? Math.max(1, Math.round(w * scale)) : w;
+        const outH = needsResize ? Math.max(1, Math.round(h * scale)) : h;
+        try {
+            const imageData = new ImageData(new Uint8ClampedArray(tex.image.data.buffer.slice(0)), w, h);
+            let bitmap;
+            if (needsResize) {
+                bitmap = await createImageBitmap(imageData, { resizeWidth: outW, resizeHeight: outH, resizeQuality: 'high' });
+            } else {
+                bitmap = await createImageBitmap(imageData);
+            }
+            const next = new THREE.Texture(bitmap);
+            configureLoadedTexture(next);
+            next.generateMipmaps = true;
+            next.minFilter = THREE.LinearMipmapLinearFilter;
+            next.magFilter = THREE.LinearFilter;
+            tex.dispose && tex.dispose();
+            return next;
+        } catch (e) {
+            // Fallback: canvas drawImage resize, or keep the DataTexture
+            // with mipmaps if even that fails.
+            try {
+                const src = document.createElement('canvas');
+                src.width = w; src.height = h;
+                src.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(tex.image.data.buffer.slice(0)), w, h), 0, 0);
+                const dst = document.createElement('canvas');
+                dst.width = outW; dst.height = outH;
+                dst.getContext('2d').drawImage(src, 0, 0, outW, outH);
+                const next = new THREE.Texture(dst);
+                configureLoadedTexture(next);
+                next.generateMipmaps = true;
+                next.minFilter = THREE.LinearMipmapLinearFilter;
+                next.magFilter = THREE.LinearFilter;
+                tex.dispose && tex.dispose();
+                return next;
+            } catch (e2) {
+                tex.generateMipmaps = true;
+                tex.minFilter = THREE.LinearMipmapLinearFilter;
+                tex.magFilter = THREE.LinearFilter;
+                return tex;
+            }
+        }
+    }
+    if (!needsResize) return tex;
+    // Float data (EXR/HDR): integer-factor box filter into a new DataTexture.
+    const factor = Math.max(1, Math.round(longest / maxSize));
+    const outW = Math.max(1, Math.floor(w / factor));
+    const outH = Math.max(1, Math.floor(h / factor));
+    const src = tex.image.data;
+    const channels = 4;
+    const out = new Float32Array(outW * outH * channels);
+    for (let oy = 0; oy < outH; oy += 1) {
+        for (let ox = 0; ox < outW; ox += 1) {
+            const acc = [0, 0, 0, 0];
+            let n = 0;
+            for (let fy = 0; fy < factor; fy += 1) {
+                const sy = oy * factor + fy;
+                if (sy >= h) continue;
+                for (let fx = 0; fx < factor; fx += 1) {
+                    const sx = ox * factor + fx;
+                    if (sx >= w) continue;
+                    const si = (sy * w + sx) * channels;
+                    acc[0] += src[si]; acc[1] += src[si + 1]; acc[2] += src[si + 2]; acc[3] += src[si + 3];
+                    n += 1;
+                }
+            }
+            const di = (oy * outW + ox) * channels;
+            out[di] = acc[0] / n; out[di + 1] = acc[1] / n; out[di + 2] = acc[2] / n; out[di + 3] = acc[3] / n;
+        }
+    }
+    const next = new THREE.DataTexture(out, outW, outH, tex.format, tex.type);
+    next.minFilter = next.magFilter = THREE.LinearFilter;
+    tex.dispose && tex.dispose();
+    return next;
+};
+
 // Binds dropped textures onto the shader's filename sampler uniforms.
 // Cache hits assign synchronously; misses load async (TextureLoader, or
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
@@ -6419,6 +6616,7 @@ Object.assign(window, {
     normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture,
+    readImageDimensions, boundDecodedTexture,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
     getFilenameDefaultTexture, rebindFilenameDefault, configureLoadedTexture, samplerHoldsDefault,

@@ -12,16 +12,39 @@
 const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff'];
 
 const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
-const SCENE_TEXTURE_MAX_SIZE_VALUES = [512, 1024, 2048];
+// Original is unbounded (Infinity internally); persisted as the string
+// "original" since Infinity does not round-trip through localStorage.
+const SCENE_TEXTURE_MAX_SIZE_VALUES = [512, 1024, 2048, 4096, Infinity];
 const SCENE_TEXTURE_MAX_SIZE_DEFAULT = 2048;
 
 const storedSceneTextureMaxSize = () => {
     if (window.top !== window) return SCENE_TEXTURE_MAX_SIZE_DEFAULT;
     try {
-        const stored = Number(localStorage.getItem(SCENE_TEXTURE_MAX_SIZE_KEY));
+        const raw = localStorage.getItem(SCENE_TEXTURE_MAX_SIZE_KEY);
+        if (raw === 'original') return Infinity;
+        const stored = Number(raw);
         return SCENE_TEXTURE_MAX_SIZE_VALUES.includes(stored) ? stored : SCENE_TEXTURE_MAX_SIZE_DEFAULT;
     } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
 };
+
+// Texture memory budget: caps the total decoded bytes the planner will
+// allow across every ordinary and UDIM texture combined. Persisted at the
+// top realm only, like the size tier above.
+const SCENE_TEXTURE_BUDGET_KEY = 'mtlx_scene_texture_budget';
+const SCENE_TEXTURE_BUDGET_VALUES = [1, 2, 4]; // GiB
+const SCENE_TEXTURE_BUDGET_DEFAULT_GIB = 1;
+const GIB = 1024 * 1024 * 1024;
+
+const storedSceneTextureBudgetBytes = () => {
+    if (window.top !== window) return SCENE_TEXTURE_BUDGET_DEFAULT_GIB * GIB;
+    try {
+        const stored = Number(localStorage.getItem(SCENE_TEXTURE_BUDGET_KEY));
+        return (SCENE_TEXTURE_BUDGET_VALUES.includes(stored) ? stored : SCENE_TEXTURE_BUDGET_DEFAULT_GIB) * GIB;
+    } catch (e) { return SCENE_TEXTURE_BUDGET_DEFAULT_GIB * GIB; /* privacy mode */ }
+};
+
+const formatGB = (bytes) => (bytes / GIB).toFixed(2) + ' GB';
+const formatMB = (bytes) => Math.round(bytes / (1024 * 1024)) + ' MB';
 
 // Loop subdivision level for catmullClark/loop meshes, persisted the same
 // way as the texture size cap above.
@@ -274,7 +297,11 @@ const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
 
 const createMtlxSceneView = async ({
     container, stage, files = [], version, onProgress, isMounted = () => true,
-    udimTileSize = 512, udimMaxTiles = 256,
+    udimTileSize = 512, udimMaxTiles = 1024,
+    // udimMaxBytes and udimTileSize are accepted for compatibility but no
+    // longer drive accounting: UDIM tiles now resize to plannedTextureSize
+    // and reserve against the single textureMaxBytes budget (see
+    // planTextureSize/reserveTexture below). udimMaxTiles stays a sanity cap.
     udimMaxBytes = 256 * 1024 * 1024, textureMaxSize, textureMaxBytes,
 }) => {
     if (!container) throw new Error('USD scene view requires a container.');
@@ -350,89 +377,118 @@ const createMtlxSceneView = async ({
     let mxEnv = null;
     const sceneOptions = {
         udimTileSize: Math.max(128, Number(udimTileSize) || 512),
-        udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 256),
+        udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 1024),
         udimMaxBytes: Math.max(4 * 1024 * 1024, Number(udimMaxBytes) || 256 * 1024 * 1024),
-        textureMaxSize: Math.max(128, Number(textureMaxSize) || storedSceneTextureMaxSize()),
-        textureMaxBytes: Math.max(64 * 1024 * 1024, Number(textureMaxBytes) || 1024 * 1024 * 1024),
+        textureMaxSize: Number.isFinite(Number(textureMaxSize)) || textureMaxSize === Infinity
+            ? Math.max(128, Number(textureMaxSize) || storedSceneTextureMaxSize())
+            : storedSceneTextureMaxSize(),
+        // Any positive finite override is honored as-is (specs pass small
+        // budgets); persistence still only happens for the 1/2/4 GiB steps.
+        textureMaxBytes: (Number(textureMaxBytes) > 0) ? Number(textureMaxBytes) : storedSceneTextureBudgetBytes(),
     };
     const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0 };
     let samplerReport = [];
     const textureReservations = new Set();
-    // Ordinary textures and UDIM tiles are tracked against separate byte
-    // budgets (textureMaxBytes / udimMaxBytes) so a scene with many ordinary
-    // maps cannot starve UDIM tiles or vice versa. The ordinary size tier is
-    // decided once up front by planOrdinaryTextureSize (see below), not
-    // degraded mid-stream as textures are bound.
-    let ordinaryTextureSize = sceneOptions.textureMaxSize;
+    // One shared budget: ordinary and UDIM textures both reserve against
+    // textureMaxBytes and both resize to plannedTextureSize, decided once up
+    // front by planTextureSize (below), not degraded mid-stream as textures
+    // are bound. udimMaxTiles is kept only as a sanity cap.
     let plannedTextureSize = sceneOptions.textureMaxSize;
-    // Counts the distinct ordinary (non-UDIM) texture files the given
-    // compiled materials reference, resolved against the file map and
-    // deduplicated by resolved path, then picks the largest size tier in
-    // [textureMaxSize, 1024, 512] whose estimated total fits textureMaxBytes.
-    // Falls back to 512 if even that does not fit; reservations beyond the
-    // budget still fail at bind time. Called before any ordinary texture is
-    // bound, and again by setTextureMaxSize before its display rebuild.
-    const planOrdinaryTextureSize = (compiledList) => {
-        const seen = new Set();
+    let plannedBytes = 0;
+    let fullBytes = 0;
+    // Reads every unique texture referenced by the compiled materials
+    // (ordinary refs plus UDIM tiles), estimates decoded bytes per texture
+    // at each tier in the ladder [requested, 4096, 2048, 1024, 512] (capped
+    // at the requested tier), and picks the largest tier whose total fits
+    // sceneOptions.textureMaxBytes, else 512. Called before any texture is
+    // bound, and again by setTextureMaxSize/setTextureBudgetBytes before
+    // their display rebuild.
+    const planTextureSize = async (compiledList) => {
+        const entries = new Map(); // path -> { blob, ext, mipmapped }
         for (const compiled of compiledList) {
             if (!compiled || !Array.isArray(compiled.introspected)) continue;
             for (const u of compiled.introspected) {
                 if (u.type !== 'filename' || u.data == null) continue;
-                if (/<UDIM>/i.test(String(u.data))) continue;
+                if (/<UDIM>/i.test(String(u.data))) {
+                    const tiles = sceneUdimTiles(u.data, fileMap);
+                    tiles.forEach((hit) => { if (hit && !entries.has(hit.path)) entries.set(hit.path, hit.blob); });
+                    continue;
+                }
                 const hit = sceneExactFile(fileMap, u.data, '');
-                if (hit) seen.add(hit.path);
+                if (hit && !entries.has(hit.path)) entries.set(hit.path, hit.blob);
             }
         }
-        const count = seen.size;
-        const tiers = Array.from(new Set([sceneOptions.textureMaxSize, 1024, 512]
-            .filter((value) => value <= sceneOptions.textureMaxSize))).sort((a, b) => b - a);
-        if (!tiers.length) tiers.push(512);
-        let chosen = tiers[tiers.length - 1];
-        for (const tier of tiers) {
-            const estimate = count * Math.ceil(4 * tier * tier * 4 / 3);
-            if (estimate <= sceneOptions.textureMaxBytes) { chosen = tier; break; }
+        const dims = await Promise.all(Array.from(entries.entries()).map(async ([path, blob]) => {
+            const ext = String(path).split('.').pop().toLowerCase();
+            let dimensions = null;
+            try { dimensions = window.readImageDimensions ? await window.readImageDimensions(blob) : null; } catch (e) { dimensions = null; }
+            const w = (dimensions && dimensions.width) || 4096;
+            const h = (dimensions && dimensions.height) || 4096;
+            const isFloat = ext === 'exr' || ext === 'hdr';
+            const mipmapped = !isFloat; // 8-bit formats get mips; float unbounded formats do not
+            const bytesPerPixel = isFloat ? 16 : 4;
+            return { w, h, bytesPerPixel, mipmapped };
+        }));
+        const textureCount = dims.length;
+        const requested = Number.isFinite(sceneOptions.textureMaxSize) ? sceneOptions.textureMaxSize : Infinity;
+        const ladder = Array.from(new Set([requested, 4096, 2048, 1024, 512]
+            .filter((value) => value <= requested))).sort((a, b) => b - a);
+        if (!ladder.length) ladder.push(512);
+        const estimateAt = (tier) => dims.reduce((total, d) => {
+            const w = Math.min(d.w, tier), h = Math.min(d.h, tier);
+            return total + w * h * d.bytesPerPixel * (d.mipmapped ? 4 / 3 : 1);
+        }, 0);
+        fullBytes = estimateAt(requested === Infinity ? Math.max(4096, ...dims.map((d) => Math.max(d.w, d.h)), 1) : requested);
+        let chosen = 512;
+        for (const tier of ladder) {
+            const estimate = estimateAt(tier);
+            if (estimate <= sceneOptions.textureMaxBytes) { chosen = tier; plannedBytes = estimate; break; }
+            plannedBytes = estimate;
         }
-        ordinaryTextureSize = chosen;
+        if (!ladder.includes(chosen)) { chosen = 512; plannedBytes = estimateAt(512); }
         plannedTextureSize = chosen;
-        if (chosen < sceneOptions.textureMaxSize) {
-            warnings.push('Texture budget: ' + count + ' textures loaded at ' + chosen
-                + ' px (requested ' + sceneOptions.textureMaxSize + ' px)');
+        const udimTileCount = dims.length ? Array.from(entries.keys()).filter((path) => /\.(\d{4})\./.test(path) || /1[0-9]{3}/.test(path)).length : 0;
+        if (chosen < requested) {
+            const requestedLabel = requested === Infinity ? 'Original' : requested + ' px';
+            warnings.push('Texture budget: ' + textureCount + ' textures (' + udimTileCount + ' UDIM tiles) loaded at ' + chosen
+                + ' px; requested ' + requestedLabel + ' needs ' + formatGB(fullBytes)
+                + ', planned ' + formatMB(plannedBytes) + ' of the ' + formatGB(sceneOptions.textureMaxBytes) + ' budget');
         }
         return chosen;
     };
-    const reserveTexture = (path, isUdim = false) => {
+    const reserveTexture = (path, isUdim = false, bytesOverride = null) => {
         const key = String(path || '');
         if (textureReservations.has(key)) return true;
-        const size = isUdim ? sceneOptions.udimTileSize : ordinaryTextureSize;
-        const estimate = Math.ceil(4 * size * size * 4 / 3);
-        if (isUdim) {
-            if (textureStats.udimBytes + estimate > sceneOptions.udimMaxBytes) return false;
-            textureReservations.add(key);
-            textureStats.udimTiles += 1;
-            textureStats.udimBytes += estimate;
-            textureStats.bytesReserved += estimate;
-            return true;
-        }
+        const estimate = bytesOverride != null ? bytesOverride : Math.ceil(4 * plannedTextureSize * plannedTextureSize * 4 / 3);
         if (textureStats.ordinaryBytes + estimate > sceneOptions.textureMaxBytes) return false;
         textureReservations.add(key);
+        if (isUdim) textureStats.udimTiles += 1;
         textureStats.ordinaryBytes += estimate;
         textureStats.bytesReserved += estimate;
         return true;
     };
     // EXR/HDR/TIF are not resized by createImageBitmap (the bounded PNG/JPEG
-    // path), so their real decoded size must be known before budgeting.
-    const decodeUnboundedSceneTexture = async (blob, ext) => {
+    // path), so they are decoded then explicitly bounded to the planned tier
+    // via boundDecodedTexture before their real bytes are known/reserved.
+    const decodeUnboundedSceneTexture = async (blob, ext, path) => {
         let tex = null;
         try {
             if (ext === 'exr') tex = await window.loadExrTexture(blob);
             else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
             else tex = await window.loadTifTexture(blob);
         } catch (error) { return null; }
-        if (!tex || !tex.image) return null;
-        // TIF decodes to 8bpc RGBA (4 bytes/px); EXR/HDR decode float RGBA
-        // (4 channels x 4 bytes = 16 bytes/px).
-        const bytesPerPixel = (ext === 'exr' || ext === 'hdr') ? 16 : 4;
-        const bytes = (tex.image.width || 0) * (tex.image.height || 0) * bytesPerPixel;
+        if (!tex || !tex.image) {
+            const warning = 'MaterialX texture decode failed for ' + (path || '(unknown)');
+            if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+            return null;
+        }
+        try {
+            tex = await window.boundDecodedTexture(tex, plannedTextureSize);
+        } catch (e) { /* keep the undecimated texture rather than fail the material */ }
+        const isFloat = ext === 'exr' || ext === 'hdr';
+        const bytesPerPixel = isFloat ? 16 : 4;
+        const mipFactor = (!isFloat && tex.generateMipmaps) ? 4 / 3 : 1;
+        const bytes = Math.ceil((tex.image.width || 0) * (tex.image.height || 0) * bytesPerPixel * mipFactor);
         window.configureLoadedTexture(tex);
         return { tex, bytes };
     };
@@ -628,20 +684,17 @@ const createMtlxSceneView = async ({
                 if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); continue; }
                 const extension = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(extension)) {
-                    // Not resized by createImageBitmap, so the reserveTexture
-                    // estimate would be wrong-sized; decode first, account the
-                    // real bytes, and drop only when that exceeds the budget.
-                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension).then((result) => {
+                    // Decode+bound first (boundDecodedTexture inside), then
+                    // account the real post-resize bytes via the bytes
+                    // override so a rebuild does not double count.
+                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
-                        if (textureStats.ordinaryBytes + bytes > sceneOptions.textureMaxBytes) {
+                        if (!reserveTexture(hit.path, false, bytes)) {
                             warnings.push('Texture preview budget exceeded for ' + hit.path);
                             tex.dispose && tex.dispose();
                             return;
                         }
-                        textureReservations.add(hit.path);
-                        textureStats.ordinaryBytes += bytes;
-                        textureStats.bytesReserved += bytes;
                         if (uniforms[u.name]) uniforms[u.name].value = tex;
                     }, (error) => ({ error })));
                     continue;
@@ -652,7 +705,7 @@ const createMtlxSceneView = async ({
                 introspected: [u],
                 textureCache,
                 textureQueue,
-                maxTextureSize: ordinaryTextureSize,
+                maxTextureSize: plannedTextureSize,
                 isAlive: () => !stopped && isMounted(),
                 }, { [hit.path]: hit.blob });
                 pendingTextures.push(...(binding && binding.pending || []));
@@ -706,7 +759,7 @@ const createMtlxSceneView = async ({
             const ensured = await ensureCompiledMaterial(record);
             if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
         }
-        planOrdinaryTextureSize(precompiled);
+        await planTextureSize(precompiled);
         for (const record of sceneArray(stage.materials)) {
             const result = await makeMtlxMaterial(record);
             if (result) {
@@ -776,17 +829,15 @@ const createMtlxSceneView = async ({
                 const hit = tileHits[index];
                 const ext = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) {
-                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext).then((result) => {
+                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
-                        if (textureStats.udimBytes + bytes > sceneOptions.udimMaxBytes) {
+                        if (!reserveTexture(hit.path, true, bytes)) {
                             const warning = 'UDIM preview budget exceeded for ' + label + ' tile ' + code;
                             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                             tex.dispose && tex.dispose();
                             return;
                         }
-                        textureStats.udimBytes += bytes;
-                        textureStats.bytesReserved += bytes;
                         if (uniforms[entry.uniform.name]) uniforms[entry.uniform.name].value = tex;
                     }, (error) => ({ error })));
                     return;
@@ -797,7 +848,7 @@ const createMtlxSceneView = async ({
                     introspected: [bindingUniform],
                     textureCache,
                     textureQueue,
-                    maxTextureSize: sceneOptions.udimTileSize,
+                    maxTextureSize: plannedTextureSize,
                     isAlive: () => !stopped && isMounted(),
                 }, { [hit.path]: hit.blob });
                 pending.push(...(binding && binding.pending || []));
@@ -1084,6 +1135,19 @@ const createMtlxSceneView = async ({
             });
         };
         const rebuildDisplayMaterials = async () => {
+            // Every material regenerates below, so drop stale reservations
+            // and byte counters up front (as setTextureMaxSize/
+            // setTextureBudgetBytes already do before enqueueing this).
+            textureCache.forEach((texture) => {
+                try { texture.dispose && texture.dispose(); } catch (e) {}
+                try { texture.image && texture.image.close && texture.image.close(); } catch (e) {}
+            });
+            textureCache.clear();
+            textureReservations.clear();
+            textureStats.bytesReserved = 0;
+            textureStats.ordinaryBytes = 0;
+            textureStats.udimTiles = 0;
+            textureStats.udimBytes = 0;
             // Compile all replacement sources before changing any live mesh.
             // If the global event changes again while WASM is busy, discard
             // the provisional set and retry so one scene cannot mix modes.
@@ -1320,31 +1384,47 @@ const createMtlxSceneView = async ({
         // and the loaded stage untouched. Re-plans the size tier against the
         // new cap (from the already-compiled materials) before that rebuild.
         const setTextureMaxSize = (px) => {
-            const next = Math.round(Number(px));
+            const value = px === Infinity || String(px).toLowerCase() === 'original' ? Infinity : Math.round(Number(px));
+            const next = Number.isNaN(value) ? sceneOptions.textureMaxSize : value;
             if (!SCENE_TEXTURE_MAX_SIZE_VALUES.includes(next) || next === sceneOptions.textureMaxSize) {
                 return sceneOptions.textureMaxSize;
             }
             sceneOptions.textureMaxSize = next;
-            planOrdinaryTextureSize(Array.from(byPath.values()).map((info) => info.compiled));
             if (window.top === window) {
-                try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, String(next)); } catch (e) { /* privacy mode */ }
+                try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, next === Infinity ? 'original' : String(next)); } catch (e) { /* privacy mode */ }
             }
-            textureCache.forEach((texture) => {
-                try { texture.dispose && texture.dispose(); } catch (e) {}
-                try { texture.image && texture.image.close && texture.image.close(); } catch (e) {}
-            });
-            textureCache.clear();
-            textureReservations.clear();
-            textureStats.bytesReserved = 0;
-            textureStats.ordinaryBytes = 0;
-            textureStats.udimTiles = 0;
-            textureStats.udimBytes = 0;
             udimVariantByMaterial.clear();
             displayDirty = true;
             displayRevision += 1;
-            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            planTextureSize(Array.from(byPath.values()).map((info) => info.compiled)).finally(() => {
+                if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            });
             return sceneOptions.textureMaxSize;
         };
+        // Texture memory budget: any positive finite value is honored (specs
+        // pass small budgets), but only the 1/2/4 GiB steps persist. Changing
+        // it re-plans and re-enters the same rebuild path as setTextureMaxSize.
+        const setTextureBudgetBytes = (bytes) => {
+            const next = Number(bytes);
+            if (!(next > 0) || !Number.isFinite(next) || next === sceneOptions.textureMaxBytes) {
+                return sceneOptions.textureMaxBytes;
+            }
+            sceneOptions.textureMaxBytes = next;
+            if (window.top === window) {
+                const gib = next / GIB;
+                if (SCENE_TEXTURE_BUDGET_VALUES.includes(gib)) {
+                    try { localStorage.setItem(SCENE_TEXTURE_BUDGET_KEY, String(gib)); } catch (e) { /* privacy mode */ }
+                }
+            }
+            udimVariantByMaterial.clear();
+            displayDirty = true;
+            displayRevision += 1;
+            planTextureSize(Array.from(byPath.values()).map((info) => info.compiled)).finally(() => {
+                if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            });
+            return sceneOptions.textureMaxBytes;
+        };
+        const getTextureBudgetBytes = () => sceneOptions.textureMaxBytes;
         const handle = {
             scene, camera, renderer, controls, prims, warnings, textureStats,
             udimStats: {
@@ -1365,6 +1445,8 @@ const createMtlxSceneView = async ({
             // already tracks.
             getTextureMaxSize: () => sceneOptions.textureMaxSize,
             setTextureMaxSize,
+            getTextureBudgetBytes,
+            setTextureBudgetBytes,
             getTextureStats: () => ({
                 textureMaxSize: sceneOptions.textureMaxSize,
                 plannedTextureSize,
@@ -1373,6 +1455,9 @@ const createMtlxSceneView = async ({
                 ordinaryBytes: textureStats.ordinaryBytes,
                 textureCount: textureReservations.size,
                 udimTileCount: textureStats.udimTiles,
+                budgetBytes: sceneOptions.textureMaxBytes,
+                plannedBytes,
+                fullBytes,
             }),
             getSamplerReport: () => samplerReport.slice(),
             setBackdrop: (mode) => {

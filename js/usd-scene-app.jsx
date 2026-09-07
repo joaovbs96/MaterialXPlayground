@@ -496,7 +496,12 @@
         const rootBasename = rootPath ? rootPath.split('/').pop() : '';
         const takeScreenshot = () => { if (handleRef.current && handleRef.current.snapshot) downloadSnapshot(handleRef.current, rootBasename || 'usd-scene'); };
         const pickTextureMaxSize = (px) => {
-            callHandle('setTextureMaxSize', Number(px));
+            const value = px === Infinity || String(px).toLowerCase() === 'infinity' ? Infinity : Number(px);
+            callHandle('setTextureMaxSize', value);
+            setTextureSizeTick((t) => t + 1);
+        };
+        const pickTextureBudgetGib = (gib) => {
+            callHandle('setTextureBudgetBytes', Number(gib) * 1024 * 1024 * 1024);
             setTextureSizeTick((t) => t + 1);
         };
         const pickSubdivisionLevel = (level) => {
@@ -509,6 +514,9 @@
         const textureMaxSize = (handle && typeof handle.getTextureMaxSize === 'function')
             ? handle.getTextureMaxSize()
             : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
+        const textureBudgetGib = (handle && typeof handle.getTextureBudgetBytes === 'function')
+            ? Math.round(handle.getTextureBudgetBytes() / (1024 * 1024 * 1024))
+            : 1;
         // Referenced so the memo below re-reads getTextureMaxSize() after a
         // mutation that doesn't otherwise touch React state.
         void textureSizeTick;
@@ -672,8 +680,8 @@
                         <span className="text-xs font-medium text-gray-400">Texture resolution</span>
                         <MtlxSelect
                             value={textureMaxSize}
-                            options={[512, 1024, 2048]}
-                            labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px' }}
+                            options={[512, 1024, 2048, 4096, Infinity]}
+                            labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
                             onChange={pickTextureMaxSize}
                             defValue={2048}
                             size="sm"
@@ -682,6 +690,21 @@
                     </div>
                     <div className="mt-1 text-[11px] text-gray-400">
                         Higher resolutions sharpen normal and roughness maps, at the cost of memory and load time.
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-400">Texture memory</span>
+                        <MtlxSelect
+                            value={textureBudgetGib}
+                            options={[1, 2, 4]}
+                            labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
+                            onChange={pickTextureBudgetGib}
+                            defValue={1}
+                            size="sm"
+                            disabled={!handle || typeof handle.setTextureBudgetBytes !== 'function'}
+                        />
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        Higher values can exhaust GPU memory and lose the WebGL context on smaller GPUs
                     </div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Subdivision</span>
