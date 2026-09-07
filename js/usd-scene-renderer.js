@@ -9,7 +9,7 @@
 // engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
 // Formats the engine's exr/hdr/tif loaders decode whole (never resized by
 // createImageBitmap, unlike the bounded PNG/JPEG path).
-const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff'];
+const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff', 'ktx2'];
 
 const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
 // Original is unbounded (Infinity internally); persisted as the string
@@ -98,6 +98,7 @@ const sceneFileMap = (files, stage) => {
         const typeByExtension = {
             png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
             tif: 'image/tiff', tiff: 'image/tiff', exr: 'image/x-exr', hdr: 'image/vnd.radiance',
+            ktx2: 'image/ktx2',
         };
         // Preserve the user's authored file when the Worker also returns a
         // composed/generated payload at the same path. Stage assets remain a
@@ -121,9 +122,20 @@ const sceneJoinPath = (base, value) => sceneNormPath((base ? base + '/' : '') + 
         if (part === '..') { out.pop(); return out; }
         out.push(part); return out;
     }, []).join('/');
+// Given a resolved map path, prefer a sibling "<stem>.ktx2" in the same
+// directory when one exists, and never touch the original file.
+const sceneKtx2SiblingPath = (map, path) => {
+    if (/\.ktx2$/i.test(path) || /\.mtlx$/i.test(path)) return path; // documents, not textures
+    const dot = path.lastIndexOf('.');
+    if (dot < 0) return path;
+    const ktx2Path = path.slice(0, dot) + '.ktx2';
+    return map[ktx2Path] ? ktx2Path : path;
+};
 const sceneExactFile = (map, ref, fromDir) => {
     const want = sceneJoinPath(fromDir, ref);
-    return map[want] ? { path: want, blob: map[want] } : null;
+    if (!map[want]) return null;
+    const path = sceneKtx2SiblingPath(map, want);
+    return { path, blob: map[path], substituted: path !== want };
 };
 
 const sceneUdimCode = (u, v) => 1001 + u + v * 10;
@@ -166,7 +178,8 @@ const sceneUdimTiles = (ref, map) => {
         if (code < 1001) continue;
         const offset = code - 1001;
         const u = offset % 10, v = Math.floor(offset / 10);
-        tiles.set(code, { path, blob, u, v });
+        const ktx2Path = sceneKtx2SiblingPath(map, path);
+        tiles.set(code, { path: ktx2Path, blob: map[ktx2Path], u, v, substituted: ktx2Path !== path });
     }
     return tiles;
 };
@@ -409,7 +422,7 @@ const createMtlxSceneView = async ({
         // budgets); persistence still only happens for the 1/2/4 GiB steps.
         textureMaxBytes: (Number(textureMaxBytes) > 0) ? Number(textureMaxBytes) : storedSceneTextureBudgetBytes(),
     };
-    const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0 };
+    const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0, ktx2Substituted: 0 };
     let samplerReport = [];
     const textureReservations = new Set();
     // One shared budget: ordinary and UDIM textures both reserve against
@@ -449,7 +462,9 @@ const createMtlxSceneView = async ({
             const h = (dimensions && dimensions.height) || 4096;
             const isFloat = ext === 'exr' || ext === 'hdr';
             const mipmapped = !isFloat; // 8-bit formats get mips; float unbounded formats do not
-            const bytesPerPixel = isFloat ? 16 : 4;
+            // KTX2 (UASTC, our cook script's only mode) already carries its own
+            // mip chain at ~1 byte/pixel; the 4/3 factor below still applies.
+            const bytesPerPixel = ext === 'ktx2' ? 1 : (isFloat ? 16 : 4);
             return { w, h, bytesPerPixel, mipmapped };
         }));
         const textureCount = dims.length;
@@ -496,7 +511,8 @@ const createMtlxSceneView = async ({
     const decodeUnboundedSceneTexture = async (blob, ext, path) => {
         let tex = null;
         try {
-            if (ext === 'exr') tex = await window.loadExrTexture(blob);
+            if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob);
+            else if (ext === 'exr') tex = await window.loadExrTexture(blob);
             else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
             else tex = await window.loadTifTexture(blob);
         } catch (error) { return null; }
@@ -504,6 +520,14 @@ const createMtlxSceneView = async ({
             const warning = 'MaterialX texture decode failed for ' + (path || '(unknown)');
             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
             return null;
+        }
+        if (ext === 'ktx2') {
+            // Already GPU block data with its own mip chain: cap by dropping
+            // the largest levels instead of resampling, then bytes are the
+            // exact sum of the kept levels (no 4/3 mip-factor estimate).
+            const bytes = window.capKtx2MipLevels(tex, plannedTextureSize);
+            window.configureLoadedTexture(tex);
+            return { tex, bytes };
         }
         try {
             tex = await window.boundDecodedTexture(tex, plannedTextureSize);
@@ -701,7 +725,9 @@ const createMtlxSceneView = async ({
             for (const u of compiled.introspected || []) {
                 if (u.type !== 'filename' || u.data == null) continue;
                 if (/<UDIM>/i.test(String(u.data))) {
-                    udimRefs.push({ uniform: u, tiles: sceneUdimTiles(u.data, fileMap) });
+                    const tiles = sceneUdimTiles(u.data, fileMap);
+                    tiles.forEach((tile) => { if (tile.substituted) textureStats.ktx2Substituted += 1; });
+                    udimRefs.push({ uniform: u, tiles });
                     continue;
                 }
                 // Filename values were canonicalized against their declaring
@@ -710,6 +736,7 @@ const createMtlxSceneView = async ({
                 // from an unrelated layer.
                 const hit = sceneExactFile(fileMap, u.data, '');
                 if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); continue; }
+                if (hit.substituted) textureStats.ktx2Substituted += 1;
                 const extension = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(extension)) {
                     // Decode+bound first (boundDecodedTexture inside), then
@@ -1550,6 +1577,10 @@ const createMtlxSceneView = async ({
             return sceneOptions.textureMaxBytes;
         };
         const getTextureBudgetBytes = () => sceneOptions.textureMaxBytes;
+        if (textureStats.ktx2Substituted > 0) {
+            warnings.push(textureStats.ktx2Substituted + ' texture' + (textureStats.ktx2Substituted === 1 ? '' : 's')
+                + ' loaded from KTX2 sibling' + (textureStats.ktx2Substituted === 1 ? '' : 's'));
+        }
         const handle = {
             scene, camera, renderer, controls, prims, warnings, textureStats,
             udimStats: {
@@ -1584,6 +1615,7 @@ const createMtlxSceneView = async ({
                 budgetBytes: sceneOptions.textureMaxBytes,
                 plannedBytes,
                 fullBytes,
+                ktx2Substituted: textureStats.ktx2Substituted,
             }),
             getSamplerReport: () => samplerReport.slice(),
             setBackdrop: (mode) => {

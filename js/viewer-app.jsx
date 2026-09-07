@@ -1217,7 +1217,7 @@
                                     placeholder="No document loaded"
                                     multiple
                                     icon="files"
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                     onFiles={onPickFileList}
                                 />
                             </div>

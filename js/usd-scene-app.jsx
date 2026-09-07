@@ -574,7 +574,7 @@
                                 placeholder="No stage loaded"
                                 multiple
                                 icon="files"
-                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                 onFiles={chooseFiles}
                                 inputTestId="usd-scene-file-picker"
                             />

@@ -1034,6 +1034,21 @@ const findFileForRef = (fileMap, ref) => {
     return null;
 };
 
+// Given a resolved file-map hit, prefer a sibling "<stem>.ktx2" in the same
+// directory when one exists (per-UDIM tile too, since the tile code lives in
+// the stem: "wall.1001.png" -> "wall.1001.ktx2"), and never touch the
+// original file. Returns the (possibly substituted) hit.
+const preferKtx2Sibling = (fileMap, hit) => {
+    if (!hit || /\.ktx2$/i.test(hit.key)) return hit;
+    const dot = hit.key.lastIndexOf('.');
+    if (dot < 0) return hit;
+    const ktx2Key = hit.key.slice(0, dot) + '.ktx2';
+    if (Object.prototype.hasOwnProperty.call(fileMap, ktx2Key)) {
+        return { key: ktx2Key, how: hit.how, substituted: true };
+    }
+    return hit;
+};
+
 // Inline <xi:include href="..."/> from the dropped files (MaterialX
 // documents may be split across files; readFromXmlString can't reach
 // our in-memory map). Missing includes are dropped with a warning.
@@ -1133,6 +1148,66 @@ const loadHdrTexture = async (blob) => {
     }
 };
 
+// Shared THREE.KTX2Loader instance (one transcoder worker pool for the
+// session). detectSupport() needs a WebGLRenderer to read the GPU's
+// supported compressed formats; the caller's own view.renderer is reused
+// when available, else a hidden renderer is created once and kept alive
+// for the rest of the session (detectSupport is cheap and idempotent).
+let _ktx2Loader = null;
+let _ktx2HiddenRenderer = null;
+const getKtx2Loader = (view) => {
+    if (!_ktx2Loader) {
+        if (typeof THREE.KTX2Loader === 'undefined') return null;
+        _ktx2Loader = new THREE.KTX2Loader();
+        _ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/', document.baseURI).href);
+    }
+    const renderer = (view && view.renderer) || (_ktx2HiddenRenderer = _ktx2HiddenRenderer || new THREE.WebGLRenderer());
+    _ktx2Loader.detectSupport(renderer);
+    return _ktx2Loader;
+};
+
+// Parses a dropped .ktx2 Blob via THREE.KTX2Loader into a CompressedTexture
+// carrying its full mip chain. flipY stays false and no flip is baked at
+// encode time (scripts/cook-textures.mjs never flips): our uncompressed
+// textures already upload with flipY=false, relying on the MaterialX
+// generator to flip UVs in the shader, so KTX2 data must match — top row
+// first, same as the source image.
+const loadKtx2Texture = async (blob, view) => {
+    const loader = getKtx2Loader(view);
+    if (!loader) {
+        console.warn('mtlx-engine: THREE.KTX2Loader unavailable (script blocked/offline); .ktx2 textures keep the node default color.');
+        return null;
+    }
+    try {
+        const buf = await blob.arrayBuffer();
+        return await new Promise((resolve, reject) => {
+            loader.parse(buf, resolve, reject);
+        });
+    } catch (e) {
+        console.warn('mtlx-engine: failed to parse dropped .ktx2 texture, keeping the node default color:', e);
+        return null;
+    }
+};
+
+// Caps a KTX2 CompressedTexture's mip chain to a tier by dropping its
+// largest levels (never resampling GPU block data): mipmaps[] is ordered
+// largest-first, so this keeps the smallest-side-<=maxSize suffix and
+// updates image.width/height to the new top level. Returns the summed byte
+// length of the kept levels, for the scene's texture-budget accounting.
+const capKtx2MipLevels = (tex, maxSize) => {
+    if (!tex || !tex.mipmaps || !tex.mipmaps.length) return tex && tex.image ? (tex.image.width || 0) * (tex.image.height || 0) : 0;
+    if (!(maxSize > 0)) return tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0);
+    let keepFrom = 0;
+    while (keepFrom < tex.mipmaps.length - 1 && Math.max(tex.mipmaps[keepFrom].width, tex.mipmaps[keepFrom].height) > maxSize) keepFrom += 1;
+    if (keepFrom > 0) {
+        tex.mipmaps = tex.mipmaps.slice(keepFrom);
+        tex.image.width = tex.mipmaps[0].width;
+        tex.image.height = tex.mipmaps[0].height;
+        tex.needsUpdate = true;
+    }
+    return tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0);
+};
+
 // Parses a dropped .tif/.tiff Blob via UTIF.js into an 8bpc RGBA texture.
 // Baseline decode only (8/16-bit, common compressions); exotic TIFFs fall
 // back to null like the loaders above, keeping the node default color.
@@ -1217,6 +1292,13 @@ const readImageDimensions = async (blob) => {
                 offset += 2 + segLen;
             }
             return null;
+        }
+        // KTX2: 12-byte identifier, then a little-endian header:
+        // vkFormat(4), typeSize(4), pixelWidth(4), pixelHeight(4), ...
+        const KTX2_IDENTIFIER = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];
+        if (buf.length >= 44 && KTX2_IDENTIFIER.every((b, i) => buf[i] === b)) {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            return { width: dv.getUint32(20, true), height: dv.getUint32(24, true) };
         }
         // TIFF: byte-order mark, then a 4-byte IFD offset, then the IFD
         // entry count and entries; tags 256 (width) and 257 (height) can be
@@ -1388,6 +1470,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     const pending = [];
     const cache = view.textureCache || TEXTURE_CACHE;
     const isAlive = () => typeof view.isAlive !== 'function' || view.isAlive();
+    let ktx2Substituted = 0;
     for (const u of view.introspected) {
         if (u.type !== 'filename') continue;
         let ref = '';
@@ -1396,8 +1479,10 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             else if (u.data != null) ref = String(u.data);
         } catch (e) { ref = ''; }
         if (!ref) continue; // no file reference recorded
-        const hit = findFileForRef(fileMap, ref);
+        let hit = findFileForRef(fileMap, ref);
         if (!hit) { missing.push(ref); continue; }
+        hit = preferKtx2Sibling(fileMap, hit);
+        if (hit.substituted) ktx2Substituted += 1;
         const blob = fileMap[hit.key];
         const cacheKey = textureCacheKey(blob, hit.key);
         const cached = cache.get(cacheKey);
@@ -1408,7 +1493,17 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             }
         } else {
             const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
-            if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
+            if (ext === 'ktx2') {
+                const pendingLoad = loadKtx2Texture(blob, view).then((tex) => {
+                    if (!tex) return; // unsupported/corrupt, the node default color stands
+                    configureLoadedTexture(tex);
+                    if (!isAlive()) { tex.dispose && tex.dispose(); return; }
+                    cache.set(cacheKey, tex);
+                    if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                    if (onBound) onBound();
+                }, (error) => ({ error }));
+                pending.push(pendingLoad);
+            } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
                 const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
                 const pendingLoad = parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
@@ -1456,7 +1551,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         }
         bound.push(ref + '  →  ' + hit.key);
     }
-    return { bound, missing, pending };
+    if (ktx2Substituted > 0) console.info('bindDroppedTextures: ' + ktx2Substituted + ' texture(s) loaded from .ktx2 sibling(s)');
+    return { bound, missing, pending, ktx2Substituted };
 };
 
 // Extracts a plain JS array from a real array or an embind vector-like
@@ -6726,9 +6822,9 @@ Object.assign(window, {
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
-    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, resolveIncludes, readMtlxText,
+    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, preferKtx2Sibling, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
-    loadExrTexture, loadHdrTexture, loadTifTexture,
+    loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     readImageDimensions, boundDecodedTexture,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
