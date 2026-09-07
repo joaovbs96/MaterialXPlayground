@@ -135,7 +135,7 @@ const sceneExactFile = (map, ref, fromDir) => {
     const want = sceneJoinPath(fromDir, ref);
     if (!map[want]) return null;
     const path = sceneKtx2SiblingPath(map, want);
-    return { path, blob: map[path], substituted: path !== want };
+    return { path, blob: map[path], substituted: path !== want, originalPath: want, originalBlob: map[want] };
 };
 
 const sceneUdimCode = (u, v) => 1001 + u + v * 10;
@@ -179,7 +179,7 @@ const sceneUdimTiles = (ref, map) => {
         const offset = code - 1001;
         const u = offset % 10, v = Math.floor(offset / 10);
         const ktx2Path = sceneKtx2SiblingPath(map, path);
-        tiles.set(code, { path: ktx2Path, blob: map[ktx2Path], u, v, substituted: ktx2Path !== path });
+        tiles.set(code, { path: ktx2Path, blob: map[ktx2Path], u, v, substituted: ktx2Path !== path, originalPath: path, originalBlob: map[path] });
     }
     return tiles;
 };
@@ -508,14 +508,33 @@ const createMtlxSceneView = async ({
     // EXR/HDR/TIF are not resized by createImageBitmap (the bounded PNG/JPEG
     // path), so they are decoded then explicitly bounded to the planned tier
     // via boundDecodedTexture before their real bytes are known/reserved.
-    const decodeUnboundedSceneTexture = async (blob, ext, path) => {
+    const decodeUnboundedSceneTexture = async (blob, ext, path, fallback) => {
         let tex = null;
         try {
-            if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob);
+            if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob, null, path);
             else if (ext === 'exr') tex = await window.loadExrTexture(blob);
             else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
             else tex = await window.loadTifTexture(blob);
-        } catch (error) { return null; }
+        } catch (error) {
+            if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== path) {
+                const notice = 'KTX2 texture ' + path + ' is not a multiple of 4; falling back to ' + fallback.path;
+                if (!udimWarnings.has(notice)) { udimWarnings.add(notice); warnings.push(notice); }
+                const fallbackExt = String(fallback.path).split('.').pop().toLowerCase();
+                if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(fallbackExt)) {
+                    return decodeUnboundedSceneTexture(fallback.blob, fallbackExt, fallback.path, null);
+                }
+                // Ordinary 8-bit source (png/jpg): bound it the same way the
+                // regular (non-unbounded) texture path does.
+                try {
+                    const boundedTex = await window.loadBoundedBitmapTexture(fallback.blob, plannedTextureSize);
+                    if (!boundedTex) return null;
+                    window.configureLoadedTexture(boundedTex);
+                    const bytes = Math.ceil((boundedTex.image.width || 0) * (boundedTex.image.height || 0) * 4 * 4 / 3);
+                    return { tex: boundedTex, bytes };
+                } catch (e) { return null; }
+            }
+            return null;
+        }
         if (!tex || !tex.image) {
             const warning = 'MaterialX texture decode failed for ' + (path || '(unknown)');
             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
@@ -742,7 +761,9 @@ const createMtlxSceneView = async ({
                     // Decode+bound first (boundDecodedTexture inside), then
                     // account the real post-resize bytes via the bytes
                     // override so a rebuild does not double count.
-                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path).then((result) => {
+                    const fallbackHit = hit.substituted && hit.originalBlob
+                        ? { path: hit.originalPath, blob: hit.originalBlob } : null;
+                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path, fallbackHit).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, false, bytes)) {
@@ -889,7 +910,9 @@ const createMtlxSceneView = async ({
                 const hit = tileHits[index];
                 const ext = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) {
-                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path).then((result) => {
+                    const fallbackHit = hit.substituted && hit.originalBlob
+                        ? { path: hit.originalPath, blob: hit.originalBlob } : null;
+                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path, fallbackHit).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, true, bytes)) {

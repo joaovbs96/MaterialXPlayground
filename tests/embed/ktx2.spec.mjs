@@ -158,3 +158,54 @@ test('@ktx2 a .ktx2 sibling renders with the same orientation as its source PNG'
   expect(runA.consoleLines.some((l) => /loaded from \.ktx2 sibling/i.test(l))).toBe(false);
   expect(runB.consoleLines.some((l) => /loaded from \.ktx2 sibling/i.test(l))).toBe(true);
 });
+
+// --- invalid base level fixture: a hand-built 10x10 UASTC .ktx2 whose base
+// level is not a multiple of 4 (WebGL rejects it, sampling solid black),
+// plus its 10x10 orange PNG source. Built once with:
+//   toktx --t2 --encode uastc --uastc_quality 2 --genmipmap --zcmp 18 \
+//     --assign_oetf srgb ktx2-badbase-10x10.ktx2 ktx2-badbase-10x10.png
+// ktxinfo confirms pixelWidth/pixelHeight are 10 (not a multiple of 4).
+const BADBASE_MTLX = `<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_bad" type="color3">
+    <input name="file" type="filename" value="badbase.png" />
+  </image>
+  <surface_unlit name="SR_Bad" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="img_bad" />
+  </surface_unlit>
+  <surfacematerial name="Bad" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_Bad" />
+  </surfacematerial>
+</materialx>
+`;
+
+test('@ktx2 an invalid (non-multiple-of-4) .ktx2 base level falls back to the source', async ({ page, embedURL }) => {
+  const referenceDir = path.join(workDir, 'badbase-reference'); // PNG only, no .ktx2 sibling at all
+  const badbaseDir = path.join(workDir, 'badbase'); // PNG plus its invalid .ktx2 sibling
+  fs.mkdirSync(referenceDir, { recursive: true });
+  fs.mkdirSync(badbaseDir, { recursive: true });
+  fs.writeFileSync(path.join(referenceDir, 'badbase.mtlx'), BADBASE_MTLX);
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'ktx2-badbase-10x10.png'), path.join(referenceDir, 'badbase.png'));
+  fs.writeFileSync(path.join(badbaseDir, 'badbase.mtlx'), BADBASE_MTLX);
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'ktx2-badbase-10x10.png'), path.join(badbaseDir, 'badbase.png'));
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'ktx2-badbase-10x10.ktx2'), path.join(badbaseDir, 'badbase.ktx2'));
+
+  await page.addInitScript(() => { try { localStorage.setItem('mtlxDebugShaders', '1'); } catch (e) {} });
+  const reference = await loadDirAndScreenshot(page, embedURL, referenceDir);
+  const run = await loadDirAndScreenshot(page, embedURL, badbaseDir);
+
+  // The whole model is one flat color; sample its center in both runs.
+  const cx = Math.floor(run.png.width / 2), cy = Math.floor(run.png.height / 2);
+  const refPixel = reference.png.getPixel(cx, cy);
+  const p = run.png.getPixel(cx, cy);
+
+  // A black (invalid-KTX2) render would sample near (0,0,0); the reference
+  // (PNG-only, never touches the bad .ktx2) proves what the orange source
+  // renders as under this pipeline's color management, so compare against
+  // it rather than an assumed absolute RGB.
+  expect(refPixel.r, 'sanity: the reference render should not itself be black').toBeGreaterThan(30);
+  const dist = Math.sqrt((p.r - refPixel.r) ** 2 + (p.g - refPixel.g) ** 2 + (p.b - refPixel.b) ** 2);
+  expect(dist, 'the invalid-.ktx2 run should fall back and match the PNG-only reference').toBeLessThan(40);
+
+  expect(run.consoleLines.some((l) => /not a multiple of 4/i.test(l))).toBe(true);
+});

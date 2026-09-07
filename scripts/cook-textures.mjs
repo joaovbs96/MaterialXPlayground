@@ -149,7 +149,7 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
     const b64 = bytes.toString("base64");
 
     const decoded = await page.evaluate(
-      async ({ b64, ext, skipCap, needsPngExport }) => {
+      async ({ b64, ext, skipCap, needsPngExport: wantsPngExport, useToktx }) => {
         function b64ToBuf(s) {
           const bin = atob(s);
           const arr = new Uint8Array(bin.length);
@@ -240,9 +240,35 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
           width = newW; height = newH;
         }
 
+        // Block-compressed KTX2 requires the base level's width and height
+        // to each be a multiple of 4; resize (never pad, that would shift
+        // UVs) down to the nearest multiple of 4 that fits inside the
+        // source size.
+        let resizedFrom = null;
+        const mod4W = width - (width % 4);
+        const mod4H = height - (height % 4);
+        if (mod4W !== width || mod4H !== height) {
+          const newW = Math.max(4, mod4W);
+          const newH = Math.max(4, mod4H);
+          const srcCanvas2 = document.createElement("canvas");
+          srcCanvas2.width = width; srcCanvas2.height = height;
+          srcCanvas2.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+          const dstCanvas2 = document.createElement("canvas");
+          dstCanvas2.width = newW; dstCanvas2.height = newH;
+          const dstCtx2 = dstCanvas2.getContext("2d");
+          dstCtx2.imageSmoothingQuality = "high";
+          dstCtx2.drawImage(srcCanvas2, 0, 0, width, height, 0, 0, newW, newH);
+          resizedFrom = { width, height };
+          rgba = dstCtx2.getImageData(0, 0, newW, newH).data;
+          width = newW; height = newH;
+        }
+
         // For toktx, non-PNG/JPEG sources (TIFF/EXR/HDR) are handed over as
         // a temporary 8-bit PNG rather than raw pixels: toktx reads PNG and
         // JPEG directly and we reuse the same decode path for every format.
+        // A PNG/JPEG source that got resized above also needs this export:
+        // otherwise toktx would re-read the original (un-resized) file.
+        const needsPngExport = wantsPngExport || (useToktx && !!resizedFrom);
         let pngB64 = null;
         if (needsPngExport) {
           const canvas = document.createElement("canvas");
@@ -253,14 +279,17 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
           pngB64 = bufToB64(buf);
         }
 
-        return { width, height, rgbaB64: needsPngExport ? null : bufToB64(rgba), pngB64, downscaledFrom };
+        return { width, height, rgbaB64: needsPngExport ? null : bufToB64(rgba), pngB64, downscaledFrom, resizedFrom };
       },
-      { b64, ext: file.ext, skipCap: useToktx, needsPngExport: useToktx && ![".png", ".jpg", ".jpeg"].includes(file.ext) }
+      { b64, ext: file.ext, skipCap: useToktx, useToktx, needsPngExport: useToktx && ![".png", ".jpg", ".jpeg"].includes(file.ext) }
     );
 
-    const { width, height, downscaledFrom } = decoded;
+    const { width, height, downscaledFrom, resizedFrom } = decoded;
     if (downscaledFrom) {
       console.log(`  note: ${path.basename(file.srcPath)} is ${downscaledFrom.width}x${downscaledFrom.height} (${downscaledFrom.width * downscaledFrom.height} texels), above the encoder's 12,582,912-texel limit; downscaled to ${width}x${height} for the .ktx2 only`);
+    }
+    if (resizedFrom) {
+      console.log(`  note: ${path.basename(file.srcPath)}: ${resizedFrom.width}x${resizedFrom.height} resized to ${width}x${height} (block compression needs multiples of 4)`);
     }
     const seconds = (Date.now() - started) / 1000;
 
