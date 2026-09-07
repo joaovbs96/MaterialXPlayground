@@ -53,7 +53,8 @@ function roadmapInline(text, keyPrefix) {
 // lines fall back to plain paragraphs so the page never goes blank on a
 // small format drift.
 function parseRoadmap(text) {
-    const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+    // HTML comments are maintainer notes, stripped before parsing.
+    const lines = String(text).replace(/<!--[\s\S]*?-->/g, '').replace(/\r\n/g, '\n').split('\n');
     let title = 'Roadmap';
     const introParas = [];
     const sections = [];
