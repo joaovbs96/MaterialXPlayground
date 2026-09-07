@@ -130,7 +130,11 @@
         };
         const setExposure = (value) => {
             exposure = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 1;
-            if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = exposure;
+            // Exposure is applied exactly once, through u_envLightIntensity
+            // (usd-scene-renderer.js's applyMaterialEnvironment reads
+            // getEnvExposure() below), matching the Viewer, which pins this
+            // same property to 1.0 (js/mtlx-engine.js).
+            if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = 1;
             return exposure;
         };
         const refreshDisplayTransform = () => {

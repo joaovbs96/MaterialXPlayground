@@ -1064,7 +1064,10 @@ const createMtlxSceneView = async ({
             if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
             if ('toneMapping' in renderer) {
                 renderer.toneMapping = mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-                renderer.toneMappingExposure = envExposure;
+                // Exposure is applied exactly once, through u_envLightIntensity
+                // (applyMaterialEnvironment/envExposure below), matching the
+                // Viewer (js/mtlx-engine.js pins this to 1.0 too).
+                renderer.toneMappingExposure = 1;
             }
         };
         const disposeMaterial = (material) => {

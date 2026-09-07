@@ -156,14 +156,16 @@ test('@scene environment controls change the presented pixels and studio shadow'
   await page.waitForTimeout(100);
   const exposure2Image = decodePNG(await canvas.screenshot());
   expect(changedPixels(exposure1Image, exposure2Image)).toBeGreaterThan(exposure1Image.width * exposure1Image.height * 0.01);
-  expect(await page.evaluate(() => window.__usdSceneHandle.renderer.toneMappingExposure)).toBe(2);
+  // Exposure is applied exactly once, through u_envLightIntensity, matching
+  // the Viewer; renderer.toneMappingExposure stays pinned at 1.
+  expect(await page.evaluate(() => window.__usdSceneHandle.renderer.toneMappingExposure)).toBe(1);
 
   const uiExposure = page.getByText('Exposure', { exact: true }).locator('../..').getByRole('slider');
   await uiExposure.fill('3');
   await page.waitForTimeout(100);
   const uiExposureImage = decodePNG(await canvas.screenshot());
   expect(changedPixels(exposure2Image, uiExposureImage)).toBeGreaterThan(exposure1Image.width * exposure1Image.height * 0.01);
-  expect(await page.evaluate(() => window.__usdSceneHandle.renderer.toneMappingExposure)).toBe(8);
+  expect(await page.evaluate(() => window.__usdSceneHandle.renderer.toneMappingExposure)).toBe(1);
   const uniformsAfterUiExposure = await materialEnvironmentState();
   expect(uniformsAfterUiExposure.some((state, i) => JSON.stringify(state) !== JSON.stringify(uniformsBeforeUi[i]))).toBe(true);
 
@@ -261,4 +263,19 @@ test('@scene latest environment import wins while renderer creation is deferred'
     const skyMesh = window.__usdSceneHandle.scene.getObjectByName('__usd-scene-environment-sky');
     return skyMesh.material.map.image.data[2];
   })).toBe(220);
+});
+
+test('@scene exposure is applied once, through envLightIntensity, not renderer.toneMappingExposure', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await page.getByTestId('usd-scene-load-example').click();
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  await page.waitForFunction(() => !!window.__mtlxUsdSceneHandle, null, { timeout: 30000 });
+
+  const before = await page.evaluate(() => window.__mtlxUsdSceneHandle.__debug().renderer.toneMappingExposure);
+  expect(before).toBe(1);
+
+  await page.evaluate(() => window.__mtlxUsdSceneHandle.setEnvExposure(4));
+  await page.waitForTimeout(50);
+  const after = await page.evaluate(() => window.__mtlxUsdSceneHandle.__debug().renderer.toneMappingExposure);
+  expect(after).toBe(1);
 });
