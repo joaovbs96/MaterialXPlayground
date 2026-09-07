@@ -323,17 +323,25 @@ function sameCornerIndices(generated, ordinary, vertexCount) {
 // Array-valued attributes from this API are truncated past 512 elements and
 // must never be read as data; the orientation token is always safe.
 function readOrientation(api, root, primPath) {
-  if (typeof api.getPrimAttributes !== "function" || !primPath) return "rightHanded";
+  return readMeshTokens(api, root, primPath).orientation;
+}
+
+// Reads orientation and subdivisionScheme together with a single
+// getPrimAttributes call, since array-valued attributes from this API
+// truncate past 512 elements but these two tokens are always safe.
+function readMeshTokens(api, root, primPath) {
+  const tokens = { orientation: "rightHanded", subdivisionScheme: undefined };
+  if (typeof api.getPrimAttributes !== "function" || !primPath) return tokens;
   try {
     for (const record of arrayItems(api.getPrimAttributes(root, primPath))) {
-      if (text(record?.name) === "orientation") {
-        return text(record.value) === "leftHanded" ? "leftHanded" : "rightHanded";
-      }
+      const name = text(record?.name);
+      if (name === "orientation") tokens.orientation = text(record.value) === "leftHanded" ? "leftHanded" : "rightHanded";
+      else if (name === "subdivisionScheme") tokens.subdivisionScheme = text(record.value);
     }
   } catch {
     // Tolerate any native failure and fall back to the USD default.
   }
-  return "rightHanded";
+  return tokens;
 }
 
 function swapCorners(array, triangleIndex, stride) {
@@ -372,6 +380,195 @@ function applyOrientation(mesh) {
     for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
   }
   return mesh;
+}
+
+// Loop-subdivides a deindexed triangle mesh (positions/normals/uvs are flat
+// per-corner streams, indices absent or a trivial identity sequence, exactly
+// what the native draw produces). Welds corners by exact position so shared
+// cage vertices merge into one manifold topology, runs `levels` Loop
+// subdivision passes with face-varying UVs (interpolated per corner so UV
+// seams stay sharp), recomputes area-weighted smooth normals from the welded
+// topology, and re-expands to deindexed corners with a sequential index so
+// the renderer path is unchanged. Returns null if the mesh cannot be welded
+// into a usable triangle list (degenerate/point mesh).
+function subdivideMesh(mesh, levels) {
+  const positions = mesh.positions;
+  if (!positions || positions.length < 9 || levels <= 0) return null;
+  const indices = mesh.indices;
+  const cornerCount = indices ? indices.length : positions.length / 3;
+  if (cornerCount < 3 || cornerCount % 3 !== 0) return null;
+  const hasUV = mesh.uvs && mesh.uvs.length === (positions.length / 3) * 2;
+
+  const posKey = (x, y, z) => `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
+  const posMap = new Map();
+  let weldedPositions = [];
+  const cornerVertex = (cornerIndex) => {
+    const srcIndex = indices ? indices[cornerIndex] : cornerIndex;
+    const x = positions[srcIndex * 3], y = positions[srcIndex * 3 + 1], z = positions[srcIndex * 3 + 2];
+    const key = posKey(x, y, z);
+    let vi = posMap.get(key);
+    if (vi === undefined) {
+      vi = weldedPositions.length;
+      weldedPositions.push([x, y, z]);
+      posMap.set(key, vi);
+    }
+    return vi;
+  };
+
+  let triangles = [];
+  for (let c = 0; c + 2 < cornerCount; c += 3) {
+    const a = cornerVertex(c), b = cornerVertex(c + 1), cc = cornerVertex(c + 2);
+    const uv = hasUV ? [
+      [mesh.uvs[c * 2], mesh.uvs[c * 2 + 1]],
+      [mesh.uvs[(c + 1) * 2], mesh.uvs[(c + 1) * 2 + 1]],
+      [mesh.uvs[(c + 2) * 2], mesh.uvs[(c + 2) * 2 + 1]],
+    ] : null;
+    triangles.push({ v: [a, b, cc], uv });
+  }
+  if (weldedPositions.length < 4 || !triangles.length) return null;
+
+  const edgeKey = (x, y) => (x < y ? `${x}_${y}` : `${y}_${x}`);
+
+  for (let level = 0; level < levels; level++) {
+    const n = weldedPositions.length;
+    const edgeTriangles = new Map();
+    const vertexNeighbors = Array.from({ length: n }, () => new Set());
+    for (let ti = 0; ti < triangles.length; ti++) {
+      const [a, b, c] = triangles[ti].v;
+      for (const [x, y] of [[a, b], [b, c], [c, a]]) {
+        const ek = edgeKey(x, y);
+        let list = edgeTriangles.get(ek);
+        if (!list) { list = []; edgeTriangles.set(ek, list); }
+        list.push(ti);
+        vertexNeighbors[x].add(y);
+        vertexNeighbors[y].add(x);
+      }
+    }
+
+    const evenPositions = new Array(n);
+    for (let vi = 0; vi < n; vi++) {
+      const neighbors = Array.from(vertexNeighbors[vi]);
+      const boundaryNeighbors = neighbors.filter(nb => edgeTriangles.get(edgeKey(vi, nb)).length === 1);
+      const p = weldedPositions[vi];
+      if (boundaryNeighbors.length) {
+        if (boundaryNeighbors.length === 2) {
+          const p0 = weldedPositions[boundaryNeighbors[0]], p1 = weldedPositions[boundaryNeighbors[1]];
+          evenPositions[vi] = [
+            0.75 * p[0] + 0.125 * (p0[0] + p1[0]),
+            0.75 * p[1] + 0.125 * (p0[1] + p1[1]),
+            0.75 * p[2] + 0.125 * (p0[2] + p1[2]),
+          ];
+        } else {
+          evenPositions[vi] = p.slice();
+        }
+      } else {
+        const k = neighbors.length || 1;
+        const beta = k === 3 ? 3 / 16 : 3 / (8 * k);
+        let sx = 0, sy = 0, sz = 0;
+        for (const nb of neighbors) { const pn = weldedPositions[nb]; sx += pn[0]; sy += pn[1]; sz += pn[2]; }
+        evenPositions[vi] = [
+          (1 - k * beta) * p[0] + beta * sx,
+          (1 - k * beta) * p[1] + beta * sy,
+          (1 - k * beta) * p[2] + beta * sz,
+        ];
+      }
+    }
+
+    const newPositions = evenPositions.slice();
+    const oddIndex = new Map();
+    const getOdd = (a, b) => {
+      const ek = edgeKey(a, b);
+      let idx = oddIndex.get(ek);
+      if (idx !== undefined) return idx;
+      const adj = edgeTriangles.get(ek);
+      const pa = weldedPositions[a], pb = weldedPositions[b];
+      let pos;
+      if (adj.length === 1) {
+        pos = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2];
+      } else {
+        const [t0, t1] = adj;
+        const oppOf = (ti) => triangles[ti].v.find(v => v !== a && v !== b);
+        const pc = weldedPositions[oppOf(t0)], pd = weldedPositions[oppOf(t1)];
+        pos = [
+          0.375 * (pa[0] + pb[0]) + 0.125 * (pc[0] + pd[0]),
+          0.375 * (pa[1] + pb[1]) + 0.125 * (pc[1] + pd[1]),
+          0.375 * (pa[2] + pb[2]) + 0.125 * (pc[2] + pd[2]),
+        ];
+      }
+      idx = newPositions.length;
+      newPositions.push(pos);
+      oddIndex.set(ek, idx);
+      return idx;
+    };
+
+    const lerpUV = (u0, u1, t) => [u0[0] + (u1[0] - u0[0]) * t, u0[1] + (u1[1] - u0[1]) * t];
+    const newTriangles = [];
+    for (const tri of triangles) {
+      const [a, b, c] = tri.v;
+      const ab = getOdd(a, b), bc = getOdd(b, c), ca = getOdd(c, a);
+      if (tri.uv) {
+        const [uvA, uvB, uvC] = tri.uv;
+        const uvAB = lerpUV(uvA, uvB, 0.5), uvBC = lerpUV(uvB, uvC, 0.5), uvCA = lerpUV(uvC, uvA, 0.5);
+        newTriangles.push({ v: [a, ab, ca], uv: [uvA, uvAB, uvCA] });
+        newTriangles.push({ v: [b, bc, ab], uv: [uvB, uvBC, uvAB] });
+        newTriangles.push({ v: [c, ca, bc], uv: [uvC, uvCA, uvBC] });
+        newTriangles.push({ v: [ab, bc, ca], uv: [uvAB, uvBC, uvCA] });
+      } else {
+        newTriangles.push({ v: [a, ab, ca], uv: null });
+        newTriangles.push({ v: [b, bc, ab], uv: null });
+        newTriangles.push({ v: [c, ca, bc], uv: null });
+        newTriangles.push({ v: [ab, bc, ca], uv: null });
+      }
+    }
+    weldedPositions = newPositions;
+    triangles = newTriangles;
+  }
+
+  // Area-weighted smooth normals from the final welded topology.
+  const smoothNormals = weldedPositions.map(() => [0, 0, 0]);
+  for (const tri of triangles) {
+    const [a, b, c] = tri.v;
+    const pa = weldedPositions[a], pb = weldedPositions[b], pc = weldedPositions[c];
+    const e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+    const e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+    const nx = e1[1] * e2[2] - e1[2] * e2[1];
+    const ny = e1[2] * e2[0] - e1[0] * e2[2];
+    const nz = e1[0] * e2[1] - e1[1] * e2[0];
+    for (const vi of [a, b, c]) {
+      smoothNormals[vi][0] += nx; smoothNormals[vi][1] += ny; smoothNormals[vi][2] += nz;
+    }
+  }
+  for (const n of smoothNormals) {
+    const len = Math.hypot(n[0], n[1], n[2]) || 1;
+    n[0] /= len; n[1] /= len; n[2] /= len;
+  }
+
+  // Re-expand to deindexed corners (sequential index, matching the current
+  // renderer path exactly).
+  const cornerN = triangles.length * 3;
+  const outPositions = new Float32Array(cornerN * 3);
+  const outNormals = new Float32Array(cornerN * 3);
+  const outUVs = hasUV ? new Float32Array(cornerN * 2) : undefined;
+  let cursor = 0;
+  for (const tri of triangles) {
+    for (let k = 0; k < 3; k++) {
+      const vi = tri.v[k];
+      const p = weldedPositions[vi], n = smoothNormals[vi];
+      outPositions[cursor * 3] = p[0]; outPositions[cursor * 3 + 1] = p[1]; outPositions[cursor * 3 + 2] = p[2];
+      outNormals[cursor * 3] = n[0]; outNormals[cursor * 3 + 1] = n[1]; outNormals[cursor * 3 + 2] = n[2];
+      if (outUVs && tri.uv) {
+        outUVs[cursor * 2] = tri.uv[k][0]; outUVs[cursor * 2 + 1] = tri.uv[k][1];
+      }
+      cursor++;
+    }
+  }
+
+  return {
+    positions: outPositions,
+    normals: outNormals,
+    ...(outUVs ? { uvs: outUVs } : {}),
+    triangleCount: triangles.length,
+  };
 }
 
 function collectPrototypeTargets(value, result = []) {
@@ -467,7 +664,8 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
       // in the real stage, not on the temporary probe layer or the generated
       // __instances__ record, so it is read from the actual target path.
       const actualMeshPath = probe.relativeMeshPath ? `${probe.target}/${probe.relativeMeshPath}` : probe.target;
-      const orientation = readOrientation(api, root, actualMeshPath);
+      const tokens = readMeshTokens(api, root, actualMeshPath);
+      const orientation = tokens.orientation;
       for (const generatedMesh of probe.meshes) {
         const marker = "/__instances__/";
         const tail = generatedMesh.path.slice(generatedMesh.path.indexOf(marker) + marker.length);
@@ -496,6 +694,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
         }
         generatedMesh.normals = candidate.normals;
         generatedMesh.orientation = orientation;
+        generatedMesh.subdivisionScheme = tokens.subdivisionScheme;
       }
     }
   } catch (error) {
@@ -618,7 +817,11 @@ async function load(request) {
     // get their own orientation token read here, once per drawn prim.
     const pushMesh = mesh => {
       if (!mesh.path || !copiedMeshPaths.has(mesh.path)) {
-        if (!mesh.instanceOwnerPath) mesh.orientation = readOrientation(api, root, mesh.path || path);
+        if (!mesh.instanceOwnerPath) {
+          const tokens = readMeshTokens(api, root, mesh.path || path);
+          mesh.orientation = tokens.orientation;
+          mesh.subdivisionScheme = tokens.subdivisionScheme;
+        }
         drawSnapshot.meshes.push(mesh);
         if (mesh.path) copiedMeshPaths.add(mesh.path);
       }
@@ -665,11 +868,64 @@ async function load(request) {
   // and stamped their orientation, so every snapshot mesh is flipped exactly
   // once here.
   for (const mesh of drawSnapshot.meshes) applyOrientation(mesh);
+  {
+    const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 1));
+    if (levels > 0) {
+      const MESH_TRIANGLE_LIMIT = 600000;
+      const STAGE_TRIANGLE_LIMIT = 6000000;
+      const factor = 4 ** levels;
+      let stageTriangleTotal = 0;
+      for (const mesh of drawSnapshot.meshes) {
+        const cornerCount = mesh.indices ? mesh.indices.length : (mesh.positions ? mesh.positions.length / 3 : 0);
+        stageTriangleTotal += Math.floor(cornerCount / 3);
+      }
+      let budgetWarned = false;
+      for (const mesh of drawSnapshot.meshes) {
+        const scheme = mesh.subdivisionScheme;
+        if (scheme !== "catmullClark" && scheme !== "loop") continue;
+        if (mesh.instanceOwnerPath && !mesh.normals) continue;
+        const cornerCount = mesh.indices ? mesh.indices.length : (mesh.positions ? mesh.positions.length / 3 : 0);
+        const originalTriangles = Math.floor(cornerCount / 3);
+        if (!originalTriangles) continue;
+        const projectedTriangles = originalTriangles * factor;
+        if (projectedTriangles > MESH_TRIANGLE_LIMIT) {
+          drawSnapshot.warnings ??= [];
+          drawSnapshot.warnings.push(
+            `Subdivision skipped (would exceed ${MESH_TRIANGLE_LIMIT} triangles): ${mesh.path || mesh.name || "mesh"}`
+          );
+          continue;
+        }
+        if (stageTriangleTotal - originalTriangles + projectedTriangles > STAGE_TRIANGLE_LIMIT) {
+          if (!budgetWarned) {
+            drawSnapshot.warnings ??= [];
+            drawSnapshot.warnings.push(`Subdivision stopped: stage triangle budget (${STAGE_TRIANGLE_LIMIT}) reached`);
+            budgetWarned = true;
+          }
+          continue;
+        }
+        const subdivided = subdivideMesh(mesh, levels);
+        if (!subdivided) continue;
+        stageTriangleTotal += subdivided.triangleCount - originalTriangles;
+        mesh.positions = subdivided.positions;
+        mesh.normals = subdivided.normals;
+        if (subdivided.uvs) mesh.uvs = subdivided.uvs;
+        delete mesh.indices;
+        if (Array.isArray(mesh.subsets) && mesh.subsets.length) {
+          mesh.subsets = mesh.subsets.map(subset => ({
+            ...subset,
+            start: subset.start * factor,
+            count: subset.count * factor,
+          }));
+        }
+      }
+    }
+  }
   postMessage({ id: request.id, type: "progress", value: {
     phase: "material", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
   } });
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot);
   result.warnings.push(...normalRecoveryWarnings);
+  if (drawSnapshot.warnings?.length) result.warnings.push(...drawSnapshot.warnings);
   const extractedOwners = new Set(result.meshes.map(mesh => mesh.instanceOwnerPath).filter(Boolean));
   for (const path of pointInstancerPaths) {
     if (!extractedOwners.has(path)) {

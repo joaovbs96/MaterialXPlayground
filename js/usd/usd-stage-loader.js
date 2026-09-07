@@ -6,7 +6,7 @@ let nextRequestId = 1;
  * Input ArrayBuffers are deliberately structured-cloned; the caller keeps
  * ownership because the same files are subsequently consumed by MaterialX.
  */
-export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolicy = "defaultRender" }) {
+export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolicy = "defaultRender", subdivisionLevel = 1 }) {
   if (!Array.isArray(files) || !files.length) return Promise.reject(new Error("USD files are required"));
   if (!rootPath) return Promise.reject(new Error("USD rootPath is required"));
   const worker = new Worker(workerUrl, { type: "module", name: "openusd-stage" });
@@ -37,7 +37,7 @@ export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolic
     };
     worker.onerror = event => finish(reject, new Error(event.message || "OpenUSD worker failed"));
     try {
-      worker.postMessage({ id, type: "load", files: requestFiles, rootPath, purposePolicy });
+      worker.postMessage({ id, type: "load", files: requestFiles, rootPath, purposePolicy, subdivisionLevel });
     } catch (error) {
       finish(reject, new Error(`OpenUSD request could not cross Worker boundary: ${error?.message ?? error}`));
     }

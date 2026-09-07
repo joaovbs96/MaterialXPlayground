@@ -19,6 +19,26 @@ const storedSceneTextureMaxSize = () => {
     } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
 };
 
+// Loop subdivision level for catmullClark/loop meshes, persisted the same
+// way as the texture size cap above.
+const SCENE_SUBDIVISION_KEY = 'mtlx_scene_subdivision';
+const SCENE_SUBDIVISION_VALUES = [0, 1, 2];
+const SCENE_SUBDIVISION_DEFAULT = 1;
+
+const storedSceneSubdivisionLevel = () => {
+    if (window.top !== window) return SCENE_SUBDIVISION_DEFAULT;
+    try {
+        const stored = Number(localStorage.getItem(SCENE_SUBDIVISION_KEY));
+        return SCENE_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_SUBDIVISION_DEFAULT;
+    } catch (e) { return SCENE_SUBDIVISION_DEFAULT; /* privacy mode */ }
+};
+
+const setStoredSceneSubdivisionLevel = (level) => {
+    if (window.top === window) {
+        try { localStorage.setItem(SCENE_SUBDIVISION_KEY, String(level)); } catch (e) { /* privacy mode */ }
+    }
+};
+
 const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
 
 const sceneFileMap = (files, stage) => {
