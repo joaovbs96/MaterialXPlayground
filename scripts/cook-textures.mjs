@@ -121,7 +121,10 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
   const page = await browser.newPage();
   await page.addScriptTag({ path: path.join(REPO_ROOT, "vendor/three/three.min.js") });
   await page.addScriptTag({ path: path.join(REPO_ROOT, "node_modules/three/examples/js/loaders/RGBELoader.js") });
-  await page.addScriptTag({ path: path.join(REPO_ROOT, "node_modules/three/examples/js/loaders/EXRLoader.js") });
+  // The site's vendored EXRLoader fork needs the fflate global for ZIP and
+  // PIZ compressed files; the npm copy has the same requirement, unmet here.
+  await page.addScriptTag({ path: path.join(REPO_ROOT, "vendor/three/fflate.min.js") });
+  await page.addScriptTag({ path: path.join(REPO_ROOT, "js/vendor/EXRLoader.js") });
   await page.addScriptTag({ path: path.join(REPO_ROOT, "vendor/utif/UTIF.js") });
 
   // The basis wasm encoder is only needed for the fallback path; skip its
@@ -139,6 +142,7 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
 
   for (const file of files) {
     const started = Date.now();
+    try {
     const bytes = await readFile(file.srcPath);
     const b64 = bytes.toString("base64");
 
@@ -320,6 +324,11 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
 
     const totalSeconds = (Date.now() - started) / 1000;
     results.push({ file, width, height, seconds: totalSeconds, outBytes: outBytes.length, dryRun: false });
+    } catch (err) {
+      // One bad file must not abort the folder; report it in the summary.
+      const firstLine = String(err && err.message ? err.message : err).split(/\r?\n/)[0];
+      results.push({ file, error: firstLine, seconds: (Date.now() - started) / 1000 });
+    }
   }
 
   await page.close();
@@ -412,7 +421,9 @@ async function main() {
   for (const r of allResults) {
     const rel = path.relative(folder, r.file.srcPath);
     const outRel = path.relative(folder, r.file.ktx2Path);
-    if (r.dryRun) {
+    if (r.error) {
+      console.log(`  [FAILED] ${rel}: ${r.error}`);
+    } else if (r.dryRun) {
       console.log(`  [dry-run] ${rel} -> ${outRel}  ${r.width}x${r.height}  ${r.seconds.toFixed(2)}s`);
     } else {
       console.log(`  ${rel} -> ${outRel}  ${r.width}x${r.height}  ${r.seconds.toFixed(2)}s  ${(r.outBytes / 1024).toFixed(1)} KiB`);
@@ -421,5 +432,7 @@ async function main() {
   }
 
   console.log("");
-  console.log(`done: ${allResults.length} texture(s) cooked${args.dryRun ? " (dry run, nothing written)" : `, ${(totalBytes / (1024 * 1024)).toFixed(2)} MiB total`}.`);
+  const failed = allResults.filter((r) => r.error).length;
+  if (failed) console.log(`${failed} texture(s) FAILED, see the lines above.`);
+  console.log(`done: ${allResults.length - failed} texture(s) cooked${args.dryRun ? " (dry run, nothing written)" : `, ${(totalBytes / (1024 * 1024)).toFixed(2)} MiB total`}.`);
 }
