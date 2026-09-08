@@ -546,6 +546,85 @@ const splitGlslArgs = argsText => {
   return out;
 };
 
+// Generic version of findGlslCalls: finds every CALL statement (any
+// function name), not just one. Used to trace height sources through
+// arbitrary helper calls (separate3, extract, nodegraph wrappers).
+const findAllCallStatements = text => {
+  const calls = [];
+  const idRe = /\b(\w+)\s*\(/g;
+  let m;
+  while ((m = idRe.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 8), m.index);
+    if (/\bvoid\s*$/.test(before)) continue; // definition, not a call
+    const openParenIdx = m.index + m[0].length - 1;
+    let depth = 1,
+      i = openParenIdx + 1;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth++;else if (text[i] === ')') depth--;
+      i++;
+    }
+    if (depth !== 0) continue;
+    const closeParenIdx = i - 1;
+    let j = i;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    if (text[j] !== ';') continue;
+    calls.push({
+      fnName: m[1],
+      argsText: text.slice(openParenIdx + 1, closeParenIdx),
+      start: m.index,
+      end: j + 1
+    });
+  }
+  return calls;
+};
+
+// Finds every "void NAME(params) { ... }" definition in GLSL source text
+// (generated shaders inline nodegraph bodies as plain functions, e.g.
+// NG_bump_vector3), including main() itself. Used to scope height-source
+// tracing per-function and to resolve a parameter back to its call-site
+// argument when a call site passes the height through a wrapper function.
+const findFunctionDefs = text => {
+  const defs = [];
+  const re = /\bvoid\s+(\w+)\s*\(/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const openParenIdx = m.index + m[0].length - 1;
+    let depth = 1,
+      i = openParenIdx + 1;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth++;else if (text[i] === ')') depth--;
+      i++;
+    }
+    if (depth !== 0) continue;
+    const paramsText = text.slice(openParenIdx + 1, i - 1);
+    let j = i;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    if (text[j] !== '{') continue; // not immediately followed by a body: not a definition we can scope
+    let bodyDepth = 1,
+      k = j + 1;
+    while (k < text.length && bodyDepth > 0) {
+      if (text[k] === '{') bodyDepth++;else if (text[k] === '}') bodyDepth--;
+      k++;
+    }
+    if (bodyDepth !== 0) continue;
+    const params = splitGlslArgs(paramsText).filter(p => p.length).map(p => {
+      const parts = p.trim().split(/\s+/);
+      return {
+        name: parts[parts.length - 1],
+        type: parts.slice(0, -1).join(' ')
+      };
+    });
+    defs.push({
+      name: m[1],
+      params,
+      bodyStart: j + 1,
+      bodyEnd: k - 1
+    });
+  }
+  return defs;
+};
+const findEnclosingFunction = (pos, funcDefs) => funcDefs.find(f => pos >= f.bodyStart && pos <= f.bodyEnd);
+
 // uv_scale/uv_offset arrive as UNIFORM NAMES in generated GLSL (MaterialX
 // never inlines them as literals), so "identity" is checked against the
 // uniform's own MaterialX-introspected default value (collectMxUniforms
@@ -580,54 +659,160 @@ void mx_heighttonormal_vector3_texel(sampler2D tex, vec2 uv, float scale, out ve
 }
 `;
 
+// Hex-tiled height sampling blends three rotated tile lookups (no single
+// texel grid exists to resample), so this keeps upstream's own
+// screen-derivative formula and only divides the gradient by N (the
+// sampler's largest texel dimension) for texel-unit semantics.
+const HEIGHTTONORMAL_HEXTILE_TEXEL_FN = `
+void mx_heighttonormal_vector3_hextile_texel(float height, sampler2D tex, vec2 texcoord, float scale, out vec3 result)
+{
+    float N = float(max(textureSize(tex, 0).x, textureSize(tex, 0).y));
+    vec2 dHdS = vec2(dFdx(height), dFdy(height)) * scale * (1.0 / 16.0) / N;
+    vec2 dUdS = vec2(dFdx(texcoord.x), dFdy(texcoord.x));
+    vec2 dVdS = vec2(dFdx(texcoord.y), dFdy(texcoord.y));
+    vec3 tangent = vec3(dUdS.x, dVdS.x, dHdS.x);
+    vec3 bitangent = vec3(dUdS.y, dVdS.y, dHdS.y);
+    vec3 n = cross(tangent, bitangent);
+    if (dot(n, n) < 1e-16) { n = vec3(0, 0, 1); }
+    else if (n.z < 0.0) { n *= -1.0; }
+    result = normalize(n) * 0.5 + 0.5;
+}
+`;
+
+// Functions whose call passes the source vector as its first arg and the
+// extracted channel(s) as later "out" args, e.g. NG_separate3_color3(in1,
+// outr, outg, outb) or an inlined extract nodegraph's NG_extract_*(in1,
+// index, out). Matched by generated-name prefix, case sensitive.
+const CHANNEL_EXTRACT_FN_RE = /^(NG_separate[234]_|NG_extract_|mx_extract_)/;
+
+// Traces `varName` (used as the H argument of a heighttonormal call, or
+// as an intermediate found along the way) back to a sampler-based source,
+// within a single function's body text (GLSL has no nested functions, so
+// a function's own body is a closed scope for local variables).
+// Handles direct mx_image_*/mx_hextiledimage_* results, simple aliasing
+// ("H = tmp;"), component extracts ("H = tmp.x;"/"H = tmp[0];"), and
+// separate3/extract-style calls. Crosses into the caller's scope when
+// `varName` turns out to be a formal parameter (see resolveAcrossCall
+// below), so a height traced through a nodegraph-turned-function (e.g.
+// NG_bump_vector3) still resolves. Returns { kind: 'image', sampler,
+// texcoord } | { kind: 'hextiled', sampler } | null.
+const traceHeightSource = (varName, funcDef, fs, allFuncs, introspected, notices, depth) => {
+  if (depth > 6) return null; // defensive cap, real chains are 2-3 deep
+  const body = fs.slice(funcDef.bodyStart, funcDef.bodyEnd + 1);
+
+  // 1) Direct sampler-backed result: mx_image_<type>(...) / mx_hextiledimage_<type>(...).
+  for (const call of findAllCallStatements(body)) {
+    const args = splitGlslArgs(call.argsText);
+    const isImage = /^mx_image_(float|color3|color4|vector2|vector3|vector4)$/.test(call.fnName);
+    const isHextiled = /^mx_hextiledimage_(color3|color4)$/.test(call.fnName);
+    if (!isImage && !isHextiled) continue;
+    const resultVar = args[args.length - 1];
+    if (resultVar !== varName) continue;
+    if (isImage) {
+      if (args.length < 13) continue;
+      const sampler = args[0],
+        texcoord = args[3],
+        uvScale = args[10],
+        uvOffset = args[11];
+      if (!isIdentityVec2Arg(uvScale, introspected, 1, 1) || !isIdentityVec2Arg(uvOffset, introspected, 0, 0)) {
+        notices.push(`heighttonormal: skipped a call site (non-identity uv_scale/uv_offset on "${resultVar}")`);
+        return null;
+      }
+      return {
+        kind: 'image',
+        sampler,
+        texcoord
+      };
+    }
+    return {
+      kind: 'hextiled',
+      sampler: args[0]
+    };
+  }
+
+  // 2) Simple alias / component extract: "[type] H = X;" / "H = X.c;" / "H = X[n];".
+  const aliasRe = new RegExp('(?:^|[;{}\\s])(?:\\w+\\s+)?' + varName + '\\s*=\\s*([A-Za-z_]\\w*)\\s*(?:\\.\\w+|\\[\\s*\\d+\\s*\\])?\\s*;');
+  const aliasMatch = body.match(aliasRe);
+  if (aliasMatch && aliasMatch[1] !== varName) {
+    return traceHeightSource(aliasMatch[1], funcDef, fs, allFuncs, introspected, notices, depth + 1);
+  }
+
+  // 3) separate3/extract-style calls: varName is one of the output args.
+  for (const call of findAllCallStatements(body)) {
+    if (!CHANNEL_EXTRACT_FN_RE.test(call.fnName)) continue;
+    const args = splitGlslArgs(call.argsText);
+    if (args.length < 2 || !args.slice(1).includes(varName)) continue;
+    return traceHeightSource(args[0], funcDef, fs, allFuncs, introspected, notices, depth + 1);
+  }
+
+  // 4) varName is a formal parameter of this function: follow its ONLY
+  // call site back into the caller's scope. Skipped (ambiguous) if the
+  // function is called from more than one place, or the actual argument
+  // isn't a bare variable, since it isn't safe to rewrite a SHARED
+  // function body for just one of its callers.
+  const paramIdx = funcDef.params.findIndex(p => p.name === varName);
+  if (paramIdx === -1) return null;
+  const callSites = findGlslCalls(fs, funcDef.name);
+  if (callSites.length !== 1) return null;
+  const callerArgs = splitGlslArgs(callSites[0].argsText);
+  const actualArg = callerArgs[paramIdx] && callerArgs[paramIdx].trim();
+  if (!actualArg || !/^\w+$/.test(actualArg)) return null;
+  const callerFunc = findEnclosingFunction(callSites[0].start, allFuncs);
+  if (!callerFunc) return null;
+  return traceHeightSource(actualArg, callerFunc, fs, allFuncs, introspected, notices, depth + 1);
+};
+
 // Experimental opt-in (see HEIGHT_TO_NORMAL_TEXEL above): rewrites
-// mx_heighttonormal_vector3(H, S, T, OUT) call sites whose height H was
-// assigned by an earlier mx_image_float(sampler, ..., texcoord, ...,
-// uv_scale, uv_offset, H) call in the same fragment source, to sample a
-// texel-space gradient off the same sampler/uv instead. Call sites whose
-// height doesn't trace back to a plain image sample, or whose uv_scale/
-// uv_offset aren't identity, are left untouched (upstream behavior).
+// mx_heighttonormal_vector3(H, S, T, OUT) call sites whose height H
+// traces back (through assignments, component extracts, separate/extract
+// chains, and nodegraph-turned-function parameters) to a sampler-based
+// source, to a texel-space gradient instead. A plain mx_image_* source
+// resamples the sampler directly; a hextiledimage source (three rotated
+// tile blends, no single texel grid) keeps upstream's own screen-
+// derivative formula but scales it by 1/N instead. Anything that doesn't
+// trace to a sampler, or whose uv_scale/uv_offset aren't identity, is
+// left untouched (upstream behavior).
 const applyHeightToNormalTexel = (fs, notices, introspected) => {
   if (!getHeightToNormalTexel()) return fs;
-  const heightSources = new Map(); // height var name -> { sampler, texcoord }
-  for (const call of findGlslCalls(fs, 'mx_image_float')) {
-    const args = splitGlslArgs(call.argsText);
-    if (args.length < 13) continue;
-    const [sampler,,, texcoord,,,,,,, uvScale, uvOffset, resultVar] = args;
-    if (!isIdentityVec2Arg(uvScale, introspected, 1, 1) || !isIdentityVec2Arg(uvOffset, introspected, 0, 0)) {
-      notices.push(`heighttonormal: skipped a call site (non-identity uv_scale/uv_offset on "${resultVar}")`);
-      continue;
-    }
-    heightSources.set(resultVar, {
-      sampler,
-      texcoord
-    });
-  }
-  if (!heightSources.size) return fs;
+  const allFuncs = findFunctionDefs(fs);
   const h2nCalls = findGlslCalls(fs, 'mx_heighttonormal_vector3');
-  let rewritten = 0;
+  if (!h2nCalls.length) return fs;
+  let rewrittenImage = 0,
+    rewrittenHextile = 0;
   // Rebuild right-to-left so earlier offsets stay valid as later (later
   // in text order, processed first here) spans are replaced.
   for (let k = h2nCalls.length - 1; k >= 0; k--) {
     const call = h2nCalls[k];
     const args = splitGlslArgs(call.argsText);
     if (args.length !== 4) continue;
-    const [heightVar, scale,, outVar] = args;
-    const src = heightSources.get(heightVar);
+    const [heightVar, scale, texcoord, outVar] = args;
+    const enclosing = findEnclosingFunction(call.start, allFuncs);
+    if (!enclosing) continue;
+    const src = traceHeightSource(heightVar, enclosing, fs, allFuncs, introspected, notices, 0);
     if (!src) continue;
-    rewritten++;
-    const replacement = `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
+    let replacement;
+    if (src.kind === 'image') {
+      replacement = `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
+      rewrittenImage++;
+    } else {
+      replacement = `mx_heighttonormal_vector3_hextile_texel(${heightVar}, ${src.sampler}, ${texcoord}, ${scale}, ${outVar});`;
+      rewrittenHextile++;
+    }
     fs = fs.slice(0, call.start) + replacement + fs.slice(call.end);
   }
+  const rewritten = rewrittenImage + rewrittenHextile;
   if (rewritten > 0) {
     // Insert after any leading "precision ...;" directives, not at
     // position 0: ESSL requires those before the first float/int/
-    // sampler use, and our injected function has all three.
+    // sampler use, and our injected functions have all three.
     let insertAt = 0;
     const precisionRe = /^precision\s+\w+\s+\w+\s*;\s*$/gm;
     let pm;
     while ((pm = precisionRe.exec(fs)) !== null) insertAt = pm.index + pm[0].length;
-    fs = fs.slice(0, insertAt) + '\n' + HEIGHTTONORMAL_TEXEL_FN + fs.slice(insertAt);
+    let injected = '';
+    if (rewrittenImage) injected += HEIGHTTONORMAL_TEXEL_FN;
+    if (rewrittenHextile) injected += HEIGHTTONORMAL_HEXTILE_TEXEL_FN;
+    fs = fs.slice(0, insertAt) + '\n' + injected + fs.slice(insertAt);
     notices.push(`heighttonormal: ${rewritten} call(s) use texel-space gradients (experimental)`);
   }
   return fs;
