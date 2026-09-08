@@ -498,6 +498,75 @@ function readPrimAttrMap(api, root, primPath) {
   return map;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Finds the `{ ... }` body of the first `def "name" ... {` or
+// `over "name" ... {` block in a USD text layer, matching balanced braces
+// (nested prim blocks included). Returns null when no such block exists.
+function findNamedBlockBody(usdaText, name) {
+  const openRe = new RegExp('(?:\\bdef\\b|\\bover\\b)\\s+(?:\\w+\\s+)?"' + escapeRegExp(name) + '"[^{]*\\{');
+  const match = openRe.exec(usdaText);
+  if (!match) return null;
+  const braceStart = match.index + match[0].length - 1;
+  let depth = 0;
+  for (let i = braceStart; i < usdaText.length; i++) {
+    const c = usdaText[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return usdaText.slice(braceStart + 1, i);
+    }
+  }
+  return null;
+}
+
+// `over`/`def` prim names declared anywhere inside a block body, regardless
+// of nesting depth (a shader-node override sits one level under its
+// Material's own `over` block, but this stays correct if a DCC nests it
+// deeper).
+function collectNamedChildren(blockBody) {
+  const names = new Set();
+  const re = /\b(?:def|over)\s+(?:\w+\s+)?"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(blockBody))) names.add(m[1]);
+  return names;
+}
+
+// USD `over` blocks under a Material prim (asset file swaps, place2d scale,
+// glass parameters, etc.) are authored on the material's descendant shader
+// prims. getSceneGraph only lists prims with a resolved type, so an
+// override-only prim (no matching `def` anywhere in composition) never
+// appears there even though getPrimAttributes resolves it directly once its
+// path is known; child names are instead found by scanning the uploaded USD
+// text layers for the Material prim's own named block. The Scene applies
+// the composed attribute values onto the resolved MaterialX document.
+function collectMaterialOverrides(api, root, usdaTexts, materialPath) {
+  const overrides = [];
+  if (!materialPath) return overrides;
+  const leafName = materialPath.split("/").filter(Boolean).pop();
+  if (!leafName) return overrides;
+  const childNames = new Set();
+  for (const usdaText of usdaTexts) {
+    const body = findNamedBlockBody(usdaText, leafName);
+    if (!body) continue;
+    for (const name of collectNamedChildren(body)) childNames.add(name);
+  }
+  const readInto = (primPath, node) => {
+    const attrMap = readPrimAttrMap(api, root, primPath);
+    for (const [name, record] of attrMap) {
+      if (!name.startsWith("inputs:")) continue;
+      const valueText = text(record?.value);
+      if (!valueText) continue; // metadata-only attribute, no authored value
+      overrides.push({ node, input: name.slice("inputs:".length), value: valueText });
+    }
+  };
+  readInto(materialPath, null);
+  for (const name of childNames) readInto(materialPath + "/" + name, name);
+  return overrides;
+}
+
 function collectCameras(api, root, graph, warn) {
   const cameraEntries = arrayItems(graph).filter(entry => {
     if ((text(entry?.typeName) ?? "").toLowerCase() !== "camera") return false;
@@ -1025,6 +1094,12 @@ async function load(request) {
   const fileTotal = (request.files ?? []).filter(file => file?.path).length;
   postMessage({ id: request.id, type: "progress", value: { phase: "worker", done: 0, total: fileTotal, fraction: 0.05, message: "Preparing input files" } });
   let loadedFiles = 0;
+  // Plain-text USD layers, kept so USD override `over` blocks can be found
+  // by name: getSceneGraph only lists prims with a resolved type, but an
+  // override-only child prim (no matching `def` anywhere) has none and
+  // never appears there, even though getPrimAttributes still resolves it
+  // directly once its path is known.
+  const usdaTexts = [];
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
     const source = typeof file.data?.arrayBuffer === "function"
@@ -1034,6 +1109,9 @@ async function load(request) {
       ? new Uint8Array(source)
       : arrayCopy(source, Uint8Array);
     if (!data) continue;
+    if (/\.usda?$/i.test(String(file.path))) {
+      try { usdaTexts.push(new TextDecoder().decode(data)); } catch { /* binary-ish, skip */ }
+    }
     api.createDataFile(normalizePath(file.path), data);
     loadedFiles++;
     postMessage({ id: request.id, type: "progress", value: {
@@ -1194,6 +1272,10 @@ async function load(request) {
   const cameraWarnings = [];
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras);
+  for (const material of result.materials) {
+    const overrides = collectMaterialOverrides(api, root, usdaTexts, material.path);
+    if (overrides.length) material.overrides = overrides;
+  }
   result.warnings.push(...cameraWarnings);
   result.warnings.push(...normalRecoveryWarnings);
   if (drawSnapshot.warnings?.length) result.warnings.push(...drawSnapshot.warnings);
