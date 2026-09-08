@@ -96,6 +96,10 @@ const COPIES = [
   { pkg: "jszip", src: "dist/jszip.min.js", dest: "jszip/jszip.min.js" },
 
   { pkg: "utif", src: "UTIF.js", dest: "utif/UTIF.js" },
+  // pako inflate-only UMD build: UTIF.js's compression-8 (Deflate/old-Deflate)
+  // path calls pako.inflate at runtime; the full pako.min.js also bundles an
+  // unused deflate encoder, so only the smaller inflate-only build is vendored.
+  { pkg: "pako", src: "dist/pako_inflate.min.js", dest: "pako/pako_inflate.min.js" },
 
   { pkg: "reactflow", src: "dist/style.css", dest: "reactflow/style.css" },
   { pkg: "reactflow", src: "dist/umd/index.js", dest: "reactflow/index.js" },
@@ -119,6 +123,7 @@ const COPIES = [
   { pkg: "katex", src: "LICENSE", dest: "katex/LICENSE.txt" },
   { pkg: "jszip", src: "LICENSE.markdown", dest: "jszip/LICENSE.markdown" },
   { pkg: "utif", src: "LICENSE", dest: "utif/LICENSE.txt" },
+  { pkg: "pako", src: "LICENSE", dest: "pako/LICENSE.txt" },
   { pkg: "reactflow", src: "LICENSE", dest: "reactflow/LICENSE.txt" },
   { pkg: "dagre", src: "LICENSE", dest: "dagre/LICENSE.txt" },
   { pkg: "@highlightjs/cdn-assets", src: "LICENSE", dest: "highlightjs/LICENSE.txt" },

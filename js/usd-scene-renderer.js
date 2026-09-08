@@ -514,7 +514,7 @@ const createMtlxSceneView = async ({
             if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob, null, path);
             else if (ext === 'exr') tex = await window.loadExrTexture(blob);
             else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
-            else tex = await window.loadTifTexture(blob);
+            else tex = await window.loadTifTexture(blob, path);
         } catch (error) {
             if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== path) {
                 const notice = 'KTX2 texture ' + path + ' is not a multiple of 4; falling back to ' + fallback.path;
@@ -533,6 +533,8 @@ const createMtlxSceneView = async ({
                     return { tex: boundedTex, bytes };
                 } catch (e) { return null; }
             }
+            const warning = (error && error.message) || ('MaterialX texture decode failed for ' + (path || '(unknown)'));
+            if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
             return null;
         }
         if (!tex || !tex.image) {

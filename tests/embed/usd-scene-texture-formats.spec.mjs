@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from './lib/test-base.mjs';
 import { decodePNG } from './lib/png.mjs';
-import { makeSolidTif } from './lib/image-fixtures.mjs';
+import { makeSolidTif, makeDeflateTif, makeBogusCompressionTif } from './lib/image-fixtures.mjs';
 import { makeSolidExr } from './lib/env-fixtures.mjs';
 
 const fixtureRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'usd-scene');
@@ -72,6 +72,67 @@ test('@scene EXR and TIF ordinary textures decode instead of falling back to the
   expect(Math.abs(rightMean.r - EXR_RGB_255[0])).toBeLessThan(30);
   expect(Math.abs(rightMean.g - EXR_RGB_255[1])).toBeLessThan(30);
   expect(Math.abs(rightMean.b - EXR_RGB_255[2])).toBeLessThan(30);
+});
+
+test('@scene old-Deflate (compression 32946) TIF decodes its color', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+
+  await page.getByTestId('usd-scene-file-picker').setInputFiles([
+    fixtureFile('texture-formats-root.usda'),
+    fixtureFile('texture-formats-tif.mtlx'),
+    fixtureFile('texture-formats-exr.mtlx'),
+    { name: 'quadA.tif', mimeType: 'image/tiff', buffer: makeDeflateTif(4, 4, TIF_RGB) },
+    { name: 'quadB.exr', mimeType: 'image/x-exr', buffer: makeSolidExr(4, 4, EXR_RGBA) },
+  ]);
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
+
+  const warningsText = (await page.getByTestId('usd-material-warnings').allTextContents()).join('\n');
+  expect(warningsText).not.toContain('TIF decode unsupported');
+
+  const sidebar = page.getByTestId('usd-scene-sidebar');
+  const backdrop = sidebar.getByRole('combobox').last();
+  await backdrop.click();
+  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await page.waitForTimeout(150);
+
+  const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
+  const png = decodePNG(await canvas.screenshot());
+  const bg = png.getPixel(0, 0);
+  const leftMean = meanOfRegion(png, 0, Math.floor(png.width / 2), 0, png.height, bg);
+  expect(leftMean).toBeTruthy();
+  expect(Math.abs(leftMean.r - TIF_RGB[0])).toBeLessThan(30);
+  expect(Math.abs(leftMean.g - TIF_RGB[1])).toBeLessThan(30);
+  expect(Math.abs(leftMean.b - TIF_RGB[2])).toBeLessThan(30);
+});
+
+test('@scene a TIF with an unsupported compression code warns instead of rendering black', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+
+  await page.getByTestId('usd-scene-file-picker').setInputFiles([
+    fixtureFile('texture-formats-root.usda'),
+    fixtureFile('texture-formats-tif.mtlx'),
+    fixtureFile('texture-formats-exr.mtlx'),
+    { name: 'quadA.tif', mimeType: 'image/tiff', buffer: makeBogusCompressionTif(4, 4) },
+    { name: 'quadB.exr', mimeType: 'image/x-exr', buffer: makeSolidExr(4, 4, EXR_RGBA) },
+  ]);
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+
+  const warningsText = (await page.getByTestId('usd-material-warnings').allTextContents()).join('\n');
+  expect(warningsText).toContain('TIF decode unsupported');
+
+  const sidebar = page.getByTestId('usd-scene-sidebar');
+  const backdrop = sidebar.getByRole('combobox').last();
+  await backdrop.click();
+  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await page.waitForTimeout(150);
+
+  const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
+  const png = decodePNG(await canvas.screenshot());
+  const leftPixel = png.getPixel(Math.floor(png.width / 4), Math.floor(png.height / 2));
+  expect(leftPixel.r > 5 || leftPixel.g > 5 || leftPixel.b > 5).toBe(true);
 });
 
 // Runs inside the page. Only "_file" filename uniforms are a UDIM tile
