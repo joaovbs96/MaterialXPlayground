@@ -153,8 +153,9 @@
             // (radius / 2) instead of radius / 8, matching the Viewer's ratio.
             studioScale = radius / 2;
             // Floor sits just under the lowest point; 3 percent of the extent
-            // left a visible gap (3 cm on a 1 m statue), same rule as line 172.
-            const floorGap = Math.max(0.01, radius * 0.003);
+            // left a visible gap (3 cm on a 1 m statue); no absolute minimum, since
+            // 0.01 is a whole centimetre on a metre-scale stage.
+            const floorGap = radius * 0.003;
             if (studioMesh) {
                 studioMesh.scale.setScalar(studioScale);
                 studioMesh.position.set(center.x, bounds.min.y - floorGap, center.z);
@@ -172,8 +173,8 @@
             const distance = Math.max(10, far * 0.45);
             environmentSky.scale.setScalar(distance);
             environmentSky.position.copy(camera.position);
-            if (studioMesh && bounds) studioMesh.position.y = bounds.min.y - Math.max(0.01, Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003);
-            if (studioCatcher && bounds) studioCatcher.position.y = bounds.min.y - Math.max(0.01, Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003);
+            if (studioMesh && bounds) studioMesh.position.y = bounds.min.y - Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003;
+            if (studioCatcher && bounds) studioCatcher.position.y = bounds.min.y - Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003;
         };
         // Both updateBounds and update keep studioMesh/studioCatcher in sync
         // at the same world Y, so reading either back gives the floor's
