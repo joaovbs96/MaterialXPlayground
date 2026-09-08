@@ -16,6 +16,11 @@ import { decodePNG } from './lib/png.mjs';
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const FIXTURE_MTLX = fs.readFileSync(path.join(__dirname, 'fixtures', 'heighttonormal.mtlx'), 'utf8');
+// hexbump: bump node fed by hextiledimage->separate3 (Stirling's actual
+// chain shape). extractImg: plain heighttonormal fed by extract(image
+// color3), the other new tracing case (channel extract off a plain image).
+const HEXBUMP_MTLX = fs.readFileSync(path.join(__dirname, 'fixtures', 'heighttonormal-hexbump.mtlx'), 'utf8');
+const EXTRACT_MTLX = fs.readFileSync(path.join(__dirname, 'fixtures', 'heighttonormal-extract.mtlx'), 'utf8');
 
 // --- minimal 8-bit RGBA PNG encoder (mirrors tests/embed/ktx2.spec.mjs) ---
 function crc32(buf) {
@@ -102,9 +107,9 @@ async function gotoViewerWithFlag(page, embedURL, flagOn, geom) {
 // then an on-load left the SECOND load compiled against the FIRST value
 // under some navigation orderings (observed empirically as identical
 // off/on screenshots). A new browser context sidesteps that entirely.
-async function loadHeightfieldAndScreenshot(browser, embedURL, flagOn, pngBuffer, geom) {
+async function loadHeightfieldAndScreenshot(browser, embedURL, flagOn, pngBuffer, geom, mtlxText = FIXTURE_MTLX) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-h2n-spec-'));
-  fs.writeFileSync(path.join(dir, 'heighttonormal.mtlx'), FIXTURE_MTLX);
+  fs.writeFileSync(path.join(dir, 'heighttonormal.mtlx'), mtlxText);
   fs.writeFileSync(path.join(dir, 'heightfield.png'), pngBuffer);
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -193,5 +198,33 @@ test.describe('opt-in heighttonormal texel-space gradient', () => {
     const onSign = Math.sign(onHalves.left - onHalves.right);
     expect(Math.abs(onHalves.left - onHalves.right)).toBeGreaterThan(1);
     expect(onSign).toBe(offSign);
+  });
+
+  // Stirling's real bump chain: bump (NG_bump_vector3) fed by
+  // hextiledimage->separate3, which the plain image-based tracing above
+  // never matches (js/mtlx-engine.js traceHeightSource's hextiled branch).
+  test('collapses speckle on a hextiled-image bump chain', async ({ browser, embedURL }) => {
+    const noisePng = noiseHeightfieldPng(1024);
+    const off = await loadHeightfieldAndScreenshot(browser, embedURL, false, noisePng, 'sphere', HEXBUMP_MTLX);
+    const on = await loadHeightfieldAndScreenshot(browser, embedURL, true, noisePng, 'sphere', HEXBUMP_MTLX);
+    // Measured empirically on this exact setup: off ~0.05-0.09, on ~0.
+    const offFraction = speckleFraction(off, 200, 6);
+    const onFraction = speckleFraction(on, 200, 6);
+    expect(offFraction).toBeGreaterThan(0.03);
+    expect(onFraction).toBeLessThan(0.01);
+  });
+
+  // A plain heighttonormal fed by extract(image color3): the channel-
+  // extract chain (no separate3, no nodegraph wrapper), verifying the
+  // "H = tmp[0]"/mx_extract_color3-style tracing on its own.
+  test('collapses speckle on an extract(image) height chain', async ({ browser, embedURL }) => {
+    const noisePng = noiseHeightfieldPng(1024);
+    const off = await loadHeightfieldAndScreenshot(browser, embedURL, false, noisePng, 'sphere', EXTRACT_MTLX);
+    const on = await loadHeightfieldAndScreenshot(browser, embedURL, true, noisePng, 'sphere', EXTRACT_MTLX);
+    // Measured empirically on this exact setup: off ~0.05-0.09, on ~0.
+    const offFraction = speckleFraction(off, 200, 6);
+    const onFraction = speckleFraction(on, 200, 6);
+    expect(offFraction).toBeGreaterThan(0.03);
+    expect(onFraction).toBeLessThan(0.01);
   });
 });
