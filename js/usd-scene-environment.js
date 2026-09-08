@@ -152,13 +152,16 @@
             // scale 1, so treat the scene's largest extent as that diameter
             // (radius / 2) instead of radius / 8, matching the Viewer's ratio.
             studioScale = radius / 2;
+            // Floor sits just under the lowest point; 3 percent of the extent
+            // left a visible gap (3 cm on a 1 m statue), same rule as line 172.
+            const floorGap = Math.max(0.01, radius * 0.003);
             if (studioMesh) {
                 studioMesh.scale.setScalar(studioScale);
-                studioMesh.position.set(center.x, bounds.min.y - radius * 0.03, center.z);
+                studioMesh.position.set(center.x, bounds.min.y - floorGap, center.z);
             }
             if (studioCatcher) {
                 studioCatcher.scale.setScalar(studioScale);
-                studioCatcher.position.set(center.x, bounds.min.y - radius * 0.03, center.z);
+                studioCatcher.position.set(center.x, bounds.min.y - floorGap, center.z);
             }
             updateLight();
             environmentSky.position.copy(center);
