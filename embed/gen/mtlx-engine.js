@@ -2050,10 +2050,12 @@ const rebindFilenameDefault = (uniforms, defaultUniformName, type, value) => {
 };
 
 // Configure a user-loaded texture the way the generated shaders expect
-// to sample a `filename` input: repeat wrapping, no flipY.
+// to sample a `filename` input: repeat wrapping, no flipY, anisotropic
+// filtering (three clamps to the device max at upload).
 const configureLoadedTexture = t => {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.flipY = false;
+  t.anisotropy = 8;
   t.needsUpdate = true;
   return t;
 };
