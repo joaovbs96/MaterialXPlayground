@@ -212,6 +212,18 @@
       "bytes": 1107
     },
     {
+      "path": "pako/pako_inflate.min.js",
+      "source": "pako@1.0.11",
+      "sha256": "2ca27e9a8dae569cdeac42752ed1aed1afeff7f19282d3cc12c0aaa54a08bc04",
+      "bytes": 22682
+    },
+    {
+      "path": "pako/LICENSE.txt",
+      "source": "pako@1.0.11",
+      "sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539",
+      "bytes": 1104
+    },
+    {
       "path": "react/LICENSE.txt",
       "source": "react@18.3.1",
       "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
