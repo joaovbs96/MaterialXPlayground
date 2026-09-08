@@ -1284,27 +1284,39 @@ const capKtx2MipLevels = (tex, maxSize) => {
   return tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0);
 };
 
+// Compressions UTIF.js actually decodes (see vendor/utif/UTIF.js decode._decompress).
+// 32946 (old Deflate) is not in that list but is the same zlib stream as 8,
+// so it is remapped below before decodeImage runs.
+const UTIF_SUPPORTED_COMPRESSION = new Set([1, 3, 4, 5, 6, 7, 8, 32767, 32773]);
+
 // Parses a dropped .tif/.tiff Blob via UTIF.js into an 8bpc RGBA texture.
-// Baseline decode only (8/16-bit, common compressions); exotic TIFFs fall
-// back to null like the loaders above, keeping the node default color.
-const loadTifTexture = async blob => {
+// Baseline decode only (8/16-bit, common compressions); exotic TIFFs throw
+// so callers can warn instead of silently keeping an all-zero texture.
+const loadTifTexture = async (blob, path) => {
   if (typeof UTIF === 'undefined') {
     console.warn('mtlx-engine: UTIF unavailable (script blocked/offline); .tif textures keep the node default color.');
     return null;
   }
-  try {
-    const buf = await blob.arrayBuffer();
-    const ifds = UTIF.decode(buf);
-    if (!ifds || !ifds.length) return null;
-    UTIF.decodeImage(buf, ifds[0]);
-    const rgba = UTIF.toRGBA8(ifds[0]);
-    const tex = new THREE.DataTexture(new Uint8Array(rgba), ifds[0].width, ifds[0].height, THREE.RGBAFormat, THREE.UnsignedByteType);
-    tex.minFilter = tex.magFilter = THREE.LinearFilter;
-    return tex;
-  } catch (e) {
-    console.warn('mtlx-engine: failed to parse dropped .tif texture, keeping the node default color:', e);
-    return null;
+  const label = path || '(unknown)';
+  const buf = await blob.arrayBuffer();
+  const ifds = UTIF.decode(buf);
+  if (!ifds || !ifds.length) return null;
+  const ifd = ifds[0];
+  const compression = ifd.t259 && ifd.t259[0];
+  if (compression === 32946) ifd.t259[0] = 8; // old Deflate: same zlib stream, UTIF applies the predictor itself
+  UTIF.decodeImage(buf, ifd);
+  const rgba = UTIF.toRGBA8(ifd);
+  if (!UTIF_SUPPORTED_COMPRESSION.has(compression) && compression !== 32946) {
+    throw new Error('TIF decode unsupported (compression ' + compression + ') for ' + label);
   }
+  let allZero = true;
+  for (let i = 0; i < rgba.length - 2 && allZero; i += 97) {
+    if (rgba[i] !== 0 || rgba[i + 1] !== 0 || rgba[i + 2] !== 0) allZero = false;
+  }
+  if (allZero) throw new Error('TIF decode unsupported (compression ' + compression + ') for ' + label);
+  const tex = new THREE.DataTexture(new Uint8Array(rgba), ifd.width, ifd.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  return tex;
 };
 
 // Loads the original (non-.ktx2) source for a resolved hit, used when a
@@ -1314,7 +1326,7 @@ const loadTextureForHit = async (hit, blob, view) => {
   const ext = (hit.key.split('.').pop() || '').toLowerCase();
   if (ext === 'exr') return loadExrTexture(blob);
   if (ext === 'hdr') return loadHdrTexture(blob);
-  if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob);
+  if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob, hit.key);
   if (view && view.maxTextureSize && typeof createImageBitmap === 'function') {
     return loadBoundedBitmapTexture(blob, Number(view.maxTextureSize));
   }
@@ -1679,7 +1691,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         });
         pending.push(pendingLoad);
       } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
-        const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
+        const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
         const pendingLoad = parsePromise.then(tex => {
           if (!tex) return; // unsupported/corrupt, the node default color stands
           configureLoadedTexture(tex);
@@ -1690,9 +1702,13 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
           cache.set(cacheKey, tex);
           if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
           if (onBound) onBound();
-        }, error => ({
-          error
-        }));
+        }, error => {
+          console.warn('mtlx-engine: texture decode failed for ' + hit.key + ', keeping the node default color:', error);
+          missing.push(ref);
+          return {
+            error
+          };
+        });
         pending.push(pendingLoad);
       } else if (view.maxTextureSize) {
         const startBoundedLoad = () => {
