@@ -13,6 +13,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [in progress] **KTX2 compressed textures**: GPU-compressed textures cut memory use by about four times, so large scenes can load at full resolution. Includes a script that converts a folder of textures once. Branch `ktx2-textures`.
 - [planned] **Displacement**: render MaterialX displacement by baking it to a texture and moving the mesh vertices on the CPU, in both viewers.
 - [planned] **MaterialXView parity**: close the known differences to the reference MaterialX viewer: per-image sampler settings, shadows, lights authored in the document, document validation, mipmaps on float textures, extra vertex streams.
+- [planned] **Prefiltered environment reflections**: replace per-pixel importance sampling of the environment with a GGX prefiltered mip chain, as MaterialXView does, so smooth surfaces stop sparkling under high contrast HDRIs.
 - [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces, type mismatches and mix weights outside 0 to 1 instead of letting MaterialX drop them silently.
 - [planned] **Correct transparency blending**: blend transparent layers in linear light instead of display space.
 - [planned] **Faster, quieter texture loading**: decode textures off the main thread, keep objects neutral until their textures are ready, show one progress line, allow cancelling.
