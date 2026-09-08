@@ -1153,6 +1153,8 @@ async function load(request) {
   // never appears there, even though getPrimAttributes still resolves it
   // directly once its path is known.
   const usdaTexts = [];
+  const OVERRIDE_SCAN_MAX_BYTES = 32 * 1024 * 1024;
+  const scanWarnings = [];
   // Uploaded .mtlx file text, keyed by normalized path, so a material whose
   // native materialX.data payload is unavailable can still fall back to its
   // sourceAsset's own uploaded bytes when enumerating override candidates.
@@ -1166,9 +1168,17 @@ async function load(request) {
       ? new Uint8Array(source)
       : arrayCopy(source, Uint8Array);
     if (!data) continue;
+    // Only text layers (#usda magic) under the cap are scanned; a binary
+    // crate (PXR-USDC) decoded as a string can exceed V8's limit and kill
+    // the tab before the stage loads (1.86 GB Lion crate, 2026-09-08).
     if (/\.usda?$/i.test(String(file.path))) {
-      try { usdaTexts.push(new TextDecoder().decode(data)); } catch { /* binary-ish, skip */ }
-    } else if (/\.mtlx$/i.test(String(file.path))) {
+      const isTextLayer = data.length >= 6 && data[0] === 0x23 && data[1] === 0x75 && data[2] === 0x73 && data[3] === 0x64 && data[4] === 0x61;
+      if (isTextLayer && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
+        try { usdaTexts.push(new TextDecoder().decode(data)); } catch { /* skip */ }
+      } else if (isTextLayer) {
+        scanWarnings.push(`Override scan skipped for ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
+      }
+    } else if (/\.mtlx$/i.test(String(file.path)) && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
       try { mtlxFileTextsByPath.set(normalizePath(file.path), new TextDecoder().decode(data)); } catch { /* skip */ }
     }
     api.createDataFile(normalizePath(file.path), data);
@@ -1337,6 +1347,7 @@ async function load(request) {
     if (overrides.length) material.overrides = overrides;
   }
   result.warnings.push(...cameraWarnings);
+  result.warnings.push(...scanWarnings);
   result.warnings.push(...normalRecoveryWarnings);
   if (drawSnapshot.warnings?.length) result.warnings.push(...drawSnapshot.warnings);
   const extractedOwners = new Set(result.meshes.map(mesh => mesh.instanceOwnerPath).filter(Boolean));
