@@ -502,21 +502,30 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Finds the `{ ... }` body of the first `def "name" ... {` or
-// `over "name" ... {` block in a USD text layer, matching balanced braces
-// (nested prim blocks included). Returns null when no such block exists.
-function findNamedBlockBody(usdaText, name) {
-  const openRe = new RegExp('(?:\\bdef\\b|\\bover\\b)\\s+(?:\\w+\\s+)?"' + escapeRegExp(name) + '"[^{]*\\{');
-  const match = openRe.exec(usdaText);
-  if (!match) return null;
-  const braceStart = match.index + match[0].length - 1;
-  let depth = 0;
-  for (let i = braceStart; i < usdaText.length; i++) {
-    const c = usdaText[i];
-    if (c === "{") depth++;
-    else if (c === "}") {
-      depth--;
-      if (depth === 0) return usdaText.slice(braceStart + 1, i);
+// Finds the `{ ... }` body of a `def "name" ... {` or `over "name" ... {`
+// block in a USD text layer (balanced braces, nested prim blocks included),
+// trying every occurrence of the name in turn and accepting only a body
+// that actually authors at least one `inputs:` attribute. This is tolerant
+// of an unrelated prim (e.g. a Mesh) sharing the Material's leaf name: such
+// a block has no `inputs:` lines and is skipped in favor of the real one.
+function findNamedBlockBodyWithInputs(usdaText, name) {
+  const openRe = new RegExp('(?:\\bdef\\b|\\bover\\b)\\s+(?:\\w+\\s+)?"' + escapeRegExp(name) + '"[^{]*\\{', "g");
+  let match;
+  while ((match = openRe.exec(usdaText))) {
+    const braceStart = match.index + match[0].length - 1;
+    let depth = 0;
+    for (let i = braceStart; i < usdaText.length; i++) {
+      const c = usdaText[i];
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          const body = usdaText.slice(braceStart + 1, i);
+          if (/\binputs:/.test(body)) return body;
+          openRe.lastIndex = i + 1;
+          break;
+        }
+      }
     }
   }
   return null;
@@ -534,22 +543,66 @@ function collectNamedChildren(blockBody) {
   return names;
 }
 
+// Element names declared in a MaterialX document's XML text: any tag with a
+// `name="..."` attribute (nodes, nodegraph children, the surfacematerial),
+// excluding structural elements (`materialx`, and an element's own `input`/
+// `output`/`token`/`member` children, which are not themselves override
+// targets).
+const MTLX_NON_TARGET_TAGS = new Set(["materialx", "input", "output", "token", "member"]);
+function collectMtlxElementNames(mtlxText) {
+  const names = new Set();
+  const re = /<([A-Za-z_][\w.]*)\b[^>]*\bname\s*=\s*"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(mtlxText))) {
+    if (MTLX_NON_TARGET_TAGS.has(m[1])) continue;
+    names.add(m[2]);
+  }
+  return names;
+}
+
+// Text of the MaterialX document(s) relevant to one material record: the
+// native inline materialX.data payload when present (the resolved network
+// actually selected, includes composed from a usdMtlx nodegraph), plus the
+// uploaded sourceAsset .mtlx file's own text as a fallback/second source.
+function decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath) {
+  const texts = [];
+  try {
+    const data = material?.materialX?.data;
+    if (data) texts.push(new TextDecoder().decode(data));
+  } catch { /* not text, skip */ }
+  const sourceAsset = text(material?.sourceAsset) || text(material?.materialX?.path);
+  if (sourceAsset) {
+    const fromFiles = mtlxFileTextsByPath.get(normalizePath(sourceAsset));
+    if (fromFiles) texts.push(fromFiles);
+  }
+  return texts;
+}
+
 // USD `over` blocks under a Material prim (asset file swaps, place2d scale,
 // glass parameters, etc.) are authored on the material's descendant shader
-// prims. getSceneGraph only lists prims with a resolved type, so an
-// override-only prim (no matching `def` anywhere in composition) never
-// appears there even though getPrimAttributes resolves it directly once its
-// path is known; child names are instead found by scanning the uploaded USD
-// text layers for the Material prim's own named block. The Scene applies
-// the composed attribute values onto the resolved MaterialX document.
-function collectMaterialOverrides(api, root, usdaTexts, materialPath) {
+// prims. Candidate child names come from two sources: primarily the
+// material's own resolved MaterialX document text (mtlxTexts) -- the
+// authoritative node/nodegraph/material-alias namespace, and the only source
+// that still works when the override's root USD layer is a binary usdc file
+// -- and secondarily the uploaded USD text layers, scanned for the Material
+// prim's own named block, so an override naming a node that does not exist
+// in the document at all is still discovered and can be reported as a
+// missing-node warning instead of silently dropped (getSceneGraph itself
+// cannot help here: it only lists prims with a resolved type, and an
+// override-only prim has none, even though getPrimAttributes resolves it
+// directly once its path is known). The Scene applies the composed
+// attribute values onto the resolved MaterialX document.
+function collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, materialPath) {
   const overrides = [];
   if (!materialPath) return overrides;
   const leafName = materialPath.split("/").filter(Boolean).pop();
   if (!leafName) return overrides;
   const childNames = new Set();
+  for (const mtlxText of mtlxTexts) {
+    for (const name of collectMtlxElementNames(mtlxText)) childNames.add(name);
+  }
   for (const usdaText of usdaTexts) {
-    const body = findNamedBlockBody(usdaText, leafName);
+    const body = findNamedBlockBodyWithInputs(usdaText, leafName);
     if (!body) continue;
     for (const name of collectNamedChildren(body)) childNames.add(name);
   }
@@ -1100,6 +1153,10 @@ async function load(request) {
   // never appears there, even though getPrimAttributes still resolves it
   // directly once its path is known.
   const usdaTexts = [];
+  // Uploaded .mtlx file text, keyed by normalized path, so a material whose
+  // native materialX.data payload is unavailable can still fall back to its
+  // sourceAsset's own uploaded bytes when enumerating override candidates.
+  const mtlxFileTextsByPath = new Map();
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
     const source = typeof file.data?.arrayBuffer === "function"
@@ -1111,6 +1168,8 @@ async function load(request) {
     if (!data) continue;
     if (/\.usda?$/i.test(String(file.path))) {
       try { usdaTexts.push(new TextDecoder().decode(data)); } catch { /* binary-ish, skip */ }
+    } else if (/\.mtlx$/i.test(String(file.path))) {
+      try { mtlxFileTextsByPath.set(normalizePath(file.path), new TextDecoder().decode(data)); } catch { /* skip */ }
     }
     api.createDataFile(normalizePath(file.path), data);
     loadedFiles++;
@@ -1273,7 +1332,8 @@ async function load(request) {
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras);
   for (const material of result.materials) {
-    const overrides = collectMaterialOverrides(api, root, usdaTexts, material.path);
+    const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
+    const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path);
     if (overrides.length) material.overrides = overrides;
   }
   result.warnings.push(...cameraWarnings);

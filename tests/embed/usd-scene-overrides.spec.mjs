@@ -2,8 +2,10 @@
 // referenced MaterialX material (usd-stage-worker.js collectMaterialOverrides,
 // js/usd-scene-renderer.js applyUsdOverrides) must be applied onto the
 // resolved document before generation: a scalar override wins over the
-// file's own value, an asset override swaps the bound texture, and an
-// override naming a node that does not exist produces exactly one warning.
+// file's own value, an asset override swaps the bound texture, an override
+// on a node named only in the .mtlx (never a `def` in any usda) is found
+// and applied via the document-text scan, and an override naming a node
+// that does not exist anywhere produces exactly one warning.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,10 +86,13 @@ test('@scene USD overrides on a referenced MaterialX material apply a scalar ove
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
   const png = decodePNG(await canvas.screenshot());
   const bg = png.getPixel(0, 0);
+  const third = Math.floor(png.width / 3);
 
-  const leftMean = meanOfRegion(png, 0, Math.floor(png.width / 2), 0, png.height, bg);
-  const rightMean = meanOfRegion(png, Math.floor(png.width / 2), png.width, 0, png.height, bg);
+  const leftMean = meanOfRegion(png, 0, third, 0, png.height, bg);
+  const midMean = meanOfRegion(png, third, third * 2, 0, png.height, bg);
+  const rightMean = meanOfRegion(png, third * 2, png.width, 0, png.height, bg);
   expect(leftMean).toBeTruthy();
+  expect(midMean).toBeTruthy();
   expect(rightMean).toBeTruthy();
 
   // Left quad: the file's constant blue is overridden to red.
@@ -95,7 +100,15 @@ test('@scene USD overrides on a referenced MaterialX material apply a scalar ove
   expect(leftMean.g).toBeLessThan(60);
   expect(leftMean.b).toBeLessThan(60);
 
-  // Right quad: the file's tex-a.png (green) is swapped for tex-b.png (yellow).
+  // Middle quad: the file's tex-a.png (green) is swapped for tex-b.png (yellow).
+  expect(midMean.r).toBeGreaterThan(150);
+  expect(midMean.g).toBeGreaterThan(150);
+  expect(midMean.b).toBeLessThan(60);
+
+  // Right quad: "const_doc_only" has no `def` anywhere, only the `over`
+  // below and a matching node in override.mtlx -- found via the document
+  // text scan, not the usda scene graph -- overriding its value from the
+  // file's green to yellow.
   expect(rightMean.r).toBeGreaterThan(150);
   expect(rightMean.g).toBeGreaterThan(150);
   expect(rightMean.b).toBeLessThan(60);
