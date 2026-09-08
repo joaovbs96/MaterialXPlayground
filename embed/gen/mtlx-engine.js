@@ -5803,9 +5803,11 @@ const createUsdSceneStudioLight = (scale = 1) => {
   light.shadow.camera.near = (STUDIO_LIGHT_DISTANCE - 4) * scale;
   light.shadow.camera.far = (STUDIO_LIGHT_DISTANCE + STUDIO_WALL_R + 2) * scale;
   light.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE, STUDIO_SHADOW_MAP_SIZE);
-  light.shadow.radius = 12;
+  // Stage meshes rest on the floor, so the contact shadow must start at
+  // the base: a smaller blur and normal bias than the shaderball rig.
+  light.shadow.radius = 6;
   light.shadow.bias = -0.0005;
-  light.shadow.normalBias = 0.02 * scale;
+  light.shadow.normalBias = 0.004 * scale;
   return {
     light,
     target
