@@ -7,6 +7,12 @@ Format: one item per bullet, `- [status] **Title**: one or two sentences.` Statu
 
 Where MaterialX Playground is heading, grouped by area: the rendering engine shared by the Material Viewer and the Scene Viewer, the tools around them, and the desktop and editor integrations. Everything here is open for discussion, including the order and whether an item belongs at all. Missing something? Open an issue on the [GitHub issues page](https://github.com/joaovbs96/MaterialXPlayground/issues) to suggest, question or voice your support for an item.
 
+## Known issues
+
+- [parked] **Bump and heighttonormal speckle**: MaterialX 1.39 computes heighttonormal from screen derivatives per UV unit, so high resolution height maps at the default scale produce per pixel noise on bumps (Stirling tires and sand, Playground skirting). An opt-in texel-space variant exists behind a flag; the default follows upstream.
+- [parked] **Sub-pixel flake sparkle**: procedural flakes smaller than a pixel (Stirling car paint) alias into white specks in a single-sample rasterizer; a supersampling or accumulation pass is the fix.
+- [parked] **Glossy sparkle under high contrast HDRIs**: 16-sample environment importance sampling shows fireflies on smooth surfaces; the prefiltered environment reflections item above removes it.
+
 ## Rendering Engine
 
 - [planned] **One renderer for both viewers**: the Material Viewer and the Scene Viewer still keep separate copies of some rendering code. Move it into shared modules so every feature (transparency, textures, environment, diagnostics) works the same in both.
