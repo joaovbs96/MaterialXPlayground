@@ -347,6 +347,12 @@ const createMtlxSceneView = async ({
         if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
     };
     window.addEventListener('mtlx-display-transform', displayTransformListener);
+    // heightToNormalTexel is generation-affecting like the display
+    // transform: reuse the same rebuild path so a flag flip recompiles.
+    const settingsChangedListener = (e) => {
+        if (e.detail && e.detail.key === 'heightToNormalTexel') displayTransformListener();
+    };
+    window.addEventListener('mtlx-settings-changed', settingsChangedListener);
     const fileMap = sceneFileMap(files, stage);
     const creationDisplayRevision = displayRevision;
     const creationDisplayTransform = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
@@ -1825,6 +1831,7 @@ const createMtlxSceneView = async ({
                 stopped = true;
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
+                    window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
                     displayTransformListener = null;
                 }
                 if (raf) cancelAnimationFrame(raf);
@@ -1855,6 +1862,7 @@ const createMtlxSceneView = async ({
         stopped = true;
         if (displayTransformListener) {
             window.removeEventListener('mtlx-display-transform', displayTransformListener);
+                    window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
             displayTransformListener = null;
         }
         if (raf) cancelAnimationFrame(raf);

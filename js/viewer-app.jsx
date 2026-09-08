@@ -303,6 +303,20 @@
                 window.addEventListener('mtlx-display-transform', onDisplayTransform);
                 return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
             }, []);
+            // Experimental heighttonormal flag (js/mtlx-engine.js) bakes
+            // into generated fragment source, same as displayTransform
+            // above, so a flip must also force the render effect to rerun.
+            const [heightToNormalTexel, setHeightToNormalTexelState] = React.useState(
+                () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel())
+            );
+            React.useEffect(() => {
+                const onSettingsChanged = (e) => {
+                    if (!e.detail || e.detail.key !== 'heightToNormalTexel') return;
+                    setHeightToNormalTexelState(!!e.detail.value);
+                };
+                window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+                return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            }, []);
             // Restore re-inits GL state but not render-target contents
             // (PMREM bake, shadow map), so a glEpoch bump forces the build
             // effect to dispose and fully rebuild.
@@ -984,7 +998,7 @@
                         if (onViewRef.current) onViewRef.current(null);
                     }
                 };
-            }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform]);
+            }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
 
             // Backs the Scene card's transparency-forcing toggle (browser
             // only): local mirror of the engine's persisted value, replacing
