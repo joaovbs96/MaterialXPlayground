@@ -592,12 +592,16 @@ const createMtlxSceneView = async ({
         input = window.mxSafe(() => (typeof node.addInputFromNodeDef === 'function' ? node.addInputFromNodeDef(inputName) : null), null);
         return input || null;
     };
-    const convertUsdOverrideValue = (rawText, declaredType, usdaDir) => {
+    const convertUsdOverrideValue = (rawText, declaredType, baseDirs) => {
         const raw = String(rawText || '').trim();
         if (declaredType === 'filename' || declaredType === 'asset') {
             const match = raw.match(/^@(.*)@$/);
             const ref = match ? match[1] : raw;
-            return sceneJoinPath(usdaDir, ref);
+            // USD resolves the asset against the layer that authored the
+            // override; that layer normally sits beside the .mtlx, so try the
+            // material's directory first and the stage root as a fallback.
+            const candidates = baseDirs.map((dir) => sceneJoinPath(dir, ref));
+            return candidates.find((candidate) => fileMap[candidate]) || candidates[0];
         }
         if (/^\(.*\)$/.test(raw)) return raw.slice(1, -1).split(',').map((v) => v.trim()).join(', ');
         return raw; // bool/number/plain string, verbatim
@@ -606,7 +610,7 @@ const createMtlxSceneView = async ({
     // document, before generation. `matchedNode` is the surface shader
     // node already resolved for this record (used when override.node is
     // null). Missing nodes/inputs each push one deduped warning.
-    const applyUsdOverrides = (doc, matchedNode, record, usdaDir) => {
+    const applyUsdOverrides = (doc, matchedNode, record, baseDirs) => {
         const overrides = Array.isArray(record && record.overrides) ? record.overrides : [];
         if (!overrides.length) return;
         const label = record.materialName || String(record.path || '').split('/').filter(Boolean).pop() || record.sourceAsset || 'material';
@@ -625,7 +629,7 @@ const createMtlxSceneView = async ({
                 continue;
             }
             const declaredType = window.mxSafe(() => input.getType(), 'string');
-            const value = convertUsdOverrideValue(ov.value, declaredType, usdaDir);
+            const value = convertUsdOverrideValue(ov.value, declaredType, baseDirs);
             // A literal override must win over an existing connection, or
             // the generated shader keeps reading the connected node instead.
             window.mxRemoveAttr(input, 'nodename');
@@ -677,7 +681,7 @@ const createMtlxSceneView = async ({
             const names = [explicitName, explicitName ? null : record.materialName]
                 .filter((value, index, values) => value && values.indexOf(value) === index)
                 .map((value) => String(value));
-            const usdaDir = sceneDir(stage.rootPath);
+            const usdaDir = [sceneDir(source), sceneDir(stage.rootPath)];
             for (const name of names) {
                 const matches = renderables.filter((r) => String(r.name || '') === name);
                 if (matches.length === 1) {
