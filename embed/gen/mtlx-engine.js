@@ -494,6 +494,41 @@ const patchGeompropVaryings = (vs, fs) => {
   };
 };
 
+// Finds CALL sites of fnName in GLSL source text (not its definition:
+// generated fragment sources inline the library function body right
+// above its call sites, and a naive non-greedy ")...;" regex matches
+// INTO that definition's body instead of stopping at its own params).
+// Balances parens from the opening "(" to find the real end, then
+// requires the next non-space character to be ";" (a call statement;
+// a definition's params are followed by "{" instead).
+const findGlslCalls = (text, fnName) => {
+  const calls = [];
+  const idRe = new RegExp('\\b' + fnName + '\\s*\\(', 'g');
+  let m;
+  while ((m = idRe.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 8), m.index);
+    if (/\bvoid\s*$/.test(before)) continue; // "void fnName(" is the definition
+    const openParenIdx = m.index + m[0].length - 1;
+    let depth = 1,
+      i = openParenIdx + 1;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth++;else if (text[i] === ')') depth--;
+      i++;
+    }
+    if (depth !== 0) continue; // unbalanced, bail out defensively
+    const closeParenIdx = i - 1;
+    let j = i;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    if (text[j] !== ';') continue; // followed by "{" => a definition, skip
+    calls.push({
+      argsText: text.slice(openParenIdx + 1, closeParenIdx),
+      start: m.index,
+      end: j + 1
+    });
+  }
+  return calls;
+};
+
 // Splits a GLSL call's argument list on top-level commas only (args can
 // themselves be calls, e.g. "vec2(0.000000, 0.000000)").
 const splitGlslArgs = argsText => {
@@ -511,12 +546,17 @@ const splitGlslArgs = argsText => {
   return out;
 };
 
-// A vec2(a, b) literal is "identity" for uv_scale (1,1) / uv_offset (0,0)
-// once MaterialX's %.6f formatting is accounted for.
-const isVec2Literal = (expr, x, y) => {
-  const m = expr.match(/^vec2\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)$/);
-  if (!m) return false;
-  return Math.abs(parseFloat(m[1]) - x) < 1e-4 && Math.abs(parseFloat(m[2]) - y) < 1e-4;
+// uv_scale/uv_offset arrive as UNIFORM NAMES in generated GLSL (MaterialX
+// never inlines them as literals), so "identity" is checked against the
+// uniform's own MaterialX-introspected default value (collectMxUniforms
+// entries, { name, type, data }), not the call-site text. A bare vec2(..)
+// literal is also accepted, in case a future codegen path does inline it.
+const isIdentityVec2Arg = (expr, introspected, x, y) => {
+  const lit = expr.match(/^vec2\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)$/);
+  if (lit) return Math.abs(parseFloat(lit[1]) - x) < 1e-4 && Math.abs(parseFloat(lit[2]) - y) < 1e-4;
+  const u = introspected && introspected.find(e => e.name === expr && e.type === 'vector2');
+  if (!u || !Array.isArray(u.data) || u.data.length < 2) return false;
+  return Math.abs(u.data[0] - x) < 1e-4 && Math.abs(u.data[1] - y) < 1e-4;
 };
 const HEIGHTTONORMAL_TEXEL_FN = `
 void mx_heighttonormal_vector3_texel(sampler2D tex, vec2 uv, float scale, out vec3 result)
@@ -547,16 +587,14 @@ void mx_heighttonormal_vector3_texel(sampler2D tex, vec2 uv, float scale, out ve
 // texel-space gradient off the same sampler/uv instead. Call sites whose
 // height doesn't trace back to a plain image sample, or whose uv_scale/
 // uv_offset aren't identity, are left untouched (upstream behavior).
-const applyHeightToNormalTexel = (fs, notices) => {
+const applyHeightToNormalTexel = (fs, notices, introspected) => {
   if (!getHeightToNormalTexel()) return fs;
-  const imageCallRe = /\bmx_image_float\s*\(([^;]*?)\)\s*;/g;
   const heightSources = new Map(); // height var name -> { sampler, texcoord }
-  let m;
-  while ((m = imageCallRe.exec(fs)) !== null) {
-    const args = splitGlslArgs(m[1]);
+  for (const call of findGlslCalls(fs, 'mx_image_float')) {
+    const args = splitGlslArgs(call.argsText);
     if (args.length < 13) continue;
     const [sampler,,, texcoord,,,,,,, uvScale, uvOffset, resultVar] = args;
-    if (!isVec2Literal(uvScale, 1, 1) || !isVec2Literal(uvOffset, 0, 0)) {
+    if (!isIdentityVec2Arg(uvScale, introspected, 1, 1) || !isIdentityVec2Arg(uvOffset, introspected, 0, 0)) {
       notices.push(`heighttonormal: skipped a call site (non-identity uv_scale/uv_offset on "${resultVar}")`);
       continue;
     }
@@ -566,19 +604,30 @@ const applyHeightToNormalTexel = (fs, notices) => {
     });
   }
   if (!heightSources.size) return fs;
+  const h2nCalls = findGlslCalls(fs, 'mx_heighttonormal_vector3');
   let rewritten = 0;
-  const h2nCallRe = /\bmx_heighttonormal_vector3\s*\(([^;]*?)\)\s*;/g;
-  fs = fs.replace(h2nCallRe, (full, argsText) => {
-    const args = splitGlslArgs(argsText);
-    if (args.length !== 4) return full;
+  // Rebuild right-to-left so earlier offsets stay valid as later (later
+  // in text order, processed first here) spans are replaced.
+  for (let k = h2nCalls.length - 1; k >= 0; k--) {
+    const call = h2nCalls[k];
+    const args = splitGlslArgs(call.argsText);
+    if (args.length !== 4) continue;
     const [heightVar, scale,, outVar] = args;
     const src = heightSources.get(heightVar);
-    if (!src) return full;
+    if (!src) continue;
     rewritten++;
-    return `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
-  });
+    const replacement = `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
+    fs = fs.slice(0, call.start) + replacement + fs.slice(call.end);
+  }
   if (rewritten > 0) {
-    fs = HEIGHTTONORMAL_TEXEL_FN + fs;
+    // Insert after any leading "precision ...;" directives, not at
+    // position 0: ESSL requires those before the first float/int/
+    // sampler use, and our injected function has all three.
+    let insertAt = 0;
+    const precisionRe = /^precision\s+\w+\s+\w+\s*;\s*$/gm;
+    let pm;
+    while ((pm = precisionRe.exec(fs)) !== null) insertAt = pm.index + pm[0].length;
+    fs = fs.slice(0, insertAt) + '\n' + HEIGHTTONORMAL_TEXEL_FN + fs.slice(insertAt);
     notices.push(`heighttonormal: ${rewritten} call(s) use texel-space gradients (experimental)`);
   }
   return fs;
@@ -4662,7 +4711,6 @@ const generatePreviewSourcesUnlocked = ({
     }
   }
   fs = patchUnlitLightingRefs(fs);
-  fs = applyHeightToNormalTexel(fs, notices);
   const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
   const outVar = outDeclMatch ? outDeclMatch[1] : null;
   const outAssignments = outVar ? fs.match(new RegExp('\\b' + outVar + '\\s*=[^;]*;', 'g')) : null;
@@ -4699,6 +4747,11 @@ const generatePreviewSourcesUnlocked = ({
     if (st) introspected = introspected.concat(collectMxUniforms(st));
   }
   introspected = introspected.map(plainizeMxUniformData);
+  // uv_scale/uv_offset are ALWAYS emitted as uniforms (never inline
+  // vec2 literals), so applyHeightToNormalTexel's identity check reads
+  // their MaterialX-introspected default value here, once introspected
+  // exists, instead of pattern-matching the (nonexistent) literal text.
+  fs = applyHeightToNormalTexel(fs, notices, introspected);
 
   // Last reference to mxShader, free it here, still inside the lock.
   // Guarded: a BindingError here must never fail an otherwise-successful
