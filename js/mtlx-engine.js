@@ -291,6 +291,34 @@ const setForceTransparency = (v, { persist = true } = {}) => {
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
 // (this material's hwTransparency verdict), see PEEL_LAYERS/getDummyTex.
 
+// Experimental, opt-in: mx_heighttonormal_vector3 (MaterialX 1.39) derives
+// its height gradient from screen-space derivatives divided by the UV
+// Jacobian, so on a high-resolution height texture a single-texel step
+// reads as an enormous per-pixel slope (speckle). When on, call sites
+// whose height comes straight from an mx_image_float() sample are
+// rewritten to a texel-space finite-difference gradient instead (see
+// applyHeightToNormalTexel below). Off by default: DCC parity is
+// unverified, this is for side-by-side comparison only. A `?heightToNormalTexel=1`
+// URL param seeds the flag for a page load without touching localStorage.
+let HEIGHT_TO_NORMAL_TEXEL = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('heightToNormalTexel')) return qs.get('heightToNormalTexel') === '1';
+        return localStorage.getItem('mtlxHeightToNormalTexel') === '1';
+    } catch (e) { return false; }
+})();
+const getHeightToNormalTexel = () => HEIGHT_TO_NORMAL_TEXEL;
+const setHeightToNormalTexel = (v, { persist = true } = {}) => {
+    HEIGHT_TO_NORMAL_TEXEL = !!v;
+    if (persist) {
+        try { localStorage.setItem('mtlxHeightToNormalTexel', HEIGHT_TO_NORMAL_TEXEL ? '1' : '0'); } catch (e) { /* best-effort */ }
+    }
+    // Generation-affecting: existing compiled sources bake in the old
+    // rewrite decision, so every live view must recompile its materials,
+    // mirroring how forceTransparency's setter above nudges live views.
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'heightToNormalTexel', value: HEIGHT_TO_NORMAL_TEXEL } })); } catch (e) { /* best-effort */ }
+};
+
 // Nearest transparent layers the peel loop resolves before giving up on
 // farther fragments, ample for the single-mesh shaderball preview this
 // targets. Each layer costs a full extra raster+composite pass, so this
@@ -404,6 +432,137 @@ const patchGeompropVaryings = (vs, fs) => {
         .replace(/^(\s*)i_geomprop_(\w+)\s*=\s*i_geomprop_\2\s*;/gm, '$1vd_geomprop_$2 = i_geomprop_$2;');
     const patchedFs = fs.replace(/\bi_geomprop_(\w+)\b/g, 'vd_geomprop_$1');
     return { vs: patchedVs, fs: patchedFs };
+};
+
+// Finds CALL sites of fnName in GLSL source text (not its definition:
+// generated fragment sources inline the library function body right
+// above its call sites, and a naive non-greedy ")...;" regex matches
+// INTO that definition's body instead of stopping at its own params).
+// Balances parens from the opening "(" to find the real end, then
+// requires the next non-space character to be ";" (a call statement;
+// a definition's params are followed by "{" instead).
+const findGlslCalls = (text, fnName) => {
+  const calls = [];
+  const idRe = new RegExp('\\b' + fnName + '\\s*\\(', 'g');
+  let m;
+  while ((m = idRe.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 8), m.index);
+    if (/\bvoid\s*$/.test(before)) continue; // "void fnName(" is the definition
+    const openParenIdx = m.index + m[0].length - 1;
+    let depth = 1, i = openParenIdx + 1;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')') depth--;
+      i++;
+    }
+    if (depth !== 0) continue; // unbalanced, bail out defensively
+    const closeParenIdx = i - 1;
+    let j = i;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    if (text[j] !== ';') continue; // followed by "{" => a definition, skip
+    calls.push({ argsText: text.slice(openParenIdx + 1, closeParenIdx), start: m.index, end: j + 1 });
+  }
+  return calls;
+};
+
+// Splits a GLSL call's argument list on top-level commas only (args can
+// themselves be calls, e.g. "vec2(0.000000, 0.000000)").
+const splitGlslArgs = (argsText) => {
+    const out = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < argsText.length; i++) {
+        const c = argsText[i];
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        else if (c === ',' && depth === 0) { out.push(argsText.slice(start, i).trim()); start = i + 1; }
+    }
+    out.push(argsText.slice(start).trim());
+    return out;
+};
+
+// uv_scale/uv_offset arrive as UNIFORM NAMES in generated GLSL (MaterialX
+// never inlines them as literals), so "identity" is checked against the
+// uniform's own MaterialX-introspected default value (collectMxUniforms
+// entries, { name, type, data }), not the call-site text. A bare vec2(..)
+// literal is also accepted, in case a future codegen path does inline it.
+const isIdentityVec2Arg = (expr, introspected, x, y) => {
+    const lit = expr.match(/^vec2\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)$/);
+    if (lit) return Math.abs(parseFloat(lit[1]) - x) < 1e-4 && Math.abs(parseFloat(lit[2]) - y) < 1e-4;
+    const u = introspected && introspected.find((e) => e.name === expr && e.type === 'vector2');
+    if (!u || !Array.isArray(u.data) || u.data.length < 2) return false;
+    return Math.abs(u.data[0] - x) < 1e-4 && Math.abs(u.data[1] - y) < 1e-4;
+};
+
+const HEIGHTTONORMAL_TEXEL_FN = `
+void mx_heighttonormal_vector3_texel(sampler2D tex, vec2 uv, float scale, out vec3 result)
+{
+    // Finite-difference gradient over texels, matching common DCC bump
+    // nodes, instead of upstream's per-UV screen-derivative gradient
+    // (which blows up on high-resolution height textures).
+    vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+    float hL = texture(tex, uv - vec2(texel.x, 0.0)).r;
+    float hR = texture(tex, uv + vec2(texel.x, 0.0)).r;
+    float hD = texture(tex, uv - vec2(0.0, texel.y)).r;
+    float hU = texture(tex, uv + vec2(0.0, texel.y)).r;
+    float gx = (hR - hL) * 0.5;
+    float gy = (hU - hD) * 0.5;
+    // Mirrored UVs flip the tangent-frame handedness; match upstream's
+    // n.z<0 flip via the UV Jacobian's sign instead (no cross product here).
+    vec2 dUdS = vec2(dFdx(uv.x), dFdy(uv.x));
+    vec2 dVdS = vec2(dFdx(uv.y), dFdy(uv.y));
+    if (dUdS.x * dVdS.y - dUdS.y * dVdS.x < 0.0) { gx = -gx; gy = -gy; }
+    result = normalize(vec3(-gx * scale, -gy * scale, 1.0)) * 0.5 + 0.5;
+}
+`;
+
+// Experimental opt-in (see HEIGHT_TO_NORMAL_TEXEL above): rewrites
+// mx_heighttonormal_vector3(H, S, T, OUT) call sites whose height H was
+// assigned by an earlier mx_image_float(sampler, ..., texcoord, ...,
+// uv_scale, uv_offset, H) call in the same fragment source, to sample a
+// texel-space gradient off the same sampler/uv instead. Call sites whose
+// height doesn't trace back to a plain image sample, or whose uv_scale/
+// uv_offset aren't identity, are left untouched (upstream behavior).
+const applyHeightToNormalTexel = (fs, notices, introspected) => {
+    if (!getHeightToNormalTexel()) return fs;
+    const heightSources = new Map(); // height var name -> { sampler, texcoord }
+    for (const call of findGlslCalls(fs, 'mx_image_float')) {
+        const args = splitGlslArgs(call.argsText);
+        if (args.length < 13) continue;
+        const [sampler, , , texcoord, , , , , , , uvScale, uvOffset, resultVar] = args;
+        if (!isIdentityVec2Arg(uvScale, introspected, 1, 1) || !isIdentityVec2Arg(uvOffset, introspected, 0, 0)) {
+            notices.push(`heighttonormal: skipped a call site (non-identity uv_scale/uv_offset on "${resultVar}")`);
+            continue;
+        }
+        heightSources.set(resultVar, { sampler, texcoord });
+    }
+    if (!heightSources.size) return fs;
+    const h2nCalls = findGlslCalls(fs, 'mx_heighttonormal_vector3');
+    let rewritten = 0;
+    // Rebuild right-to-left so earlier offsets stay valid as later (later
+    // in text order, processed first here) spans are replaced.
+    for (let k = h2nCalls.length - 1; k >= 0; k--) {
+        const call = h2nCalls[k];
+        const args = splitGlslArgs(call.argsText);
+        if (args.length !== 4) continue;
+        const [heightVar, scale, , outVar] = args;
+        const src = heightSources.get(heightVar);
+        if (!src) continue;
+        rewritten++;
+        const replacement = `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
+        fs = fs.slice(0, call.start) + replacement + fs.slice(call.end);
+    }
+    if (rewritten > 0) {
+        // Insert after any leading "precision ...;" directives, not at
+        // position 0: ESSL requires those before the first float/int/
+        // sampler use, and our injected function has all three.
+        let insertAt = 0;
+        const precisionRe = /^precision\s+\w+\s+\w+\s*;\s*$/gm;
+        let pm;
+        while ((pm = precisionRe.exec(fs)) !== null) insertAt = pm.index + pm[0].length;
+        fs = fs.slice(0, insertAt) + '\n' + HEIGHTTONORMAL_TEXEL_FN + fs.slice(insertAt);
+        notices.push(`heighttonormal: ${rewritten} call(s) use texel-space gradients (experimental)`);
+    }
+    return fs;
 };
 
 // Hair helper pbrlib nodes pull in the full BSDF/lighting include chain,
@@ -1223,27 +1382,39 @@ const capKtx2MipLevels = (tex, maxSize) => {
     return tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0);
 };
 
+// Compressions UTIF.js actually decodes (see vendor/utif/UTIF.js decode._decompress).
+// 32946 (old Deflate) is not in that list but is the same zlib stream as 8,
+// so it is remapped below before decodeImage runs.
+const UTIF_SUPPORTED_COMPRESSION = new Set([1, 3, 4, 5, 6, 7, 8, 32767, 32773]);
+
 // Parses a dropped .tif/.tiff Blob via UTIF.js into an 8bpc RGBA texture.
-// Baseline decode only (8/16-bit, common compressions); exotic TIFFs fall
-// back to null like the loaders above, keeping the node default color.
-const loadTifTexture = async (blob) => {
+// Baseline decode only (8/16-bit, common compressions); exotic TIFFs throw
+// so callers can warn instead of silently keeping an all-zero texture.
+const loadTifTexture = async (blob, path) => {
     if (typeof UTIF === 'undefined') {
         console.warn('mtlx-engine: UTIF unavailable (script blocked/offline); .tif textures keep the node default color.');
         return null;
     }
-    try {
-        const buf = await blob.arrayBuffer();
-        const ifds = UTIF.decode(buf);
-        if (!ifds || !ifds.length) return null;
-        UTIF.decodeImage(buf, ifds[0]);
-        const rgba = UTIF.toRGBA8(ifds[0]);
-        const tex = new THREE.DataTexture(new Uint8Array(rgba), ifds[0].width, ifds[0].height, THREE.RGBAFormat, THREE.UnsignedByteType);
-        tex.minFilter = tex.magFilter = THREE.LinearFilter;
-        return tex;
-    } catch (e) {
-        console.warn('mtlx-engine: failed to parse dropped .tif texture, keeping the node default color:', e);
-        return null;
+    const label = path || '(unknown)';
+    const buf = await blob.arrayBuffer();
+    const ifds = UTIF.decode(buf);
+    if (!ifds || !ifds.length) return null;
+    const ifd = ifds[0];
+    const compression = ifd.t259 && ifd.t259[0];
+    if (compression === 32946) ifd.t259[0] = 8; // old Deflate: same zlib stream, UTIF applies the predictor itself
+    UTIF.decodeImage(buf, ifd);
+    const rgba = UTIF.toRGBA8(ifd);
+    if (!UTIF_SUPPORTED_COMPRESSION.has(compression) && compression !== 32946) {
+        throw new Error('TIF decode unsupported (compression ' + compression + ') for ' + label);
     }
+    let allZero = true;
+    for (let i = 0; i < rgba.length - 2 && allZero; i += 97) {
+        if (rgba[i] !== 0 || rgba[i + 1] !== 0 || rgba[i + 2] !== 0) allZero = false;
+    }
+    if (allZero) throw new Error('TIF decode unsupported (compression ' + compression + ') for ' + label);
+    const tex = new THREE.DataTexture(new Uint8Array(rgba), ifd.width, ifd.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    return tex;
 };
 
 // Loads the original (non-.ktx2) source for a resolved hit, used when a
@@ -1253,7 +1424,7 @@ const loadTextureForHit = async (hit, blob, view) => {
     const ext = (hit.key.split('.').pop() || '').toLowerCase();
     if (ext === 'exr') return loadExrTexture(blob);
     if (ext === 'hdr') return loadHdrTexture(blob);
-    if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob);
+    if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob, hit.key);
     if (view && view.maxTextureSize && typeof createImageBitmap === 'function') {
         return loadBoundedBitmapTexture(blob, Number(view.maxTextureSize));
     }
@@ -1545,7 +1716,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                 });
                 pending.push(pendingLoad);
             } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
-                const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
+                const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
                 const pendingLoad = parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
                     configureLoadedTexture(tex);
@@ -1553,7 +1724,11 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     cache.set(cacheKey, tex);
                     if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
                     if (onBound) onBound();
-                }, (error) => ({ error }));
+                }, (error) => {
+                    console.warn('mtlx-engine: texture decode failed for ' + hit.key + ', keeping the node default color:', error);
+                    missing.push(ref);
+                    return { error };
+                });
                 pending.push(pendingLoad);
             } else if (view.maxTextureSize) {
                 const startBoundedLoad = () => {
@@ -1780,10 +1955,12 @@ const rebindFilenameDefault = (uniforms, defaultUniformName, type, value) => {
 };
 
 // Configure a user-loaded texture the way the generated shaders expect
-// to sample a `filename` input: repeat wrapping, no flipY.
+// to sample a `filename` input: repeat wrapping, no flipY, anisotropic
+// filtering (three clamps to the device max at upload).
 const configureLoadedTexture = (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.flipY = false;
+    t.anisotropy = 8;
     t.needsUpdate = true;
     return t;
 };
@@ -3932,6 +4109,11 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         if (st) introspected = introspected.concat(collectMxUniforms(st));
     }
     introspected = introspected.map(plainizeMxUniformData);
+    // uv_scale/uv_offset are ALWAYS emitted as uniforms (never inline
+    // vec2 literals), so applyHeightToNormalTexel's identity check reads
+    // their MaterialX-introspected default value here, once introspected
+    // exists, instead of pattern-matching the (nonexistent) literal text.
+    fs = applyHeightToNormalTexel(fs, notices, introspected);
 
     // Last reference to mxShader, free it here, still inside the lock.
     // Guarded: a BindingError here must never fail an otherwise-successful
@@ -6857,6 +7039,7 @@ Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
     MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
+    getHeightToNormalTexel, setHeightToNormalTexel,
     parseUniforms, parseVertexInputs, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,

@@ -347,6 +347,12 @@ const createMtlxSceneView = async ({
         if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
     };
     window.addEventListener('mtlx-display-transform', displayTransformListener);
+    // heightToNormalTexel is generation-affecting like the display
+    // transform: reuse the same rebuild path so a flag flip recompiles.
+    const settingsChangedListener = (e) => {
+        if (e.detail && e.detail.key === 'heightToNormalTexel') displayTransformListener();
+    };
+    window.addEventListener('mtlx-settings-changed', settingsChangedListener);
     const fileMap = sceneFileMap(files, stage);
     const creationDisplayRevision = displayRevision;
     const creationDisplayTransform = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
@@ -514,7 +520,7 @@ const createMtlxSceneView = async ({
             if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob, null, path);
             else if (ext === 'exr') tex = await window.loadExrTexture(blob);
             else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
-            else tex = await window.loadTifTexture(blob);
+            else tex = await window.loadTifTexture(blob, path);
         } catch (error) {
             if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== path) {
                 const notice = 'KTX2 texture ' + path + ' is not a multiple of 4; falling back to ' + fallback.path;
@@ -533,6 +539,8 @@ const createMtlxSceneView = async ({
                     return { tex: boundedTex, bytes };
                 } catch (e) { return null; }
             }
+            const warning = (error && error.message) || ('MaterialX texture decode failed for ' + (path || '(unknown)'));
+            if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
             return null;
         }
         if (!tex || !tex.image) {
@@ -563,6 +571,70 @@ const createMtlxSceneView = async ({
     const programByKey = new Map();
     const sourceXmlByRecord = new WeakMap();
     const materialRecords = new Map();
+
+    // USD `over` blocks recorded by the worker (usd-stage-worker.js
+    // collectMaterialOverrides) as { node, input, value } text triples.
+    // node is null when the attribute sits on the Material prim itself,
+    // meaning it targets the bound surface shader node.
+    const findMxNode = (doc, name) => {
+        let node = window.mxSafe(() => doc.getNode(name), null);
+        if (node) return node;
+        const graphs = window.vecToArray(window.mxSafe(() => doc.getNodeGraphs(), []));
+        for (const graph of graphs) {
+            node = window.mxSafe(() => graph.getNode(name), null);
+            if (node) return node;
+        }
+        return null;
+    };
+    const findOrAddInput = (node, inputName) => {
+        let input = window.mxSafe(() => node.getInput(inputName), null);
+        if (input) return input;
+        input = window.mxSafe(() => (typeof node.addInputFromNodeDef === 'function' ? node.addInputFromNodeDef(inputName) : null), null);
+        return input || null;
+    };
+    const convertUsdOverrideValue = (rawText, declaredType, usdaDir) => {
+        const raw = String(rawText || '').trim();
+        if (declaredType === 'filename' || declaredType === 'asset') {
+            const match = raw.match(/^@(.*)@$/);
+            const ref = match ? match[1] : raw;
+            return sceneJoinPath(usdaDir, ref);
+        }
+        if (/^\(.*\)$/.test(raw)) return raw.slice(1, -1).split(',').map((v) => v.trim()).join(', ');
+        return raw; // bool/number/plain string, verbatim
+    };
+    // Applies one material record's overrides onto its freshly parsed
+    // document, before generation. `matchedNode` is the surface shader
+    // node already resolved for this record (used when override.node is
+    // null). Missing nodes/inputs each push one deduped warning.
+    const applyUsdOverrides = (doc, matchedNode, record, usdaDir) => {
+        const overrides = Array.isArray(record && record.overrides) ? record.overrides : [];
+        if (!overrides.length) return;
+        const label = record.materialName || String(record.path || '').split('/').filter(Boolean).pop() || record.sourceAsset || 'material';
+        for (const ov of overrides) {
+            const targetNode = ov.node ? findMxNode(doc, ov.node) : matchedNode;
+            if (!targetNode) {
+                const warning = `USD override targets missing MaterialX node "${ov.node}" in ${label}`;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+                continue;
+            }
+            const input = findOrAddInput(targetNode, ov.input);
+            if (!input) {
+                const nodeLabel = ov.node || window.mxSafe(() => targetNode.getName(), label);
+                const warning = `USD override targets missing input "${ov.input}" on node "${nodeLabel}" in ${label}`;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+                continue;
+            }
+            const declaredType = window.mxSafe(() => input.getType(), 'string');
+            const value = convertUsdOverrideValue(ov.value, declaredType, usdaDir);
+            // A literal override must win over an existing connection, or
+            // the generated shader keeps reading the connected node instead.
+            window.mxRemoveAttr(input, 'nodename');
+            window.mxRemoveAttr(input, 'nodegraph');
+            window.mxRemoveAttr(input, 'output');
+            window.mxRemoveAttr(input, 'interfacename');
+            window.mxWriteValue(input, value, declaredType);
+        }
+    };
 
     const loadRenderable = async (record) => {
         if (record && (record.renderable || record.node)) {
@@ -605,15 +677,20 @@ const createMtlxSceneView = async ({
             const names = [explicitName, explicitName ? null : record.materialName]
                 .filter((value, index, values) => value && values.indexOf(value) === index)
                 .map((value) => String(value));
+            const usdaDir = sceneDir(stage.rootPath);
             for (const name of names) {
                 const matches = renderables.filter((r) => String(r.name || '') === name);
-                if (matches.length === 1) return { node: matches[0].node, document: doc };
+                if (matches.length === 1) {
+                    await window.mxExclusive(() => applyUsdOverrides(doc, matches[0].node, record, usdaDir));
+                    return { node: matches[0].node, document: doc };
+                }
             }
             // A composed alias can differ from the sole authored renderable
             // name (the common sourceAsset-only case).  This fallback is
             // safe only for the native inferred-selection path; an authored
             // subidentifier that did not match must remain an error.
             if (renderables.length === 1 && !explicitName) {
+                await window.mxExclusive(() => applyUsdOverrides(doc, renderables[0].node, record, usdaDir));
                 return { node: renderables[0].node, document: doc };
             }
             throw new Error('MaterialX source has no unambiguous renderable for ' + (record.materialName || record.subIdentifier || source));
@@ -707,15 +784,9 @@ const createMtlxSceneView = async ({
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [],
         });
-        // USD typed material inputs may override scalar shader parameters. The
-        // stage bridge keeps these separate from structural MaterialX graph
-        // selection; only uniforms already declared by the generated shader
-        // are eligible here.
-        for (const [key, value] of Object.entries(record && record.overrides || {})) {
-            const uniformName = key.startsWith('u_') ? key : 'u_' + key;
-            if (uniforms[uniformName]) uniforms[uniformName].value = value;
-            else warnings.push('Unsupported scalar MaterialX override ' + key + ' on ' + label);
-        }
+        // USD value overrides (record.overrides) are applied onto the
+        // MaterialX document itself in loadRenderable/applyUsdOverrides,
+        // before generation, so the compiled shader here already reflects them.
         const material = new THREE.RawShaderMaterial({
             vertexShader: compiled.vs,
             fragmentShader: compiled.fs,
@@ -1760,6 +1831,7 @@ const createMtlxSceneView = async ({
                 stopped = true;
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
+                    window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
                     displayTransformListener = null;
                 }
                 if (raf) cancelAnimationFrame(raf);
@@ -1790,6 +1862,7 @@ const createMtlxSceneView = async ({
         stopped = true;
         if (displayTransformListener) {
             window.removeEventListener('mtlx-display-transform', displayTransformListener);
+                    window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
             displayTransformListener = null;
         }
         if (raf) cancelAnimationFrame(raf);
