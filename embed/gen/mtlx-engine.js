@@ -328,6 +328,47 @@ const setForceTransparency = (v, {
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
 // (this material's hwTransparency verdict), see PEEL_LAYERS/getDummyTex.
 
+// Experimental, opt-in: mx_heighttonormal_vector3 (MaterialX 1.39) derives
+// its height gradient from screen-space derivatives divided by the UV
+// Jacobian, so on a high-resolution height texture a single-texel step
+// reads as an enormous per-pixel slope (speckle). When on, call sites
+// whose height comes straight from an mx_image_float() sample are
+// rewritten to a texel-space finite-difference gradient instead (see
+// applyHeightToNormalTexel below). Off by default: DCC parity is
+// unverified, this is for side-by-side comparison only. A `?heightToNormalTexel=1`
+// URL param seeds the flag for a page load without touching localStorage.
+let HEIGHT_TO_NORMAL_TEXEL = (() => {
+  try {
+    const qs = new URLSearchParams(window.location.search);
+    if (qs.has('heightToNormalTexel')) return qs.get('heightToNormalTexel') === '1';
+    return localStorage.getItem('mtlxHeightToNormalTexel') === '1';
+  } catch (e) {
+    return false;
+  }
+})();
+const getHeightToNormalTexel = () => HEIGHT_TO_NORMAL_TEXEL;
+const setHeightToNormalTexel = (v, {
+  persist = true
+} = {}) => {
+  HEIGHT_TO_NORMAL_TEXEL = !!v;
+  if (persist) {
+    try {
+      localStorage.setItem('mtlxHeightToNormalTexel', HEIGHT_TO_NORMAL_TEXEL ? '1' : '0');
+    } catch (e) {/* best-effort */}
+  }
+  // Generation-affecting: existing compiled sources bake in the old
+  // rewrite decision, so every live view must recompile its materials,
+  // mirroring how forceTransparency's setter above nudges live views.
+  try {
+    window.dispatchEvent(new CustomEvent('mtlx-settings-changed', {
+      detail: {
+        key: 'heightToNormalTexel',
+        value: HEIGHT_TO_NORMAL_TEXEL
+      }
+    }));
+  } catch (e) {/* best-effort */}
+};
+
 // Nearest transparent layers the peel loop resolves before giving up on
 // farther fragments, ample for the single-mesh shaderball preview this
 // targets. Each layer costs a full extra raster+composite pass, so this
@@ -451,6 +492,96 @@ const patchGeompropVaryings = (vs, fs) => {
     vs: patchedVs,
     fs: patchedFs
   };
+};
+
+// Splits a GLSL call's argument list on top-level commas only (args can
+// themselves be calls, e.g. "vec2(0.000000, 0.000000)").
+const splitGlslArgs = argsText => {
+  const out = [];
+  let depth = 0,
+    start = 0;
+  for (let i = 0; i < argsText.length; i++) {
+    const c = argsText[i];
+    if (c === '(') depth++;else if (c === ')') depth--;else if (c === ',' && depth === 0) {
+      out.push(argsText.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(argsText.slice(start).trim());
+  return out;
+};
+
+// A vec2(a, b) literal is "identity" for uv_scale (1,1) / uv_offset (0,0)
+// once MaterialX's %.6f formatting is accounted for.
+const isVec2Literal = (expr, x, y) => {
+  const m = expr.match(/^vec2\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)$/);
+  if (!m) return false;
+  return Math.abs(parseFloat(m[1]) - x) < 1e-4 && Math.abs(parseFloat(m[2]) - y) < 1e-4;
+};
+const HEIGHTTONORMAL_TEXEL_FN = `
+void mx_heighttonormal_vector3_texel(sampler2D tex, vec2 uv, float scale, out vec3 result)
+{
+    // Finite-difference gradient over texels, matching common DCC bump
+    // nodes, instead of upstream's per-UV screen-derivative gradient
+    // (which blows up on high-resolution height textures).
+    vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+    float hL = texture(tex, uv - vec2(texel.x, 0.0)).r;
+    float hR = texture(tex, uv + vec2(texel.x, 0.0)).r;
+    float hD = texture(tex, uv - vec2(0.0, texel.y)).r;
+    float hU = texture(tex, uv + vec2(0.0, texel.y)).r;
+    float gx = (hR - hL) * 0.5;
+    float gy = (hU - hD) * 0.5;
+    // Mirrored UVs flip the tangent-frame handedness; match upstream's
+    // n.z<0 flip via the UV Jacobian's sign instead (no cross product here).
+    vec2 dUdS = vec2(dFdx(uv.x), dFdy(uv.x));
+    vec2 dVdS = vec2(dFdx(uv.y), dFdy(uv.y));
+    if (dUdS.x * dVdS.y - dUdS.y * dVdS.x < 0.0) { gx = -gx; gy = -gy; }
+    result = normalize(vec3(-gx * scale, -gy * scale, 1.0)) * 0.5 + 0.5;
+}
+`;
+
+// Experimental opt-in (see HEIGHT_TO_NORMAL_TEXEL above): rewrites
+// mx_heighttonormal_vector3(H, S, T, OUT) call sites whose height H was
+// assigned by an earlier mx_image_float(sampler, ..., texcoord, ...,
+// uv_scale, uv_offset, H) call in the same fragment source, to sample a
+// texel-space gradient off the same sampler/uv instead. Call sites whose
+// height doesn't trace back to a plain image sample, or whose uv_scale/
+// uv_offset aren't identity, are left untouched (upstream behavior).
+const applyHeightToNormalTexel = (fs, notices) => {
+  if (!getHeightToNormalTexel()) return fs;
+  const imageCallRe = /\bmx_image_float\s*\(([^;]*?)\)\s*;/g;
+  const heightSources = new Map(); // height var name -> { sampler, texcoord }
+  let m;
+  while ((m = imageCallRe.exec(fs)) !== null) {
+    const args = splitGlslArgs(m[1]);
+    if (args.length < 13) continue;
+    const [sampler,,, texcoord,,,,,,, uvScale, uvOffset, resultVar] = args;
+    if (!isVec2Literal(uvScale, 1, 1) || !isVec2Literal(uvOffset, 0, 0)) {
+      notices.push(`heighttonormal: skipped a call site (non-identity uv_scale/uv_offset on "${resultVar}")`);
+      continue;
+    }
+    heightSources.set(resultVar, {
+      sampler,
+      texcoord
+    });
+  }
+  if (!heightSources.size) return fs;
+  let rewritten = 0;
+  const h2nCallRe = /\bmx_heighttonormal_vector3\s*\(([^;]*?)\)\s*;/g;
+  fs = fs.replace(h2nCallRe, (full, argsText) => {
+    const args = splitGlslArgs(argsText);
+    if (args.length !== 4) return full;
+    const [heightVar, scale,, outVar] = args;
+    const src = heightSources.get(heightVar);
+    if (!src) return full;
+    rewritten++;
+    return `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
+  });
+  if (rewritten > 0) {
+    fs = HEIGHTTONORMAL_TEXEL_FN + fs;
+    notices.push(`heighttonormal: ${rewritten} call(s) use texel-space gradients (experimental)`);
+  }
+  return fs;
 };
 
 // Hair helper pbrlib nodes pull in the full BSDF/lighting include chain,
@@ -4531,6 +4662,7 @@ const generatePreviewSourcesUnlocked = ({
     }
   }
   fs = patchUnlitLightingRefs(fs);
+  fs = applyHeightToNormalTexel(fs, notices);
   const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
   const outVar = outDeclMatch ? outDeclMatch[1] : null;
   const outAssignments = outVar ? fs.match(new RegExp('\\b' + outVar + '\\s*=[^;]*;', 'g')) : null;
@@ -7910,6 +8042,8 @@ Object.assign(window, {
   clockTick,
   getForceTransparency,
   setForceTransparency,
+  getHeightToNormalTexel,
+  setHeightToNormalTexel,
   parseUniforms,
   parseVertexInputs,
   stripVersion,
