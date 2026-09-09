@@ -264,6 +264,11 @@ const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
         'void main() { float d = gl_FragCoord.z; fragColor = vec4(d, d * d, 0.0, 1.0); }',
     ].join('\n'),
     side: THREE.FrontSide,
+    // Depth bias: without it a surface shadows itself and the whole stage
+    // bands. Applied here rather than in the shader so it scales with slope.
+    polygonOffset: true,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: 4,
 });
 
 // The same transform sceneRoot carries, needed before that group exists so
@@ -556,7 +561,7 @@ const createMtlxSceneView = async ({
     // is nowhere to put a second map.
     let shadowTarget = null;
     let shadowDepthMaterial = null;
-    let shadowMatrix = new THREE.Matrix4();
+    let shadowMatrix = null;
     let shadowsEnabled = storedSceneShadows();
     let shadowDirty = true;
     const disposeShadowResources = () => {
@@ -1303,30 +1308,25 @@ const createMtlxSceneView = async ({
         // environment key direction when the stage has none. Runs on demand,
         // never per frame: nothing here changes while the camera moves.
         const updateShadowMap = () => {
-            if (!shadowsEnabled || !sceneRoot) { shadowMatrix = new THREE.Matrix4(); return; }
+            if (!shadowsEnabled || !sceneRoot) { shadowMatrix = null; return; }
             const box = new THREE.Box3().setFromObject(sceneRoot);
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
             const radius = Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
-            const lights = activeStageLights() || [];
+            // Directional only, deliberately. A point light sits inside the
+            // scene, so no single 2D map can cover it: everything outside the
+            // frustum clamps to edge texels and smears. MaterialX has one map
+            // and no bounds check, so an orthographic frustum that encloses the
+            // whole stage is the only shape that is correct everywhere.
+            const lights = (activeStageLights() || []).filter((l) => l.type === 1);
             const caster = lights.slice().sort((a, b) => b.intensity - a.intensity)[0];
-            let shadowCamera;
-            if (caster && caster.type === 2 || caster && caster.type === 3) {
-                const from = caster.position.clone();
-                const distance = Math.max(from.distanceTo(center), radius * 0.05);
-                const fov = 2 * Math.atan(radius / Math.max(distance, 1e-6)) * 180 / Math.PI;
-                shadowCamera = new THREE.PerspectiveCamera(Math.min(150, Math.max(5, fov * 1.2)), 1, Math.max(distance - radius, distance * 0.01), distance + radius * 2);
-                shadowCamera.position.copy(from);
-            } else {
-                // Directional caster, or none: fall back to the environment's
-                // key direction so shadows still read under pure IBL.
-                const dir = caster ? caster.direction.clone()
-                    : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
-                if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
-                dir.normalize();
-                shadowCamera = new THREE.OrthographicCamera(-radius, radius, radius, -radius, 0.01, radius * 4);
-                shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
-            }
+            const dir = caster ? caster.direction.clone()
+                : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
+            if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
+            dir.normalize();
+            const extent = radius * 1.05;
+            const shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, 0.01, radius * 4);
+            shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
             shadowCamera.lookAt(center);
             shadowCamera.updateMatrixWorld(true);
             shadowCamera.updateProjectionMatrix();
@@ -1334,6 +1334,10 @@ const createMtlxSceneView = async ({
                 shadowTarget = new THREE.WebGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, {
                     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
                     format: THREE.RGBAFormat, type: THREE.HalfFloatType, depthBuffer: true,
+                    // Clamped to a white border-equivalent: mx_shadow_occlusion
+                    // does not bounds-check, so anything outside the frustum
+                    // must read as unshadowed rather than repeat the map.
+                    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
                 });
             }
             if (!shadowDepthMaterial) shadowDepthMaterial = createShadowDepthMaterial();
@@ -1912,7 +1916,7 @@ const createMtlxSceneView = async ({
         const setShadowsEnabled = (on) => {
             shadowsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
-            if (shadowsEnabled) updateShadowMap(); else shadowMatrix = new THREE.Matrix4();
+            if (shadowsEnabled) updateShadowMap(); else shadowMatrix = null;
             applyMaterialEnvironment();
             return shadowsEnabled;
         };
