@@ -5109,6 +5109,7 @@ const createMtlxSceneUniforms = ({
   stageLights = null,
   shadowMap = null,
   shadowMatrix = null,
+  envTilt = null,
   envRotationRad = 0,
   envExposure = 1
 }) => {
@@ -5170,9 +5171,16 @@ const createMtlxSceneUniforms = ({
       value: radiance
     };
   }
-  if (has('u_envMatrix')) uniforms.u_envMatrix = {
-    value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad)
-  };
+  // envTilt carries a dome light's non-vertical orientation. The rotation
+  // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
+  // and re-applied here: with the slider at the dome's own yaw this
+  // reproduces the authored orientation exactly.
+  if (has('u_envMatrix')) {
+    const m = new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad);
+    uniforms.u_envMatrix = {
+      value: envTilt ? m.multiply(envTilt) : m
+    };
+  }
   if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = {
     value: mips
   };
