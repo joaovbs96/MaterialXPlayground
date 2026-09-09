@@ -1120,24 +1120,45 @@ const patchShadowBounds = fs => {
 // slots (an area emitter is split across several) carry the shadow, everything
 // else stays lit. u_shadowLightBegin == u_shadowLightEnd means "no caster",
 // which is the safe default and what the Material Viewer runs with.
+// Number of independent shadow casters packed into the atlas, and the light
+// slots the per-light lookup can address. Both are compile-time array sizes,
+// so they are fixed here and must match the renderer's own constants.
+const SHADOW_CASTER_SLOTS = 4;
+const SHADOW_LIGHT_SLOTS_MAX = 32;
 const patchShadowLightScope = fs => {
   const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
   const site = 'L = lightShader.direction;';
   if (fs.indexOf(call) === -1 || fs.indexOf(site) === -1) return fs;
-  let out = fs.replace(call, 'float mx_shadowTerm = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);');
-  out = out.replace(site, site + '\n            occlusion = (activeLightIndex >= u_shadowLightBegin && activeLightIndex < u_shadowLightEnd)' + '\n                ? mx_shadowTerm : 1.0;');
-  const decl = 'uniform int u_shadowLightBegin;\nuniform int u_shadowLightEnd;';
-  if (out.indexOf('uniform int u_shadowLightBegin;') === -1) {
-    // Must land before the FIRST global function, not before main(): the
-    // light loop lives in a surface evaluation function that precedes
-    // main, so declaring any later leaves these used before declared and
-    // nothing compiles. Same trap patchAmbientOcclusion documents.
-    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
-    const at = firstFn !== -1 ? firstFn : out.indexOf('void main');
-    if (at === -1) return fs;
-    out = out.slice(0, at) + decl + '\n' + out.slice(at);
-  }
-  return out;
+  // MaterialX's own single-map call is dropped: it computes the shadow once,
+  // before the loop, which is what limited it to light slot 0.
+  let out = fs.replace(call, 'occlusion = 1.0;');
+  out = out.replace(site, site + '\n            {' + '\n                int mx_caster = u_shadowSlotCaster[activeLightIndex];' + '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld);' + '\n            }');
+  if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
+  const decl = ['uniform sampler2D u_shadowAtlas;', 'uniform mat4 u_shadowMatrices[' + SHADOW_CASTER_SLOTS + '];',
+  // xy = tile origin in atlas UV, zw = tile size.
+  'uniform vec4 u_shadowTiles[' + SHADOW_CASTER_SLOTS + '];',
+  // Per light slot: which caster shadows it, or -1 for none.
+  'uniform int u_shadowSlotCaster[' + SHADOW_LIGHT_SLOTS_MAX + '];', 'float mx_shadow_atlas(int caster, vec3 P) {', '    if (caster < 0) return 1.0;', '    vec4 c4 = u_shadowMatrices[caster] * vec4(P, 1.0);', '    if (c4.w <= 0.0) return 1.0;', '    vec3 sc = c4.xyz / c4.w;', '    sc = sc * 0.5 + 0.5;', '    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return 1.0;', '    vec4 tile = u_shadowTiles[caster];', '    vec2 moments = texture(u_shadowAtlas, tile.xy + sc.xy * tile.zw).xy;',
+  // Chebyshev, with a much lower variance floor than the library's 1e-5:
+  // the renderer now fits the depth range to the geometry that actually
+  // overlaps the frustum, so differences are no longer squeezed into a
+  // couple of percent and the floor can stop swallowing them.
+  '    float p = (sc.z <= moments.x) ? 1.0 : 0.0;', '    float variance = max(moments.y - moments.x * moments.x, 2e-7);', '    float d = sc.z - moments.x;', '    float lit = max(p, variance / (variance + d * d));',
+  // Light bleed reduction. Chebyshev is only an upper bound, so a partly
+  // occluded texel reports far more light than it receives; rescaling the
+  // tail is what makes a shadow read as a shadow instead of a grey wash.
+  '    lit = smoothstep(0.3, 1.0, lit);',
+  // One 2D map cannot cover a light inside the room, so the frustum ends
+  // somewhere; fade the last few percent instead of drawing a hard line.
+  '    vec2 e = min(sc.xy, vec2(1.0) - sc.xy);', '    return mix(1.0, lit, smoothstep(0.0, 0.04, min(e.x, e.y)));', '}', ''].join('\n');
+  // Must land before the FIRST global function, not before main(): the light
+  // loop lives in a surface evaluation function that precedes main, so
+  // declaring any later leaves these used before declared and nothing
+  // compiles. Same trap patchAmbientOcclusion documents.
+  const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+  const at = firstFn !== -1 ? firstFn : out.indexOf('void main');
+  if (at === -1) return fs;
+  return out.slice(0, at) + decl + out.slice(at);
 };
 
 // Feeds a screen-space ambient occlusion factor into the slot MaterialX
@@ -5743,8 +5764,10 @@ const createMtlxSceneUniforms = ({
   envRotationRad = 0,
   envExposure = 1,
   displayTransform = null,
-  shadowLightBegin = 0,
-  shadowLightEnd = 0,
+  shadowAtlas = null,
+  shadowMatrices = null,
+  shadowTiles = null,
+  shadowSlotCaster = null,
   skyVisMap = null,
   skyVisMin = null,
   skyVisSize = null,
@@ -5790,12 +5813,24 @@ const createMtlxSceneUniforms = ({
     u_displayTransform: {
       value: displayTransformId(displayTransform || getDisplayTransform())
     },
-    // Which light slots the shadow map belongs to; equal means no caster.
-    u_shadowLightBegin: {
-      value: shadowLightBegin | 0
+    // Shadow atlas. Seeded unconditionally for the same sampler-unit
+    // reason as the sky volume below, and defaulted to "no caster on any
+    // slot", which makes the whole lookup an exact no-op.
+    u_shadowAtlas: {
+      value: shadowAtlas || getDummyTexWhite()
     },
-    u_shadowLightEnd: {
-      value: shadowLightEnd | 0
+    u_shadowMatrices: {
+      value: shadowMatrices && shadowMatrices.length === SHADOW_CASTER_SLOTS ? shadowMatrices : Array.from({
+        length: SHADOW_CASTER_SLOTS
+      }, () => new THREE.Matrix4())
+    },
+    u_shadowTiles: {
+      value: shadowTiles && shadowTiles.length === SHADOW_CASTER_SLOTS ? shadowTiles : Array.from({
+        length: SHADOW_CASTER_SLOTS
+      }, () => new THREE.Vector4(0, 0, 1, 1))
+    },
+    u_shadowSlotCaster: {
+      value: shadowSlotCaster && shadowSlotCaster.length === SHADOW_LIGHT_SLOTS_MAX ? shadowSlotCaster : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)
     },
     // Baked sky visibility. Seeded unconditionally, NOT through has():
     // parseUniforms' regex has no room for a precision qualifier, so
@@ -8161,11 +8196,23 @@ const createMtlxRenderView = async ({
         },
         // No stage caster in the Viewer, so no slot is shadowed;
         // the white dummy moments map above says the same thing.
-        u_shadowLightBegin: {
-          value: 0
+        // No stage caster in the Viewer: an all -1 slot map
+        // makes the atlas lookup an exact no-op.
+        u_shadowAtlas: {
+          value: getDummyTexWhite()
         },
-        u_shadowLightEnd: {
-          value: 0
+        u_shadowMatrices: {
+          value: Array.from({
+            length: SHADOW_CASTER_SLOTS
+          }, () => new THREE.Matrix4())
+        },
+        u_shadowTiles: {
+          value: Array.from({
+            length: SHADOW_CASTER_SLOTS
+          }, () => new THREE.Vector4(0, 0, 1, 1))
+        },
+        u_shadowSlotCaster: {
+          value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)
         },
         // Same sampler-unit hazard as the Scene: see
         // createMtlxSceneUniforms. No stage volume here, so
@@ -9282,6 +9329,8 @@ Object.assign(window, {
   getSpecularEnvMethod,
   getDummyTexWhite,
   getDummyTex3DWhite,
+  SHADOW_CASTER_SLOTS,
+  SHADOW_LIGHT_SLOTS_MAX,
   createPeelPipeline,
   applyPeelMaterialMode,
   registerLiveView,
