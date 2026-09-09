@@ -4095,7 +4095,12 @@ const PREFILTER_GLSL = [
     '}',
     'void main() {',
     '    vec2 uv = gl_FragCoord.xy / uTargetSize;',
-    '    vec3 worldN = mx_latlong_map_projection_inverse(uv);',
+    // +0.5 in longitude, because mx_latlong_map_projection_inverse is NOT
+    // the inverse of mx_latlong_projection: measured, the two disagree by
+    // exactly half the map. Writing texel uv as the value for the
+    // un-corrected direction leaves the whole prefiltered chain rotated
+    // 180 degrees against the lookup that reads it back.
+    '    vec3 worldN = mx_latlong_map_projection_inverse(vec2(uv.x + 0.5, uv.y));',
     '    float alpha = mx_latlong_lod_to_alpha(uMip);',
     // A mirror lobe has no width to integrate; sampling it would just add
     // noise, so level 0 is the source unchanged.

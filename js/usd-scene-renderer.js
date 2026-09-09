@@ -1635,41 +1635,36 @@ const createMtlxSceneView = async ({
                 const ranked = [...emitters.values()].sort((a, b) => b.score - a.score)[0];
                 local = ranked ? ranked.source : null;
             }
+            // A perspective frustum is only used when the caster stands
+            // OUTSIDE the stage, where one map can genuinely cover it.
+            //
+            // For a light inside the room an orthographic map is the better
+            // approximation even though the rays are parallel rather than
+            // radiating, and the reason is depth precision: an orthographic
+            // projection is linear in z, so the variance moments spread
+            // evenly across the range. A perspective projection is
+            // hyperbolic, and from a lamp 24 units inside a 250 unit stage
+            // the ENTIRE scene lands past z = 0.99, where the moments cannot
+            // discriminate. That is what produced the shadow acne and the
+            // detached contacts, and it is why the orthographic caster this
+            // replaced looked markedly more accurate.
             let shadowCamera;
-            if (local) {
-                // Aimed at the stage, NOT down the light's own -Z. A UsdLux
-                // rect light's forward axis is wherever the author pointed the
-                // panel: both Playground lamps sit over 80 degrees off the
-                // room centre, so a frustum built on that axis covers nothing
-                // and the bounds guard correctly reports every fragment as
-                // lit. Fitting the frustum to the stage instead keeps the
-                // caster at the light's real position, which is what casts a
-                // correct shadow, while guaranteeing it covers the geometry.
+            const outside = local && local.position.distanceTo(center) > radius;
+            if (local && outside) {
                 const eye = local.position.clone();
                 const distance = Math.max(1e-6, eye.distanceTo(center));
                 const halfAngle = Math.asin(Math.min(1, radius / distance));
-                const fov = Math.min(140, Math.max(10, 2 * halfAngle * 180 / Math.PI * 1.05));
-                // The near plane sets the depth precision the variance test
-                // has to work with, and radius * 1e-3 against a far of
-                // distance + radius gave a 1600:1 range that crushed every
-                // stored moment up against 1.0. A hundredth of the stage is
-                // still far closer than anything a caster realistically
-                // touches, and it cuts the range by about five times.
-                const near = Math.max(radius * 0.005, distance * 0.02);
+                const fov = Math.min(120, Math.max(10, 2 * halfAngle * 180 / Math.PI * 1.05));
+                const near = Math.max(radius * 0.005, (distance - radius) * 0.5);
                 shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, distance + radius * 1.1);
                 shadowCamera.position.copy(eye);
                 shadowCamera.lookAt(center);
-                // A caster standing inside the stage needs a wider frustum
-                // than one map can hold, so its shadows cover the middle of
-                // the room and fade out toward the corners. Say so rather
-                // than leaving the falloff looking like a rendering fault.
-                if (distance < radius) {
-                    const note = '[info] Shadow caster ' + (local.primPath || 'light')
-                        + ' stands inside the stage, so its shadow map covers the area around it and fades out further away';
-                    if (warnings.indexOf(note) < 0) warnings.push(note);
-                }
             } else {
+                // Direction, in order of preference: an authored directional
+                // light, then the strongest local light aimed at the stage,
+                // then the environment's key direction.
                 const dir = directional ? directional.direction.clone()
+                    : local ? center.clone().sub(local.position)
                     : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
                 if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
                 dir.normalize();
@@ -1677,6 +1672,11 @@ const createMtlxSceneView = async ({
                 shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, radius * 0.5, radius * 3.5);
                 shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
                 shadowCamera.lookAt(center);
+                if (local && !directional) {
+                    const note = '[info] Shadow caster ' + (local.primPath || 'light')
+                        + ' stands inside the stage, so its shadows are cast along its direction rather than radiating from it';
+                    if (warnings.indexOf(note) < 0) warnings.push(note);
+                }
             }
             shadowCamera.updateMatrixWorld(true);
             shadowCamera.updateProjectionMatrix();
