@@ -4710,7 +4710,12 @@ const makeLightEntry = over => Object.assign({
 // Slot layout is fixed for the life of a program: [rig..., key, stage...].
 // The key light keeps index rigCount so updateKeyLightUniformEntry can keep
 // mutating it in place, and the stage lights occupy the reserved tail.
-const currentLights = (rigLights, keyLight, rotRad, stageLights) => {
+// envScale is u_envLightIntensity. The key light is energy SPLIT OUT of the
+// environment map (extractKeyLight replaces the sun cluster with the local
+// mean), so it has to carry the same gain as the map it came from; without it
+// the sun and the sky drift apart by exactly the dome's intensity whenever
+// that is not 1, which reads as one blown highlight over a correct scene.
+const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale) => {
   const rig = rigLights || [];
   const stage = (stageLights || []).slice(0, STAGE_LIGHT_SLOTS);
   const out = rig.map(l => makeLightEntry({
@@ -4724,7 +4729,7 @@ const currentLights = (rigLights, keyLight, rotRad, stageLights) => {
       type: LIGHT_TYPE_DIRECTIONAL,
       direction: keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad || 0)),
       color: new THREE.Vector3(keyLight.color[0], keyLight.color[1], keyLight.color[2]),
-      intensity: keyLight.intensity
+      intensity: keyLight.intensity * (Number.isFinite(envScale) ? envScale : 1)
     }));
   } else {
     out.push(makeLightEntry({
@@ -4748,13 +4753,13 @@ const activeLightCount = (rigLights, keyLight, stageLights) => {
 // Live-updates ONLY the key-light slot (last entry) of an already-bound
 // u_lightData array in place, mutates values, never replaces the
 // array/uniform object (three r128 caches the struct-array layout).
-const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad) => {
+const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad, envScale) => {
   const entry = uniforms && uniforms.u_lightData && uniforms.u_lightData.value && uniforms.u_lightData.value[rigCount];
   if (!entry) return;
   if (keyLight) {
     entry.direction.copy(keyLight.direction).applyMatrix4(keyLightRotationMatrix(rotRad || 0));
     entry.color.set(keyLight.color[0], keyLight.color[1], keyLight.color[2]);
-    entry.intensity = keyLight.intensity;
+    entry.intensity = keyLight.intensity * (Number.isFinite(envScale) ? envScale : 1);
   } else {
     entry.direction.set(0, -1, 0);
     entry.color.set(0, 0, 0);
@@ -5901,7 +5906,7 @@ const createMtlxSceneUniforms = ({
     value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix()
   };
   if (has('u_lightData')) uniforms.u_lightData = {
-    value: currentLights(lightData, env && env.keyLight, envRotationRad, stageLights)
+    value: currentLights(lightData, env && env.keyLight, envRotationRad, stageLights, envExposure)
   };
   if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = {
     value: activeLightCount(lightData, env && env.keyLight, stageLights)
@@ -8602,7 +8607,7 @@ const createMtlxRenderView = async ({
         envRotationRad = rad;
         // The extracted key light tracks the (clamped) sun's
         // position as the env rotates, rig lights don't.
-        updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, rad);
+        updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, rad, envExposure);
         // Studio spotlight follows the SAME rotated direction, so
         // the shadow agrees with the highlight; shadow.autoUpdate
         // defaults to true, so the shadow map redraws on its own.
@@ -8693,7 +8698,7 @@ const createMtlxRenderView = async ({
         // bound uniform entry in place, honoring current rotation.
         envKeyLight = env.keyLight || null;
         envSoftKeyDir = env.softKeyDir || null;
-        updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, envRotationRad);
+        updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, envRotationRad, envExposure);
         // Same refresh for the shadow: without this the studio light
         // would keep aiming along the PREVIOUS env's key light until
         // the next rotation change.
