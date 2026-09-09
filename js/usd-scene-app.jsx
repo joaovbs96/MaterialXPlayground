@@ -879,7 +879,7 @@
                         />
                     </div>
                     <SliderField
-                        label="Exposure" unit="EV"
+                        label="Camera exposure" unit="EV"
                         value={displayExposure}
                         min={-8}
                         max={8}
@@ -888,7 +888,7 @@
                         onNumber={(v) => applyDisplayExposure(v)}
                     />
                     <div className="text-[11px] text-gray-400">
-                        Scales the whole image before the display transform, the way a camera would. Environment exposure gains only the image based lighting, so it cannot balance a stage that also has its own lights.
+                        Scales the whole image before the display transform, the way a camera would. The Environment card's exposure gains only the image based lighting, so on a stage that also has its own lights it cannot balance the picture on its own.
                     </div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Texture resolution</span>

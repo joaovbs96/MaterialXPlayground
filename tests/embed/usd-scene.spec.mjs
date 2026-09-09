@@ -331,6 +331,7 @@ test('@scene refreshes display transform without reloading the USD stage', async
         materials.push({
           path: material.userData.mtlxSceneMaterialPath,
           shader: material.fragmentShader,
+          transformId: material.uniforms.u_displayTransform ? material.uniforms.u_displayTransform.value : null,
           envMatrix: material.uniforms.u_envMatrix ? Array.from(material.uniforms.u_envMatrix.value.elements) : null,
           envIntensity: material.uniforms.u_envLightIntensity ? material.uniforms.u_envLightIntensity.value : null,
         });
@@ -359,7 +360,7 @@ test('@scene refreshes display transform without reloading the USD stage', async
   const configuredImage = decodePNG(await page.getByTestId('usd-scene-canvas').locator('canvas').screenshot());
   await page.getByRole('link', { name: 'Viewer', exact: true }).click();
   await expect(page.getByTestId('usd-scene-viewer')).toBeHidden();
-  await page.evaluate(() => window.setDisplayTransform('lin_rec709'));
+  await page.evaluate(() => window.__usdSceneHandle.setSceneDisplayTransform('lin_rec709'));
   await page.getByRole('link', { name: 'Scene Viewer' }).click();
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
   await page.waitForFunction(() => {
@@ -374,10 +375,17 @@ test('@scene refreshes display transform without reloading the USD stage', async
     for (const object of handle.prims) {
       const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of objectMaterials) {
-        if (material && material.userData && material.userData.mtlxSceneCompiled) current.set(material.userData.mtlxSceneMaterialPath, material.fragmentShader);
+        if (material && material.userData && material.userData.mtlxSceneCompiled) {
+          current.set(material.userData.mtlxSceneMaterialPath, {
+            shader: material.fragmentShader,
+            transformId: material.uniforms.u_displayTransform ? material.uniforms.u_displayTransform.value : null,
+          });
+        }
       }
     }
-    return before.length > 0 && before.every((entry) => current.has(entry.path) && current.get(entry.path) !== entry.shader);
+    return before.length > 0 && before.every((entry) => current.has(entry.path)
+      && current.get(entry.path).shader === entry.shader
+      && current.get(entry.path).transformId !== entry.transformId);
   }, null, { timeout: 30000 });
   const retained = await page.evaluate(() => {
     const state = window.__usdRouteState;
@@ -392,6 +400,7 @@ test('@scene refreshes display transform without reloading the USD stage', async
         materials.push({
           path: material.userData.mtlxSceneMaterialPath,
           shader: material.fragmentShader,
+          transformId: material.uniforms.u_displayTransform ? material.uniforms.u_displayTransform.value : null,
           envMatrix: material.uniforms.u_envMatrix ? Array.from(material.uniforms.u_envMatrix.value.elements) : null,
           envIntensity: material.uniforms.u_envLightIntensity ? material.uniforms.u_envLightIntensity.value : null,
         });
@@ -421,8 +430,9 @@ test('@scene refreshes display transform without reloading the USD stage', async
   retained.cameraQuaternion.forEach((value, index) => expect(value).toBeCloseTo(routeState.cameraQuaternion[index], 10));
   expect(retained.sameSceneEnvironment).toBe(true);
   expect(retained.exposure).toBeCloseTo(routeState.exposure, 5);
-  // Exposure applied exactly once: renderer.toneMappingExposure stays
-  // pinned at 1 (matching the Viewer) both before and after the route swap.
+  // renderer.toneMappingExposure now carries the camera exposure so three's
+  // built-in backdrop matches the MaterialX materials; at the default 0 EV
+  // that is still exactly 1, before and after the route swap.
   expect(routeState.toneMappingExposure).toBe(1);
   expect(retained.toneMappingExposure).toBe(1);
   expect(retained.workerCalls).toBe(routeState.workerCalls);
