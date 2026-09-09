@@ -1065,8 +1065,60 @@ const patchShadowBounds = fs => {
   // perspective projection shadowCoord.z is not a distance, and with a
   // near of 0.25 against a far of 399 the ENTIRE stage lands past 0.99,
   // so any threshold on it fades every shadow in the scene to nothing.
-  'vec2 mx_shadowEdge = min(shadowCoord.xy, vec2(1.0) - shadowCoord.xy);', 'float mx_shadowFade = smoothstep(0.0, 0.12, min(mx_shadowEdge.x, mx_shadowEdge.y));', 'return mix(1.0, ' + call + ', mx_shadowFade);'].join('\n    ');
+  'vec2 mx_shadowEdge = min(shadowCoord.xy, vec2(1.0) - shadowCoord.xy);', 'float mx_shadowFade = smoothstep(0.0, 0.12, min(mx_shadowEdge.x, mx_shadowEdge.y));',
+  // Variance shadow maps leak: Chebyshev's bound is only an upper bound,
+  // so a partly occluded texel reports far more light than it receives.
+  // The library has no bleed reduction at all, and with MIN_VARIANCE at
+  // 1e-5 across a whole stage's depth range an occluder needs roughly a
+  // world unit of separation before it even half darkens. Rescaling the
+  // tail of the bound is the standard fix and is what gives small props
+  // a readable shadow instead of a grey wash.
+  'float mx_shadowRaw = ' + call + ';', 'float mx_shadowLit = smoothstep(0.35, 1.0, mx_shadowRaw);', 'return mix(1.0, mx_shadowLit, mx_shadowFade);'].join('\n    ');
   return fs.replace(anchor, guard);
+};
+
+// Points MaterialX's single shadow term at the light the map was actually
+// rendered from.
+//
+// The generator emits the shadow ONCE, before the light loop, and resets it at
+// the end of every iteration:
+//
+//     // Shadow occlusion
+//     occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);
+//     ... for (int activeLightIndex = ...) {
+//             // Clear shadow factor for next light
+//             occlusion = 1.0;
+//         }
+//
+// so only light slot 0 is ever shadowed. Our slot layout is [rig..., key,
+// stage...] and the site's environment_map.mtlx declares no rig lights, so slot
+// 0 is the environment key light while the caster is chosen from the STAGE
+// lights. The map was therefore drawn from one light and applied to a different
+// one pointing somewhere else, which is why no USD light cast a shadow and the
+// darkening that did appear sat at the wrong contact points.
+//
+// The fix keeps MaterialX's one map and selects per light instead: the caster's
+// slots (an area emitter is split across several) carry the shadow, everything
+// else stays lit. u_shadowLightBegin == u_shadowLightEnd means "no caster",
+// which is the safe default and what the Material Viewer runs with.
+const patchShadowLightScope = fs => {
+  const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
+  const site = 'L = lightShader.direction;';
+  if (fs.indexOf(call) === -1 || fs.indexOf(site) === -1) return fs;
+  let out = fs.replace(call, 'float mx_shadowTerm = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);');
+  out = out.replace(site, site + '\n            occlusion = (activeLightIndex >= u_shadowLightBegin && activeLightIndex < u_shadowLightEnd)' + '\n                ? mx_shadowTerm : 1.0;');
+  const decl = 'uniform int u_shadowLightBegin;\nuniform int u_shadowLightEnd;';
+  if (out.indexOf('uniform int u_shadowLightBegin;') === -1) {
+    // Must land before the FIRST global function, not before main(): the
+    // light loop lives in a surface evaluation function that precedes
+    // main, so declaring any later leaves these used before declared and
+    // nothing compiles. Same trap patchAmbientOcclusion documents.
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : out.indexOf('void main');
+    if (at === -1) return fs;
+    out = out.slice(0, at) + decl + '\n' + out.slice(at);
+  }
+  return out;
 };
 
 // Feeds a screen-space ambient occlusion factor into the slot MaterialX
@@ -5546,6 +5598,7 @@ const generatePreviewSourcesUnlocked = ({
   // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
   fs = patchTransmissionAlpha(fs);
   fs = patchShadowBounds(fs);
+  fs = patchShadowLightScope(fs);
   fs = patchAmbientOcclusion(fs);
   fs = patchTransmissionThickness(fs);
   // Depth-peel machinery: baked into every fragment shader
@@ -5651,7 +5704,9 @@ const createMtlxSceneUniforms = ({
   envTilt = null,
   envRotationRad = 0,
   envExposure = 1,
-  displayTransform = null
+  displayTransform = null,
+  shadowLightBegin = 0,
+  shadowLightEnd = 0
 }) => {
   if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
   const uniforms = {
@@ -5691,6 +5746,13 @@ const createMtlxSceneUniforms = ({
     },
     u_displayTransform: {
       value: displayTransformId(displayTransform || getDisplayTransform())
+    },
+    // Which light slots the shadow map belongs to; equal means no caster.
+    u_shadowLightBegin: {
+      value: shadowLightBegin | 0
+    },
+    u_shadowLightEnd: {
+      value: shadowLightEnd | 0
     }
   };
   applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
@@ -8030,6 +8092,14 @@ const createMtlxRenderView = async ({
         },
         u_displayTransform: {
           value: displayTransformId(getDisplayTransform())
+        },
+        // No stage caster in the Viewer, so no slot is shadowed;
+        // the white dummy moments map above says the same thing.
+        u_shadowLightBegin: {
+          value: 0
+        },
+        u_shadowLightEnd: {
+          value: 0
         }
       };
 
