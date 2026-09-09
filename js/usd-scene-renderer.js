@@ -502,7 +502,11 @@ const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
         // Matches MaterialX's mx_compute_depth_moments() exactly.
         'void main() { float d = gl_FragCoord.z; fragColor = vec4(d, d * d, 0.0, 1.0); }',
     ].join('\n'),
-    side: THREE.FrontSide,
+    // Cast from both faces. USD stages carry plenty of single-sided and
+    // inverted-winding geometry (17 of the 21 chess meshes are leftHanded, and
+    // props are routinely open shells), and front-face-only casting made all of
+    // it transparent to the shadow pass.
+    side: THREE.DoubleSide,
     // Depth bias: without it a surface shadows itself and the whole stage
     // bands. Applied here rather than in the shader so it scales with slope.
     // Modest bias now that the moments are full float: the large offset the
@@ -807,6 +811,10 @@ const createMtlxSceneView = async ({
     let shadowBlurCamera = null;
     let shadowDepthMaterial = null;
     let shadowMatrix = null;
+    // Which u_lightData slots the shadow map belongs to. MaterialX shadows one
+    // light, and until this existed it always shadowed slot 0 (the environment
+    // key light) no matter which light the map was actually drawn from.
+    let shadowLightRange = { begin: 0, end: 0 };
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
@@ -1243,6 +1251,7 @@ const createMtlxSceneView = async ({
         if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
+            shadowLightBegin: shadowLightRange.begin, shadowLightEnd: shadowLightRange.end,
             shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
             thicknessScale, refractionTwoSided: true,
         });
@@ -1647,7 +1656,7 @@ const createMtlxSceneView = async ({
             // map) lands outside the visible region rather than washing
             // shadows out along the screen border. Never larger than the
             // stage, and never so small that a stray orbit target degenerates.
-            const fit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.2));
+            const fit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.4));
             const centreL = target.clone().applyMatrix4(toLight);
             let left = Math.max(centreL.x - fit, stageBox.min.x);
             let right = Math.min(centreL.x + fit, stageBox.max.x);
@@ -1679,7 +1688,7 @@ const createMtlxSceneView = async ({
             shadowCamera.far = -stageBox.min.z + margin;
         };
         const updateShadowMap = () => {
-            if (!shadowsEnabled || !sceneRoot) { shadowMatrix = null; return; }
+            if (!shadowsEnabled || !sceneRoot) { shadowMatrix = null; shadowLightRange = { begin: 0, end: 0 }; return; }
             const box = new THREE.Box3().setFromObject(sceneRoot);
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
@@ -1717,6 +1726,29 @@ const createMtlxSceneView = async ({
                 const ranked = [...emitters.values()].sort((a, b) => b.score - a.score)[0];
                 local = ranked ? ranked.source : null;
             }
+            // Record which u_lightData slots the caster owns, so the shader can
+            // shadow exactly those. An area emitter is split into several point
+            // samples that sit contiguously in the array, and the whole run has
+            // to be shadowed or the lamp keeps lighting through its own
+            // occluders with the fraction of its power the split left behind.
+            // Slot layout is [rig..., key, stage...] (js/mtlx-engine.js
+            // currentLights), so a stage index needs the rig and key offset.
+            const casterPath = (directional && (directional.emitter || directional).primPath)
+                || (local && local.primPath) || null;
+            const slotOffset = ((mxEnv && mxEnv.lightData) ? mxEnv.lightData.length : 0) + 1;
+            let begin = -1;
+            let end = -1;
+            if (casterPath) {
+                for (let i = 0; i < stageLights.length; i++) {
+                    const source = stageLights[i].emitter || stageLights[i];
+                    if ((source.primPath || null) !== casterPath) continue;
+                    if (begin < 0) begin = i;
+                    end = i + 1;
+                }
+            }
+            shadowLightRange = begin < 0
+                ? { begin: 0, end: 0 }
+                : { begin: slotOffset + begin, end: slotOffset + end };
             // A perspective frustum is only used when the caster stands
             // OUTSIDE the stage, where one map can genuinely cover it.
             //
@@ -1992,6 +2024,8 @@ const createMtlxSceneView = async ({
                 if (material.uniforms.u_shadowMap && shadowTarget) {
                     material.uniforms.u_shadowMap.value = shadowTarget.texture;
                 }
+                if (material.uniforms.u_shadowLightBegin) material.uniforms.u_shadowLightBegin.value = shadowLightRange.begin;
+                if (material.uniforms.u_shadowLightEnd) material.uniforms.u_shadowLightEnd.value = shadowLightRange.end;
             }
         };
         const applyMaterialEnvironment = () => {
@@ -2008,9 +2042,10 @@ const createMtlxSceneView = async ({
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
+            shadowLightBegin: shadowLightRange.begin, shadowLightEnd: shadowLightRange.end,
                     shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
                     thicknessScale, refractionTwoSided: true,
-                    envRotationRad, envExposure, displayTransform: sceneDisplayTransform,
+                    envRotationRad, envExposure,
                 });
                 for (const [name, slot] of Object.entries(next)) {
                     if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$|u_shadowMap$|u_shadowMatrix$)/).test(name) || !material.uniforms[name]) continue;
@@ -2631,7 +2666,7 @@ const createMtlxSceneView = async ({
         const setShadowsEnabled = (on) => {
             shadowsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
-            if (shadowsEnabled) updateShadowMap(); else shadowMatrix = null;
+            if (shadowsEnabled) updateShadowMap(); else { shadowMatrix = null; shadowLightRange = { begin: 0, end: 0 }; applyShadowMatrix(); }
             applyMaterialEnvironment();
             return shadowsEnabled;
         };
