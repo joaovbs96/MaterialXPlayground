@@ -917,7 +917,15 @@ const patchShadowBounds = (fs) => {
     const guard = [
         'if (shadowCoord4.w <= 0.0) return 1.0;',
         'if (any(lessThan(shadowCoord, vec3(0.0))) || any(greaterThan(shadowCoord, vec3(1.0)))) return 1.0;',
-        anchor,
+        // A light inside the scene cannot be covered by one 2D map, so the
+        // frustum always ends somewhere. Stopping dead at its edge draws a
+        // hard straight line across the floor where shadowed meets
+        // unshadowed. Fading over the last few percent of the map, and near
+        // the far plane, makes that a gradient instead of a seam.
+        'vec2 mx_shadowEdge = min(shadowCoord.xy, vec2(1.0) - shadowCoord.xy);',
+        'float mx_shadowFade = smoothstep(0.0, 0.12, min(mx_shadowEdge.x, mx_shadowEdge.y))',
+        '                    * (1.0 - smoothstep(0.85, 1.0, shadowCoord.z));',
+        'return mix(1.0, ' + call + ', mx_shadowFade);',
     ].join('\n    ');
     return fs.replace(anchor, guard);
 };

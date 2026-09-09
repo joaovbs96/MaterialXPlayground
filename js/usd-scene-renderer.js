@@ -1653,6 +1653,15 @@ const createMtlxSceneView = async ({
                 shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, distance + radius * 1.5);
                 shadowCamera.position.copy(eye);
                 shadowCamera.lookAt(center);
+                // A caster standing inside the stage needs a wider frustum
+                // than one map can hold, so its shadows cover the middle of
+                // the room and fade out toward the corners. Say so rather
+                // than leaving the falloff looking like a rendering fault.
+                if (distance < radius) {
+                    const note = '[info] Shadow caster ' + (local.primPath || 'light')
+                        + ' stands inside the stage, so its shadow map covers the area around it and fades out further away';
+                    if (warnings.indexOf(note) < 0) warnings.push(note);
+                }
             } else {
                 const dir = directional ? directional.direction.clone()
                     : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
