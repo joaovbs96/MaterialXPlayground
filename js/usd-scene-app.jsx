@@ -262,6 +262,11 @@
             const onSettingsChanged = (e) => {
                 if (!e.detail || e.detail.key !== 'forceTransparency') return;
                 setForceTransparencyState(!!e.detail.value);
+                // The peel set only exists while the flag is on, so refresh the
+                // sidebar list from the handle instead of leaving it stale.
+                const fn = handleRef.current && handleRef.current.getTransparentPrims;
+                if (!e.detail.value) setTransparentPrims([]);
+                else if (typeof fn === 'function') { try { setTransparentPrims(fn()); } catch (err) { /* not rendered yet */ } }
             };
             window.addEventListener('mtlx-settings-changed', onSettingsChanged);
             return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);

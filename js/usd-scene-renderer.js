@@ -265,9 +265,11 @@ const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
     side: THREE.FrontSide,
     // Depth bias: without it a surface shadows itself and the whole stage
     // bands. Applied here rather than in the shader so it scales with slope.
+    // Modest bias now that the moments are full float: the large offset the
+    // half-float target needed detaches shadows from their contact points.
     polygonOffset: true,
-    polygonOffsetFactor: 4,
-    polygonOffsetUnits: 8,
+    polygonOffsetFactor: 1.5,
+    polygonOffsetUnits: 2,
 });
 
 // The same transform sceneRoot carries, needed before that group exists so
