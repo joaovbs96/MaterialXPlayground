@@ -15,6 +15,17 @@
 // STAMP_TABLE, which fails CI if this literal drifts from
 // js/gen/mtlx-version.json.
 const MTLX_DEFAULT_VERSION = '1.39.5';
+// MaterialX light shader ids. The id bound with bindLightShader IS the
+// LightData.type the generated sampleLightSource() switches on, so these
+// are part of the shader contract and must not be renumbered.
+const LIGHT_TYPE_DIRECTIONAL = 1;
+const LIGHT_TYPE_POINT = 2;
+const LIGHT_TYPE_SPOT = 3;
+// Slots reserved for lights imported from a USD stage. This lands in the
+// generated GLSL as part of MAX_LIGHT_SOURCES, so it is decided once before
+// the first shader is generated and can never grow at runtime. Unused slots
+// cost nothing: the light loop is bounded by u_numActiveLightSources.
+const STAGE_LIGHT_SLOTS = 8;
 const mxEnvPromises = new Map();
 
 // Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
@@ -125,6 +136,17 @@ const getMxEnv = (version) => {
                             if (HwGen && HwGen.bindLightShader && ldef) {
                                 try { HwGen.unbindLightShaders(genContext); } catch (e) { /* fresh ctx */ }
                                 HwGen.bindLightShader(ldef, 1, genContext);
+                                // Point and spot as well, so USD stage lights
+                                // have a target: the id IS LightData.type in
+                                // the generated sampleLightSource() switch.
+                                // Each bind is guarded on its own, a missing
+                                // nodedef just leaves that type unavailable.
+                                for (const [name, id] of [['ND_point_light', LIGHT_TYPE_POINT], ['ND_spot_light', LIGHT_TYPE_SPOT]]) {
+                                    try {
+                                        const def = stdlib.getNodeDef ? stdlib.getNodeDef(name) : null;
+                                        if (def) HwGen.bindLightShader(def, id, genContext);
+                                    } catch (e) { console.warn('light shader ' + name + ' unavailable:', e); }
+                                }
                                 // Parses <directional_light> via DOMParser,
                                 // which handles self-closing tags unlike
                                 // regex. Parse failure warns, never throws.
@@ -167,13 +189,15 @@ const getMxEnv = (version) => {
                                         console.warn('direct-light rig: DOMParser failed on environment_map.mtlx, no rig lights loaded.', e);
                                     }
                                 }
-                                // Capacity must cover the rig PLUS one slot
-                                // reserved for the auto-extracted env key
-                                // light (extractKeyLight), fixed for good,
-                                // since a bound array's length can't change.
+                                // Capacity must cover the rig, the reserved
+                                // env key-light slot and STAGE_LIGHT_SLOTS for
+                                // imported USD lights. It becomes a #define in
+                                // the generated GLSL, so it is fixed for good:
+                                // a bound array's length can never change.
                                 try {
                                     const opts = genContext.getOptions();
-                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1);
+                                    const want = rigLights.length + 1 + STAGE_LIGHT_SLOTS;
+                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, want);
                                 } catch (e) { /* keep default */ }
                                 // No fallback light: an empty rig leaves
                                 // lightData empty, so u_numActiveLightSources
@@ -3667,21 +3691,51 @@ const keyLightRotationMatrix = (rad) => new THREE.Matrix4().makeRotationY(-rad);
 // Rig lights (fixed) + the active env's extracted key light (rotates
 // live), padded to a FIXED length (rig.length + 1) for u_lightData,
 // the array length must never change after a program's first bind.
-const currentLights = (rigLights, keyLight, rotRad) => {
-    const out = (rigLights || []).map((l) => ({
+// One LightData entry. Every field the merged struct declares must be
+// present on every entry: three reads each declared member by name, so a
+// missing one is a bind error rather than a default.
+const makeLightEntry = (over) => Object.assign({
+    type: 0,
+    position: new THREE.Vector3(),
+    direction: new THREE.Vector3(0, -1, 0),
+    color: new THREE.Vector3(),
+    intensity: 0,
+    decay_rate: 2,
+    inner_angle: 0,
+    outer_angle: 0,
+}, over || {});
+// Slot layout is fixed for the life of a program: [rig..., key, stage...].
+// The key light keeps index rigCount so updateKeyLightUniformEntry can keep
+// mutating it in place, and the stage lights occupy the reserved tail.
+const currentLights = (rigLights, keyLight, rotRad, stageLights) => {
+    const rig = rigLights || [];
+    const stage = (stageLights || []).slice(0, STAGE_LIGHT_SLOTS);
+    const out = rig.map((l) => makeLightEntry({
         type: l.type, direction: l.direction.clone(), color: l.color.clone(), intensity: l.intensity,
     }));
     if (keyLight) {
-        out.push({
-            type: 1,
+        out.push(makeLightEntry({
+            type: LIGHT_TYPE_DIRECTIONAL,
             direction: keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad || 0)),
             color: new THREE.Vector3(keyLight.color[0], keyLight.color[1], keyLight.color[2]),
             intensity: keyLight.intensity,
-        });
+        }));
     } else {
-        out.push({ type: 1, direction: new THREE.Vector3(0, -1, 0), color: new THREE.Vector3(0, 0, 0), intensity: 0 });
+        out.push(makeLightEntry({ type: LIGHT_TYPE_DIRECTIONAL }));
     }
+    for (const l of stage) out.push(makeLightEntry(l));
+    // The array length must equal MAX_LIGHT_SOURCES exactly; three walks
+    // every declared index and an absent element throws.
+    while (out.length < rig.length + 1 + STAGE_LIGHT_SLOTS) out.push(makeLightEntry());
     return out;
+};
+// Slots actually evaluated. Stage lights sit past the key slot, so reaching
+// them means counting it too; an unused key slot is inert (intensity 0).
+const activeLightCount = (rigLights, keyLight, stageLights) => {
+    const rigCount = (rigLights || []).length;
+    const stageCount = Math.min((stageLights || []).length, STAGE_LIGHT_SLOTS);
+    if (stageCount) return rigCount + 1 + stageCount;
+    return rigCount + (keyLight ? 1 : 0);
 };
 // Live-updates ONLY the key-light slot (last entry) of an already-bound
 // u_lightData array in place, mutates values, never replaces the
@@ -4346,7 +4400,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRotationRad = 0, envExposure = 1 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, envRotationRad = 0, envExposure = 1 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -4381,8 +4435,8 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRota
     if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
     if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure };
     if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = { value: false };
-    if (has('u_lightData')) uniforms.u_lightData = { value: currentLights(lightData, env && env.keyLight, envRotationRad) };
-    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: (lightData || []).length + (env && env.keyLight ? 1 : 0) };
+    if (has('u_lightData')) uniforms.u_lightData = { value: currentLights(lightData, env && env.keyLight, envRotationRad, stageLights) };
+    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights) };
     return uniforms;
 };
 
@@ -6406,7 +6460,7 @@ const createMtlxRenderView = async ({
                         // length (rigCount+1, see getMxEnv's
                         // hwMaxActiveLightSources) so later updates can
                         // mutate values in place without a rebuild.
-                        const nLights = rigCount + (envKeyLight ? 1 : 0);
+                        const nLights = activeLightCount(lightData, envKeyLight, null);
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
                         if (has('u_lightData')) newUniforms.u_lightData = { value: currentLights(lightData, envKeyLight, envRotationRad) };
                         if (DEBUG_SHADERS) {
