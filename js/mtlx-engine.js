@@ -954,9 +954,16 @@ const patchAmbientOcclusion = (fs) => {
         '}',
         '',
     ].join('\n');
-    const mainIdx = out.indexOf('void main(');
-    if (mainIdx === -1) return fs; // no main: leave the shader untouched
-    return out.slice(0, mainIdx) + decls + out.slice(mainIdx);
+    // Must land before the FIRST function definition, not before main():
+    // the generator emits the ambient-occlusion slot inside a surface
+    // evaluation function that precedes main, so declaring the helper any
+    // later leaves it used before it is declared and nothing compiles.
+    // Only builtins are referenced here, so the top of the function section
+    // is always a legal home for it.
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : out.indexOf('void main(');
+    if (at === -1) return fs; // nothing recognisable: leave the shader untouched
+    return out.slice(0, at) + decls + out.slice(at);
 };
 
 // Gives MaterialX's volume absorption the path length it is missing.
