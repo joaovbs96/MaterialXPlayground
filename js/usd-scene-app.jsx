@@ -920,7 +920,7 @@
                                 />
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
-                                {stageLightInfo.count} light{stageLightInfo.count === 1 ? '' : 's'} imported from the stage. Area lights are approximated as points at their centre, matching Hydra Storm, and cast no shadows yet.
+                                {stageLightInfo.count} light{stageLightInfo.count === 1 ? '' : 's'} imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter's power; Diagnostics lists the split per light.
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"
@@ -936,7 +936,7 @@
                                 />
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
-                                One shadow caster only, from the brightest light: MaterialX computes a single occlusion value shared by every light and the environment, so shadowed areas also lose ambient light.
+                                One shadow caster only, from the brightest light: MaterialX computes a single occlusion value shared by every light and the environment, so shadowed areas also lose ambient light. A local light casts from its own forward axis, so anything outside that cone is unshadowed.
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"

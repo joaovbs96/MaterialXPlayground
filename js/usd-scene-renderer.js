@@ -1270,18 +1270,25 @@ const createMtlxSceneView = async ({
                 envTilt = domeResult.tilt || null;
             }
         }
-        if (window.convertUsdStageLights) {
+        // Splitting an area light across its surface needs to know how far it
+        // is from what it lights, and geometry does not exist yet. Convert
+        // once now so early frames have lighting, and again below once the
+        // bounds are real. The first pass weighs every emitter equally.
+        const convertLights = (sceneCenter) => {
+            if (!window.convertUsdStageLights) return;
             try {
                 stageLights = window.convertUsdStageLights(stage.lights, {
                     rootMatrix: sceneRootMatrix(stage),
-                    limit: 8,
+                    limit: 16, // must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js
+                    sceneCenter,
                     warn: (message) => { if (warnings.indexOf(message) < 0) warnings.push(message); },
                 });
             } catch (e) {
                 warnings.push('Stage light import failed: ' + String(e && e.message || e));
                 stageLights = [];
             }
-        }
+        };
+        convertLights(null);
         if (!isMounted()) throw new Error('USD scene view was cancelled.');
         const byPath = new Map();
         const pendingTextures = [];
@@ -1868,9 +1875,14 @@ const createMtlxSceneView = async ({
         }
         await awaitTextureJobs(pendingTextures);
         if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+        const stageBox = new THREE.Box3().setFromObject(sceneRoot);
         if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
-            environmentBridge.updateBounds(new THREE.Box3().setFromObject(sceneRoot));
+            environmentBridge.updateBounds(stageBox);
         }
+        // Now that the stage has real bounds, redo the light split with the
+        // distances it needs. The info lines from the first pass are already
+        // deduped by primPath, so this only adds ones that actually changed.
+        if (!stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
         // Geometry and lights are final here, so draw the map once before the
         // first frame rather than leaving the opening frames unshadowed.
         if (shadowsEnabled) updateShadowMap();

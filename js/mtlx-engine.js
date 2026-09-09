@@ -25,7 +25,13 @@ const LIGHT_TYPE_SPOT = 3;
 // generated GLSL as part of MAX_LIGHT_SOURCES, so it is decided once before
 // the first shader is generated and can never grow at runtime. Unused slots
 // cost nothing: the light loop is bounded by u_numActiveLightSources.
-const STAGE_LIGHT_SLOTS = 8;
+//
+// 16 is a ceiling, not a preference. LightData is 8 vec4 slots wide (int +
+// 3 vec3 + 4 float), so 16 stage slots plus the env key light is 136 uniform
+// vectors, still inside the 224 that GLES 3 guarantees. Raising it buys
+// finer area-light subdivision at the risk of failing to link on a GPU at
+// that floor, and this define lands in EVERY material in both apps.
+const STAGE_LIGHT_SLOTS = 16;
 const mxEnvPromises = new Map();
 
 // Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
