@@ -20,7 +20,14 @@
 
     var DEG = Math.PI / 180;
 
+    // Number(null) is 0, which is finite, so a plain Number() coercion turned
+    // every unauthored attribute into an authored zero. The worker writes null
+    // for attributes a prim does not author precisely so the two can be told
+    // apart, and this is where that distinction was being thrown away: a rect
+    // light relying on the UsdLux width/height defaults reported zero area, so
+    // the area multiply was skipped and the emitter was never split.
     function num(value, fallback) {
+        if (value === null || value === undefined || value === '') return fallback;
         var n = Number(value);
         return Number.isFinite(n) ? n : fallback;
     }
