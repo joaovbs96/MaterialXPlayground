@@ -129,6 +129,16 @@
         padding-right: calc(32px + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
     }
 }
+/* macOS: the traffic lights are drawn by the OS at the window's top LEFT,
+   over the brand. Nothing reserves that space automatically, because the
+   titlebar-area-* vars above only exist for the Windows/Linux overlay and
+   resolve to their zero fallbacks here. Reserve it explicitly instead.
+   The gutter must clear the cluster's left inset (trafficLightPosition.x in
+   electron/main/main.js) plus its ~52px width; change both together. */
+.mtlx-header-bar.mtlx-desktop-mac {
+    --mtlx-traffic-light-gutter: 104px;
+    padding-left: var(--mtlx-traffic-light-gutter);
+}
 /* The mobile dropdown panel and the update banner are siblings of the bar
    that can grow the outer strip taller (menu open, banner visible); carve
    both out whole so nothing below the header strip is ever draggable. */
@@ -148,6 +158,14 @@
 .mtlx-header.mtlx-desktop-titlebar .mtlx-menu {
     -webkit-app-region: no-drag;
     app-region: no-drag;
+}
+
+/* Electron's right cluster is icon-only (GitHub + settings cog), no reason
+   to also show the MaterialX version pill; the id selector's extra
+   specificity here beats the plain #mtlx-header-version media-query rule
+   below regardless of source order. */
+.mtlx-header-bar.mtlx-desktop-titlebar #mtlx-header-version {
+    display: none;
 }
 
 /* Brand: logo mark + site title. Color lives on the outer element
@@ -175,6 +193,12 @@
     font-weight: 700;
     white-space: nowrap;
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Same brand blue as .mtlx-brand above, for the desktop About dialog's
+   logo/title. No hover rule: this is a static header, not a link. */
+.mtlx-dialog-brand {
+    color: var(--site-blue-400);
 }
 
 /* Desktop page tabs + right-side links: hidden below 768px (the
@@ -510,6 +534,51 @@
 .mtlx-source-fact svg {
     width: 12px;
     height: 12px;
+}
+
+/* Electron-only icon buttons: the compacted GitHub widget and the new
+   settings cog, sized/shaped as a matched pair (site-header.js applies
+   this class to both). Sits after .mtlx-source above so its square
+   sizing wins over that pill's own padding/gap for the GitHub button. */
+.mtlx-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 6px;
+    gap: 0;
+    border-radius: 8px;
+    /* Transparent at rest, but keep the 1px border reserving its own
+       space so hover doesn't shift/resize the button (BTN_MENUBAR). */
+    border: 1px solid transparent;
+    background-color: transparent;
+    color: var(--site-gray-200);
+    cursor: pointer;
+    transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mtlx-icon-btn:hover {
+    background-color: var(--site-gray-700);
+    border-color: var(--site-gray-600);
+}
+.mtlx-icon-btn svg {
+    width: 20px;
+    height: 20px;
+}
+/* The octocat is a filled 16-unit glyph with ink to its edges, so at the
+   same 20px box it reads heavier than the outline icons beside it; shrink
+   it slightly so the three buttons look optically matched. */
+.mtlx-source.mtlx-icon-btn .mtlx-source-icon {
+    width: 18px;
+    height: 18px;
+}
+/* The GitHub button keeps its .mtlx-source-meta node in the DOM (repo
+   name + facts row) so initSourceFacts' lookups never see a missing
+   target; icon-only mode just hides it. */
+.mtlx-source.mtlx-icon-btn .mtlx-source-meta {
+    display: none;
 }
 
 /* Hamburger: mobile only (measure() can also force this to an inline
@@ -931,4 +1000,13 @@
 }
 .mtlx-footer-link-amber:hover {
     color: var(--site-amber-100);
+}
+
+/* DesktopAboutDialog (js/shell.jsx) wraps the same experimental-notice
+   markup in the site's amber warning box idiom instead of the footer
+   strip; neutralize the footer's own amber color/opacity here so the
+   box's Tailwind text color is not fought paragraph-side. */
+.mtlx-about-disclaimer .mtlx-footer-experimental {
+    color: inherit;
+    opacity: 1;
 }

@@ -8,6 +8,7 @@ node_modules/**
 scripts/**
 docs/**
 tutorials-src/**
+electron/**
 package-lock.json
 sitemap.xml
 404.html

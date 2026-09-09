@@ -101,6 +101,9 @@
             // by its bootstrap). Distinct from chromeless: this gates
             // webview-only affordances (e.g. copying a permalink), not layout.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
+            // True when hosted inside the Electron desktop shell (set by its
+            // preload). Shares IN_VSCODE's permalink gate below.
+            const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
             // Kept current every render so the mtlx-open-node listener below
             // (registered once per jsonData load) can gate on the LATEST
             // active value without re-subscribing.
@@ -775,10 +778,10 @@
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </a>
                                                 )}
-                                                {/* Under VS Code the webview's origin makes a copied
-                                                    URL meaningless, so hide the button. Gated on
-                                                    IN_VSCODE, not chromeless/inline — this is host-specific. */}
-                                                {!IN_VSCODE && (
+                                                {/* Under VS Code or Electron the host's origin makes a
+                                                    copied URL meaningless, so hide the button. Gated on
+                                                    IN_VSCODE/IN_ELECTRON, not chromeless/inline. */}
+                                                {!IN_VSCODE && !IN_ELECTRON && (
                                                 <button
                                                     onClick={copyPermalink}
                                                     title="Copy a direct link to this node"

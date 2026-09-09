@@ -391,7 +391,11 @@ const fetchRemoteDocumentFiles = async docUrl => {
     if (!origin) return false;
     try {
       const u = new URL(url);
-      return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === origin;
+      if (u.protocol === 'http:' || u.protocol === 'https:') return u.origin === origin;
+      // Electron serves the site over its own app:// scheme, where
+      // location.protocol isn't http(s); accept same-origin refs
+      // under that scheme too, or ?src= documents load untextured.
+      return u.protocol === location.protocol && u.origin === window.location.origin;
     } catch (e) {
       return false;
     }
@@ -856,11 +860,15 @@ const downloadXml = (xml, filename) => {
 // line carries no version rather than a wrong one, and the 1.5s race
 // keeps a slow or never-settling lookup from blocking an export.
 const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
+
+// Electron never fetches source facts (site-header.js bails), so awaiting
+// them would just burn the full 1.5s on every export; skip the wait.
+const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
 const exportAttributionLine = async () => {
   const NL = String.fromCharCode(10);
   let version = '';
   try {
-    const facts = await Promise.race([Promise.resolve(window.mtlxSourceFacts), new Promise(r => setTimeout(() => r(null), 1500))]);
+    const facts = IN_ELECTRON ? null : await Promise.race([Promise.resolve(window.mtlxSourceFacts), new Promise(r => setTimeout(() => r(null), 1500))]);
     const tag = facts && facts.version ? String(facts.version).trim() : '';
     if (tag) version = ' ' + (/^v/i.test(tag) ? tag : 'v' + tag);
   } catch (e) {/* no facts available: attribute without a version */}
@@ -1042,9 +1050,20 @@ const useWindowFileDrop = ({
     const onDropAnywhere = async e => {
       if (activeRef && !activeRef.current) return;
       if (!hasFiles(e)) return;
+      // Claims the drop for js/shell.jsx's window-level listener,
+      // which defers its own check to a microtask so this
+      // synchronous flag always wins when a view hook is active.
+      e.__mtlxHandled = true;
       e.preventDefault();
       depth = 0;
       if (onDragStateRef.current) onDragStateRef.current(false);
+      if (typeof window.__mtlxDesktopPathDrop === 'function' && typeof window.__mtlxOpenPath === 'function') {
+        const path = window.__mtlxDesktopPathDrop(e.dataTransfer);
+        if (path) {
+          window.__mtlxOpenPath(path);
+          return;
+        }
+      }
       const map = await readDroppedItems(e.dataTransfer);
       if (onFilesRef.current) onFilesRef.current(map);
     };

@@ -122,9 +122,12 @@ jobs:
         if: github.event_name == 'release'
         run: |
           mkdir -p "$RUNNER_TEMP/site"
+          # electron/ is the desktop app's own source tree, released as its
+          # own artifact (see electron/package.json), so keep it out of the site.
           rsync -a \
             --exclude='.git' \
             --exclude='.github' \
+            --exclude='electron' \
             --exclude='node_modules' \
             --exclude='tutorials-src' \
             --exclude='scripts' \

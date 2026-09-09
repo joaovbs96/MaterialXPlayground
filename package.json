@@ -2,7 +2,7 @@
   "name": "materialx-playground",
   "displayName": "MaterialX Playground",
   "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor.",
-  "version": "2026.8.3",
+  "version": "2026.8.11",
   "publisher": "local",
   "license": "Apache-2.0",
   "private": true,
@@ -33,7 +33,9 @@
     "test:embed:smoke": "playwright test --grep @smoke",
     "gallery:manifest": "node scripts/build-gallery.mjs",
     "gallery:thumbs": "node scripts/gallery-shots.mjs",
-    "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs"
+    "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs",
+    "electron:dev": "node electron/scripts/dev.mjs",
+    "electron:pack": "node electron/scripts/pack.mjs"
   },
   "devDependencies": {
     "@babel/standalone": "7.26.10",

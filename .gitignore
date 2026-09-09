@@ -3,6 +3,16 @@ node_modules/
 vendor/materialx/
 *.vsix
 
+.gpu-render-out/**
+.pt-render-out/**
+native/mtlx-pt/**
+presentation/**
+scratchpad/**
+
+# electron/: local dev/pack output, never committed.
+electron/dist/
+electron/dist-site/
+
 # Generated into the Pages artifact by deploy.yml at release time, never
 # committed: a committed copy would serve a stale version locally. Kept out
 # of js/** on purpose since the deterministic build id hashes js/** from disk.
@@ -29,3 +39,6 @@ docs/local/
 # run gallery:data): manifest + thumbnails, regenerated locally and at
 # deploy time, never committed.
 gallery/
+
+# Claude Code local settings and agent worktrees
+.claude/

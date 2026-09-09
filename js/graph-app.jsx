@@ -219,6 +219,99 @@
             );
         }
 
+        // Basename of a path that may use either separator, since recent
+        // paths can be Windows-style even when this UI runs cross-platform.
+        function pathBasename(p) {
+            const s = String(p || '');
+            const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+            return i >= 0 ? s.slice(i + 1) : s;
+        }
+
+        // File > Open Recent… (item 3b): the native Open Recent submenu is
+        // unreachable behind titleBarStyle 'hidden', so this dialog lists
+        // the same main-process-owned recents list. List is fetched fresh
+        // on every open (onOpen), never cached, since it changes on every
+        // save/open elsewhere. Arrow/Enter nav copies AutosaveRestoreDialog.
+        function OpenRecentDialog({ onClose, onOpen, coveredByConfirm }) {
+            const [list, setList] = React.useState(null); // null while loading
+            const [hi, setHi] = React.useState(0);
+            const listRef = React.useRef(null);
+            const panelRef = React.useRef(null);
+
+            useEscapeToClose(onClose, !coveredByConfirm);
+            React.useEffect(() => {
+                if (!coveredByConfirm && panelRef.current) panelRef.current.focus();
+            }, [coveredByConfirm]);
+            React.useEffect(() => {
+                let cancelled = false;
+                if (typeof window.__mtlxGetRecents === 'function') {
+                    window.__mtlxGetRecents().then((paths) => {
+                        if (!cancelled) setList(Array.isArray(paths) ? paths : []);
+                    }).catch(() => { if (!cancelled) setList([]); });
+                } else {
+                    setList([]);
+                }
+                return () => { cancelled = true; };
+            }, []);
+            React.useEffect(() => {
+                const el = listRef.current && listRef.current.children[hi];
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+            }, [hi]);
+
+            const onKeyDown = (e) => {
+                if (!list || !list.length) return;
+                if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, list.length - 1)); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+                else if (e.key === 'Enter') { e.preventDefault(); onOpen(list[hi]); }
+            };
+
+            return (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
+                    <div
+                        ref={panelRef}
+                        tabIndex={-1}
+                        onKeyDown={onKeyDown}
+                        className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-[32rem] max-w-[95%] p-4 outline-none"
+                    >
+                        <div className="text-sm font-semibold text-gray-100 mb-1">Open Recent</div>
+                        <div className="text-[12px] text-gray-400 mb-3">
+                            Pick a document you have opened or saved before.
+                        </div>
+                        <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar border border-gray-700 rounded-md">
+                            {list === null && (
+                                <div className="px-3 py-3 text-[11px] text-gray-500">{'Loading' + '…'}</div>
+                            )}
+                            {list && list.length === 0 && (
+                                <div className="px-3 py-3 text-[11px] text-gray-500">No recent documents.</div>
+                            )}
+                            {list && list.map((p, i) => (
+                                <button
+                                    key={p}
+                                    type="button"
+                                    onClick={() => setHi(i)}
+                                    onDoubleClick={() => onOpen(p)}
+                                    className={'w-full text-left px-2 py-1.5 border-b border-gray-700 last:border-b-0 transition-colors '
+                                        + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                >
+                                    <div className="text-[11px] font-mono truncate">{pathBasename(p)}</div>
+                                    <div className="text-[10px] text-gray-500 truncate">{p}</div>
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 mt-3">
+                            <button type="button" onClick={onClose} className={BTN_SECONDARY}>Cancel</button>
+                            <button
+                                type="button"
+                                disabled={!list || !list.length}
+                                onClick={() => list && list[hi] && onOpen(list[hi])}
+                                className={BTN_PRIMARY}
+                            >Open</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // Collapsible parameter-group header (folders + Downstream
         // Connections). Negative margins matching the panel's own px-2.5
         // pull the border edge-to-edge instead of sitting inset.
@@ -288,8 +381,8 @@
             // opened .mtlx file, so browser-only affordances are hidden.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             // True when hosted in the Electron desktop shell (set by its
-            // preload before any script runs). This product has no such
-            // shell, so this stays permanently false here.
+            // preload before any script runs). Unlike VS Code, this keeps
+            // autosave, file-drop and the in-app File menu.
             const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
@@ -507,6 +600,18 @@
             const refreshRestorable = () => {
                 if (!AUTOSAVE_ON) return;
                 setRestorableCount(window.MtlxAutosave.offerableCount(autosaveIdRef.current));
+            };
+
+            // File > Open Recent's disabled state (item 3b): mirrors
+            // restorableCount above, refreshed on mount and on window
+            // focus since the list changes on every save/open elsewhere.
+            const [recentsCount, setRecentsCount] = React.useState(0);
+            const [recentsDialogOpen, setRecentsDialogOpen] = React.useState(false);
+            const refreshRecentsCount = () => {
+                if (typeof window.__mtlxGetRecents !== 'function') return;
+                window.__mtlxGetRecents().then((list) => {
+                    setRecentsCount(Array.isArray(list) ? list.length : 0);
+                }).catch(() => {});
             };
 
             // ---- Undo / redo: coarse XML-snapshot history --------------
@@ -1369,10 +1474,10 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    // Under VS Code the .mtlx file is the source of truth
-                    // (resent on every edit), so this bypasses the confirm
-                    // dialog; first payload ingest()s, later edits use externalReload.
-                    if (window.__MTLX_VSCODE__) {
+                    // The soft (no-confirm) path is for a host-driven reload of
+                    // the SAME document already open (VS Code always; Electron
+                    // only when payload.reload flags its own file watcher).
+                    if (IN_VSCODE || (IN_ELECTRON && payload.reload)) {
                         if (parsedRef.current) externalReloadRef.current(map);
                         else ingestRef.current(map);
                     } else {
@@ -1802,6 +1907,15 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     window.removeEventListener('focus', scheduleRefresh);
                     if (timer) clearTimeout(timer);
                 };
+            }, []);
+
+            // Refresh File > Open Recent's count on mount and whenever the
+            // window regains focus, same idiom as restorableCount above.
+            React.useEffect(() => {
+                if (!IN_ELECTRON) return;
+                refreshRecentsCount();
+                window.addEventListener('focus', refreshRecentsCount);
+                return () => window.removeEventListener('focus', refreshRecentsCount);
             }, []);
 
             // Autosave producer registration (item 13): the missing half
@@ -2355,7 +2469,21 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     return false;
                 }
                 const base = nameOverride || defaultExportBase();
-                const blob = new Blob([await attributeExportedXml(xml)], { type: 'application/xml' });
+                const exportedXml = await attributeExportedXml(xml);
+                const blob = new Blob([exportedXml], { type: 'application/xml' });
+                if (IN_ELECTRON && window.mtlxDesktop) {
+                    try {
+                        const result = await window.mtlxDesktop.saveMtlx({ xml: exportedXml, suggestedName: base + '.mtlx' });
+                        if (result && result.ok) {
+                            markSaved();
+                            return true;
+                        }
+                        if (result && result.canceled) return false;
+                        // any other failure falls through to the picker/download path below
+                    } catch (e) {
+                        // bridge call itself failed, fall through the same way
+                    }
+                }
                 if (typeof window.showSaveFilePicker === 'function') {
                     let handle = null;
                     try {
@@ -2383,6 +2511,78 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 downloadBlob(blob, base + '.mtlx');
                 markSaved(); // the just-downloaded file matches the current document
                 return true;
+            };
+            // In-app Save / Save As (item 3a): the File menu's own entries,
+            // since titleBarStyle 'hidden' means the native menu bar and its
+            // Ctrl+S/Ctrl+Shift+S accelerators are the only other way in.
+            // Sends the SAME bytes the accelerator sends (window.__mtlxGetGraphXml,
+            // not doExportMtlx's post-attributeExportedXml string) so in-app
+            // Save and Ctrl+S always write identical content.
+            const doSaveInApp = async (forceDialog) => {
+                if (!parsed || !IN_ELECTRON || !window.mtlxDesktop) return false;
+                if (typeof window.__mtlxGetGraphXml !== 'function') {
+                    setStatus('Save failed: graph view is not ready.');
+                    return false;
+                }
+                let xml;
+                try {
+                    xml = await window.__mtlxGetGraphXml();
+                } catch (e) {
+                    setStatus('Save failed: ' + errMsg(e));
+                    return false;
+                }
+                const suggestedName = defaultExportBase() + '.mtlx';
+                let result;
+                try {
+                    result = await window.mtlxDesktop.saveMtlx({ xml, suggestedName, forceDialog: !!forceDialog });
+                } catch (e) {
+                    setStatus('Save failed: ' + errMsg(e));
+                    return false;
+                }
+                if (result && result.ok) {
+                    markSaved();
+                    return true;
+                }
+                if (result && result.canceled) return false;
+                setStatus('Save failed: ' + ((result && result.error) || 'unknown error'));
+                return false;
+            };
+            // File > Open Recent's dialog picks a path and hands it here.
+            // Routed through main's openMtlxRouted (via mtlx-open-recent),
+            // which prunes and reports a missing file instead of failing silently.
+            const onOpenRecentPath = async (filePath) => {
+                if (typeof window.__mtlxOpenRecent !== 'function') return;
+                let result;
+                try {
+                    result = await window.__mtlxOpenRecent(filePath);
+                } catch (e) {
+                    setStatus('Could not open recent file: ' + errMsg(e));
+                    return;
+                }
+                if (result && result.ok) {
+                    setRecentsDialogOpen(false);
+                    refreshRecentsCount();
+                    return;
+                }
+                if (result && result.missing) {
+                    setStatus('That file no longer exists and was removed from Recent: ' + pathBasename(filePath));
+                    refreshRecentsCount();
+                    return;
+                }
+                setStatus('Could not open recent file.');
+            };
+            // File > Reveal/Copy Path (item 3, E3): main reports { ok: false }
+            // when this window has no bound document yet; reuses the same
+            // setStatus idiom onOpenRecentPath above uses for its own failures.
+            const doRevealDocument = async () => {
+                if (typeof window.__mtlxRevealDocument !== 'function') return;
+                const result = await window.__mtlxRevealDocument();
+                if (!result || !result.ok) setStatus('This document has not been saved to disk yet.');
+            };
+            const doCopyDocumentPath = async () => {
+                if (typeof window.__mtlxCopyDocumentPath !== 'function') return;
+                const result = await window.__mtlxCopyDocumentPath();
+                if (!result || !result.ok) setStatus('This document has not been saved to disk yet.');
             };
             // Same document packaged as a .zip alongside every matched
             // texture (`resolvedTextures`, from scanExportTextures). Stored
@@ -4763,6 +4963,27 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
+            // Native desktop menu commands (Electron only): New/Export/Undo/Redo
+            // forwarded from main.js via glue.js's onMenuCommand, routed to the
+            // exact same handlers the in-app File/Edit menu items already call.
+            const guardedNewDocumentRef = React.useRef(guardedNewDocument);
+            guardedNewDocumentRef.current = guardedNewDocument;
+            const openExportDialogRef = React.useRef(openExportDialog);
+            openExportDialogRef.current = openExportDialog;
+            React.useEffect(() => {
+                if (!IN_ELECTRON) return;
+                const onCommand = (e) => {
+                    if (!activeRef.current) return;
+                    const cmd = e.detail && e.detail.cmd;
+                    if (cmd === 'new') guardedNewDocumentRef.current();
+                    else if (cmd === 'export') openExportDialogRef.current();
+                    else if (cmd === 'undo') undoDocRef.current();
+                    else if (cmd === 'redo') redoDocRef.current();
+                };
+                window.addEventListener('mtlx-desktop-command', onCommand);
+                return () => window.removeEventListener('mtlx-desktop-command', onCommand);
+            }, [IN_ELECTRON]);
+
             // ReactFlow's `.dragging` class (grab cursor) sticks if the
             // mouseup happens OUTSIDE the window. Self-heal: strip it when
             // the pointer moves with no buttons held, or on window blur.
@@ -5575,6 +5796,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
                     title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
                 },
+                IN_ELECTRON && {
+                    label: 'Open Recent…', icon: 'history',
+                    disabled: recentsCount === 0,
+                    onSelect: () => setRecentsDialogOpen(true),
+                    title: recentsCount === 0
+                        ? 'No recent documents to open.'
+                        : 'Browse and open a recently used document',
+                },
                 !IN_VSCODE && {
                     label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
@@ -5597,6 +5826,26 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         : 'Browse and restore a previous editing session recovered from autosave',
                 },
                 !IN_VSCODE && { separator: true },
+                IN_ELECTRON && {
+                    label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed,
+                    onSelect: () => doSaveInApp(false),
+                    title: 'Save the current document to its file (or choose a location if it has none yet)',
+                },
+                IN_ELECTRON && {
+                    label: 'Save As…', icon: 'file-download', keys: 'Ctrl+Shift+S', disabled: !parsed,
+                    onSelect: () => doSaveInApp(true),
+                    title: 'Save the current document to a new file',
+                },
+                IN_ELECTRON && {
+                    label: window.__MTLX_PLATFORM__ === 'darwin' ? 'Reveal in Finder'
+                        : window.__MTLX_PLATFORM__ === 'win32' ? 'Show in Explorer' : 'Show in File Manager',
+                    icon: 'folder', onSelect: doRevealDocument,
+                    title: 'Reveal the saved document in the system file manager',
+                },
+                IN_ELECTRON && {
+                    label: 'Copy Path', icon: 'clipboard', onSelect: doCopyDocumentPath,
+                    title: 'Copy the saved document\'s file path to the clipboard',
+                },
                 {
                     label: 'Export .mtlx…', icon: 'file-download', disabled: !parsed, onSelect: openExportDialog,
                     title: 'Export the current document as .mtlx or a .zip with textures, edits, connections and layout positions included',
@@ -6658,6 +6907,16 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             onDiscard={onDiscardDraft}
                             onDiscardAll={onDiscardAllDrafts}
                             onClose={() => setRestoreOffer(null)}
+                            coveredByConfirm={confirmCloseOpen || !!exportDialog || !!shaderExport}
+                        />
+                    )}
+
+                    {/* File > Open Recent… (item 3b): the native submenu is
+                        unreachable behind titleBarStyle 'hidden'. */}
+                    {recentsDialogOpen && (
+                        <OpenRecentDialog
+                            onOpen={onOpenRecentPath}
+                            onClose={() => setRecentsDialogOpen(false)}
                             coveredByConfirm={confirmCloseOpen || !!exportDialog || !!shaderExport}
                         />
                     )}

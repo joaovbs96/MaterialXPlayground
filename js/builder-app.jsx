@@ -44,12 +44,74 @@ const BUILDER_CHECKERBOARD_STYLE = {
     backgroundColor: '#27272a',
 };
 
-// The directory index.html lives in, e.g. "https://host/MaterialXPlayground/".
-// Both snippet types resolve embed/* against this, same as a real host page.
-const BUILDER_SITE_BASE = new URL('.', window.location.href).href;
+// True when hosted inside the Electron desktop shell (set by its preload).
+const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
+
+// Same literal + canonical-link lookup js/shared/mtlx-ui.jsx's
+// exportAttributionLine uses, duplicated here since each lazy view script
+// is its own scope. Falls back to the literal when no canonical link ships.
+const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
+function builderPublicSiteBase() {
+    try {
+        const link = document.querySelector('link[rel="canonical"]');
+        if (link && link.href) return link.href;
+    } catch (e) { /* keep the literal */ }
+    return MTLX_SITE_URL;
+}
+
+// This app's own origin, e.g. "app://playground/" in Electron or
+// "https://host/MaterialXPlayground/" on the web. Only for things WE fetch
+// (the Help dialog's embedding-docs.html) - never put in copied/opened output.
+const BUILDER_LOCAL_BASE = new URL('.', window.location.href).href;
+
+// The directory index.html lives in on the public site, e.g.
+// "https://host/MaterialXPlayground/". Both snippet types resolve embed/*
+// against this, and it's what the "Open in new tab" href uses, so pasted
+// output always resolves outside the app too. On the web this is the same
+// origin as BUILDER_LOCAL_BASE; in Electron it isn't, which is the point.
+const BUILDER_PUBLIC_BASE = builderPublicSiteBase();
 
 const builderNorm = (s) => String(s == null ? '' : s).trim().toLowerCase();
 const builderEscAttr = (s) => String(s).replace(/"/g, '&quot;');
+
+// Repo-relative prefix every 'materialx' origin docPath starts with,
+// mirroring gallery-app.jsx's GALLERY_EXAMPLES_PREFIX and js/shared/
+// mtlx-ui.jsx's MTLX_PRESETS_BASE (both point at the same repo folder).
+const BUILDER_EXAMPLES_PREFIX = 'resources/Materials/Examples/';
+
+// Normalizes a preset-picker onSelect payload's `entry` into { origin,
+// docPath }, whichever shape it came from: a manifest entry already has
+// both fields; the MTLX_PRESETS fallback entry carries the original
+// preset under `_preset` instead ({ src } or { path }). Returns null for
+// anything unrecognized (e.g. the picker never selected, or a future
+// entry shape this file doesn't know about yet).
+function builderDocIdentity(entry) {
+    if (!entry) return null;
+    if (entry._preset) {
+        const p = entry._preset;
+        return p.src ? { origin: 'playground', docPath: p.src }
+            : { origin: 'materialx', docPath: BUILDER_EXAMPLES_PREFIX + p.path };
+    }
+    if (entry.origin && entry.docPath) return { origin: entry.origin, docPath: entry.docPath };
+    return null;
+}
+
+// The URL this app itself should fetch for a picked identity: a MaterialX
+// example resolves through MtlxAssets (local vendor mirror or remote,
+// whichever this build has), a playground document resolves against our
+// own local origin so it loads the same way in every host.
+function builderLocalSrcForIdentity(id) {
+    return id.origin === 'materialx' ? window.MtlxAssets.repoUrl(id.docPath) : BUILDER_LOCAL_BASE + id.docPath;
+}
+
+// The URL that should go in anything copied or opened externally: a
+// MaterialX example always resolves to its public raw.githubusercontent.com
+// form (Change 2), and a playground document to the public site base plus
+// its repo-relative path - both fetchable outside the app, unlike the local
+// forms above (which can be an unfetchable app:// URL under Electron).
+function builderPublicSrcForIdentity(id) {
+    return id.origin === 'materialx' ? window.MtlxAssets.publicRepoUrl(id.docPath) : BUILDER_PUBLIC_BASE + id.docPath;
+}
 
 // MaterialX version list for the "MaterialX version" select, mirroring
 // js/mtlx-assets.js's getters. Falls back to a single-entry list if the
@@ -957,7 +1019,12 @@ function BuilderApp({ active } = {}) {
         wheelZoom, version, poster, eager,
     } = settings;
 
-    const [presetPick, setPresetPick] = React.useState(''); // selected MTLX_PRESETS URL, or '' (placeholder)
+    // { origin, docPath } of the last preset picked via MtlxPresetPicker, or
+    // null. Lets the public-URL derivation below (Change 2) tell "src came
+    // from a pick we resolved" apart from "src is user-typed text", the same
+    // way the old presetPick select value did for its own placeholder state.
+    const [pickedDoc, setPickedDoc] = React.useState(null);
+    const [presetPickerOpen, setPresetPickerOpen] = React.useState(false);
     const [renderables, setRenderables] = React.useState([]); // last 'mtlx-renderables' detail
 
     const [helpOpen, setHelpOpen] = React.useState(false);
@@ -1146,14 +1213,26 @@ function BuilderApp({ active } = {}) {
     };
     const commitGeometryUrl = () => commitGeometryUrlValue(geometryUrl);
 
-    // Picking a preset fills the src field and commits it immediately,
-    // same as typing a URL then pressing Enter. Typing in the src field
-    // afterwards resets this select back to its placeholder (see below).
-    const handlePresetPick = (url) => {
-        setPresetPick(url);
-        if (!url) return;
+    // Picking a preset resolves its local URL (fetchable by this preview,
+    // whichever host we're in) into the src field and commits it
+    // immediately, same as typing a URL then pressing Enter. `pickedDoc`
+    // remembers the identity so the public URL used in snippets/new-tab
+    // (Change 2) can be derived later without re-touching document content.
+    // Typing in the src field afterwards clears it (see below).
+    const handlePresetPickerSelect = (picked) => {
+        setPresetPickerOpen(false);
+        const id = builderDocIdentity(picked && picked.entry);
+        setPickedDoc(id);
+        if (!id) return;
+        const url = builderLocalSrcForIdentity(id);
         patch({ src: url });
         commitSrcValue(url);
+    };
+    // Opens the picker once its graph/3D-viewer deps are loaded, same
+    // pattern as js/viewer-app.jsx's openPresetPicker.
+    const openPresetPicker = async () => {
+        await window.mtlxLoadViewDeps('galleryDetail');
+        setPresetPickerOpen(true);
     };
 
     const handleUseCurrentView = async () => {
@@ -1171,7 +1250,7 @@ function BuilderApp({ active } = {}) {
     const applySettings = (values) => {
         const next = { ...BUILDER_DEFAULTS, ...values };
         setSettings(next);
-        setPresetPick('');
+        setPickedDoc(null);
         commitSrcValue(next.src);
         commitEnvmapValue(next.envmap);
         commitGeometryUrlValue(next.geometryUrl);
@@ -1185,7 +1264,7 @@ function BuilderApp({ active } = {}) {
         if (!helpOpen || helpFetchStartedRef.current) return;
         helpFetchStartedRef.current = true;
         setHelpLoading(true);
-        fetch(BUILDER_SITE_BASE + 'js/gen/embedding-docs.html')
+        fetch(BUILDER_LOCAL_BASE + 'js/gen/embedding-docs.html')
             .then((res) => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.text(); })
             .then((html) => setHelpHtml(html))
             .catch(() => setHelpError(true))
@@ -1202,21 +1281,32 @@ function BuilderApp({ active } = {}) {
         copyTimerRef.current = setTimeout(() => setCopiedKey(null), 1500);
     };
 
+    // The src value for anything copied/opened externally (Change 2): a
+    // pick we resolved ourselves is rewritten to its public form so it's
+    // fetchable outside the app; anything the user typed by hand is passed
+    // through untouched, since we never resolved it in the first place.
+    const publicSrc = pickedDoc ? builderPublicSrcForIdentity(pickedDoc) : src.trim();
+
     // Serializes the non-default settings into "#!builder?..." (same param
     // names as the embed query string, plus builder-only w/h/sizing),
-    // replaces the URL bar hash, and copies the resulting link.
+    // replaces the URL bar hash, and copies the resulting link. Uses
+    // publicSrc (not settings.src) so a picked doc's app:// src never
+    // leaks into a link shared outside the app.
     const handleShareConfig = async () => {
-        const qs = buildShareParams(settings).toString();
+        const qs = buildShareParams({ ...settings, src: publicSrc }).toString();
         const hash = '#!builder' + (qs ? '?' + qs : '');
         try { history.replaceState(null, '', hash); } catch (e) { window.location.hash = hash; }
-        const url = window.location.origin + window.location.pathname + window.location.search + hash;
+        // Under Electron, window.location is the app:// origin, meaningless
+        // outside the app; share the public site URL instead (BUILDER_PUBLIC_BASE).
+        const base = IN_ELECTRON ? BUILDER_PUBLIC_BASE : window.location.origin + window.location.pathname;
+        const url = base + window.location.search + hash;
         await copySnippet('share', url);
     };
 
     // ---- Snippet generation: omit anything at its documented default ----
     const queryEntries = () => {
         const entries = [];
-        if (src.trim()) entries.push(['src', src.trim()]);
+        if (publicSrc) entries.push(['src', publicSrc]);
         if (geometry !== BUILDER_DEFAULT_GEOM) entries.push(['geometry', geometry]);
         if (env.trim() !== '') entries.push(['env', env.trim()]);
         if (exposure.trim() !== '') entries.push(['exposure', exposure.trim()]);
@@ -1240,7 +1330,7 @@ function BuilderApp({ active } = {}) {
     const iframeUrl = (() => {
         const entries = queryEntries();
         const qs = entries.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-        return BUILDER_SITE_BASE + 'embed/viewer.html' + (qs ? '?' + qs : '');
+        return BUILDER_PUBLIC_BASE + 'embed/viewer.html' + (qs ? '?' + qs : '');
     })();
 
     // Responsive drops width/height for a CSS aspect-ratio instead; eager
@@ -1260,7 +1350,7 @@ function BuilderApp({ active } = {}) {
 
     const elementSnippet = (() => {
         const attrs = [];
-        if (src.trim()) attrs.push(`src="${builderEscAttr(src.trim())}"`);
+        if (publicSrc) attrs.push(`src="${builderEscAttr(publicSrc)}"`);
         if (geometry !== BUILDER_DEFAULT_GEOM) attrs.push(`geometry="${geometry}"`);
         if (env.trim() !== '') attrs.push(`env="${env.trim()}"`);
         if (exposure.trim() !== '') attrs.push(`exposure="${exposure.trim()}"`);
@@ -1284,7 +1374,7 @@ function BuilderApp({ active } = {}) {
             ? `style="width:100%;aspect-ratio:${width}/${height}"`
             : `style="width: ${width}px; height: ${height}px;"`);
         const attrLines = attrs.map((a) => '  ' + a).join('\n');
-        return `<script src="${builderEscAttr(BUILDER_SITE_BASE + 'embed/mtlx-viewer.js')}"></script>\n\n` +
+        return `<script src="${builderEscAttr(BUILDER_PUBLIC_BASE + 'embed/mtlx-viewer.js')}"></script>\n\n` +
             `<materialx-viewer\n${attrLines}>\n</materialx-viewer>`;
     })();
 
@@ -1386,29 +1476,25 @@ function BuilderApp({ active } = {}) {
                 <FieldLabel label="Document URL (src)" />
                 <ClearableTextField
                     value={src}
-                    onChange={(e) => { patch({ src: e.target.value }); setPresetPick(''); }}
+                    onChange={(e) => { patch({ src: e.target.value }); setPickedDoc(null); }}
                     onBlur={commitSrc}
                     onKeyDown={(e) => { if (e.key === 'Enter') { commitSrc(); e.currentTarget.blur(); } }}
                     placeholder="https://example.com/materials/brushed_steel.mtlx"
-                    onClear={() => { patch({ src: '' }); setPresetPick(''); commitSrcValue(''); }}
+                    onClear={() => { patch({ src: '' }); setPickedDoc(null); commitSrcValue(''); }}
                 />
                 <p className="text-[11px] text-gray-500 mt-1">Applies on Enter or when the field loses focus.</p>
             </div>
-            {window.MTLX_PRESETS && window.presetDocUrl && (
-                <div>
-                    <FieldLabel label="Or pick a curated example" />
-                    <MtlxSelect
-                        value={presetPick}
-                        options={window.MTLX_PRESETS.map((p) => ({ value: window.presetDocUrl(p), label: p.label }))}
-                        placeholder="Choose a curated example"
-                        onChange={handlePresetPick}
-                        defValue={null}
-                        size="lg"
-                        variant="field"
-                        block
-                    />
-                </div>
-            )}
+            <div>
+                <FieldLabel label="Or pick a curated example" />
+                <button
+                    type="button"
+                    onClick={openPresetPicker}
+                    className={BTN_SECONDARY + ' w-full justify-center inline-flex items-center gap-1.5'}
+                >
+                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                    Browse materials...
+                </button>
+            </div>
             <div className="grid grid-cols-2 gap-3">
                 <div>
                     <FieldLabel label="Material" pill={<LivePill />} />
@@ -1817,6 +1903,15 @@ function BuilderApp({ active } = {}) {
                 html={helpHtml}
                 loading={helpLoading}
                 error={helpError}
+            />
+
+            {/* Same `fixed` escape hatch as js/viewer-app.jsx's own preset
+                picker: stops below the header instead of dimming it. */}
+            <MtlxPresetPicker
+                open={presetPickerOpen}
+                onClose={() => setPresetPickerOpen(false)}
+                onSelect={handlePresetPickerSelect}
+                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-gray-950/70"
             />
         </div>
     );

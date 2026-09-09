@@ -16,7 +16,7 @@
 //
 // Usage: node scripts/gallery-shots.mjs [--manifest <path>] [--out <dir>]
 //                                       [--limit N] [--only <id>] [--jobs N]
-//                                       [--reuse-from <site base url>]
+//                                       [--reuse-from <url>] [--reuse-only]
 //
 // --reuse-from makes a deploy incremental: it reads the manifest already
 // published at that site and re-downloads every thumbnail whose material
@@ -24,6 +24,12 @@
 // Rendering is CPU-bound software rasterization on a GPU-less runner
 // (~13s each), so NOT rendering is worth far more than rendering faster.
 // Any failure falls back to a full capture: slow, never wrong.
+//
+// --reuse-only downloads what is published and renders NOTHING, so it
+// needs no browser. That is what the release artifacts use: the offline
+// zip and the desktop app want real tiles but must not spend 13s a piece
+// re-rendering what the site already published. Materials with no
+// published tile keep the gallery's placeholder, exactly as before.
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -71,6 +77,7 @@ function parseArgs(argv) {
   // capture to that is the prerequisite for raising this default.
   let jobs = 1;
   let reuseFrom = null;
+  let reuseOnly = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--manifest" && argv[i + 1]) {
@@ -85,9 +92,11 @@ function parseArgs(argv) {
       jobs = Math.max(1, Number(argv[++i]) || 1);
     } else if (arg === "--reuse-from" && argv[i + 1]) {
       reuseFrom = String(argv[++i]).replace(/\/+$/, "");
+    } else if (arg === "--reuse-only") {
+      reuseOnly = true;
     }
   }
-  return { manifestPath, outDir, limit, only, jobs, reuseFrom };
+  return { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly };
 }
 
 /** Races `promise` against a timeout, rejecting with a labeled error if
@@ -175,7 +184,7 @@ async function captureOne(context, baseURL, outDir, material) {
 }
 
 async function main() {
-  const { manifestPath, outDir, limit, only, jobs, reuseFrom } = parseArgs(process.argv.slice(2));
+  const { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly } = parseArgs(process.argv.slice(2));
 
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   let materials = manifest.materials;
@@ -199,6 +208,17 @@ async function main() {
       log(`gallery thumbnails: ${reusedCount} reused, 0 rendered. Nothing changed.`);
       return; // no browser, no server: the whole point of reusing
     }
+    if (reuseOnly) {
+      // Not an error: a material published after the last deploy simply has
+      // no tile yet, and the gallery renders a placeholder for it.
+      log(`gallery thumbnails: ${reusedCount} reused, ${materials.length} left unrendered (--reuse-only).`);
+      for (const m of materials) log(`  no published tile: ${m.id}`);
+      return;
+    }
+  }
+  if (reuseOnly) {
+    console.error("error: --reuse-only requires --reuse-from");
+    process.exit(1);
   }
 
   const { baseURL, close } = await startServer({ root: REPO_ROOT });

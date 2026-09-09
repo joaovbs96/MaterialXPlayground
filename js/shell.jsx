@@ -16,6 +16,10 @@ const EMBED = !!window.__MTLX_EMBED;
 // only to tighten the viewer view's layout into a full-bleed viewport.
 const IN_VSCODE = !!window.__MTLX_VSCODE__;
 
+// IN_ELECTRON is set by the desktop shell's preload script before any site
+// script runs, when this page is hosted inside the Electron app.
+const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
+
 // ------------------------------------------------------------------
 // WebGL2 capability probe, cached — a page's WebGL2 support is static.
 // ------------------------------------------------------------------
@@ -248,7 +252,7 @@ const VIEW_DEPS = {
         // Dependency-free, self-registering custom element (docs/EMBEDDING.md)
         // that drives the live preview - a plain script, not a babelScript.
         scripts: ['embed/mtlx-viewer.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx', 'js/shared/preset-picker.jsx'],
         app: 'js/builder-app.jsx',
         globalName: 'BuilderApp',
     },
@@ -270,6 +274,9 @@ let __selfHealDone = false;
 async function maybeSelfHeal() {
     if (__selfHealDone) return;
     __selfHealDone = true;
+    // The desktop shell never serves a stale cached index.html alongside
+    // fresh view files, so there is nothing to self-heal from.
+    if (IN_ELECTRON) return;
     if (!window.__MTLX_BUILD_CHECK) return;
     let result = null;
     try {
@@ -500,6 +507,506 @@ function DesktopCloseConfirmDialog() {
     );
 }
 
+// Main-to-renderer notice channel (main.js's sendNotice/broadcastNotice
+// over 'mtlx-notice'): safe-mode startup, GPU-process restarts, etc.
+// Inert on web (event never fires); dedupes by kind, caps at 3.
+function DesktopNoticeBar() {
+    const [notices, setNotices] = React.useState([]);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onNotice = (e) => {
+            const notice = e.detail;
+            if (!notice || !notice.kind) return;
+            setNotices((prev) => [notice, ...prev.filter((n) => n.kind !== notice.kind)].slice(0, 3));
+        };
+        window.addEventListener('mtlx-desktop-notice', onNotice);
+        return () => window.removeEventListener('mtlx-desktop-notice', onNotice);
+    }, []);
+
+    if (!window.__MTLX_ELECTRON__ || notices.length === 0) return null;
+
+    const dismiss = (kind) => setNotices((prev) => prev.filter((n) => n.kind !== kind));
+
+    return (
+        <div
+            id="mtlx-desktop-notice-bar"
+            className="fixed left-1/2 -translate-x-1/2 z-40 flex flex-col items-stretch gap-2 w-[28rem] max-w-[92%] pointer-events-none"
+            style={{ top: 'calc(var(--mtlx-header-h, 0px) + 10px)' }}
+        >
+            {notices.map((n) => (
+                <div
+                    key={n.kind}
+                    id={'mtlx-desktop-notice-' + n.kind}
+                    className={'pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur px-3 py-2 text-[12px] shadow-lg '
+                        + (n.level === 'warn'
+                            ? 'border-amber-600/50 bg-amber-900/30 text-amber-200'
+                            : 'border-slate-600/50 bg-slate-800/30 text-slate-200')}
+                >
+                    <span className="flex-1">{n.text}</span>
+                    <button
+                        type="button"
+                        onClick={() => dismiss(n.kind)}
+                        className={(n.level === 'warn' ? 'text-amber-200/80 hover:text-amber-100' : 'text-slate-200/80 hover:text-slate-100')
+                            + ' leading-none'}
+                        aria-label="Dismiss"
+                    >
+                        ×
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+// Settings dialog opened from the header cog (js/site-header.js). Unlike
+// DesktopCloseConfirmDialog above, this is a normal below-header popup, and
+// its only setting so far is the same preference the native menu checkbox
+// toggles (main.js's setOpenInNewWindow); more rows can be added here later.
+function DesktopSettingsDialog() {
+    const [open, setOpen] = React.useState(false);
+    const [openInNewWindow, setOpenInNewWindowState] = React.useState(true);
+    const [showRecentInSystem, setShowRecentInSystemState] = React.useState(true);
+    const [documentOpenView, setDocumentOpenViewState] = React.useState('graph');
+    // safeMode is the persisted preference; safeModeActive is what THIS
+    // launch actually did with it (they differ right after a toggle,
+    // until "Relaunch now" or a manual restart catches safeMode up).
+    const [safeMode, setSafeModeState] = React.useState(false);
+    const [safeModeActive, setSafeModeActiveState] = React.useState(false);
+    // platform/jumpListStatus come from main over the bridge (contextIsolation
+    // hides process.platform from the renderer); null until the first read.
+    const [platform, setPlatform] = React.useState(null);
+    const [jumpListStatus, setJumpListStatus] = React.useState('ok');
+    // MtlxSelect below lives in js/shared/mtlx-ui.jsx, which Home (this
+    // dialog's usual host) never loads eagerly; fetch it on first open via
+    // the shell's memoized loader instead of crashing on a bare reference.
+    const [mtlxUiReady, setMtlxUiReady] = React.useState(typeof MtlxSelect !== 'undefined');
+    const panelRef = React.useRef(null);
+
+    React.useEffect(() => {
+        if (!open || mtlxUiReady) return undefined;
+        let cancelled = false;
+        loadJsxApp('js/shared/mtlx-ui.jsx').then(() => {
+            if (!cancelled) setMtlxUiReady(true);
+        });
+        return () => { cancelled = true; };
+    }, [open, mtlxUiReady]);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onOpen = () => {
+            setOpen(true);
+            // Read fresh every time: a second window's own preference read
+            // stays independent from what this dialog last showed. This also
+            // means jumpListStatus is current as of the last buildJumpList().
+            if (typeof window.__mtlxGetDesktopSettings === 'function') {
+                window.__mtlxGetDesktopSettings().then((settings) => {
+                    if (!settings) return;
+                    if (typeof settings.openInNewWindow === 'boolean') {
+                        setOpenInNewWindowState(settings.openInNewWindow);
+                    }
+                    if (typeof settings.showRecentInSystem === 'boolean') {
+                        setShowRecentInSystemState(settings.showRecentInSystem);
+                    }
+                    if (settings.documentOpenView === 'viewer' || settings.documentOpenView === 'graph') {
+                        setDocumentOpenViewState(settings.documentOpenView);
+                    }
+                    if (typeof settings.safeMode === 'boolean') setSafeModeState(settings.safeMode);
+                    if (typeof settings.safeModeActive === 'boolean') setSafeModeActiveState(settings.safeModeActive);
+                    if (typeof settings.platform === 'string') setPlatform(settings.platform);
+                    if (typeof settings.jumpListStatus === 'string') setJumpListStatus(settings.jumpListStatus);
+                });
+            }
+        };
+        window.addEventListener('mtlx-desktop-settings', onOpen);
+        return () => window.removeEventListener('mtlx-desktop-settings', onOpen);
+    }, []);
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    // Outside-pointerdown close (SettingsDialog pattern from mtlx-ui.jsx):
+    // this effect only attaches once React has committed the render that
+    // follows the click that opened the dialog, so it can never see that
+    // same click's own pointerdown.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (panelRef.current && panelRef.current.contains(e.target)) return;
+            setOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
+    const toggleOpenInNewWindow = (checked) => {
+        setOpenInNewWindowState(checked);
+        if (typeof window.__mtlxSetOpenInNewWindow === 'function') {
+            window.__mtlxSetOpenInNewWindow(checked);
+        }
+    };
+
+    // Turning this on rebuilds the jump list on main's side, so re-opening
+    // this dialog after fixing the Windows setting reads a cleared status.
+    const toggleShowRecentInSystem = (checked) => {
+        setShowRecentInSystemState(checked);
+        if (typeof window.__mtlxSetShowRecentInSystem === 'function') {
+            window.__mtlxSetShowRecentInSystem(checked);
+        }
+    };
+
+    const changeDocumentOpenView = (value) => {
+        setDocumentOpenViewState(value);
+        if (typeof window.__mtlxSetDocumentOpenView === 'function') {
+            window.__mtlxSetDocumentOpenView(value);
+        }
+    };
+
+    // Only persists; it takes effect on the next launch, hence the
+    // "Relaunch now" button below whenever this drifts from safeModeActive.
+    const toggleSafeMode = (checked) => {
+        setSafeModeState(checked);
+        if (typeof window.__mtlxSetSafeMode === 'function') {
+            window.__mtlxSetSafeMode(checked);
+        }
+    };
+
+    if (!open) return null;
+    return (
+        // top: header height (not inset-0/z-[70]): a normal popup, not the
+        // window-closing dialog above, so it stops below the header.
+        <div
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
+            style={{ top: 'var(--mtlx-header-h, 0px)' }}
+        >
+            <div
+                ref={panelRef}
+                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+            >
+                <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-gray-100">Settings</div>
+                    <button
+                        type="button"
+                        onClick={() => setOpen(false)}
+                        className="mtlx-icon-btn"
+                        title="Close"
+                        aria-label="Close"
+                    >
+                        <MtlxIcon name="x" />
+                    </button>
+                </div>
+                {!mtlxUiReady ? (
+                    <div className="text-[11px] text-gray-500">Loading settings&hellip;</div>
+                ) : (
+                    <React.Fragment>
+                        <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={openInNewWindow}
+                                onChange={(e) => toggleOpenInNewWindow(e.target.checked)}
+                            />
+                            <span>
+                                <span className="block text-[12px] text-gray-200">Open Files in New Window</span>
+                                <span className="block text-[11px] text-gray-400">
+                                    Open documents from the OS in a new window instead of the current one.
+                                </span>
+                            </span>
+                        </label>
+                        <div className="flex items-start justify-between gap-2 mt-3">
+                            <span>
+                                <span className="block text-[12px] text-gray-200">Open Documents Into</span>
+                                <span className="block text-[11px] text-gray-400">
+                                    Which view a document lands in when opened without a specific view requested.
+                                </span>
+                            </span>
+                            <MtlxSelect
+                                value={documentOpenView}
+                                options={['graph', 'viewer']}
+                                labels={{ graph: 'Graph Editor', viewer: 'Viewer' }}
+                                defValue="graph"
+                                onChange={changeDocumentOpenView}
+                                ariaLabel="Open Documents Into"
+                                size="sm"
+                                variant="field"
+                            />
+                        </div>
+                        {(platform === 'win32' || platform === 'darwin') ? (
+                            <label className="flex items-start gap-2 cursor-pointer mt-3">
+                                <input
+                                    type="checkbox"
+                                    className="mt-0.5"
+                                    checked={showRecentInSystem}
+                                    onChange={(e) => toggleShowRecentInSystem(e.target.checked)}
+                                />
+                                <span>
+                                    <span className="block text-[12px] text-gray-200">Show Recent Files in System</span>
+                                    <span className="block text-[11px] text-gray-400">
+                                        Publish recently opened files to the {platform === 'darwin' ? 'Dock' : 'taskbar jump list'}.
+                                    </span>
+                                </span>
+                            </label>
+                        ) : null}
+                        {showRecentInSystem && platform === 'win32' && jumpListStatus === 'blocked' ? (
+                            <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-2">
+                                Windows is blocking recent files from appearing in the jump list. Turn on
+                                "Show recommended files in Start, recent files in File Explorer, and items in Jump Lists"
+                                in Settings &gt; Personalization &gt; Start to fix this.
+                            </div>
+                        ) : null}
+                        <label className="flex items-start gap-2 cursor-pointer mt-3">
+                            <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={safeMode}
+                                onChange={(e) => toggleSafeMode(e.target.checked)}
+                            />
+                            <span>
+                                <span className="block text-[12px] text-gray-200">Safe mode (software rendering)</span>
+                                <span className="block text-[11px] text-gray-400">
+                                    Turns off hardware acceleration on the next launch. Use it if views stay blank or the app crashes on this machine.
+                                </span>
+                            </span>
+                        </label>
+                        {safeMode !== safeModeActive ? (
+                            <button
+                                type="button"
+                                onClick={() => { if (typeof window.__mtlxRelaunch === 'function') window.__mtlxRelaunch(); }}
+                                className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                            >
+                                Relaunch now
+                            </button>
+                        ) : null}
+                    </React.Fragment>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// Curated display name + license URL per vendor-manifest.json `source`
+// string, so raw package specs/URLs never leak into the About dialog.
+// Several sources map to the same library (react/react-dom, three/three-147,
+// the two tailwindcss entries) and are deduped by name when rendered.
+// License URLs are GitHub blob links pinned to HEAD (never main/master).
+const VENDOR_LIBRARY_MAP = {
+    '@babel/standalone@7.26.10': { name: 'Babel', licenseUrl: 'https://github.com/babel/babel/blob/HEAD/LICENSE' },
+    '@highlightjs/cdn-assets@11.9.0': { name: 'highlight.js', licenseUrl: 'https://github.com/highlightjs/highlight.js/blob/HEAD/LICENSE' },
+    'dagre@0.8.5': { name: 'Dagre', licenseUrl: 'https://github.com/dagrejs/dagre/blob/HEAD/LICENSE' },
+    'jszip@3.10.1': { name: 'JSZip', licenseUrl: 'https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown' },
+    'katex@0.16.47': { name: 'KaTeX', licenseUrl: 'https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE' },
+    'react@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
+    'react-dom@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
+    'reactflow@11.11.4': { name: 'React Flow', licenseUrl: 'https://github.com/xyflow/xyflow/blob/HEAD/LICENSE' },
+    'three@0.128.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
+    'three-147@0.147.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
+    'utif@3.1.0': { name: 'UTIF.js', licenseUrl: 'https://github.com/photopea/UTIF.js/blob/HEAD/LICENSE' },
+    'https://cdn.tailwindcss.com/3.4.17': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
+    'https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
+    'https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE': { name: 'Draco', licenseUrl: 'https://github.com/google/draco/blob/HEAD/LICENSE' },
+};
+// MaterialX itself ships via vendor/materialx (fetched separately by
+// `npm run vendor:offline`, gitignored) so it never appears in
+// vendor-manifest.json; list it by hand instead.
+const MATERIALX_LIBRARY = { name: 'MaterialX', licenseUrl: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/HEAD/LICENSE' };
+
+// About dialog opened from the header help button (js/site-header.js),
+// replacing the native menu's unreachable "About MaterialX Playground"
+// item. Same popup language as DesktopSettingsDialog above, just taller
+// and wider to hold the license text (which is the part that scrolls).
+let __licenseCache = null;
+let __vendorEntriesCache = null;
+function DesktopAboutDialog() {
+    const [open, setOpen] = React.useState(false);
+    const [about, setAbout] = React.useState(null);
+    const [license, setLicense] = React.useState(__licenseCache);
+    const [licenseError, setLicenseError] = React.useState(false);
+    const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
+    const panelRef = React.useRef(null);
+
+    React.useEffect(() => {
+        if (!window.__MTLX_ELECTRON__) return undefined;
+        const onOpen = () => {
+            setOpen(true);
+            if (typeof window.__mtlxGetAbout === 'function') {
+                window.__mtlxGetAbout().then((info) => { if (info) setAbout(info); });
+            }
+            if (__licenseCache === null) {
+                fetch('LICENSE')
+                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); })
+                    .then((text) => { __licenseCache = text; setLicense(text); })
+                    .catch(() => setLicenseError(true));
+            }
+            if (__vendorEntriesCache === null) {
+                fetch('vendor/vendor-manifest.json')
+                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.json(); })
+                    .then((manifest) => {
+                        const libs = (manifest.entries || [])
+                            .map((e) => VENDOR_LIBRARY_MAP[String(e.source)])
+                            .filter(Boolean);
+                        libs.push(MATERIALX_LIBRARY);
+                        const seen = new Set();
+                        const unique = libs.filter((lib) => {
+                            if (seen.has(lib.name)) return false;
+                            seen.add(lib.name);
+                            return true;
+                        }).sort((a, b) => a.name.localeCompare(b.name));
+                        __vendorEntriesCache = unique;
+                        setVendorEntries(unique);
+                    })
+                    .catch(() => { /* silently skip the third-party list */ });
+            }
+        };
+        window.addEventListener('mtlx-desktop-about', onOpen);
+        return () => window.removeEventListener('mtlx-desktop-about', onOpen);
+    }, []);
+
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    // Outside-pointerdown close (SettingsDialog pattern from mtlx-ui.jsx):
+    // this effect only attaches once React has committed the render that
+    // follows the click that opened the dialog, so it can never see that
+    // same click's own pointerdown.
+    React.useEffect(() => {
+        if (!open) return undefined;
+        const onDown = (e) => {
+            if (panelRef.current && panelRef.current.contains(e.target)) return;
+            setOpen(false);
+        };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [open]);
+
+    if (!open) return null;
+
+    const verEl = document.querySelector('#mtlx-header-version [data-role="ver"]');
+    const mtlxVersion = verEl ? verEl.textContent : null;
+    const buildId = window.__MTLX_BUILD;
+    const links = window.SITE_LINKS || {};
+    const disclaimerParts = window.SITE_DISCLAIMER_PARTS || {};
+    const logoPaths = window.SITE_LOGO_PATHS || '';
+    const title = window.SITE_TITLE || 'MaterialX Playground';
+
+    return (
+        <div
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
+            style={{ top: 'var(--mtlx-header-h, 0px)' }}
+        >
+            <div
+                ref={panelRef}
+                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
+            >
+                <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 mtlx-dialog-brand">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24"
+                            fill="currentColor" className="mtlx-brand-icon" dangerouslySetInnerHTML={{ __html: logoPaths }} />
+                        <div className="text-base font-semibold">{title}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setOpen(false)}
+                        className="mtlx-icon-btn"
+                        title="Close"
+                        aria-label="Close"
+                    >
+                        <MtlxIcon name="x" />
+                    </button>
+                </div>
+
+                <div className="text-[12px] text-gray-300 leading-relaxed mb-3">
+                    {about ? (
+                        <div>
+                            <div>Version {about.appVersion}</div>
+                            <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
+                        </div>
+                    ) : (
+                        <div className="text-gray-500">Loading version info&hellip;</div>
+                    )}
+                    {mtlxVersion ? <div>MaterialX {mtlxVersion}</div> : null}
+                    {buildId ? <div>Build {buildId}</div> : null}
+                </div>
+
+                <div className="flex flex-wrap gap-3 text-[12px] mb-3">
+                    {links.site ? (
+                        <a href={links.site} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">Website</a>
+                    ) : null}
+                    {links.repo ? (
+                        <a href={links.repo} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">GitHub Repository</a>
+                    ) : null}
+                    {links.issues ? (
+                        <a href={links.issues} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">Issues</a>
+                    ) : null}
+                </div>
+
+                {/* Same two paragraphs as the web/VS Code footer strip
+                    (js/site-header.js SITE_DISCLAIMER_PARTS), shown here
+                    instead since Electron hides that footer entirely. The
+                    experimental notice gets the site's amber warning box;
+                    .mtlx-about-disclaimer neutralizes the footer's own
+                    amber styling so it does not fight the box's colors. */}
+                {disclaimerParts.experimental ? (
+                    <div
+                        className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-1 mb-3"
+                        dangerouslySetInnerHTML={{ __html: disclaimerParts.experimental }}
+                    />
+                ) : null}
+                {disclaimerParts.affiliation ? (
+                    <div
+                        className="mtlx-footer-inner mb-4"
+                        style={{ padding: 0, maxWidth: 'none', margin: 0, marginBottom: '1rem' }}
+                        dangerouslySetInnerHTML={{ __html: disclaimerParts.affiliation }}
+                    />
+                ) : null}
+
+                {vendorEntries && vendorEntries.length ? (
+                    <div className="text-[11px] text-gray-400 mb-1">
+                        <span className="text-gray-300">Third-party libraries: </span>
+                        {vendorEntries.map((lib, i) => (
+                            <React.Fragment key={lib.name}>
+                                {i > 0 ? ', ' : ''}
+                                <a href={lib.licenseUrl} target="_blank" rel="noopener noreferrer"
+                                    className="text-blue-400 hover:text-blue-300 underline">{lib.name}</a>
+                            </React.Fragment>
+                        ))}
+                    </div>
+                ) : null}
+                {vendorEntries && vendorEntries.length ? (
+                    <div className="text-[11px] text-gray-500 mb-3">
+                        We believe this list to be complete. If we are missing anything,{' '}
+                        {links.issues ? (
+                            <a href={links.issues} target="_blank" rel="noopener noreferrer"
+                                className="text-gray-400 hover:text-gray-300 underline">let us know</a>
+                        ) : 'let us know'}.
+                    </div>
+                ) : null}
+
+                <div className="text-[11px] text-gray-400 mb-1">License</div>
+                <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto bg-gray-900/60 border border-gray-700 rounded-md p-2">
+                    {license ? (
+                        <pre className="text-[10.5px] text-gray-300 whitespace-pre-wrap font-mono">{license}</pre>
+                    ) : licenseError ? (
+                        <div className="text-[11px] text-gray-500">License text could not be loaded.</div>
+                    ) : (
+                        <div className="text-[11px] text-gray-500">Loading license&hellip;</div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
@@ -536,6 +1043,52 @@ function Shell() {
         return () => {
             window.removeEventListener('hashchange', onNav);
             window.removeEventListener('popstate', onNav);
+        };
+    }, []);
+
+    // A bare desktop launch (no document, no explicit view) lands on Home
+    // (main.js). If a crash-recovery draft is waiting in autosave, hop to
+    // the graph editor instead so the offer isn't silently missed. Mount-
+    // once only: '#!home' is exactly what a bare launch loads, and a later
+    // deliberate Home visit must never get rerouted from under the user.
+    React.useEffect(() => {
+        if (!IN_ELECTRON) return;
+        if (window.location.hash !== '#!home') return;
+        if (!window.MtlxAutosave || !window.MtlxAutosave.available()) return;
+        if (window.MtlxAutosave.offerable(null, null).length > 0) {
+            window.location.hash = '#!graph';
+        }
+    }, []);
+
+    // Electron-only drop-to-open: a single dropped .mtlx opens as a real
+    // document (main's mtlx-open-path) instead of the in-memory import.
+    // Deferred to a microtask so an active view's own drop hook wins first.
+    React.useEffect(() => {
+        if (!IN_ELECTRON) return undefined;
+        const hasFiles = (e) => {
+            const t = e.dataTransfer && e.dataTransfer.types;
+            return !!t && Array.from(t).indexOf('Files') >= 0;
+        };
+        const onDragOver = (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        };
+        const onDrop = (e) => {
+            if (!hasFiles(e)) return;
+            if (typeof window.__mtlxDesktopPathDrop !== 'function' || typeof window.__mtlxOpenPath !== 'function') return;
+            const path = window.__mtlxDesktopPathDrop(e.dataTransfer);
+            if (!path) return;
+            e.preventDefault();
+            queueMicrotask(() => {
+                if (!e.__mtlxHandled) window.__mtlxOpenPath(path);
+            });
+        };
+        window.addEventListener('dragover', onDragOver);
+        window.addEventListener('drop', onDrop);
+        return () => {
+            window.removeEventListener('dragover', onDragOver);
+            window.removeEventListener('drop', onDrop);
         };
     }, []);
 
@@ -748,6 +1301,9 @@ function Shell() {
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
             <DesktopCloseConfirmDialog />
+            <DesktopNoticeBar />
+            <DesktopSettingsDialog />
+            <DesktopAboutDialog />
         </div>
     );
 }

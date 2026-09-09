@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = 'd865f6b9df869303';</script>
+    <script>window.__MTLX_BUILD = '194799441478fbd2';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -46,11 +46,12 @@
             var last = 0;
             var pending = null;
             var FRESH = { stale: false, serverId: null };
-            // Skipped in the VS Code webview (it updates via the
-            // Marketplace), in embed mode, and on file: (offline zip
-            // opened directly). An unstamped 'dev' tree is never stale.
+            // Skipped in the VS Code webview and the Electron shell (both
+            // update via their own channels), in embed mode, and on
+            // file: (offline zip opened directly). Never stale on a dev tree.
             function skip() {
                 return !!window.__MTLX_VSCODE__
+                    || !!window.__MTLX_ELECTRON__
                     || window.__MTLX_BUILD === 'dev'
                     || location.protocol === 'file:'
                     || document.documentElement.classList.contains('embed-mode');

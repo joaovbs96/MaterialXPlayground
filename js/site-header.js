@@ -13,8 +13,8 @@
 
     // True in every real context: the old standalone pages (material-viewer,
     // node-graph) are gone, so this script only ever loads inside the shell
-    // (index.html, or the VS Code webview via window.__MTLX_VSCODE__).
-    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__;
+    // (index.html, or a hosted webview via __MTLX_VSCODE__/__MTLX_ELECTRON__).
+    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__ || !!window.__MTLX_ELECTRON__;
 
     // The site name. Change it here and it changes everywhere
     // (header, and — via window.SITE_TITLE — anything React renders).
@@ -51,6 +51,8 @@
     // Split for the desktop widget's owner/name styling (D below).
     var REPO_OWNER = REPO_SLUG.split('/')[0];
     var REPO_NAME = REPO_SLUG.split('/').slice(1).join('/');
+    // Public GitHub Pages URL, derived the same way (About dialog).
+    LINKS.site = 'https://' + REPO_OWNER + '.github.io/' + REPO_NAME + '/';
 
     // Logo mark paths, shared verbatim with home-app.jsx (rendered via
     // dangerouslySetInnerHTML) so the brand mark can't drift. The two
@@ -78,6 +80,23 @@
             '<path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />' +
             '<path d="M7 8v2a2 2 0 0 0 2 2h6a2 2 0 0 0 2 -2v-2" />' +
             '<path d="M12 12l0 4" />' +
+        '</svg>';
+
+    // Electron-only header cog (Tabler outline "settings"), same
+    // viewBox/stroke/normalization convention as the icons above.
+    var ICON_SETTINGS =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z" />' +
+            '<path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
+        '</svg>';
+
+    // Electron-only header help button (Tabler outline "help"), same
+    // viewBox/stroke/normalization convention as ICON_SETTINGS above.
+    var ICON_ABOUT =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />' +
+            '<path d="M12 17l0 .01" />' +
+            '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
         '</svg>';
 
     // Update-banner icon (alert-triangle), paths only, hand-copied from
@@ -348,12 +367,32 @@
             '</a>';
     }).join('');
 
+    // Desktop shell only: marks the header strip (outer wrapper + inner
+    // bar) as the WCO draggable title bar (site-header.css +
+    // electron/main/main.js's titleBarOverlay); native buttons overlay its edge.
+    var DESKTOP_TITLEBAR_CLASS = window.__MTLX_ELECTRON__ ? ' mtlx-desktop-titlebar' : '';
+    // macOS keeps its own traffic lights at the window's top LEFT, where
+    // the brand sits, and gets no titlebar-area-* env vars to pad against
+    // (those exist only for the Windows/Linux overlay). This class is what
+    // site-header.css reserves that left gutter on. __MTLX_PLATFORM__ comes
+    // from preload.js, set synchronously like the flag above.
+    var DESKTOP_MAC_CLASS = (window.__MTLX_ELECTRON__ && window.__MTLX_PLATFORM__ === 'darwin')
+        ? ' mtlx-desktop-mac' : '';
+
+    // Same Electron gate as DESKTOP_TITLEBAR_CLASS above (window.__MTLX_ELECTRON__
+    // is set synchronously by preload.js's contextBridge call, before this
+    // script ever runs, so it's safe to read at markup-build time here too).
+    var IS_ELECTRON = !!window.__MTLX_ELECTRON__;
+    // Compacts the GitHub widget to an icon-only button in Electron (site-header.css
+    // hides .mtlx-source-meta and squares the pill off when this class is present).
+    var SOURCE_COMPACT_CLASS = IS_ELECTRON ? ' mtlx-icon-btn' : '';
+
     // Markup below is styled entirely by js/site-header.css (`mtlx-`
     // prefixed classes, no Tailwind utilities), so it renders identically
     // whether or not Tailwind Play is loaded on the page.
     var html =
-        '<header class="mtlx-header">' +
-            '<div id="mtlx-header-bar" class="mtlx-header-bar">' +
+        '<header class="mtlx-header' + DESKTOP_TITLEBAR_CLASS + '">' +
+            '<div id="mtlx-header-bar" class="mtlx-header-bar' + DESKTOP_TITLEBAR_CLASS + DESKTOP_MAC_CLASS + '">' +
 
                 // Brand: logo mark + site title, linking to the shell's
                 // home view (#!home). Under VS Code there's no home to
@@ -386,10 +425,14 @@
                         '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
                     '</a>' +
                     // GitHub repo widget (mkdocs-material style): octocat +
-                    // repo slug + async facts row, filled in below.
+                    // repo slug + async facts row, filled in below. In
+                    // Electron this compacts to an icon-only button (CSS,
+                    // SOURCE_COMPACT_CLASS above); the meta span stays in the
+                    // DOM (just hidden) so initSourceFacts' lookups below
+                    // never see a missing node.
                     // LINKS.issues stays defined too (About dialog, footer).
                     '<a id="mtlx-source-widget" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
-                        ' title="View the source code on GitHub" class="mtlx-source">' +
+                        ' title="View the source code on GitHub" class="mtlx-source' + SOURCE_COMPACT_CLASS + '">' +
                         '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             ICON_OCTOCAT +
                         '</svg>' +
@@ -398,6 +441,26 @@
                             '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
+                    // Electron-only help button, between the GitHub icon and
+                    // the settings cog. Dispatches an event for js/shell.jsx's
+                    // DesktopAboutDialog to pick up (same "just a
+                    // CustomEvent" contract as the settings cog below).
+                    (IS_ELECTRON ?
+                        '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
+                            ' title="About" aria-label="About">' +
+                            ICON_ABOUT +
+                        '</button>'
+                    : '') +
+                    // Electron-only settings cog, rightmost in the cluster.
+                    // Dispatches an event for js/shell.jsx's
+                    // DesktopSettingsDialog to pick up (same "just a
+                    // CustomEvent" contract as the mobile menu links).
+                    (IS_ELECTRON ?
+                        '<button type="button" id="mtlx-settings-btn" class="mtlx-icon-btn"' +
+                            ' title="Settings" aria-label="Settings">' +
+                            ICON_SETTINGS +
+                        '</button>'
+                    : '') +
                 '</div>' +
 
                 // Hamburger: mobile only, toggles #mtlx-mobile-menu below.
@@ -449,6 +512,22 @@
 
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
+
+    // Electron-only help button: opens js/shell.jsx's DesktopAboutDialog.
+    var aboutBtn = document.getElementById('mtlx-about-btn');
+    if (aboutBtn) {
+        aboutBtn.addEventListener('click', function () {
+            window.dispatchEvent(new CustomEvent('mtlx-desktop-about'));
+        });
+    }
+
+    // Electron-only settings cog: opens js/shell.jsx's DesktopSettingsDialog.
+    var settingsBtn = document.getElementById('mtlx-settings-btn');
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', function () {
+            window.dispatchEvent(new CustomEvent('mtlx-desktop-settings'));
+        });
+    }
 
     // Publishes the header's rendered height as --mtlx-header-h on <html>,
     // so fixed modal scrims elsewhere can stop short of it. Re-published
@@ -636,6 +715,20 @@
     var navRight = document.getElementById('mtlx-nav-right');
     if (headerBar && navDesktop && navRight && navToggle) {
         var rafId = null;
+        // Window Controls Overlay reserves space behind the native min/max/
+        // close buttons; scrollWidth can't see content that merely spills
+        // into the bar's own padding, so check real element edges instead.
+        var overlayOverflow = function () {
+            var wco = navigator.windowControlsOverlay;
+            if (!wco || !wco.visible) return false;
+            var limit = wco.getTitlebarAreaRect().right - 24;
+            var items = headerBar.querySelectorAll('a, button, select, input, [role="button"]');
+            for (var i = 0; i < items.length; i++) {
+                var r = items[i].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && r.right > limit) return true;
+            }
+            return false;
+        };
         var measure = function () {
             // Three stages: (1) full-width desktop nav, (2) `is-compact`
             // (CSS hides the pills' abbreviatable text) if that alone
@@ -645,10 +738,10 @@
             navDesktop.style.display = 'flex';
             navRight.style.display = 'flex';
             navToggle.style.display = 'none';
-            var overflow = headerBar.scrollWidth > headerBar.clientWidth;
+            var overflow = headerBar.scrollWidth > headerBar.clientWidth || overlayOverflow();
             if (overflow) {
                 headerBar.classList.add('is-compact');
-                overflow = headerBar.scrollWidth > headerBar.clientWidth;
+                overflow = headerBar.scrollWidth > headerBar.clientWidth || overlayOverflow();
             }
             if (overflow) {
                 navDesktop.style.display = 'none';
@@ -686,6 +779,11 @@
         // reports itself; that alone can push the bar from fitting to
         // overflowing.
         window.addEventListener('mtlx-version', measure);
+        // The overlay rect can change without a window resize (e.g. still
+        // settling right after launch); re-measure whenever it does.
+        if (navigator.windowControlsOverlay) {
+            navigator.windowControlsOverlay.addEventListener('geometrychange', scheduleMeasure);
+        }
     }
 
     // ---- GitHub repo widget: async facts row -----------------------------
@@ -711,6 +809,9 @@
         // (webview.html's connect-src disallows it) — stay a plain link
         // there. Also skip the fetch outright in embed mode, not just via CSS.
         if (window.__MTLX_VSCODE__) { resolveFacts(null); return; }
+        // Same for the Electron shell: offline-first, and the app:// origin
+        // has no reason to hit a live GitHub API.
+        if (window.__MTLX_ELECTRON__) { resolveFacts(null); return; }
         if (document.documentElement.classList.contains('embed-mode')) { resolveFacts(null); return; }
 
         var CACHE_KEY = 'mtlx_source_facts_v3';
@@ -857,6 +958,7 @@
         // guard on the build-check contract itself (may not be defined,
         // e.g. an older cached index.html without it).
         if (window.__MTLX_VSCODE__) return;
+        if (window.__MTLX_ELECTRON__) return;
         if (document.documentElement.classList.contains('embed-mode')) return;
         if (!window.__MTLX_BUILD_CHECK) return;
 
@@ -1044,6 +1146,37 @@
     // Two paragraphs on every page (Experimental Preview + affiliation
     // note), injected at DOMContentLoaded (mount auto-created if missing).
     // Expanded body is an absolute overlay so it never resizes #root/layout.
+    // DISCLAIMER_BODY_HTML is the single source of truth for these two
+    // paragraphs: the footer below and shell.jsx's DesktopAboutDialog (in
+    // Electron, where the footer strip is hidden) both render this same
+    // string, so the wording never drifts between the two.
+    // Experimental Preview notice, moved from the docs page's own banner
+    // so it shows on every route. Needs display:inline: :where() sets
+    // svg{display:block}.
+    // Host noun for the two sentences below: the web/VS Code wording
+    // ("this site" / "This website") reads wrong in the desktop About
+    // dialog, which is not a website, so it swaps to app-appropriate phrasing there.
+    var DISCLAIMER_HOST_NOUN = IS_ELECTRON ? 'this app' : 'this site';
+    var DISCLAIMER_PROJECT_SUBJECT = IS_ELECTRON ? SITE_TITLE : 'This website';
+    var DISCLAIMER_EXPERIMENTAL_HTML =
+            '<p class="mtlx-footer-experimental">' +
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+                    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+                    ' class="mtlx-footer-warn-icon">' +
+                    '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
+                '</svg>' +
+                '<strong>Experimental preview:</strong> ' + DISCLAIMER_HOST_NOUN + ' is under active development, 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
+                '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
+            '</p>';
+    var DISCLAIMER_AFFILIATION_HTML =
+            '<p>' +
+                DISCLAIMER_PROJECT_SUBJECT + ' is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
+                'In the event of any discrepancies, the specification in the ' +
+                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
+                'remains the definitive source of truth.' +
+            '</p>';
+    var DISCLAIMER_BODY_HTML = DISCLAIMER_EXPERIMENTAL_HTML + DISCLAIMER_AFFILIATION_HTML;
+
     var footerHtml =
         '<footer id="mtlx-footer" class="mtlx-footer">' +
             '<button id="mtlx-footer-toggle" type="button" class="mtlx-footer-toggle"' +
@@ -1059,24 +1192,7 @@
             '</button>' +
             '<div id="mtlx-footer-body" class="mtlx-footer-pop">' +
                 '<div class="mtlx-footer-inner">' +
-                    // Experimental Preview notice, moved from the docs
-                    // page's own banner so it shows on every route.
-                    // Needs display:inline: :where() sets svg{display:block}.
-                    '<p class="mtlx-footer-experimental">' +
-                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
-                            ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
-                            ' class="mtlx-footer-warn-icon">' +
-                            '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
-                        '</svg>' +
-                        '<strong>Experimental preview:</strong> this site is under active development — 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
-                        '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
-                    '</p>' +
-                    '<p>' +
-                        'This website is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
-                        'In the event of any discrepancies, the specification in the ' +
-                        '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
-                        'remains the definitive source of truth.' +
-                    '</p>' +
+                    DISCLAIMER_BODY_HTML +
                 '</div>' +
             '</div>' +
         '</footer>';
@@ -1110,10 +1226,11 @@
             applyFooter();
         });
     };
-    // Skipped entirely under VS Code: this shrink-0 strip would steal
-    // bottom height from the full-bleed webview views (which already drop
-    // other site chrome, like Home above), so the wiring above never runs.
-    if (!window.__MTLX_VSCODE__) {
+    // Skipped entirely under VS Code (this shrink-0 strip would steal
+    // bottom height from the full-bleed webview views) and under Electron
+    // (js/shell.jsx's DesktopAboutDialog shows SITE_DISCLAIMER_PARTS instead,
+    // reachable from the header help button there).
+    if (!window.__MTLX_VSCODE__ && !window.__MTLX_ELECTRON__) {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', mountFooter);
         } else {
@@ -1125,5 +1242,13 @@
     window.SITE_TITLE = SITE_TITLE;
     window.SITE_LINKS = LINKS;
     window.SITE_LOGO_PATHS = LOGO_PATHS;
+    window.SITE_DISCLAIMER_HTML = DISCLAIMER_BODY_HTML;
+    // Split paragraphs for shell.jsx's DesktopAboutDialog, which styles the
+    // experimental notice as its own warning box (the footer keeps composing
+    // both paragraphs together above, unchanged).
+    window.SITE_DISCLAIMER_PARTS = {
+        experimental: DISCLAIMER_EXPERIMENTAL_HTML,
+        affiliation: DISCLAIMER_AFFILIATION_HTML
+    };
     window.shellRouteFor = shellRouteFor;
 })();

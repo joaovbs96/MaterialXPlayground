@@ -157,9 +157,12 @@ function PresetPickerRow({ entry, highlighted, onClick, onDoubleClick, setRowEl 
     );
 }
 
-// The unified preset picker. onSelect receives { xml, name, files } (files
-// = the loose non-.mtlx companion map); the host applies it and closes.
-// `overlayClassName` forwards to DialogFrame's own `fixed`-overlay escape hatch.
+// The unified preset picker. onSelect receives { xml, name, files, entry }
+// (files = the loose non-.mtlx companion map; entry = the picked manifest/
+// fallback entry itself, additive so a caller like the builder can derive a
+// shareable URL for it without touching document content). The host applies
+// it and closes. `overlayClassName` forwards to DialogFrame's own
+// `fixed`-overlay escape hatch.
 function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) {
     // ---- Data: manifest.materials, or the MTLX_PRESETS fallback -----
     const [mode, setMode] = React.useState('loading'); // 'loading' | 'manifest' | 'fallback'
@@ -262,7 +265,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
 
     const confirmHighlighted = () => {
         if (!ready) return;
-        onSelect({ xml: doc.xml, name: doc.name, files: doc.textures });
+        onSelect({ xml: doc.xml, name: doc.name, files: doc.textures, entry: highlightedEntry });
     };
     // Double-click highlights AND confirms. If already ready, confirm now
     // (an effect keyed on `ready` would never re-fire for an unchanged
@@ -271,7 +274,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
     const handleRowDoubleClick = (entry) => {
         setHighlightId(entry.id);
         if (docStatus === 'ready' && doc && doc.id === entry.id) {
-            onSelect({ xml: doc.xml, name: doc.name, files: doc.textures });
+            onSelect({ xml: doc.xml, name: doc.name, files: doc.textures, entry });
         } else {
             pendingConfirmIdRef.current = entry.id;
         }
@@ -279,7 +282,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
     React.useEffect(() => {
         if (ready && pendingConfirmIdRef.current === doc.id) {
             pendingConfirmIdRef.current = null;
-            onSelect({ xml: doc.xml, name: doc.name, files: doc.textures });
+            onSelect({ xml: doc.xml, name: doc.name, files: doc.textures, entry: highlightedEntry });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [ready]);
