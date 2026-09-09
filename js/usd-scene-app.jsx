@@ -253,7 +253,7 @@
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
-        const [shadowsOn, setShadowsOn] = React.useState(false);
+        const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(false);
         const [aoStrength, setAoStrength] = React.useState(0.7);
         const [skyVisOn, setSkyVisOn] = React.useState(true);
@@ -1011,7 +1011,7 @@
                                 />
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
-                                One shadow caster only: MaterialX generates a single shadow map. It now darkens the light it was actually rendered from rather than whichever light happens to sit in slot zero, so the shadow lines up with the lamp that casts it. Every other light stays unshadowed.
+                                Up to four lights cast, packed into one shadow atlas, chosen by the light they actually deliver to the stage. A heavy stage gets fewer casters, since each one is a full geometry pass whenever the camera moves. Shadowed areas also lose the environment light, because MaterialX shares one occlusion value between the two.
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"

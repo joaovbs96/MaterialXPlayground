@@ -94,9 +94,12 @@ const storedSceneAoStrength = () => {
     } catch (e) { return 0.7; }
 };
 
+// Default on. Shadows are what makes objects sit in a scene rather than float
+// in it, and the cost is bounded: the atlas is redrawn only when the camera
+// actually moves, and the caster count drops on very large stages.
 const storedSceneShadows = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SHADOWS_KEY) === '1'; } catch (e) { return false; }
+    try { return localStorage.getItem(SCENE_SHADOWS_KEY) !== '0'; } catch (e) { return true; }
 };
 
 const storedSceneStageLights = () => {
@@ -1868,9 +1871,15 @@ const createMtlxSceneView = async ({
                 }
                 rec.slots.push(i);
             }
+            // Each caster is a full geometry pass, redrawn whenever the camera
+            // moves, so a heavy stage gets fewer of them. Ranked by irradiance
+            // first, so the ones dropped are always the least significant.
+            let meshCount = 0;
+            sceneRoot.traverse((o) => { if (o.isMesh) meshCount++; });
+            const casterBudget = meshCount > 1200 ? 1 : meshCount > 500 ? 2 : SHADOW_CASTERS;
             const ranked = [...emitters.values()]
                 .sort((a, b) => b.score - a.score)
-                .slice(0, SHADOW_CASTERS);
+                .slice(0, casterBudget);
 
             // A stage with no analytic lights is lit by the environment alone,
             // and the key light extracted from it sits in the reserved slot
