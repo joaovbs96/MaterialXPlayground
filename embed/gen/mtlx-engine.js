@@ -424,6 +424,18 @@ const getDummyTex = () => {
 // u_opaqueDepth (see bindMaterialUniforms/renderFrame) so a stale/missing
 // binding reads as "nothing there", never triggering the peel discard.
 let MTLX_DUMMY_TEX_WHITE = null;
+// Shadow matrix meaning "no shadow": maps every world position to the origin,
+// so mx_shadow_occlusion samples the middle of a white moments map at depth
+// 0.5 and always returns fully lit. An identity matrix is NOT safe here, it
+// leaves fragmentDepth = worldZ * 0.5 + 0.5, which crosses the white map's
+// stored depth of 1.0 and hard-cuts the scene at worldZ = 1.
+let MTLX_SHADOW_OFF_MATRIX = null;
+const shadowOffMatrix = () => {
+  if (!MTLX_SHADOW_OFF_MATRIX) {
+    MTLX_SHADOW_OFF_MATRIX = new THREE.Matrix4().set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+  }
+  return MTLX_SHADOW_OFF_MATRIX.clone();
+};
 const getDummyTexWhite = () => {
   if (!MTLX_DUMMY_TEX_WHITE) {
     MTLX_DUMMY_TEX_WHITE = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
@@ -5180,7 +5192,7 @@ const createMtlxSceneUniforms = ({
     value: shadowMap || getDummyTexWhite()
   };
   if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = {
-    value: (shadowMatrix || new THREE.Matrix4()).clone()
+    value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix()
   };
   if (has('u_lightData')) uniforms.u_lightData = {
     value: currentLights(lightData, env && env.keyLight, envRotationRad, stageLights)
@@ -7406,7 +7418,7 @@ const createMtlxRenderView = async ({
           value: getDummyTexWhite()
         },
         u_shadowMatrix: {
-          value: new THREE.Matrix4()
+          value: shadowOffMatrix()
         },
         // Lets encodeDisplay's epilogue defer to finalMat
         // when linear peel compositing is available (see
