@@ -138,6 +138,88 @@ const sceneExactFile = (map, ref, fromDir) => {
     return { path, blob: map[path], substituted: path !== want, originalPath: want, originalBlob: map[want] };
 };
 
+// A dome light's texture is authored relative to the layer that declares it,
+// and the runtime does not report which layer that was. Every directory that
+// holds a USD layer is therefore a candidate base, deepest first, with the
+// stage root next and a unique basename match as the last resort.
+const sceneDomeTextureCandidates = (fileMap, stage) => {
+    const dirs = new Set();
+    for (const path of Object.keys(fileMap)) {
+        if (/\.usd[ac]?$/i.test(path)) dirs.add(sceneDir(path));
+    }
+    const ordered = Array.from(dirs).sort((a, b) => b.split('/').length - a.split('/').length);
+    ordered.push(sceneDir(stage && stage.rootPath), '');
+    return Array.from(new Set(ordered));
+};
+const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
+    const match = String(rawRef || '').trim().match(/^@(.*)@$/);
+    const ref = sceneNormPath(match ? match[1] : rawRef);
+    if (!ref) return { path: null, reason: 'empty' };
+    for (const dir of sceneDomeTextureCandidates(fileMap, stage)) {
+        const candidate = sceneJoinPath(dir, ref);
+        if (fileMap[candidate]) return { path: candidate, ref };
+    }
+    const base = ref.split('/').pop().toLowerCase();
+    const hits = Object.keys(fileMap).filter((path) => path.toLowerCase().split('/').pop() === base);
+    if (hits.length === 1) return { path: hits[0], ref, byBasename: true };
+    return { path: null, ref, reason: hits.length ? 'ambiguous' : 'missing' };
+};
+
+// Builds the environment a stage's own dome light describes, so a stage
+// renders under the lighting it was authored with. Returns null when the
+// stage has no dome; never throws, since a light must not block a load.
+const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
+    const dome = sceneArray(stage && stage.lights)
+        .find((light) => String(light && light.type || '').toLowerCase() === 'domelight');
+    if (!dome) return null;
+    const warn = (message) => { if (warnings && warnings.indexOf(message) < 0) warnings.push(message); };
+    try {
+        let env = null;
+        let fileName = null;
+        if (dome.textureFile) {
+            const resolved = sceneResolveDomeTexture(fileMap, stage, dome.textureFile);
+            if (!resolved.path) {
+                warn(resolved.reason === 'ambiguous'
+                    ? 'Dome light texture "' + resolved.ref + '" is ambiguous, using the default environment'
+                    : 'Dome light texture not found: "' + String(dome.textureFile) + '"');
+                return null;
+            }
+            const ext = resolved.path.slice(resolved.path.lastIndexOf('.')).toLowerCase();
+            if (ext !== '.hdr' && ext !== '.exr') {
+                warn('Dome light texture "' + resolved.path + '" is not a .hdr or .exr environment');
+                return null;
+            }
+            const buffer = await fileMap[resolved.path].arrayBuffer();
+            env = await window.loadEnvironmentFromBuffer(buffer, ext, resolved.path, false);
+            fileName = resolved.path.split('/').pop();
+        } else {
+            if (!window.makeFlatEnvironment) return null;
+            env = window.makeFlatEnvironment(dome.color);
+            fileName = 'dome colour';
+        }
+        if (!env) return null;
+        // Only a Y rotation is representable, so take the yaw and report a
+        // tilt the environment cannot express rather than silently dropping it.
+        const euler = new THREE.Euler().setFromRotationMatrix(sceneMatrix(dome.matrix), 'YXZ');
+        const tiltDeg = Math.max(Math.abs(euler.x), Math.abs(euler.z)) * 180 / Math.PI;
+        if (tiltDeg > 5) {
+            warn('Dome light ' + dome.primPath + ' is tilted ' + tiltDeg.toFixed(0)
+                + ' deg off vertical; only its Y rotation is applied');
+        }
+        const rotationDeg = ((euler.y * 180 / Math.PI) % 360 + 360) % 360;
+        const exposure = (Number(dome.intensity) || 0) * Math.pow(2, Number(dome.exposure) || 0);
+        if (Number(dome.diffuse) !== 1 || Number(dome.specular) !== 1) {
+            warn('Dome light ' + dome.primPath + ' sets diffuse/specular multipliers, which are not applied');
+        }
+        warn('Dome light ' + dome.primPath + ' applied as the environment (' + fileName
+            + ', rotation ' + rotationDeg.toFixed(0) + ' deg)');
+        return { env, descriptor: { primPath: dome.primPath, fileName, rotationDeg, exposure } };
+    } catch (error) {
+        warn('Dome light import failed: ' + String(error && error.message || error));
+        return null;
+    }
+};
+
 const sceneUdimCode = (u, v) => 1001 + u + v * 10;
 const sceneUdimTile = (u, v) => {
     if (!Number.isFinite(u) || !Number.isFinite(v) || u < 0 || v < 0) return null;
@@ -417,6 +499,8 @@ const createMtlxSceneView = async ({
     camera.position.set(0, 0, 4);
     let env = null;
     let mxEnv = null;
+    let domeLight = null;
+    let domeEnv = null;
     const sceneOptions = {
         udimTileSize: Math.max(128, Number(udimTileSize) || 512),
         udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 1024),
@@ -869,7 +953,18 @@ const createMtlxSceneView = async ({
     try {
         report({ phase: 'renderer', status: 'start' });
         mxEnv = await window.getMxEnv(version);
-        env = await window.getEnvOverride() || await window.getEnvironment();
+        const userEnv = await window.getEnvOverride();
+        env = userEnv || await window.getEnvironment();
+        // A stage's own dome light is its authored lighting, so apply it
+        // unless the user already imported an environment this session.
+        if (!userEnv) {
+            const domeResult = await sceneDomeEnvironment(stage, fileMap, warnings);
+            if (domeResult && domeResult.env) {
+                env = domeResult.env;
+                domeEnv = domeResult.env;
+                domeLight = domeResult.descriptor;
+            }
+        }
         if (!isMounted()) throw new Error('USD scene view was cancelled.');
         const byPath = new Map();
         const pendingTextures = [];
@@ -1109,8 +1204,10 @@ const createMtlxSceneView = async ({
             }
             return parts;
         };
-        let envRotationRad = 0;
-        let envExposure = 1;
+        // A stage dome seeds rotation and exposure so the render matches the
+        // authored lighting; the sidebar mirrors these through getDomeLight().
+        let envRotationRad = domeLight ? domeLight.rotationDeg * Math.PI / 180 : 0;
+        let envExposure = domeLight ? domeLight.exposure : 1;
         const applyMaterialEnvironment = () => {
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
@@ -1167,6 +1264,10 @@ const createMtlxSceneView = async ({
         if (window.createUsdSceneEnvironment) {
             environmentBridge = window.createUsdSceneEnvironment({ scene, renderer, camera, contentRoot: sceneRoot });
             if (env) environmentBridge.setEnvironment(env);
+            if (domeLight) {
+                environmentBridge.setEnvRotation(envRotationRad);
+                environmentBridge.setEnvExposure(envExposure);
+            }
         }
         for (let i = 0; i < stage.meshes.length; i++) {
             if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
@@ -1278,6 +1379,24 @@ const createMtlxSceneView = async ({
         const getCameras = () => sceneArray(stage.cameras).map((record) => ({
             primPath: String(record.primPath || ''),
             name: String(record.name || record.primPath || ''),
+        }));
+        // The dome light the stage supplied, so the Environment card can show
+        // what is actually applied instead of its own stale defaults.
+        const getDomeLight = () => (domeLight ? Object.assign({}, domeLight) : null);
+        // Restores the stage's own dome after a user import, so Reset means
+        // "back to how this stage was authored" when the stage supplied one.
+        const applyDomeLight = () => {
+            if (!domeEnv || !domeLight || stopped) return false;
+            env = domeEnv;
+            if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(domeEnv);
+            setEnvRotation(domeLight.rotationDeg * Math.PI / 180);
+            setEnvExposure(domeLight.exposure);
+            return true;
+        };
+        const getLights = () => sceneArray(stage.lights).map((record) => ({
+            primPath: String(record.primPath || ''),
+            name: String(record.name || record.primPath || ''),
+            type: String(record.type || ''),
         }));
         // Positions the camera/controls rig at a USD camera prim's composed
         // world pose. Fov is set directly from the aperture/focal length
@@ -1689,7 +1808,7 @@ const createMtlxSceneView = async ({
                 get bytes() { return textureStats.udimBytes; },
             },
             resize, frameAll,
-            getCameras, applyCamera, resetCamera,
+            getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under

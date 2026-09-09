@@ -3743,31 +3743,61 @@ const getEnvironment = () => {
     return envPromise;
 };
 
+// Builds an environment from raw bytes into the same shape getEnvironment()
+// returns. `label` only names the source in error messages; `remember` caches
+// the pristine bytes for the key-light toggle and belongs to the session-wide
+// override alone, so a stage's own dome light passes false.
+const loadEnvironmentFromBuffer = async (buf, ext, label, remember = true) => {
+    const lower = String(ext || '').toLowerCase();
+    if (lower !== '.hdr' && lower !== '.exr') {
+        throw new Error('Unsupported environment file "' + label + '", expected .hdr or .exr.');
+    }
+    // Loader-presence checks run BEFORE parseEnvBuffer purely so the
+    // dialog can report which specific script is missing, parseEnvBuffer
+    // itself just returns null on this, with no message.
+    if (lower === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+        throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');
+    }
+    if (lower === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+        throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');
+    }
+    const raw = parseEnvBuffer(buf, lower);
+    if (!raw || !raw.image || !raw.image.data) {
+        throw new Error('Failed to parse the environment image "' + label + '".');
+    }
+    if (remember) overrideEnvSource = { buf, ext: lower };
+    return buildEnvFromParsedTexture(raw);
+};
+
+// Constant-colour environment in the same shape, for a USD dome light that
+// carries a colour but no texture. Small on purpose: every texel is equal,
+// so resolution buys nothing and the mip chain still builds normally.
+const FLAT_ENV_W = 32;
+const FLAT_ENV_H = 16;
+const makeFlatEnvironment = (rgb) => {
+    const [r, g, b] = Array.isArray(rgb) && rgb.length >= 3 ? rgb : [1, 1, 1];
+    const data = new Uint16Array(FLAT_ENV_W * FLAT_ENV_H * 4);
+    const half = [floatToHalf(r), floatToHalf(g), floatToHalf(b), floatToHalf(1)];
+    for (let i = 0; i < data.length; i += 4) {
+        data[i] = half[0]; data[i + 1] = half[1]; data[i + 2] = half[2]; data[i + 3] = half[3];
+    }
+    const tex = new THREE.DataTexture(data, FLAT_ENV_W, FLAT_ENV_H, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.flipY = false;
+    return buildEnvFromParsedTexture(tex);
+};
+
 // Loads a user-dropped environment file into the same shape
 // getEnvironment() returns, reusing its parse/build helpers. Unlike
 // getEnvironment(), throws on failure instead of a silent fallback.
 const loadEnvironmentFromFile = async (file) => {
     const name = ((file && file.name) || '').toLowerCase();
     const ext = name.slice(name.lastIndexOf('.'));
+    // Reject by extension before reading the bytes: an unsupported drop
+    // should not pull a large file into memory first.
     if (ext !== '.hdr' && ext !== '.exr') {
         throw new Error('Unsupported environment file "' + (file && file.name) + '", expected .hdr or .exr.');
     }
-    // Loader-presence checks run BEFORE parseEnvBuffer purely so the
-    // dialog can report which specific script is missing, parseEnvBuffer
-    // itself just returns null on this, with no message.
-    if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
-        throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');
-    }
-    if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
-        throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');
-    }
-    const buf = await file.arrayBuffer();
-    const raw = parseEnvBuffer(buf, ext);
-    if (!raw || !raw.image || !raw.image.data) {
-        throw new Error('Failed to parse the environment image "' + (file && file.name) + '".');
-    }
-    overrideEnvSource = { buf, ext }; // pristine bytes, for the key-light toggle rebuild
-    return buildEnvFromParsedTexture(raw);
+    return loadEnvironmentFromBuffer(await file.arrayBuffer(), ext, (file && file.name) || '', true);
 };
 
 // Set/clear the session-wide environment override. null clears it
@@ -7229,7 +7259,8 @@ Object.assign(window, {
     getDisplayTransform, setDisplayTransform,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
-    loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
+    loadEnvironmentFromFile, loadEnvironmentFromBuffer, makeFlatEnvironment,
+    setEnvOverride, getEnvOverride,
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
     createPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,

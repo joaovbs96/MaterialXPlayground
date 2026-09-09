@@ -447,8 +447,8 @@ const ROTATE_AXIS_FN = { X: rotateXM, Y: rotateYM, Z: rotateZM };
 
 // Composes one prim's local matrix from its own xformOpOrder tokens.
 // Returns { matrix, unsupported } where unsupported names the first op kind
-// this worker cannot compose (the caller drops the camera in that case).
-function composeLocalMatrix(orderTokens, attrMap, primPath, warn) {
+// this worker cannot compose (the caller drops the prim in that case).
+function composeLocalMatrix(orderTokens, attrMap, primPath, warn, label = "Camera") {
   let m = identity4();
   for (const token of orderTokens) {
     if (token === "!resetXformStack!") continue;
@@ -473,7 +473,7 @@ function composeLocalMatrix(orderTokens, attrMap, primPath, warn) {
     } else if (kind === "transform") {
       opM = nums.length >= 16 ? nums.slice(0, 16) : identity4();
     } else {
-      warn(`Camera ${primPath}: unsupported transform op ${name}, camera skipped`);
+      warn(`${label} ${primPath}: unsupported transform op ${name}, ${label.toLowerCase()} skipped`);
       return { matrix: identity4(), unsupported: true };
     }
     if (invert) opM = invert4(opM);
@@ -620,34 +620,53 @@ function collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, materialPath)
   return overrides;
 }
 
-function collectCameras(api, root, graph, warn) {
-  const cameraEntries = arrayItems(graph).filter(entry => {
-    if ((text(entry?.typeName) ?? "").toLowerCase() !== "camera") return false;
+// Walks a prim's ancestor chain and accumulates the world matrix, returning
+// the leaf's attribute map alongside it so the caller does not read it twice.
+// Shared by cameras and lights; `label` only shapes the unsupported-op warning.
+function composeWorldMatrix(api, root, primPath, warn, label) {
+  const segments = primPath.split("/").filter(Boolean);
+  let running = "";
+  const ancestorPaths = segments.map(seg => (running += "/" + seg, running));
+  let worldSoFar = identity4();
+  let leafMap = null;
+  for (const path of ancestorPaths) {
+    const attrMap = readPrimAttrMap(api, root, path);
+    if (path === primPath) leafMap = attrMap;
+    const orderRecord = attrMap.get("xformOpOrder");
+    const orderTokens = orderRecord ? parseOpOrderList(orderRecord.value) : [];
+    if (orderTokens.includes("!resetXformStack!")) worldSoFar = identity4();
+    const { matrix, unsupported } = composeLocalMatrix(orderTokens, attrMap, primPath, warn, label);
+    if (unsupported) return { matrix: identity4(), leafMap: null, unsupported: true };
+    worldSoFar = mul4(matrix, worldSoFar);
+  }
+  return {
+    matrix: worldSoFar,
+    leafMap: leafMap ?? readPrimAttrMap(api, root, primPath),
+    unsupported: false,
+  };
+}
+
+// Graph entries carry a resolved typeName, so prims are picked by type here.
+// A prim authored purely as an `over` has no resolved type and never appears.
+function graphEntriesOfType(graph, matches) {
+  return arrayItems(graph).filter(entry => {
+    const typeName = (text(entry?.typeName) ?? "").toLowerCase();
+    if (!typeName || !matches(typeName)) return false;
     if (!text(entry?.path)) return false;
     if (entry?.active === false || entry?.isActive === false) return false;
     return true;
   });
+}
+
+function collectCameras(api, root, graph, warn) {
+  const cameraEntries = graphEntriesOfType(graph, name => name === "camera");
   const cameras = [];
   for (const entry of cameraEntries) {
     const primPath = text(entry.path);
     const segments = primPath.split("/").filter(Boolean);
-    let running = "";
-    const ancestorPaths = segments.map(seg => (running += "/" + seg, running));
-    let worldSoFar = identity4();
-    let skip = false;
-    let leafMap = null;
-    for (const path of ancestorPaths) {
-      const attrMap = readPrimAttrMap(api, root, path);
-      if (path === primPath) leafMap = attrMap;
-      const orderRecord = attrMap.get("xformOpOrder");
-      const orderTokens = orderRecord ? parseOpOrderList(orderRecord.value) : [];
-      if (orderTokens.includes("!resetXformStack!")) worldSoFar = identity4();
-      const { matrix, unsupported } = composeLocalMatrix(orderTokens, attrMap, primPath, warn);
-      if (unsupported) { skip = true; break; }
-      worldSoFar = mul4(matrix, worldSoFar);
-    }
-    if (skip) continue;
-    const map = leafMap ?? readPrimAttrMap(api, root, primPath);
+    const { matrix: worldSoFar, leafMap, unsupported } = composeWorldMatrix(api, root, primPath, warn, "Camera");
+    if (unsupported) continue;
+    const map = leafMap;
     const numberOf = (name, fallback) => {
       const record = map.get(name);
       const nums = record ? parseNumbers(record.value) : [];
@@ -669,6 +688,75 @@ function collectCameras(api, root, graph, warn) {
     });
   }
   return cameras;
+}
+
+// UsdLux defaults for the attributes a dome light import reads, applied when
+// an attribute is unauthored. A DCC also writes declaration-only attributes
+// with no value at all, so an empty value text falls back the same way.
+const LIGHT_DEFAULTS = { intensity: 1, exposure: 0, diffuse: 1, specular: 1 };
+// Types the Scene converts to MaterialX lights. Anything else is reported
+// once so a dropped light is never silent.
+const IMPORTED_LIGHT_TYPES = new Set([
+  "domelight", "distantlight", "spherelight", "rectlight", "disklight", "cylinderlight",
+]);
+
+function collectLights(api, root, graph, warn) {
+  const entries = graphEntriesOfType(graph, name => name.endsWith("light"));
+  const lights = [];
+  for (const entry of entries) {
+    const primPath = text(entry.path);
+    const typeName = text(entry.typeName) ?? "";
+    const { matrix, leafMap, unsupported } = composeWorldMatrix(api, root, primPath, warn, "Light");
+    if (unsupported) continue;
+    const segments = primPath.split("/").filter(Boolean);
+    const valueOf = (name) => {
+      const record = leafMap.get(name);
+      const value = record ? text(record.value) : undefined;
+      return value && value.trim() ? value.trim() : undefined;
+    };
+    const numberOf = (name, fallback) => {
+      const nums = parseNumbers(valueOf(name));
+      return nums.length ? nums[0] : fallback;
+    };
+    const colorNums = parseNumbers(valueOf("inputs:color"));
+    lights.push({
+      primPath,
+      name: segments[segments.length - 1] || primPath,
+      type: typeName,
+      matrix,
+      textureFile: valueOf("inputs:texture:file") ?? null,
+      textureFormat: valueOf("inputs:texture:format") ?? "automatic",
+      intensity: numberOf("inputs:intensity", LIGHT_DEFAULTS.intensity),
+      exposure: numberOf("inputs:exposure", LIGHT_DEFAULTS.exposure),
+      diffuse: numberOf("inputs:diffuse", LIGHT_DEFAULTS.diffuse),
+      specular: numberOf("inputs:specular", LIGHT_DEFAULTS.specular),
+      color: colorNums.length >= 3 ? colorNums.slice(0, 3) : [1, 1, 1],
+      // Emitter shape, used to normalize intensity by area and to pick the
+      // MaterialX light type. Absent attributes stay null so the converter
+      // can tell "unauthored" from "authored zero".
+      radius: numberOf("inputs:radius", null),
+      width: numberOf("inputs:width", null),
+      height: numberOf("inputs:height", null),
+      length: numberOf("inputs:length", null),
+      angle: numberOf("inputs:angle", null),
+      normalize: valueOf("inputs:normalize") === "1" || valueOf("inputs:normalize") === "true",
+      treatAsPoint: valueOf("treatAsPoint") === "1" || valueOf("treatAsPoint") === "true",
+      // UsdLuxShapingAPI: how a real spot light is authored.
+      coneAngle: numberOf("inputs:shaping:cone:angle", null),
+      coneSoftness: numberOf("inputs:shaping:cone:softness", null),
+    });
+  }
+  const domes = lights.filter(light => light.type.toLowerCase() === "domelight");
+  if (domes.length > 1) warn(`Stage has ${domes.length} dome lights; using ${domes[0].primPath}`);
+  for (const light of lights) {
+    const kind = light.type.toLowerCase();
+    if (kind === "domelight") {
+      if (light !== domes[0]) warn(`Light ${light.primPath} (${light.type}) is not imported`);
+      continue;
+    }
+    if (!IMPORTED_LIGHT_TYPES.has(kind)) warn(`Light ${light.primPath} (${light.type}) is not imported`);
+  }
+  return lights;
 }
 
 function swapCorners(array, triangleIndex, stride) {
@@ -1089,7 +1177,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   return warnings;
 }
 
-function copyStageResult(summary, draw, payloads, cameras) {
+function copyStageResult(summary, draw, payloads, cameras, lights) {
   const assets = new Map();
   const materials = new Map();
   for (const entry of arrayItems(payloads)) {
@@ -1137,6 +1225,7 @@ function copyStageResult(summary, draw, payloads, cameras) {
     materials: materialList,
     assets: assetList,
     cameras: cameras ?? [],
+    lights: lights ?? [],
     warnings: Array.from(new Set(warnings)),
     transfer,
   };
@@ -1340,13 +1429,16 @@ async function load(request) {
   } });
   const cameraWarnings = [];
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
-  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras);
+  const lightWarnings = [];
+  const lights = collectLights(api, root, graph, message => lightWarnings.push(message));
+  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights);
   for (const material of result.materials) {
     const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
     const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path);
     if (overrides.length) material.overrides = overrides;
   }
   result.warnings.push(...cameraWarnings);
+  result.warnings.push(...lightWarnings);
   result.warnings.push(...scanWarnings);
   result.warnings.push(...normalRecoveryWarnings);
   if (drawSnapshot.warnings?.length) result.warnings.push(...drawSnapshot.warnings);

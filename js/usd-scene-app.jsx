@@ -416,11 +416,23 @@
                     handleRef.current = nextHandle;
                     window.__mtlxUsdSceneHandle = nextHandle; // test and console access to the live scene handle.
                     const settings = envSettingsRef.current;
-                    callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
-                    callHandle('setEnvExposure', settings.exposureLinear);
+                    // A stage that ships a dome light has already seeded the
+                    // renderer with its own environment, rotation and exposure.
+                    // Mirror those into the card instead of replaying the
+                    // card's defaults over them; a user import still wins.
+                    const dome = nextHandle.getDomeLight ? nextHandle.getDomeLight() : null;
+                    const useDome = !!dome && !envOverrideRef.current;
+                    if (useDome) {
+                        setEnvFileName(dome.fileName || 'Stage dome light');
+                        setEnvRotation(Math.round(dome.rotationDeg));
+                        setEnvExposureLinear(dome.exposure);
+                    } else {
+                        callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
+                        callHandle('setEnvExposure', settings.exposureLinear);
+                    }
                     callHandle('setBackdrop', settings.backdrop);
                     callHandle('setAutoRotate', settings.autoRotate);
-                    if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
+                    if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current);
                     setHandle(nextHandle); setStatus('rendered');
                     if (nextHandle && nextHandle.frameAll) nextHandle.frameAll();
                 } catch (e) { if (live && mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted) { setError(String(e && e.message || e)); setStatus('error'); } }
@@ -505,6 +517,18 @@
             let env = null;
             if (getter) { try { env = await getter(); } catch (e) {} }
             if (!mountedRef.current || generation !== environmentGenerationRef.current) return;
+            // Reset means "back to how this stage was authored", so a stage
+            // that supplied a dome light returns to the dome, not to the site
+            // default environment.
+            const dome = handleRef.current && handleRef.current.getDomeLight && handleRef.current.getDomeLight();
+            if (dome && callHandle('applyDomeLight')) {
+                currentEnvironmentRef.current = null;
+                setEnvFileName(dome.fileName || 'Stage dome light');
+                setEnvRotation(Math.round(dome.rotationDeg));
+                setEnvExposureLinear(dome.exposure);
+                setBackdrop('studio'); callHandle('setBackdrop', 'studio');
+                return;
+            }
             if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
             setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1); setBackdrop('studio'); callHandle('setBackdrop', 'studio');
         };
