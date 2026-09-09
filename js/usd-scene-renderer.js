@@ -993,6 +993,10 @@ const createMtlxSceneView = async ({
         if (!ensured) return null;
         if (!ensured.compiled) return { material: sceneNeutralMaterial(label), compiled: null };
         const { compiled, cacheKey } = ensured;
+        // Builds the GGX-prefiltered radiance chain on first use; the
+        // uniform builder below picks it over the FIS chain when the
+        // shaders were generated for the prefilter path.
+        if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
             shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
@@ -1458,6 +1462,7 @@ const createMtlxSceneView = async ({
             shadowDirty = false;
         };
         const applyMaterialEnvironment = () => {
+            if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
                 console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');

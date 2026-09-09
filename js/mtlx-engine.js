@@ -335,6 +335,22 @@ let HEIGHT_TO_NORMAL_TEXEL = (() => {
         return localStorage.getItem('mtlxHeightToNormalTexel') === '1';
     } catch (e) { return false; }
 })();
+// Specular environment method. 'prefilter' is MaterialXView's path: the
+// radiance map carries a GGX-prefiltered mip chain and the shader does one
+// textureLod, so a rough surface reads a correctly filtered value instead
+// of a 16-sample estimate. 'fis' is MaterialX's filtered-importance-
+// sampling default, kept for side-by-side comparison; its 16 samples are
+// what put per-pixel white specks on low-roughness surfaces under a map
+// with a small bright sun.
+let SPECULAR_ENV_METHOD = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('specularEnv')) return qs.get('specularEnv') === 'fis' ? 'fis' : 'prefilter';
+        return localStorage.getItem('mtlx_specular_env') === 'fis' ? 'fis' : 'prefilter';
+    } catch (e) { return 'prefilter'; }
+})();
+const getSpecularEnvMethod = () => SPECULAR_ENV_METHOD;
+
 const getHeightToNormalTexel = () => HEIGHT_TO_NORMAL_TEXEL;
 const setHeightToNormalTexel = (v, { persist = true } = {}) => {
     HEIGHT_TO_NORMAL_TEXEL = !!v;
@@ -3887,6 +3903,231 @@ const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad) => {
 // Builds the full { radiance, irradiance, mips, background,
 // prefilteredIrr, keyLight, softKeyDir } shape from a raw
 // parseEnvBuffer() result, shared by getEnvironment() and loadEnvironmentFromFile.
+// GGX-prefiltered radiance chain, MaterialXView's specular environment path.
+// Each mip of the result is the environment convolved with the GGX lobe for
+// the roughness that mx_latlong_alpha_to_lod maps to that level, so the
+// shader's single textureLod replaces FIS's 16-sample estimate. The math is
+// a straight port of libraries/pbrlib/genglsl/lib/mx_generate_prefilter_env.glsl
+// and its helpers, kept function-for-function so the two cannot drift.
+const PREFILTER_SAMPLES = 1024;
+const PREFILTER_GLSL = [
+    'precision highp float;',
+    'const float M_PI = 3.1415926535897932;',
+    'const float M_PI_INV = 0.31830988618379067;',
+    'const float M_FLOAT_EPS = 1e-8;',
+    'uniform sampler2D uSource;',
+    'uniform float uMip;',
+    'uniform float uMaxMip;',
+    'uniform vec2 uTargetSize;',
+    'out vec4 fragColor;',
+    'float mx_square(float x) { return x * x; }',
+    // Return the alpha associated with the given mip level in a prefiltered environment.
+    'float mx_latlong_lod_to_alpha(float lod) {',
+    '    float lodBias = lod / uMaxMip;',
+    '    return (lodBias < 0.5) ? mx_square(lodBias) : 2.0 * (lodBias - 0.375);',
+    '}',
+    'vec3 mx_latlong_map_projection_inverse(vec2 uv) {',
+    '    float latitude = (uv.y - 0.5) * M_PI;',
+    '    float longitude = (uv.x - 0.5) * M_PI * 2.0;',
+    '    float x = -cos(latitude) * sin(longitude);',
+    '    float y = -sin(latitude);',
+    '    float z = cos(latitude) * cos(longitude);',
+    '    return vec3(x, y, z);',
+    '}',
+    'vec2 mx_latlong_projection(vec3 dir) {',
+    '    float latitude = -asin(clamp(dir.y, -1.0, 1.0)) * M_PI_INV + 0.5;',
+    '    float longitude = atan(dir.x, -dir.z) * M_PI_INV * 0.5 + 0.5;',
+    '    return vec2(longitude, latitude);',
+    '}',
+    'vec3 mx_latlong_map_lookup(vec3 dir, float lod) {',
+    '    return textureLod(uSource, mx_latlong_projection(normalize(dir)), lod).rgb;',
+    '}',
+    'float mx_latlong_compute_lod(vec3 dir, float pdf, float maxMipLevel, int envSamples) {',
+    '    const float MIP_LEVEL_OFFSET = 1.5;',
+    '    float effectiveMaxMipLevel = maxMipLevel - MIP_LEVEL_OFFSET;',
+    '    float distortion = sqrt(1.0 - mx_square(dir.y));',
+    '    return max(effectiveMaxMipLevel - 0.5 * log2(float(envSamples) * pdf * distortion), 0.0);',
+    '}',
+    'mat3 mx_orthonormal_basis(vec3 N) {',
+    '    float sgn = (N.z < 0.0) ? -1.0 : 1.0;',
+    '    float a = -1.0 / (sgn + N.z);',
+    '    float b = N.x * N.y * a;',
+    '    vec3 X = vec3(1.0 + sgn * N.x * N.x * a, sgn * b, -sgn * N.x);',
+    '    vec3 Y = vec3(b, sgn + N.y * N.y * a, -N.y);',
+    '    return mat3(X, Y, N);',
+    '}',
+    'float mx_golden_ratio_sequence(int i) {',
+    '    const float GOLDEN_RATIO = 1.6180339887498948;',
+    '    return fract((float(i) + 1.0) * GOLDEN_RATIO);',
+    '}',
+    'vec2 mx_spherical_fibonacci(int i, int numSamples) {',
+    '    return vec2((float(i) + 0.5) / float(numSamples), mx_golden_ratio_sequence(i));',
+    '}',
+    'float mx_ggx_NDF(vec3 H, vec2 alpha) {',
+    '    vec2 He = H.xy / alpha;',
+    '    float denom = dot(He, He) + mx_square(H.z);',
+    '    return 1.0 / (M_PI * alpha.x * alpha.y * mx_square(denom));',
+    '}',
+    'vec3 mx_ggx_importance_sample_VNDF(vec2 Xi, vec3 V, vec2 alpha) {',
+    '    V = normalize(vec3(V.xy * alpha, V.z));',
+    '    float phi = 2.0 * M_PI * Xi.x;',
+    '    float z = (1.0 - Xi.y) * (1.0 + V.z) - V.z;',
+    '    float sinTheta = sqrt(clamp(1.0 - z * z, 0.0, 1.0));',
+    '    vec3 c = vec3(sinTheta * cos(phi), sinTheta * sin(phi), z);',
+    '    vec3 H = c + V;',
+    '    return normalize(vec3(H.xy * alpha, max(H.z, 0.0)));',
+    '}',
+    'float mx_ggx_VNDF_reflection_PDF(vec3 H, vec2 alpha, float G1V, float NdotV) {',
+    '    return mx_ggx_NDF(H, alpha) * G1V / (4.0 * NdotV);',
+    '}',
+    'float mx_ggx_smith_G1(float cosTheta, float alpha) {',
+    '    float cosTheta2 = mx_square(cosTheta);',
+    '    float tanTheta2 = (1.0 - cosTheta2) / cosTheta2;',
+    '    return 2.0 / (1.0 + sqrt(1.0 + mx_square(alpha) * tanTheta2));',
+    '}',
+    'float mx_ggx_smith_G2(float NdotL, float NdotV, float alpha) {',
+    '    float alpha2 = mx_square(alpha);',
+    '    float lambdaL = sqrt(alpha2 + (1.0 - alpha2) * mx_square(NdotL));',
+    '    float lambdaV = sqrt(alpha2 + (1.0 - alpha2) * mx_square(NdotV));',
+    '    return 2.0 * NdotL * NdotV / (lambdaL * NdotV + lambdaV * NdotL);',
+    '}',
+    'void main() {',
+    '    vec2 uv = gl_FragCoord.xy / uTargetSize;',
+    '    vec3 worldN = mx_latlong_map_projection_inverse(uv);',
+    '    float alpha = mx_latlong_lod_to_alpha(uMip);',
+    // A mirror lobe has no width to integrate; sampling it would just add
+    // noise, so level 0 is the source unchanged.
+    '    if (alpha <= 0.0) { fragColor = vec4(mx_latlong_map_lookup(worldN, 0.0), 1.0); return; }',
+    '    vec3 V = vec3(0.0, 0.0, 1.0);',
+    '    float NdotV = 1.0;',
+    '    mat3 tangentToWorld = mx_orthonormal_basis(worldN);',
+    '    float G1V = mx_ggx_smith_G1(NdotV, alpha);',
+    '    vec3 radiance = vec3(0.0);',
+    '    float weight = 0.0;',
+    '    const int envRadianceSamples = ' + PREFILTER_SAMPLES + ';',
+    '    for (int i = 0; i < envRadianceSamples; i++) {',
+    '        vec2 Xi = mx_spherical_fibonacci(i, envRadianceSamples);',
+    '        vec3 H = mx_ggx_importance_sample_VNDF(Xi, V, vec2(alpha));',
+    '        vec3 L = -V + 2.0 * H.z * H;',
+    '        float NdotL = clamp(L.z, M_FLOAT_EPS, 1.0);',
+    '        float G = mx_ggx_smith_G2(NdotL, NdotV, alpha);',
+    '        vec3 Lw = tangentToWorld * L;',
+    '        float pdf = mx_ggx_VNDF_reflection_PDF(H, vec2(alpha), G1V, NdotV);',
+    '        float lod = mx_latlong_compute_lod(Lw, pdf, uMaxMip, envRadianceSamples);',
+    '        radiance += G * mx_latlong_map_lookup(Lw, lod);',
+    '        weight += G;',
+    '    }',
+    '    fragColor = vec4(radiance / max(weight, M_FLOAT_EPS), 1.0);',
+    '}',
+].join('\n');
+
+// Builds env.radiancePrefiltered once per environment, on the first view
+// that has a renderer. three r128 ignores the mip level for a 2D render
+// target (setRenderTarget's framebufferTexture2D call is cube-only), so each
+// level is rendered into its own target, read back, and assembled into a
+// DataTexture whose `mipmaps` array three uploads level by level.
+// Fail-soft: any problem leaves the flag set and the FIS chain in place, so
+// shading still works, just noisier.
+const ensurePrefilteredEnv = (renderer, env) => {
+    if (!env || !env.radiance || env.prefilterTried) return env;
+    env.prefilterTried = true;
+    if (getSpecularEnvMethod() !== 'prefilter') return env;
+    if (!renderer || !renderer.capabilities || !renderer.capabilities.isWebGL2) return env;
+    // Float targets are the only type readRenderTargetPixels can be relied
+    // on to return here; without them the chain cannot be read back.
+    if (!renderer.extensions.get('EXT_color_buffer_float')) {
+        mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the FIS specular environment.');
+        return env;
+    }
+    const src = env.radiance;
+    const w = src.image && src.image.width, h = src.image && src.image.height;
+    if (!w || !h) return env;
+    const levels = env.mips || (Math.trunc(Math.log2(Math.max(w, h))) + 1);
+    const t0 = performance.now();
+    const previousTarget = renderer.getRenderTarget();
+    const material = new THREE.RawShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+        fragmentShader: PREFILTER_GLSL,
+        uniforms: {
+            uSource: { value: src },
+            uMip: { value: 0 },
+            uMaxMip: { value: Math.max(1, levels - 1) },
+            uTargetSize: { value: new THREE.Vector2(w, h) },
+        },
+        depthTest: false, depthWrite: false,
+    });
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const mipmaps = [];
+    let failed = false;
+    try {
+        for (let level = 0; level < levels; level++) {
+            const lw = Math.max(1, w >> level), lh = Math.max(1, h >> level);
+            const target = new THREE.WebGLRenderTarget(lw, lh, {
+                minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat, type: THREE.FloatType,
+                depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
+            });
+            material.uniforms.uMip.value = level;
+            material.uniforms.uTargetSize.value.set(lw, lh);
+            renderer.setRenderTarget(target);
+            renderer.render(scene, camera);
+            const pixels = new Float32Array(lw * lh * 4);
+            renderer.readRenderTargetPixels(target, 0, 0, lw, lh, pixels);
+            target.dispose();
+            // Half float keeps the chain linear-filterable in core WebGL2
+            // (full float filtering needs OES_texture_float_linear) and
+            // halves the upload, at a precision the source already has.
+            const half = new Uint16Array(lw * lh * 4);
+            for (let i = 0; i < half.length; i++) half[i] = floatToHalf(pixels[i]);
+            mipmaps.push({ data: half, width: lw, height: lh });
+        }
+    } catch (error) {
+        failed = true;
+        mtlxWarn('mtlx-engine: GGX environment prefilter failed, keeping the FIS chain: ' + (error && error.message || error));
+    }
+    renderer.setRenderTarget(previousTarget);
+    material.dispose();
+    scene.children[0].geometry.dispose();
+    if (failed || !mipmaps.length) return env;
+    const base = mipmaps[0];
+    const tex = new THREE.DataTexture(base.data, base.width, base.height, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    // Always false, never copied from the source: the chain was written in
+    // framebuffer space, where row 0 is v = 0, and readRenderTargetPixels
+    // hands the rows back in that same order.
+    tex.flipY = false;
+    tex.encoding = THREE.LinearEncoding;
+    tex.anisotropy = 8;
+    // Levels are supplied, not derived: three uploads texture.mipmaps for a
+    // DataTexture and turns generateMipmaps off itself when it does.
+    tex.mipmaps = mipmaps;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    env.radiancePrefiltered = tex;
+    if (window.MTLX_PERF_LOG) {
+        console.log('[mtlx-perf] env prefilter: ' + (performance.now() - t0).toFixed(1)
+            + 'ms (' + levels + ' levels, ' + w + 'x' + h + ')');
+    }
+    return env;
+};
+
+// The radiance sampler the SHADING path binds. The backdrop, the PMREM
+// probe and the key-light extraction all keep using env.radiance: only the
+// specular lookup wants the prefiltered chain, and only when the shader was
+// generated for it.
+const envRadianceForShading = (env) => {
+    if (!env) return null;
+    if (getSpecularEnvMethod() === 'prefilter' && env.radiancePrefiltered) return env.radiancePrefiltered;
+    return env.radiance;
+};
+
 const buildEnvFromParsedTexture = (raw) => {
     // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
     // background are built below, so it disappears from all three,
@@ -4383,9 +4624,16 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // example the supplied ceramic/Lion graphs). Preview and scene renders
     // need ordinary throughput propagation semantics.
     try { genContext.getOptions().premultipliedBsdfAdd = false; } catch (e) { /* option absent in older bindings */ }
-    // Generated shaders use the generator's default FIS specular-
-    // environment method. hwSpecularEnvironmentMethod is NOT settable
-    // in this build, the embind setter rejects it. Don't retry.
+    // Specular environment method. The setter takes the EMBIND ENUM VALUE,
+    // not an integer: assigning 0/1/2 is silently ignored, which is what
+    // made this look unsettable before. Verified by generating both ways
+    // and checking for mx_latlong_alpha_to_lod in the output.
+    try {
+        const methods = mx.HwSpecularEnvironmentMethod;
+        const wanted = getSpecularEnvMethod() === 'fis'
+            ? methods.SPECULAR_ENVIRONMENT_FIS : methods.SPECULAR_ENVIRONMENT_PREFILTER;
+        if (wanted) genContext.getOptions().hwSpecularEnvironmentMethod = wanted;
+    } catch (e) { /* enum absent in older bindings, keep the generator default */ }
 
     // Bail before the ~expensive shader-generation call if this
     // build was superseded (mounted flipped while awaiting above),
@@ -4563,7 +4811,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
     const declared = new Set((compiled.declared || []).map((u) => u.name));
     const has = (name) => declared.has(name);
-    const radiance = (env && env.radiance) || getDummyTex();
+    const radiance = envRadianceForShading(env) || getDummyTex();
     const irradiance = (env && env.irradiance) || radiance;
     const mips = env && env.mips != null ? env.mips : 1;
     if (has('u_time')) uniforms.u_time = { value: MTLX_CLOCK.time };
@@ -5744,6 +5992,7 @@ const createMtlxRenderView = async ({
         if (!env) return;
         try { if (env.radiance) env.radiance.dispose(); } catch (e) { /* already disposed/invalid */ }
         try { if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.radiancePrefiltered) env.radiancePrefiltered.dispose(); } catch (e) { /* ditto */ }
         try { if (env.background) env.background.dispose(); } catch (e) { /* ditto */ }
     };
     // No-OrbitControls fallback only (script blocked): mirrors the
@@ -6199,7 +6448,7 @@ const createMtlxRenderView = async ({
                     const radianceSrc = env ? env.radiance : makeEnvTexture(256, 128, false);
                     if (needsLighting) {
                         if (env) {
-                            envRadiance = env.radiance; envIrradiance = env.irradiance; envMips = env.mips;
+                            envRadiance = envRadianceForShading(env); envIrradiance = env.irradiance; envMips = env.mips;
                             envBgTexture = env.background;
                             envHasFile = true;
                             envPrefilteredIrr = !!env.prefilteredIrr;
@@ -7011,13 +7260,14 @@ const createMtlxRenderView = async ({
             // scene-mode's PMREM. No-op on views with no lighting/env.
             setEnvironment: (env) => {
                 if (!env) return;
-                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
+                ensurePrefilteredEnv(renderer, env);
+                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = envRadianceForShading(env);
                 if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = env.irradiance;
                 if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
                 // Persist onto the SHELL env state too, not just the
                 // current material's uniforms, otherwise a future swap
                 // silently reverts to the stale env.
-                envRadiance = env.radiance;
+                envRadiance = envRadianceForShading(env);
                 envIrradiance = env.irradiance;
                 envMips = env.mips;
                 envBgTexture = env.background;
@@ -7491,6 +7741,7 @@ Object.assign(window, {
     setEnvOverride, getEnvOverride,
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
+    ensurePrefilteredEnv, getSpecularEnvMethod,
     createPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
