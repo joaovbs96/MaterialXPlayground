@@ -151,7 +151,7 @@
                     entry.type = LIGHT_TYPE_POINT;
                 }
                 if (POINT_APPROXIMATED[kind]) {
-                    warn('Light ' + record.primPath + ' (' + record.type
+                    warn('[info] Light ' + record.primPath + ' (' + record.type
                         + ') is approximated as a point at its centre, matching Hydra Storm');
                 }
             }

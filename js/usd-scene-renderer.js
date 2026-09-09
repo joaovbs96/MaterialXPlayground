@@ -224,20 +224,19 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
         if (!env) return null;
         // Only a Y rotation is representable, so take the yaw and report a
         // tilt the environment cannot express rather than silently dropping it.
+        // Decompose YXZ into a yaw the rotation slider owns and the residual
+        // tilt, so the slider stays a plain yaw while the dome's full authored
+        // orientation still reaches u_envMatrix.
         const euler = new THREE.Euler().setFromRotationMatrix(sceneMatrix(dome.matrix), 'YXZ');
-        const tiltDeg = Math.max(Math.abs(euler.x), Math.abs(euler.z)) * 180 / Math.PI;
-        if (tiltDeg > 5) {
-            warn('Dome light ' + dome.primPath + ' is tilted ' + tiltDeg.toFixed(0)
-                + ' deg off vertical; only its Y rotation is applied');
-        }
+        const tilt = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(euler.x, 0, euler.z, 'YXZ'));
         const rotationDeg = ((euler.y * 180 / Math.PI) % 360 + 360) % 360;
         const exposure = (Number(dome.intensity) || 0) * Math.pow(2, Number(dome.exposure) || 0);
         if (Number(dome.diffuse) !== 1 || Number(dome.specular) !== 1) {
             warn('Dome light ' + dome.primPath + ' sets diffuse/specular multipliers, which are not applied');
         }
-        warn('Dome light ' + dome.primPath + ' applied as the environment (' + fileName
+        warn('[info] Dome light ' + dome.primPath + ' applied as the environment (' + fileName
             + ', rotation ' + rotationDeg.toFixed(0) + ' deg)');
-        return { env, descriptor: { primPath: dome.primPath, fileName, rotationDeg, exposure } };
+        return { env, tilt, descriptor: { primPath: dome.primPath, fileName, rotationDeg, exposure } };
     } catch (error) {
         warn('Dome light import failed: ' + String(error && error.message || error));
         return null;
@@ -581,6 +580,7 @@ const createMtlxSceneView = async ({
     let mxEnv = null;
     let domeLight = null;
     let domeEnv = null;
+    let envTilt = null;
     let stageLights = [];
     let stageLightsEnabled = storedSceneStageLights();
     let stageLightsEv = storedSceneStageLightsEv();
@@ -954,7 +954,7 @@ const createMtlxSceneView = async ({
         const { compiled, cacheKey } = ensured;
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
-            shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix,
+            shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
         });
         // USD value overrides (record.overrides) are applied onto the
         // MaterialX document itself in loadRenderable/applyUsdOverrides,
@@ -1047,6 +1047,7 @@ const createMtlxSceneView = async ({
                 env = domeResult.env;
                 domeEnv = domeResult.env;
                 domeLight = domeResult.descriptor;
+                envTilt = domeResult.tilt || null;
             }
         }
         if (window.convertUsdStageLights) {
@@ -1382,7 +1383,7 @@ const createMtlxSceneView = async ({
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
-                    shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix,
+                    shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
                     envRotationRad, envExposure,
                 });
                 for (const [name, slot] of Object.entries(next)) {
@@ -1874,7 +1875,6 @@ const createMtlxSceneView = async ({
         // pipeline only when Force Transparency is on and at least one
         // mesh under sceneRoot currently carries a transparent material;
         // the mesh list is cached and invalidated on material rebuild.
-        let transparentSetReported = false;
         const collectTransparentMeshes = () => {
             if (transparentMeshCache) return transparentMeshCache;
             const list = [];
@@ -1884,23 +1884,19 @@ const createMtlxSceneView = async ({
                 if (mats.some((m) => m && m.userData && m.userData.mtlxSceneTransparent)) list.push(object);
             });
             transparentMeshCache = list;
-            // Name the peel set once: MaterialX classifies transparency as a
-            // threshold-free boolean, so a material with transmission 0.05
-            // lands here alongside genuinely clear glass, and that is the
-            // usual explanation for an "opaque" object behaving oddly.
-            if (!transparentSetReported && list.length) {
-                transparentSetReported = true;
-                const names = Array.from(new Set(list.map((object) => {
-                    const mats = Array.isArray(object.material) ? object.material : [object.material];
-                    const hit = mats.find((m) => m && m.userData && m.userData.mtlxSceneTransparent);
-                    return String((hit && hit.userData && hit.userData.mtlxSceneMaterialPath) || 'unknown');
-                })));
-                warnings.push('Force Transparency: ' + list.length + ' mesh(es) across ' + names.length
-                    + ' material(s) are treated as transparent: ' + names.slice(0, 8).join(', ')
-                    + (names.length > 8 ? ', ...' : ''));
-            }
             return list;
         };
+        // The full peel set, one entry per prim, for the sidebar. MaterialX
+        // classifies transparency as a threshold-free boolean, so a material
+        // with transmission 0.05 lands here beside genuinely clear glass.
+        const getTransparentPrims = () => collectTransparentMeshes().map((object) => {
+            const mats = Array.isArray(object.material) ? object.material : [object.material];
+            const hit = mats.find((m) => m && m.userData && m.userData.mtlxSceneTransparent);
+            return {
+                primPath: String((object.userData && object.userData.primPath) || object.name || 'unknown'),
+                materialPath: String((hit && hit.userData && hit.userData.mtlxSceneMaterialPath) || 'unknown'),
+            };
+        }).sort((a, b) => a.primPath.localeCompare(b.primPath));
         const renderFrame = () => {
             const forceOn = window.getForceTransparency && window.getForceTransparency();
             const list = forceOn ? collectTransparentMeshes() : [];
@@ -2015,7 +2011,7 @@ const createMtlxSceneView = async ({
         };
         const getTextureBudgetBytes = () => sceneOptions.textureMaxBytes;
         if (textureStats.ktx2Substituted > 0) {
-            warnings.push(textureStats.ktx2Substituted + ' texture' + (textureStats.ktx2Substituted === 1 ? '' : 's')
+            warnings.push('[info] ' + textureStats.ktx2Substituted + ' texture' + (textureStats.ktx2Substituted === 1 ? '' : 's')
                 + ' loaded from KTX2 sibling' + (textureStats.ktx2Substituted === 1 ? '' : 's'));
         }
         const handle = {
@@ -2030,7 +2026,7 @@ const createMtlxSceneView = async ({
             resize, frameAll,
             getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
             setStageLightsEnabled, setStageLightsEv, getStageLights,
-            setShadowsEnabled, getShadows,
+            setShadowsEnabled, getShadows, getTransparentPrims,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under

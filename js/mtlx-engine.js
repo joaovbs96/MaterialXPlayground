@@ -4416,7 +4416,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, envRotationRad = 0, envExposure = 1 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, envTilt = null, envRotationRad = 0, envExposure = 1 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -4446,7 +4446,14 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         if (/irradiance|diffuse/i.test(u.name)) uniforms[u.name] = { value: irradiance };
         else if (/radiance|specular|prefilter/i.test(u.name)) uniforms[u.name] = { value: radiance };
     }
-    if (has('u_envMatrix')) uniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
+    // envTilt carries a dome light's non-vertical orientation. The rotation
+    // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
+    // and re-applied here: with the slider at the dome's own yaw this
+    // reproduces the authored orientation exactly.
+    if (has('u_envMatrix')) {
+        const m = new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad);
+        uniforms.u_envMatrix = { value: envTilt ? m.multiply(envTilt) : m };
+    }
     if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
     if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
     if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure };

@@ -251,6 +251,7 @@
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
         const [shadowsOn, setShadowsOn] = React.useState(false);
+        const [transparentPrims, setTransparentPrims] = React.useState([]);
         // Local mirror of the engine's persisted Force Transparency flag
         // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
         // toggle from the Viewer or Compare tab reflects here too.
@@ -430,6 +431,9 @@
                     // Mirror those into the card instead of replaying the
                     // card's defaults over them; a user import still wins.
                     if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
+                    if (nextHandle.getTransparentPrims && window.getForceTransparency && window.getForceTransparency()) {
+                        try { setTransparentPrims(nextHandle.getTransparentPrims()); } catch (e) { /* pre-render */ }
+                    }
                     if (nextHandle.getStageLights) {
                         const info = nextHandle.getStageLights();
                         setStageLightInfo(info);
@@ -482,12 +486,67 @@
         // reports what we did is info, and the rest stays a warning.
         const severityOf = (text) => {
             const value = String(text || '');
+            // An explicit tag from the producer always wins; the wording rules
+            // below are only a fallback for messages that carry no tag.
+            if (/^\[info\]/.test(value)) return 'info';
+            if (/^\[error\]/.test(value)) return 'error';
             if (/(failed|error|could not|cannot|unsupported|invalid|aborted)/i.test(value)) return 'error';
             if (/(applied as the environment|approximated as a point|loaded from|imported from|skipped)/i.test(value)) return 'info';
             return 'warning';
         };
+        // One reusable disclosure row: chevron, icon, label, count badge and a
+        // copy button that puts the whole group on the clipboard.
+        const DiagGroup = ({ id, icon, tone, label, lines, children }) => {
+            const open = !!diagOpen[id];
+            const [copied, setCopied] = React.useState(false);
+            const copy = (event) => {
+                event.stopPropagation();
+                const text = lines.join('\n');
+                const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1200); };
+                if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => {});
+                else {
+                    // Clipboard API needs a secure context; fall back so this
+                    // still works when the site is served over plain http.
+                    const area = document.createElement('textarea');
+                    area.value = text; document.body.appendChild(area); area.select();
+                    try { document.execCommand('copy'); done(); } catch (e) { /* blocked */ }
+                    document.body.removeChild(area);
+                }
+            };
+            return (
+                <div className="border-t border-gray-700/70 first:border-t-0">
+                    <div className="w-full flex items-center gap-1.5 py-1.5 px-1 -mx-1 rounded hover:bg-gray-800/60">
+                        <button
+                            type="button"
+                            onClick={() => setDiagOpen((prev) => ({ ...prev, [id]: !prev[id] }))}
+                            aria-expanded={open}
+                            className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
+                        >
+                            <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                            <MtlxIcon name={icon} className={'w-3.5 h-3.5 shrink-0 ' + tone} />
+                            <span className={'text-[10px] font-semibold uppercase tracking-[0.08em] ' + tone}>{label}</span>
+                            <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{lines.length}</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={copy}
+                            title={'Copy all ' + lines.length + ' line(s)'}
+                            aria-label={'Copy ' + label}
+                            className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                        >
+                            <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                    {open ? <div className="pb-2 pl-5 space-y-1">{children}</div> : null}
+                </div>
+            );
+        };
+        const stripTag = (text) => String(text || '').replace(/^\[(?:info|error|warning)\]\s*/, '');
         const grouped = { error: [], warning: [], info: [] };
-        warningDetails.forEach((record) => { grouped[severityOf(record.raw || record.label)].push(record); });
+        warningDetails.forEach((record) => {
+            grouped[severityOf(record.raw || record.label)].push(
+                Object.assign({}, record, { label: stripTag(record.label), raw: stripTag(record.raw) }));
+        });
         const SEVERITY_STYLE = {
             error: { icon: 'alert-triangle', text: 'text-red-300/90', label: 'Errors' },
             warning: { icon: 'alert-triangle', text: 'text-amber-300/90', label: 'Warnings' },
@@ -900,61 +959,57 @@
 
                 <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
                     <SectionCard key={warnings.length > 0} icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen={warnings.length > 0} dense>
-                        {warnings.length ? (
+                        {warnings.length || transparentPrims.length ? (
                             <div data-testid="usd-material-warnings">
                                 {['error', 'warning', 'info'].map((severity) => {
                                     const records = grouped[severity];
                                     if (!records.length) return null;
                                     const style = SEVERITY_STYLE[severity];
-                                    const open = !!diagOpen[severity];
                                     return (
-                                        <div key={severity} className="border-t border-gray-700/70 first:border-t-0">
-                                            <button
-                                                type="button"
-                                                onClick={() => setDiagOpen((prev) => ({ ...prev, [severity]: !prev[severity] }))}
-                                                aria-expanded={open}
-                                                className="w-full flex items-center gap-1.5 py-1.5 text-left hover:bg-gray-800/60 rounded px-1 -mx-1"
-                                            >
-                                                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-                                                <MtlxIcon name={style.icon} className={'w-3.5 h-3.5 shrink-0 ' + style.text} />
-                                                <span className={'text-[10px] font-semibold uppercase tracking-[0.08em] ' + style.text}>{style.label}</span>
-                                                <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{records.length}</span>
-                                            </button>
-                                            {open ? (
-                                                <div className="pb-2 pl-5 space-y-2">
-                                                    {records.map((record, i) => (
-                                                        <div key={severity + i} className={'flex items-start gap-1 font-mono text-xs break-all ' + style.text}>
-                                                            <span>{record.label}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : null}
-                                        </div>
+                                        <DiagGroup
+                                            key={severity}
+                                            id={severity}
+                                            icon={style.icon}
+                                            tone={style.text}
+                                            label={style.label}
+                                            lines={records.map((record) => record.label)}
+                                        >
+                                            {records.map((record, i) => (
+                                                <div key={severity + i} className={'font-mono text-xs break-all ' + style.text}>{record.label}</div>
+                                            ))}
+                                        </DiagGroup>
                                     );
                                 })}
-                                {materials.length ? (
-                                    <div className="border-t border-gray-700/70">
-                                        <button
-                                            type="button"
-                                            onClick={() => setDiagOpen((prev) => ({ ...prev, materials: !prev.materials }))}
-                                            aria-expanded={!!diagOpen.materials}
-                                            className="w-full flex items-center gap-1.5 py-1.5 text-left hover:bg-gray-800/60 rounded px-1 -mx-1"
-                                        >
-                                            <MtlxIcon name={diagOpen.materials ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-                                            <MtlxIcon name="file-text" className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-                                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Material sources</span>
-                                            <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{materials.length}</span>
-                                        </button>
-                                        {diagOpen.materials ? (
-                                            <div className="pb-2 pl-5 space-y-1">
-                                                {materials.map((material, i) => (
-                                                    <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
-                                                        {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
-                                                    </div>
-                                                ))}
+                                {transparentPrims.length ? (
+                                    <DiagGroup
+                                        id="transparent"
+                                        icon="color-filter"
+                                        tone="text-sky-300/90"
+                                        label="Force Transparency"
+                                        lines={transparentPrims.map((entry) => entry.primPath + ' [' + entry.materialPath + ']')}
+                                    >
+                                        {transparentPrims.map((entry, i) => (
+                                            <div key={'t' + i} className="font-mono text-xs break-all text-sky-300/90">
+                                                {entry.primPath}
+                                                <span className="text-gray-500"> [{entry.materialPath}]</span>
                                             </div>
-                                        ) : null}
-                                    </div>
+                                        ))}
+                                    </DiagGroup>
+                                ) : null}
+                                {materials.length ? (
+                                    <DiagGroup
+                                        id="materials"
+                                        icon="file-text"
+                                        tone="text-gray-500"
+                                        label="Material sources"
+                                        lines={materials.map((material) => String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable'))}
+                                    >
+                                        {materials.map((material, i) => (
+                                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
+                                            </div>
+                                        ))}
+                                    </DiagGroup>
                                 ) : null}
                             </div>
                         ) : (
