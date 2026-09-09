@@ -1355,21 +1355,42 @@ const createMtlxSceneView = async ({
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
             const radius = Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
-            // Directional only, deliberately. A point light sits inside the
-            // scene, so no single 2D map can cover it: everything outside the
-            // frustum clamps to edge texels and smears. MaterialX has one map
-            // and no bounds check, so an orthographic frustum that encloses the
-            // whole stage is the only shape that is correct everywhere.
-            const lights = (activeStageLights() || []).filter((l) => l.type === 1);
-            const caster = lights.slice().sort((a, b) => b.intensity - a.intensity)[0];
-            const dir = caster ? caster.direction.clone()
-                : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
-            if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
-            dir.normalize();
-            const extent = radius * 1.05;
-            const shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, radius * 0.5, radius * 3.5);
-            shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
-            shadowCamera.lookAt(center);
+            // A directional caster gets an orthographic frustum enclosing the
+            // whole stage. A local caster (point or spot) gets a perspective
+            // frustum at the light aimed down its own forward axis, which is
+            // what a rect or disk lamp actually illuminates. Both rely on the
+            // bounds guard patched into mx_shadow_occlusion: the library
+            // samples the map unchecked, so without it everything outside the
+            // frustum, and everything behind a perspective light, reads as
+            // shadowed and streaks across the stage.
+            const stageLights = activeStageLights() || [];
+            const brightest = (list) => list.slice().sort((a, b) => b.intensity - a.intensity)[0];
+            const directional = brightest(stageLights.filter((l) => l.type === 1));
+            const local = directional ? null : brightest(stageLights.filter(
+                (l) => (l.type === 2 || l.type === 3) && l.position && l.direction && l.direction.lengthSq() > 1e-9));
+            let shadowCamera;
+            if (local) {
+                // Spot lights carry a real cone; a point stand-in for a rect or
+                // disk light emits over its whole forward hemisphere, so the
+                // widest frustum that still keeps usable texel density is used.
+                const fov = local.type === 3 && Number.isFinite(local.outer_angle)
+                    ? Math.min(150, Math.max(10, 2 * Math.acos(Math.min(1, Math.max(-1, local.outer_angle))) * 180 / Math.PI * 1.1))
+                    : 120;
+                const eye = local.position.clone();
+                const near = Math.max(radius * 1e-3, eye.distanceTo(center) * 0.01);
+                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, near + radius * 4);
+                shadowCamera.position.copy(eye);
+                shadowCamera.lookAt(eye.clone().add(local.direction));
+            } else {
+                const dir = directional ? directional.direction.clone()
+                    : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
+                if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
+                dir.normalize();
+                const extent = radius * 1.05;
+                shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, radius * 0.5, radius * 3.5);
+                shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
+                shadowCamera.lookAt(center);
+            }
             shadowCamera.updateMatrixWorld(true);
             shadowCamera.updateProjectionMatrix();
             if (!shadowTarget) {
