@@ -57,17 +57,21 @@ const storedSceneAo = () => {
     if (window.top !== window) return false;
     try { return localStorage.getItem(SCENE_AO_KEY) === '1'; } catch (e) { return false; }
 };
+// Default 0.7 rather than full strength: the term multiplies the WHOLE
+// environment contribution in one flat multiply (MaterialX has no per-lobe
+// occlusion), so 1.0 reads as the picture getting dimmer rather than as
+// contact shading.
 const storedSceneAoStrength = () => {
-    if (window.top !== window) return 1;
+    if (window.top !== window) return 0.7;
     try {
         // getItem returns null when unset and Number(null) is 0, which is a
         // finite number, so the fallback has to test the raw string first or
         // an untouched setting reads as zero strength.
         const raw = localStorage.getItem(SCENE_AO_STRENGTH_KEY);
-        if (raw == null || raw === '') return 1;
+        if (raw == null || raw === '') return 0.7;
         const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
-    } catch (e) { return 1; }
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.7;
+    } catch (e) { return 0.7; }
 };
 
 const storedSceneShadows = () => {
@@ -390,7 +394,12 @@ const createAoMaterial = () => new THREE.RawShaderMaterial({
         '        float occluded = (sceneDepth < sampleDepth - uBias) ? 1.0 : 0.0;',
         // Range check: a distant foreground object must not darken this
         // pixel, otherwise every silhouette grows a black halo.
-        '        occluded *= smoothstep(0.0, 1.0, uRadius / max(abs(depth - sceneDepth), 1e-6));',
+        // Range check. This used to be a RATIO (uRadius / distance), which is
+        // above 1 for every occluder nearer than the radius and therefore
+        // clamped to 1 almost always: occlusion was applied at any distance,
+        // which is what turned contact darkening into a global dimming.
+        // Falling off over the radius itself is what localises it.
+        '        occluded *= 1.0 - smoothstep(0.0, 1.0, abs(depth - sceneDepth) / max(uRadius, 1e-6));',
         '        occlusion += occluded;',
         '    }',
         '    fragColor = vec4(vec3(1.0 - occlusion / float(SAMPLES)), 1.0);',
@@ -1924,7 +1933,16 @@ const createMtlxSceneView = async ({
             aoMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
             aoMaterial.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
             aoMaterial.uniforms.uSize.value.set(aw, ah);
-            aoMaterial.uniforms.uRadius.value = radius * 0.06;
+            // Contact occlusion, so the radius follows what is on screen rather
+            // than the stage: half the stage diagonal put it around ten world
+            // units, which is a broad low frequency dimming of the whole
+            // environment term, not the tight darkening AO is meant to be.
+            // Floored and capped against the stage so it stays sane at both
+            // extremes of the orbit.
+            const aoTarget3 = (controls && controls.target) ? controls.target : box.getCenter(new THREE.Vector3());
+            const aoViewDistance = Math.max(1e-6, camera.position.distanceTo(aoTarget3));
+            const aoOnScreen = aoViewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+            aoMaterial.uniforms.uRadius.value = Math.min(radius * 0.05, Math.max(radius * 0.002, aoOnScreen * 0.06));
             aoMaterial.uniforms.uBias.value = radius * 0.0015;
             aoQuadScene.children[0].material = aoMaterial;
             renderer.setRenderTarget(aoTarget);

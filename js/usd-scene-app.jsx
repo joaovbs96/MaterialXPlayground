@@ -255,7 +255,7 @@
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
         const [shadowsOn, setShadowsOn] = React.useState(false);
         const [aoOn, setAoOn] = React.useState(false);
-        const [aoStrength, setAoStrength] = React.useState(1);
+        const [aoStrength, setAoStrength] = React.useState(0.7);
         const [transparentPrims, setTransparentPrims] = React.useState([]);
         // Local mirror of the engine's persisted Force Transparency flag
         // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
