@@ -923,21 +923,67 @@ const patchUnlitLightingRefs = src => {
 };
 
 // Shared display-transform GLSL body (`inVar`/`outVar`: vec3 in/out).
-// `mode` ('aces'|'srgb'|'lin_rec709', see getDisplayTransform()) picks ACES
-// filmic (three r128's Hill fit) + sRGB OETF, sRGB OETF alone (MaterialXView
-// parity), or raw linear (no OETF, no tone map). Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
-const ACES_SRGB_GLSL = (inVar, outVar, mode) => {
-  // renderer.toneMappingExposure and this pre-scale are independent
-  // knobs; this one is baked straight into RawShaderMaterial GLSL and
-  // bypasses renderer.toneMappingExposure entirely, so keep them from drifting.
-  // srgb matches MaterialXView: glEnable(GL_FRAMEBUFFER_SRGB) wraps its env/
-  // opaque/transparent passes (RenderPipelineGL.cpp:357, disabled :458) for a
-  // hardware sRGB OETF only, no tone map (hwSrgbEncodeOutput false, GenOptions.h:92).
-  const acesBody = mode === 'srgb' || mode === 'lin_rec709' ? '' : '        const mat3 _acesIn = mat3(\n' + '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' + '            vec3(0.04823, 0.01566, 0.83777)\n' + '        );\n' + '        const mat3 _acesOut = mat3(\n' + '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' + '            vec3(-0.07367, -0.00605,  1.07602)\n' + '        );\n' + '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' + '        _c = _acesIn * _c;\n' + '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' + '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' + '        _c = _acesOut * (_aces_a / _aces_b);\n';
-  const guarded = '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' + acesBody + '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n';
-  // lin_rec709: raw linear passthrough, no OETF curve applied at all.
-  if (mode === 'lin_rec709') return guarded + '        vec3 ' + outVar + ' = _c;\n';
+// `mode` (see getDisplayTransform()) picks the curve: 'aces' (three r128's Hill
+// fit), 'neutral' (Khronos PBR Neutral), 'srgb' (OETF alone, MaterialXView
+// parity) or 'lin_rec709' (nothing at all). `exposureVar`, when given, names a
+// float uniform applied as a camera exposure ahead of the curve.
+// Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
+// The tone curve alone, operating in place on a vec3 named `_c`. Split out of
+// ACES_SRGB_GLSL so applyThreeToneMappingChunk can reuse the exact same source
+// for three's built-in materials: the backdrop and the objects then cannot
+// drift, which is the failure this split exists to prevent.
+// srgb emits nothing, matching MaterialXView: glEnable(GL_FRAMEBUFFER_SRGB) wraps
+// its env/opaque/transparent passes (RenderPipelineGL.cpp:357, disabled :458) for a
+// hardware sRGB OETF only, no tone map (hwSrgbEncodeOutput false, GenOptions.h:92).
+const TONE_CURVE_GLSL = (mode, pad) => {
+  const p = pad || '        ';
+  if (mode === 'aces') {
+    // three r128's Hill fit of the ACES RRT+ODT, kept byte-identical to the
+    // tonemapping_pars_fragment chunk so the two paths agree exactly.
+    return p + 'const mat3 _acesIn = mat3(\n' + p + '    vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' + p + '    vec3(0.04823, 0.01566, 0.83777)\n' + p + ');\n' + p + 'const mat3 _acesOut = mat3(\n' + p + '    vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' + p + '    vec3(-0.07367, -0.00605,  1.07602)\n' + p + ');\n' + p + '_c *= (1.0 / 0.6); // three\'s ACES normalisation constant, not an exposure\n' + p + '_c = _acesIn * _c;\n' + p + 'vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' + p + 'vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' + p + '_c = _acesOut * (_aces_a / _aces_b);\n';
+  }
+  if (mode === 'neutral') {
+    // Khronos PBR Neutral. Preserves the hue and saturation of in-gamut
+    // colour and rolls only the highlights toward white, where the ACES fit
+    // skews saturated hues badly (see studioInverseAcesSrgbGlsl's own note).
+    // Written as a block rather than the reference function's early returns
+    // so it can be spliced inline.
+    return p + '{\n' + p + '    const float _nsc = 0.76; // startCompression, 0.8 - 0.04\n' + p + '    const float _nds = 0.15; // desaturation\n' + p + '    float _nx = min(_c.r, min(_c.g, _c.b));\n' + p + '    float _noff = _nx < 0.08 ? _nx - 6.25 * _nx * _nx : 0.04;\n' + p + '    _c -= _noff;\n' + p + '    float _npk = max(_c.r, max(_c.g, _c.b));\n' + p + '    if (_npk >= _nsc) {\n' + p + '        const float _nd = 1.0 - _nsc;\n' + p + '        float _nnp = 1.0 - _nd * _nd / (_npk + _nd - _nsc);\n' + p + '        _c *= _nnp / _npk;\n' + p + '        float _ng = 1.0 - 1.0 / (_nds * (_npk - _nnp) + 1.0);\n' + p + '        _c = mix(_c, vec3(_nnp), _ng);\n' + p + '    }\n' + p + '}\n';
+  }
+  return '';
+};
+const ACES_SRGB_GLSL = (inVar, outVar, mode, exposureVar) => {
+  // Camera exposure, ahead of the tone curve. It belongs here and nowhere
+  // else because it is the one scale that must apply to direct light, the
+  // environment and emission alike; u_envLightIntensity gains only the IBL.
+  // It stays a uniform on purpose: `mode` is baked into source, so anything
+  // baked would cost a full regeneration of every material per tweak.
+  const exposeBody = exposureVar ? '        _c *= ' + exposureVar + ';\n' : '';
+  const head = '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' + exposeBody;
+  // lin_rec709 is the inspection mode: no tone map, no OETF and no clamp, so
+  // over-range values survive a float readback. The saturate below belongs to
+  // the display-referred modes only, which is what it always meant.
+  if (mode === 'lin_rec709') return head + '        vec3 ' + outVar + ' = _c;\n';
+  const guarded = head + TONE_CURVE_GLSL(mode) + '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n';
   return guarded + '        vec3 _lo = _c * 12.92;\n' + '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' + '        vec3 ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n';
+};
+
+// Mirrors the same curve onto three's BUILT-IN materials: the backdrop sky
+// sphere, the studio parts and the shadow catcher. RawShaderMaterial bypasses
+// three's epilogue entirely, so without this the background keeps its own curve
+// and ignores exposure completely, which is what made the sky stop matching the
+// objects in front of it. three calls CustomToneMapping() when
+// renderer.toneMapping is CustomToneMapping; the sRGB OETF is left to
+// renderer.outputEncoding, exactly as it is for MaterialX materials.
+let BASE_TONEMAP_CHUNK = null;
+const CUSTOM_TONEMAP_STUB = 'vec3 CustomToneMapping( vec3 color ) { return color; }';
+const applyThreeToneMappingChunk = mode => {
+  if (!THREE.ShaderChunk || !THREE.ShaderChunk.tonemapping_pars_fragment) return false;
+  if (BASE_TONEMAP_CHUNK === null) BASE_TONEMAP_CHUNK = THREE.ShaderChunk.tonemapping_pars_fragment;
+  if (BASE_TONEMAP_CHUNK.indexOf(CUSTOM_TONEMAP_STUB) === -1) return false;
+  const body = mode === 'lin_rec709' ? '\treturn color * toneMappingExposure;\n' : '\tvec3 _c = max(color * toneMappingExposure, vec3(0.0));\n' + TONE_CURVE_GLSL(mode, '\t') + '\treturn clamp(_c, vec3(0.0), vec3(1.0));\n';
+  THREE.ShaderChunk.tonemapping_pars_fragment = BASE_TONEMAP_CHUNK.replace(CUSTOM_TONEMAP_STUB, 'vec3 CustomToneMapping( vec3 color ) {\n' + body + '}');
+  return true;
 };
 
 // Injects the current display transform (getDisplayTransform(), see
@@ -951,11 +997,20 @@ const encodeDisplay = src => {
   const m = src.match(/\bout\s+vec4\s+(\w+)\s*;/);
   if (!m) throw new Error('encodeDisplay: could not locate the fragment shader\'s "out vec4 <name>;" declaration, MaterialX output format may have changed');
   const v = m[1];
-  const idx = src.lastIndexOf('}');
+  // Camera exposure rides along as a uniform so changing it never
+  // regenerates a shader; the curve itself stays baked (see setDisplayTransform).
+  let out = src;
+  const decl = 'uniform float u_displayExposure;';
+  if (out.indexOf(decl) === -1) {
+    const mainIdx = out.indexOf('void main');
+    if (mainIdx === -1) throw new Error('encodeDisplay: could not locate "void main" to declare u_displayExposure, MaterialX output format may have changed');
+    out = out.slice(0, mainIdx) + decl + '\n' + out.slice(mainIdx);
+  }
+  const idx = out.lastIndexOf('}');
   if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader, MaterialX output format may have changed');
   const mode = getDisplayTransform();
-  const inject = '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' + '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' + ACES_SRGB_GLSL(v + '.rgb', '_enc', mode) + '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' + '    }\n';
-  return src.slice(0, idx) + inject + src.slice(idx);
+  const inject = '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' + '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' + ACES_SRGB_GLSL(v + '.rgb', '_enc', mode, 'u_displayExposure') + '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' + '    }\n';
+  return out.slice(0, idx) + inject + out.slice(idx);
 };
 
 // Deliberate energy-compromise constant for the peel-mode env-refraction
@@ -3032,10 +3087,57 @@ const setGlobalGeom = value => {
 
 // ---- Global display transform selection (shared across every tool) ----
 // 'srgb' (default) matches the C++ MaterialXView (no tone mapping). 'aces'
-// adds ACES filmic before that curve (this app's original look).
-// 'lin_rec709' is raw linear: no OETF, no tone map. See ACES_SRGB_GLSL for the math.
+// adds ACES filmic before that curve (this app's original look). 'neutral' is
+// Khronos PBR Neutral, which keeps hue and saturation where ACES skews them.
+// 'lin_rec709' is raw linear: no OETF, no tone map, no clamp. See ACES_SRGB_GLSL.
 const DISPLAY_TRANSFORM_KEY = 'mtlx_display_transform';
-const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'lin_rec709'];
+const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'neutral', 'lin_rec709'];
+
+// Camera exposure in stops, shared by every view. Unlike the transform this is
+// a plain uniform (u_displayExposure), so a change costs one uniform write per
+// material instead of regenerating every shader.
+const DISPLAY_EXPOSURE_KEY = 'mtlx_display_exposure';
+let MTLX_DISPLAY_EXPOSURE = null;
+const initDisplayExposure = () => {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(DISPLAY_EXPOSURE_KEY);
+  } catch (e) {/* privacy mode */}
+  const ev = Number(stored);
+  MTLX_DISPLAY_EXPOSURE = stored != null && stored !== '' && Number.isFinite(ev) ? Math.max(-8, Math.min(8, ev)) : 0;
+};
+const getDisplayExposure = () => {
+  if (MTLX_DISPLAY_EXPOSURE === null) initDisplayExposure();
+  return MTLX_DISPLAY_EXPOSURE;
+};
+
+// Linear scale for the uniform. Every seeding site goes through this so the
+// stops-to-linear conversion cannot drift between them.
+const displayExposureScale = () => Math.pow(2, getDisplayExposure());
+const setDisplayExposure = ev => {
+  if (MTLX_DISPLAY_EXPOSURE === null) initDisplayExposure();
+  const next = Math.max(-8, Math.min(8, Number(ev) || 0));
+  if (next === MTLX_DISPLAY_EXPOSURE) return;
+  MTLX_DISPLAY_EXPOSURE = next;
+  if (window.self === window.top) {
+    try {
+      localStorage.setItem(DISPLAY_EXPOSURE_KEY, String(next));
+    } catch (e) {/* privacy mode */}
+  }
+  // Broadcast rather than rely on per-app listeners: every render view is a
+  // LIVE_VIEWS member, including the docs node previews, which have no
+  // display listener of their own and would otherwise drift out of sync.
+  LIVE_VIEWS.forEach(v => {
+    try {
+      v.refreshDisplayExposure && v.refreshDisplayExposure();
+    } catch (e) {/* view mid-teardown */}
+  });
+  window.dispatchEvent(new CustomEvent('mtlx-display-exposure', {
+    detail: {
+      value: next
+    }
+  }));
+};
 let MTLX_DISPLAY_TRANSFORM = null;
 
 // Runs once, on first getDisplayTransform/setDisplayTransform call.
@@ -5544,6 +5646,11 @@ const createMtlxSceneUniforms = ({
     },
     u_peelLinear: {
       value: 0
+    },
+    // Injected by encodeDisplay, so it is never in MaterialX's own
+    // introspection and cannot be gated on has() like the rest.
+    u_displayExposure: {
+      value: displayExposureScale()
     }
   };
   applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
@@ -7164,9 +7271,13 @@ const createMtlxRenderView = async ({
     // its transform in); set here for the ordinary three materials
     // in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
     const __displayMode = getDisplayTransform();
+    // CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
+    // so these materials run the SAME curve and exposure as the
+    // MaterialX surface instead of only agreeing in 'aces'.
+    const __customTone = applyThreeToneMappingChunk(__displayMode);
     if ('outputEncoding' in renderer) renderer.outputEncoding = __displayMode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-    renderer.toneMapping = __displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-    renderer.toneMappingExposure = 1.0;
+    renderer.toneMapping = __customTone ? THREE.CustomToneMapping : __displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    renderer.toneMappingExposure = displayExposureScale();
     if (window.MTLX_PERF_LOG) {
       console.log('[mtlx-perf] WebGLRenderer init: ' + (performance.now() - __rendererPerfStart).toFixed(1) + 'ms');
     }
@@ -7870,6 +7981,12 @@ const createMtlxRenderView = async ({
         // the hoisted peelLinearOk const, above allocPeel).
         u_peelLinear: {
           value: peelLinearOk ? 1 : 0
+        },
+        // Injected by encodeDisplay, so MaterialX never
+        // introspects it and the defaults pass below cannot
+        // supply it.
+        u_displayExposure: {
+          value: displayExposureScale()
         }
       };
 
@@ -8342,6 +8459,19 @@ const createMtlxRenderView = async ({
         syncMeshMaterialMode();
         const peelOn = viewIsTransparent && FORCE_TRANSPARENCY;
         if (!peelOn && peelPipeline) peelPipeline.dispose();
+      },
+      // Camera exposure is a uniform (see ACES_SRGB_GLSL), so this costs
+      // one write instead of the full regeneration a transform change
+      // needs. Broadcast by setDisplayExposure through LIVE_VIEWS, which
+      // is what keeps the docs node previews in sync too.
+      refreshDisplayExposure: () => {
+        const scale = displayExposureScale();
+        if (uniforms.u_displayExposure) uniforms.u_displayExposure.value = scale;
+        sceneOwnedMaterials.forEach(m => {
+          if (m.uniforms && m.uniforms.u_displayExposure) m.uniforms.u_displayExposure.value = scale;
+        });
+        if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
+        renderFrame();
       },
       // Live-swaps the environment without a shader rebuild, used
       // by the Environment dialog's Import/Reset. Also regenerates
@@ -8921,6 +9051,10 @@ Object.assign(window, {
   setGlobalGeom,
   getDisplayTransform,
   setDisplayTransform,
+  getDisplayExposure,
+  setDisplayExposure,
+  displayExposureScale,
+  applyThreeToneMappingChunk,
   COLOR_VIEWABLE,
   resolveNodeKind,
   makeEnvTexture,
