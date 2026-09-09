@@ -976,6 +976,34 @@ const patchShadowBounds = fs => {
   return fs.replace(anchor, guard);
 };
 
+// Feeds a screen-space ambient occlusion factor into the slot MaterialX
+// already reserves for it. The generator emits, verbatim:
+//
+//     // Ambient occlusion
+//     occlusion = 1.0;
+//
+// immediately before the environment contribution, so replacing that one
+// assignment darkens ONLY the environment term. That is what AO means, and
+// it is why this is not folded into u_shadowMap: the shadow occlusion
+// scalar also multiplies every analytic light.
+//
+// The room in a closed interior is the whole point. MaterialX's IBL has no
+// visibility term at all, so a stage lit by a dome sees full sky radiance on
+// every surface including the ones facing a wall, which is what makes an
+// interior read flat and overlit next to an offline render that traces it.
+//
+// Fail-soft: no anchor means no AO, and the default 1x1 white map with
+// strength 0 makes the injected code an exact no-op until a pass binds one.
+const patchAmbientOcclusion = fs => {
+  const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
+  if (!anchor.test(fs)) return fs;
+  let out = fs.replace(anchor, '$1occlusion = mx_ssao_occlusion();');
+  const decls = ['uniform sampler2D u_ssaoMap;', 'uniform vec2 u_ssaoTexel;', 'uniform float u_ssaoStrength;', 'float mx_ssao_occlusion() {', '    float ao = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).r;', '    return mix(1.0, clamp(ao, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0));', '}', ''].join('\n');
+  const mainIdx = out.indexOf('void main(');
+  if (mainIdx === -1) return fs; // no main: leave the shader untouched
+  return out.slice(0, mainIdx) + decls + out.slice(mainIdx);
+};
+
 // Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
 // then mixes toward a Schlick NdotV rim so grazing angles read as
 // reflective glass instead of a flat, view-independent haze. Fail-soft.
@@ -5323,6 +5351,7 @@ const generatePreviewSourcesUnlocked = ({
   // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
   fs = patchTransmissionAlpha(fs);
   fs = patchShadowBounds(fs);
+  fs = patchAmbientOcclusion(fs);
   // Depth-peel machinery: baked into every fragment shader
   // UNCONDITIONALLY (not just when Force Transparency is on), see
   // injectPeelDiscard's header comment above for why this keeps
@@ -5416,6 +5445,9 @@ const createMtlxSceneUniforms = ({
   stageLights = null,
   shadowMap = null,
   shadowMatrix = null,
+  ssaoMap = null,
+  ssaoTexel = null,
+  ssaoStrength = 1,
   envTilt = null,
   envRotationRad = 0,
   envExposure = 1
@@ -5503,6 +5535,17 @@ const createMtlxSceneUniforms = ({
   // White moments read as fully lit, so materials are unaffected until a
   // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
   // matrix here is a raw world-to-light-clip transform.
+  // White map at strength 0 is an exact no-op, so a view with no AO pass
+  // is byte-identical to one generated before AO existed.
+  if (has('u_ssaoMap')) uniforms.u_ssaoMap = {
+    value: ssaoMap || getDummyTexWhite()
+  };
+  if (has('u_ssaoTexel')) uniforms.u_ssaoTexel = {
+    value: ssaoTexel ? ssaoTexel.clone() : new THREE.Vector2()
+  };
+  if (has('u_ssaoStrength')) uniforms.u_ssaoStrength = {
+    value: ssaoMap ? ssaoStrength : 0
+  };
   if (has('u_shadowMap')) uniforms.u_shadowMap = {
     value: shadowMap || getDummyTexWhite()
   };
@@ -8818,6 +8861,7 @@ Object.assign(window, {
   createMtlxSceneUniforms,
   ensurePrefilteredEnv,
   getSpecularEnvMethod,
+  getDummyTexWhite,
   createPeelPipeline,
   applyPeelMaterialMode,
   registerLiveView,
