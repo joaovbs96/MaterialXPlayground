@@ -32,6 +32,12 @@ const storedSceneTextureMaxSize = () => {
 // match a reference by eye instead of us hardcoding a factor.
 const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
 const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
+const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
+
+const storedSceneShadows = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SHADOWS_KEY) === '1'; } catch (e) { return false; }
+};
 
 const storedSceneStageLights = () => {
     if (window.top !== window) return true;
@@ -237,6 +243,28 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
         return null;
     }
 };
+
+// Shadow pass for MaterialX materials. MaterialX generates
+// mx_shadow_occlusion() against a variance (moments) map, so we render our own
+// vec2(z, z*z) rather than reuse three's VSM target, whose packing is not
+// guaranteed to match and would misread rather than error.
+const SHADOW_MAP_SIZE = 2048;
+const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'out vec4 fragColor;',
+        // Matches MaterialX's mx_compute_depth_moments() exactly.
+        'void main() { float d = gl_FragCoord.z; fragColor = vec4(d, d * d, 0.0, 1.0); }',
+    ].join('\n'),
+    side: THREE.FrontSide,
+});
 
 // The same transform sceneRoot carries, needed before that group exists so
 // lights and the dome can be placed in final world space.
@@ -523,6 +551,18 @@ const createMtlxSceneView = async ({
     const prims = [];
     let rebuildingProvisional = null;
     const scene = new THREE.Scene();
+    // One shadow caster only: MaterialX's generated `occlusion` is a single
+    // per-fragment scalar shared by every light and the environment, so there
+    // is nowhere to put a second map.
+    let shadowTarget = null;
+    let shadowDepthMaterial = null;
+    let shadowMatrix = new THREE.Matrix4();
+    let shadowsEnabled = storedSceneShadows();
+    let shadowDirty = true;
+    const disposeShadowResources = () => {
+        if (shadowTarget) { shadowTarget.dispose(); shadowTarget = null; }
+        if (shadowDepthMaterial) { shadowDepthMaterial.dispose(); shadowDepthMaterial = null; }
+    };
     // Applies the sidebar toggle and EV multiplier without rebuilding the
     // converted list, so both are live controls.
     const activeStageLights = () => {
@@ -909,6 +949,7 @@ const createMtlxSceneView = async ({
         const { compiled, cacheKey } = ensured;
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
+            shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix,
         });
         // USD value overrides (record.overrides) are applied onto the
         // MaterialX document itself in loadRenderable/applyUsdOverrides,
@@ -1258,6 +1299,67 @@ const createMtlxSceneView = async ({
         // authored lighting; the sidebar mirrors these through getDomeLight().
         let envRotationRad = domeLight ? domeLight.rotationDeg * Math.PI / 180 : 0;
         let envExposure = domeLight ? domeLight.exposure : 1;
+        // Renders the moments map from the brightest stage light, or from the
+        // environment key direction when the stage has none. Runs on demand,
+        // never per frame: nothing here changes while the camera moves.
+        const updateShadowMap = () => {
+            if (!shadowsEnabled || !sceneRoot) { shadowMatrix = new THREE.Matrix4(); return; }
+            const box = new THREE.Box3().setFromObject(sceneRoot);
+            if (box.isEmpty()) return;
+            const center = box.getCenter(new THREE.Vector3());
+            const radius = Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
+            const lights = activeStageLights() || [];
+            const caster = lights.slice().sort((a, b) => b.intensity - a.intensity)[0];
+            let shadowCamera;
+            if (caster && caster.type === 2 || caster && caster.type === 3) {
+                const from = caster.position.clone();
+                const distance = Math.max(from.distanceTo(center), radius * 0.05);
+                const fov = 2 * Math.atan(radius / Math.max(distance, 1e-6)) * 180 / Math.PI;
+                shadowCamera = new THREE.PerspectiveCamera(Math.min(150, Math.max(5, fov * 1.2)), 1, Math.max(distance - radius, distance * 0.01), distance + radius * 2);
+                shadowCamera.position.copy(from);
+            } else {
+                // Directional caster, or none: fall back to the environment's
+                // key direction so shadows still read under pure IBL.
+                const dir = caster ? caster.direction.clone()
+                    : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
+                if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
+                dir.normalize();
+                shadowCamera = new THREE.OrthographicCamera(-radius, radius, radius, -radius, 0.01, radius * 4);
+                shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
+            }
+            shadowCamera.lookAt(center);
+            shadowCamera.updateMatrixWorld(true);
+            shadowCamera.updateProjectionMatrix();
+            if (!shadowTarget) {
+                shadowTarget = new THREE.WebGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, {
+                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat, type: THREE.HalfFloatType, depthBuffer: true,
+                });
+            }
+            if (!shadowDepthMaterial) shadowDepthMaterial = createShadowDepthMaterial();
+            // Only stage geometry casts: the backdrop and catcher would wrap
+            // the scene and shadow everything.
+            const hidden = [];
+            scene.traverse((object) => {
+                if (object.isMesh && object.userData && object.userData.excludeFromFrame && object.visible) {
+                    object.visible = false; hidden.push(object);
+                }
+            });
+            const previousTarget = renderer.getRenderTarget();
+            scene.overrideMaterial = shadowDepthMaterial;
+            renderer.setRenderTarget(shadowTarget);
+            renderer.setClearColor(0xffffff, 1); // white moments read as fully lit
+            renderer.clear();
+            renderer.render(scene, shadowCamera);
+            scene.overrideMaterial = null;
+            renderer.setRenderTarget(previousTarget);
+            renderer.setClearColor(0x111827, 1);
+            hidden.forEach((object) => { object.visible = true; });
+            // MaterialX applies the *0.5+0.5 itself, so this stays a raw
+            // world-to-light-clip matrix, unlike three's shadow.matrix.
+            shadowMatrix = new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+            shadowDirty = false;
+        };
         const applyMaterialEnvironment = () => {
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
@@ -1271,10 +1373,11 @@ const createMtlxSceneView = async ({
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
+                    shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix,
                     envRotationRad, envExposure,
                 });
                 for (const [name, slot] of Object.entries(next)) {
-                    if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$)/).test(name) || !material.uniforms[name]) continue;
+                    if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$|u_shadowMap$|u_shadowMatrix$)/).test(name) || !material.uniforms[name]) continue;
                     const current = material.uniforms[name].value;
                     if ((current && current.isTexture) || (slot.value && slot.value.isTexture)) material.uniforms[name].value = slot.value;
                     else if (current && typeof current.copy === 'function' && slot.value && typeof slot.value.copy === 'function') current.copy(slot.value);
@@ -1393,6 +1496,9 @@ const createMtlxSceneView = async ({
         if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
             environmentBridge.updateBounds(new THREE.Box3().setFromObject(sceneRoot));
         }
+        // Geometry and lights are final here, so draw the map once before the
+        // first frame rather than leaving the opening frames unshadowed.
+        if (shadowsEnabled) updateShadowMap();
         applyMaterialEnvironment();
         const resize = () => {
             if (!renderer || !container || resizeSuspended) return;
@@ -1792,6 +1898,14 @@ const createMtlxSceneView = async ({
         };
         // Stage lights are live: both controls only re-push uniforms, no
         // recompile, because the slots were reserved at generation time.
+        const setShadowsEnabled = (on) => {
+            shadowsEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            if (shadowsEnabled) updateShadowMap(); else shadowMatrix = new THREE.Matrix4();
+            applyMaterialEnvironment();
+            return shadowsEnabled;
+        };
+        const getShadows = () => ({ enabled: shadowsEnabled, ready: !!shadowTarget });
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -1800,6 +1914,7 @@ const createMtlxSceneView = async ({
         };
         const setStageLightsEv = (value) => {
             stageLightsEv = Math.max(-8, Math.min(8, Number(value) || 0));
+            if (shadowsEnabled) updateShadowMap();
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_EV_KEY, String(stageLightsEv)); } catch (e) { /* privacy mode */ }
             applyMaterialEnvironment();
             return stageLightsEv;
@@ -1879,6 +1994,7 @@ const createMtlxSceneView = async ({
             resize, frameAll,
             getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
             setStageLightsEnabled, setStageLightsEv, getStageLights,
+            setShadowsEnabled, getShadows,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
@@ -2022,6 +2138,7 @@ const createMtlxSceneView = async ({
             dispose: () => {
                 if (stopped) return;
                 stopped = true;
+                disposeShadowResources();
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
                     window.removeEventListener('mtlx-settings-changed', settingsChangedListener);

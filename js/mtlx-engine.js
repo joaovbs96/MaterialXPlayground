@@ -121,6 +121,10 @@ const getMxEnv = (version) => {
                 // maps. Older bindings may omit this option; the geometry
                 // path still supplies i_bitangent as an additive fallback.
                 try { genContext.getOptions().hwImplicitBitangents = false; } catch (e) { /* option absent */ }
+                // Shadow occlusion: MaterialX emits mx_shadow_occlusion() from a
+                // variance (moments) map. Safe to enable everywhere because the
+                // default u_shadowMap is white, which reads as fully lit.
+                try { genContext.getOptions().hwShadowMap = true; } catch (e) { /* option absent */ }
 
                 // Direct light, like the official viewer's registerLights():
                 // binds directional_light (id 1) from any <directional_light>
@@ -4400,7 +4404,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, envRotationRad = 0, envExposure = 1 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, envRotationRad = 0, envExposure = 1 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -4435,6 +4439,11 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
     if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure };
     if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = { value: false };
+    // White moments read as fully lit, so materials are unaffected until a
+    // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
+    // matrix here is a raw world-to-light-clip transform.
+    if (has('u_shadowMap')) uniforms.u_shadowMap = { value: shadowMap || getDummyTexWhite() };
+    if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = { value: (shadowMatrix || new THREE.Matrix4()).clone() };
     if (has('u_lightData')) uniforms.u_lightData = { value: currentLights(lightData, env && env.keyLight, envRotationRad, stageLights) };
     if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights) };
     return uniforms;
@@ -6384,6 +6393,11 @@ const createMtlxRenderView = async ({
                         u_peelHasPrev: { value: 0 },
                         u_peelPrevDepth: { value: getDummyTex() },
                         u_opaqueDepth: { value: getDummyTexWhite() },
+                        // hwShadowMap is on for every generated shader, so the
+                        // Viewer must bind white moments (fully lit) or its
+                        // materials would sample nothing and render black.
+                        u_shadowMap: { value: getDummyTexWhite() },
+                        u_shadowMatrix: { value: new THREE.Matrix4() },
                         // Lets encodeDisplay's epilogue defer to finalMat
                         // when linear peel compositing is available (see
                         // the hoisted peelLinearOk const, above allocPeel).

@@ -250,6 +250,7 @@
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
+        const [shadowsOn, setShadowsOn] = React.useState(false);
         // Local mirror of the engine's persisted Force Transparency flag
         // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
         // toggle from the Viewer or Compare tab reflects here too.
@@ -428,6 +429,7 @@
                     // renderer with its own environment, rotation and exposure.
                     // Mirror those into the card instead of replaying the
                     // card's defaults over them; a user import still wins.
+                    if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
                     if (nextHandle.getStageLights) {
                         const info = nextHandle.getStageLights();
                         setStageLightInfo(info);
@@ -848,6 +850,22 @@
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
                                 {stageLightInfo.count} light{stageLightInfo.count === 1 ? '' : 's'} imported from the stage. Area lights are approximated as points at their centre, matching Hydra Storm, and cast no shadows yet.
+                            </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={shadowsOn ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Shadows
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={shadowsOn}
+                                    onChange={(next) => { setShadowsOn(next); callHandle('setShadowsEnabled', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                One shadow caster only, from the brightest light: MaterialX computes a single occlusion value shared by every light and the environment, so shadowed areas also lose ambient light.
                             </div>
                             {stageLightsOn ? (
                                 <SliderField
