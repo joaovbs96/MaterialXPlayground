@@ -404,6 +404,42 @@ const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
     depthWrite: false,
 });
 
+// Back-face distance for transmissive prims, the path length MaterialX's
+// volume absorption needs (see patchTransmissionThickness in
+// js/mtlx-engine.js). Renders only the far side of each transmissive mesh,
+// so a fragment can measure how much medium is still in front of it.
+// Layer the thickness pass draws, so it selects its meshes with a camera
+// mask instead of walking the scene graph every frame.
+const THICKNESS_LAYER = 1;
+const createThicknessMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'uniform mat4 modelMatrix;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'out vec3 vWorld;',
+        'void main() {',
+        '    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;',
+        '    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec3 vWorld;',
+        'uniform vec3 uEye;',
+        'out vec4 fragColor;',
+        'void main() { float d = distance(vWorld, uEye); fragColor = vec4(d, d, d, 1.0); }',
+    ].join('\n'),
+    // Far side only, nearest first: for a convex solid the nearest back face
+    // IS where the ray leaves the medium, which is the segment Beer-Lambert
+    // wants. A concave or multi-shell prop underestimates the path, which
+    // errs toward clear rather than toward black.
+    side: THREE.BackSide,
+    depthTest: true,
+    depthWrite: true,
+});
+
 const SHADOW_BLUR_RADIUS = 2;
 const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
@@ -762,8 +798,20 @@ const createMtlxSceneView = async ({
     let aoBlurMaterial = null;
     let aoQuadScene = null;
     let aoQuadCamera = null;
+    let thicknessTarget = null;
+    let thicknessMaterial = null;
+    let thicknessCamera = null;
+    // Scene units to the units transmission_depth is authored in. OpenPBR
+    // reads it as a scene length, but authors write it in metres while USD
+    // stages are usually centimetres, so metersPerUnit is the bridge.
+    let thicknessScale = 1;
     let aoEnabled = storedSceneAo();
     let aoStrength = storedSceneAoStrength();
+    const disposeThicknessResources = () => {
+        if (thicknessTarget) { thicknessTarget.dispose(); thicknessTarget = null; }
+        if (thicknessMaterial) { thicknessMaterial.dispose(); thicknessMaterial = null; }
+        thicknessCamera = null;
+    };
     const disposeAoResources = () => {
         if (aoTarget) { aoTarget.dispose(); aoTarget = null; }
         if (aoBlurTarget) { aoBlurTarget.dispose(); aoBlurTarget = null; }
@@ -1175,6 +1223,7 @@ const createMtlxSceneView = async ({
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
             shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
+            thicknessScale, refractionTwoSided: true,
         });
         // USD value overrides (record.overrides) are applied onto the
         // MaterialX document itself in loadRenderable/applyUsdOverrides,
@@ -1289,6 +1338,13 @@ const createMtlxSceneView = async ({
             }
         };
         convertLights(null);
+        // transmission_depth is authored in metres in practice even though
+        // OpenPBR calls it a scene length, so path lengths measured in scene
+        // units are converted before Beer-Lambert sees them.
+        {
+            const meters = Number(stage.metersPerUnit);
+            thicknessScale = Number.isFinite(meters) && meters > 0 ? meters : 1;
+        }
         if (!isMounted()) throw new Error('USD scene view was cancelled.');
         const byPath = new Map();
         const pendingTextures = [];
@@ -1741,6 +1797,61 @@ const createMtlxSceneView = async ({
                 }
             }
         };
+        // Renders the back-face distance map for transmissive prims. Only
+        // runs when the stage has any, so an opaque stage pays nothing.
+        const updateThickness = () => {
+            const list = collectTransparentMeshes();
+            if (!list.length) return null;
+            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            const tw = Math.max(1, Math.floor(size.x));
+            const th = Math.max(1, Math.floor(size.y));
+            if (thicknessTarget && (thicknessTarget.width !== tw || thicknessTarget.height !== th)) {
+                thicknessTarget.dispose();
+                thicknessTarget = null;
+            }
+            if (!thicknessTarget) {
+                const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    && !!renderer.extensions.get('EXT_color_buffer_float');
+                thicknessTarget = new THREE.WebGLRenderTarget(tw, th, {
+                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                    depthBuffer: true, stencilBuffer: false,
+                });
+            }
+            if (!thicknessMaterial) thicknessMaterial = createThicknessMaterial();
+            thicknessMaterial.uniforms = thicknessMaterial.uniforms || {};
+            thicknessMaterial.uniforms.uEye = thicknessMaterial.uniforms.uEye || { value: new THREE.Vector3() };
+            thicknessMaterial.uniforms.uEye.value.copy(camera.position);
+
+            // Only the transmissive meshes take part; everything else would
+            // put its own back faces into the map and bound the wrong medium.
+            if (!thicknessCamera) thicknessCamera = camera.clone();
+            thicknessCamera.copy(camera);
+            thicknessCamera.layers.set(THICKNESS_LAYER);
+            const previousTarget = renderer.getRenderTarget();
+            scene.overrideMaterial = thicknessMaterial;
+            renderer.setRenderTarget(thicknessTarget);
+            renderer.setClearColor(0x000000, 1); // 0 distance means "no medium"
+            renderer.render(scene, thicknessCamera);
+            scene.overrideMaterial = null;
+            renderer.setRenderTarget(previousTarget);
+            renderer.setClearColor(0x111827, 1);
+            return thicknessTarget.texture;
+        };
+        // Pushes the thickness map onto every live material, per frame.
+        const applyThickness = (texture, width, height) => {
+            for (const material of materials) {
+                if (!material.uniforms || !material.uniforms.u_thicknessMap) continue;
+                material.uniforms.u_thicknessMap.value = texture
+                    || (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+                if (material.uniforms.u_thicknessTexel && width && height) {
+                    material.uniforms.u_thicknessTexel.value.set(1 / width, 1 / height);
+                }
+                if (material.uniforms.u_thicknessScale) {
+                    material.uniforms.u_thicknessScale.value = texture ? thicknessScale : 0;
+                }
+            }
+        };
         const applyMaterialEnvironment = () => {
             if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
             const radiance = env && env.radiance;
@@ -1756,6 +1867,7 @@ const createMtlxSceneView = async ({
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
                     shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
+                    thicknessScale, refractionTwoSided: true,
                     envRotationRad, envExposure,
                 });
                 for (const [name, slot] of Object.entries(next)) {
@@ -2257,8 +2369,16 @@ const createMtlxSceneView = async ({
             const list = [];
             sceneRoot.traverse((object) => {
                 if (!object || !object.isMesh || !object.material) return;
+                // Cleared on every rebuild, so a mesh that stopped being
+                // transmissive does not stay in the thickness pass.
+                object.layers.disable(THICKNESS_LAYER);
                 const mats = Array.isArray(object.material) ? object.material : [object.material];
-                if (mats.some((m) => m && m.userData && m.userData.mtlxSceneTransparent)) list.push(object);
+                if (mats.some((m) => m && m.userData && m.userData.mtlxSceneTransparent)) {
+                    // Layer membership, not per-frame visibility juggling:
+                    // the thickness pass runs every frame on a 700-mesh stage.
+                    object.layers.enable(THICKNESS_LAYER);
+                    list.push(object);
+                }
             });
             transparentMeshCache = list;
             return list;
@@ -2281,6 +2401,13 @@ const createMtlxSceneView = async ({
                 const aoTexture = updateAmbientOcclusion();
                 const size = renderer.getDrawingBufferSize(new THREE.Vector2());
                 applyAmbientOcclusion(aoTexture, size.x, size.y);
+            }
+            // Volume absorption needs a path length whether or not the
+            // peel pipeline is running, so this is not gated on the toggle.
+            {
+                const thicknessTexture = updateThickness();
+                const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+                applyThickness(thicknessTexture, size.x, size.y);
             }
             const forceOn = window.getForceTransparency && window.getForceTransparency();
             const list = forceOn ? collectTransparentMeshes() : [];
@@ -2572,6 +2699,7 @@ const createMtlxSceneView = async ({
                 stopped = true;
                 disposeShadowResources();
                 disposeAoResources();
+                disposeThicknessResources();
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
                     window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
