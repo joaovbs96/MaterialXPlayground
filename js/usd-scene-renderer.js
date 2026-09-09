@@ -49,6 +49,26 @@ const storedSceneDisplayTransform = () => {
     } catch (e) { return SCENE_DISPLAY_TRANSFORM_DEFAULT; }
 };
 
+// Baked sky visibility: the room-scale half of the same missing visibility
+// term. Screen space AO handles contacts, this handles walls. Default on,
+// because an interior lit by a dome is wrong without it and the bake is a
+// one-off cost per stage.
+const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
+const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
+const storedSceneSkyVis = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SKYVIS_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneSkyVisStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const raw = localStorage.getItem(SCENE_SKYVIS_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
+};
+
 // Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
 const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
@@ -824,6 +844,15 @@ const createMtlxSceneView = async ({
     // light, and until this existed it always shadowed slot 0 (the environment
     // key light) no matter which light the map was actually drawn from.
     let shadowLightRange = { begin: 0, end: 0 };
+    // Baked coarse sky visibility (js/usd-scene-skyvis.js). Built once per
+    // stage, never per frame: it depends only on geometry.
+    let skyVisTexture = null;
+    let skyVisMin = null;
+    let skyVisSize = null;
+    let skyVisCell = 0;
+    let skyVisEnabled = storedSceneSkyVis();
+    let skyVisStrength = storedSceneSkyVisStrength();
+    let skyVisInfo = null;
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
@@ -1261,6 +1290,7 @@ const createMtlxSceneView = async ({
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowLightBegin: shadowLightRange.begin, shadowLightEnd: shadowLightRange.end,
+            skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
             thicknessScale, refractionTwoSided: true,
         });
@@ -2033,6 +2063,75 @@ const createMtlxSceneView = async ({
         // Refitting the frustum changes only the matrix, so push that alone.
         // applyMaterialEnvironment rebuilds every material's whole uniform set
         // and is far too heavy to run on each frame of an orbit.
+        // Bakes the sky visibility volume for the loaded stage. Geometry only,
+        // so it runs once after the bounds are final and never per frame.
+        const buildSkyVisibilityVolume = (stageBox) => {
+            if (skyVisTexture) { try { skyVisTexture.dispose(); } catch (e) {} }
+            skyVisTexture = null;
+            skyVisMin = null;
+            skyVisSize = null;
+            skyVisCell = 0;
+            skyVisInfo = null;
+            if (!skyVisEnabled || !window.buildSkyVisibility || !THREE.DataTexture3D) return;
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return;
+            const meshes = [];
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                if (object.userData && object.userData.excludeFromFrame) return;
+                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld });
+            });
+            if (!meshes.length) return;
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            let result = null;
+            try {
+                result = window.buildSkyVisibility(meshes, stageBox, { resolution: 32, rays: 32 });
+            } catch (error) {
+                const note = 'Sky visibility bake failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return;
+            }
+            if (!result) return;
+            const texture = new THREE.DataTexture3D(result.data, result.dim[0], result.dim[1], result.dim[2]);
+            texture.format = THREE.RedFormat;
+            texture.type = THREE.UnsignedByteType;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.wrapR = THREE.ClampToEdgeWrapping;
+            texture.unpackAlignment = 1;
+            texture.needsUpdate = true;
+            skyVisTexture = texture;
+            skyVisCell = result.cell;
+            skyVisMin = new THREE.Vector3(result.min[0], result.min[1], result.min[2]);
+            skyVisSize = new THREE.Vector3(result.size[0], result.size[1], result.size[2]);
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            skyVisInfo = {
+                dim: result.dim.slice(),
+                cell: result.cell,
+                occupiedFraction: result.occupiedFraction,
+                triangles: result.triangles,
+                stride: result.stride,
+                ms,
+            };
+            const note = '[info] Sky visibility baked at ' + result.dim.join('x')
+                + ' (' + result.cell.toFixed(2) + ' units per cell, '
+                + Math.round(result.occupiedFraction * 100) + ' percent of cells inside geometry, '
+                + Math.round(ms) + ' ms)';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+        };
+        // Pushes the baked volume onto every live material without a rebuild.
+        const applySkyVisibility = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_skyVisMap) u.u_skyVisMap.value = (skyVisEnabled && skyVisTexture) ? skyVisTexture : (window.getDummyTex3DWhite ? window.getDummyTex3DWhite() : u.u_skyVisMap.value);
+                if (u.u_skyVisMin && skyVisMin) u.u_skyVisMin.value.copy(skyVisMin);
+                if (u.u_skyVisSize && skyVisSize) u.u_skyVisSize.value.copy(skyVisSize);
+                if (u.u_skyVisCell) u.u_skyVisCell.value = skyVisCell;
+                if (u.u_skyVisStrength) u.u_skyVisStrength.value = (skyVisEnabled && skyVisTexture) ? skyVisStrength : 0;
+            }
+        };
         const applyShadowMatrix = () => {
             for (const material of materials) {
                 if (!material.uniforms) continue;
@@ -2061,6 +2160,7 @@ const createMtlxSceneView = async ({
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowLightBegin: shadowLightRange.begin, shadowLightEnd: shadowLightRange.end,
+            skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
                     shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
                     thicknessScale, refractionTwoSided: true,
                     envRotationRad, envExposure,
@@ -2223,6 +2323,10 @@ const createMtlxSceneView = async ({
         if (!stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
         // Geometry and lights are final here, so draw the map once before the
         // first frame rather than leaving the opening frames unshadowed.
+        // Materials were built during the geometry pass, before the volume
+        // existed, so push it onto them once it does.
+        buildSkyVisibilityVolume(stageBox);
+        applySkyVisibility();
         if (shadowsEnabled) updateShadowMap();
         applyMaterialEnvironment();
         const resize = () => {
@@ -2706,6 +2810,32 @@ const createMtlxSceneView = async ({
             renderFrame();
             return sceneDisplayTransform;
         };
+        const setSkyVisibility = (on) => {
+            const next = !!on;
+            if (next === skyVisEnabled) return skyVisEnabled;
+            skyVisEnabled = next;
+            try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_KEY, skyVisEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            // Turning it back on has to re-bake: the volume is dropped when off.
+            if (skyVisEnabled && !skyVisTexture && sceneRoot) {
+                buildSkyVisibilityVolume(new THREE.Box3().setFromObject(sceneRoot));
+            }
+            applySkyVisibility();
+            renderFrame();
+            return skyVisEnabled;
+        };
+        const setSkyVisibilityStrength = (value) => {
+            skyVisStrength = Math.max(0, Math.min(1, Number(value) || 0));
+            try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_STRENGTH_KEY, String(skyVisStrength)); } catch (e) { /* privacy mode */ }
+            applySkyVisibility();
+            renderFrame();
+            return skyVisStrength;
+        };
+        const getSkyVisibility = () => ({
+            enabled: skyVisEnabled,
+            strength: skyVisStrength,
+            ready: !!skyVisTexture,
+            info: skyVisInfo ? Object.assign({}, skyVisInfo) : null,
+        });
         const setAmbientOcclusionEnabled = (on) => {
             aoEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -2810,6 +2940,7 @@ const createMtlxSceneView = async ({
             setShadowsEnabled, getShadows, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
             getSceneDisplayTransform, setSceneDisplayTransform,
+            setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under

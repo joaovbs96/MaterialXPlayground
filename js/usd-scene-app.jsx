@@ -256,6 +256,8 @@
         const [shadowsOn, setShadowsOn] = React.useState(false);
         const [aoOn, setAoOn] = React.useState(false);
         const [aoStrength, setAoStrength] = React.useState(0.7);
+        const [skyVisOn, setSkyVisOn] = React.useState(true);
+        const [skyVisStrength, setSkyVisStrength] = React.useState(1);
         const [transparentPrims, setTransparentPrims] = React.useState([]);
         // Local mirror of the engine's persisted Force Transparency flag
         // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
@@ -447,6 +449,11 @@
                     // card's defaults over them; a user import still wins.
                     if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
                     if (nextHandle.getSceneDisplayTransform) setDisplayTransformState(nextHandle.getSceneDisplayTransform());
+                    if (nextHandle.getSkyVisibility) {
+                        const sky = nextHandle.getSkyVisibility();
+                        setSkyVisOn(sky.enabled);
+                        setSkyVisStrength(sky.strength);
+                    }
                     if (nextHandle.getAmbientOcclusion) {
                         const ao = nextHandle.getAmbientOcclusion();
                         setAoOn(ao.enabled);
@@ -580,6 +587,12 @@
             if (!Number.isFinite(value)) return;
             setAoStrength(value);
             callHandle('setAmbientOcclusionStrength', value);
+        };
+        const applySkyVisStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setSkyVisStrength(value);
+            callHandle('setSkyVisibilityStrength', value);
         };
         const applyStageLightsEv = (raw) => {
             const value = Math.max(-8, Math.min(8, Number(raw)));
@@ -959,6 +972,33 @@
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"
+                                title={skyVisOn ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Sky visibility
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={skyVisOn}
+                                    onChange={(next) => { setSkyVisOn(next); callHandle('setSkyVisibility', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can actually see into a coarse volume, once per stage. Room scale, which screen space occlusion cannot reach.
+                            </div>
+                            {skyVisOn ? (
+                                <SliderField
+                                    label="Sky visibility strength"
+                                    value={skyVisStrength}
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                    onSlider={(v) => applySkyVisStrength(v)}
+                                    onNumber={(v) => applySkyVisStrength(v)}
+                                />
+                            ) : null}
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
                                 title={shadowsOn ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
                             >
                                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
@@ -971,7 +1011,7 @@
                                 />
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
-                                One shadow caster only, from the brightest light: MaterialX computes a single occlusion value shared by every light and the environment, so shadowed areas also lose ambient light. A local light casts from its own forward axis, so anything outside that cone is unshadowed.
+                                One shadow caster only: MaterialX generates a single shadow map. It now darkens the light it was actually rendered from rather than whichever light happens to sit in slot zero, so the shadow lines up with the lamp that casts it. Every other light stays unshadowed.
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"

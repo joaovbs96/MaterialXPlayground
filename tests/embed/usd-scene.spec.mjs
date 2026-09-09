@@ -125,7 +125,9 @@ test('@scene resolves an inferred MaterialX alias in a multi-material document',
       files: [{ path: 'multi.mtlx', data: new Blob([xml], { type: 'application/xml' }) }],
       isMounted: () => true,
     });
-    const warnings = view.warnings.slice();
+    // Informational lines (the light split, the sky visibility bake) are not
+    // problems; these assertions are about warnings and errors.
+    const warnings = view.warnings.filter((entry) => !String(entry).startsWith('[info]'));
     view.dispose();
     holder.remove();
     const material = view.prims[0] && view.prims[0].material;
@@ -179,7 +181,9 @@ test('@scene enforces explicit and inferred MaterialX selection boundaries', asy
       });
       const base = view.prims[0]?.material?.uniforms?.base_color?.value;
       const baseColor = base && typeof base.x === 'number' ? [base.x, base.y, base.z] : null;
-      const warnings = view.warnings.slice();
+      // Informational lines (the light split, the sky visibility bake) are not
+    // problems; these assertions are about warnings and errors.
+    const warnings = view.warnings.filter((entry) => !String(entry).startsWith('[info]'));
       view.dispose(); holder.remove();
       return { warnings, baseColor };
     };

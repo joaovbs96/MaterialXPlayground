@@ -412,6 +412,25 @@ const getDummyTexWhite = () => {
     return MTLX_DUMMY_TEX_WHITE;
 };
 
+// White 1x1x1 volume, so a material whose stage has no baked sky visibility
+// still has something to sample. Paired with u_skyVisStrength 0 it is an exact
+// no-op, which is what the Material Viewer runs with.
+let MTLX_DUMMY_TEX3D_WHITE = null;
+const getDummyTex3DWhite = () => {
+    if (!MTLX_DUMMY_TEX3D_WHITE && THREE.DataTexture3D) {
+        MTLX_DUMMY_TEX3D_WHITE = new THREE.DataTexture3D(new Uint8Array([255]), 1, 1, 1);
+        MTLX_DUMMY_TEX3D_WHITE.format = THREE.RedFormat;
+        MTLX_DUMMY_TEX3D_WHITE.type = THREE.UnsignedByteType;
+        MTLX_DUMMY_TEX3D_WHITE.minFilter = THREE.LinearFilter;
+        MTLX_DUMMY_TEX3D_WHITE.magFilter = THREE.LinearFilter;
+        MTLX_DUMMY_TEX3D_WHITE.wrapS = THREE.ClampToEdgeWrapping;
+        MTLX_DUMMY_TEX3D_WHITE.wrapT = THREE.ClampToEdgeWrapping;
+        MTLX_DUMMY_TEX3D_WHITE.wrapR = THREE.ClampToEdgeWrapping;
+        MTLX_DUMMY_TEX3D_WHITE.needsUpdate = true;
+    }
+    return MTLX_DUMMY_TEX3D_WHITE;
+};
+
 // Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
 // "X4008 division by zero" for unrolled FIS/light loops (harmless,
 // guarded by M_FLOAT_EPS), matched by exact signature; always restored.
@@ -1114,7 +1133,35 @@ const patchShadowLightScope = (fs) => {
 const patchAmbientOcclusion = (fs) => {
     const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
     if (!anchor.test(fs)) return fs;
-    let out = fs.replace(anchor, '$1occlusion = mx_ssao_occlusion();');
+    // Sky visibility needs the world position; without that varying only the
+    // screen space term is available and the volume lookup is skipped.
+    const hasWorldPos = /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
+        && /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
+    out = fs.replace(anchor, hasWorldPos
+        ? '$1occlusion = mx_ssao_occlusion() * mx_sky_visibility();'
+        : '$1occlusion = mx_ssao_occlusion();');
+    const skyDecls = !hasWorldPos ? [] : [
+        // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
+        // MaterialX's IBL has no visibility term at all, so an interior lit by
+        // a dome sees full sky on every surface including ones facing a wall.
+        // Screen space AO cannot reach that scale; this can, and the two
+        // multiply: the volume carries the room, the screen space pass the
+        // contacts. An unbound volume is white at strength 0, an exact no-op.
+        'uniform highp sampler3D u_skyVisMap;',
+        'uniform vec3 u_skyVisMin;',
+        'uniform vec3 u_skyVisSize;',
+        // Sampled one cell along the normal, into the free space the surface
+        // faces, rather than at the surface itself where the cell is half solid.
+        'uniform float u_skyVisCell;',
+        'uniform float u_skyVisStrength;',
+        'float mx_sky_visibility() {',
+        '    if (u_skyVisStrength <= 0.0) return 1.0;',
+        '    vec3 uvw = (positionWorld + normalize(normalWorld) * u_skyVisCell - u_skyVisMin) / max(u_skyVisSize, vec3(1e-6));',
+        '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 1.0;',
+        '    float vis = texture(u_skyVisMap, uvw).r;',
+        '    return mix(1.0, clamp(vis, 0.0, 1.0), clamp(u_skyVisStrength, 0.0, 1.0));',
+        '}',
+    ];
     const decls = [
         'uniform sampler2D u_ssaoMap;',
         'uniform vec2 u_ssaoTexel;',
@@ -1123,8 +1170,7 @@ const patchAmbientOcclusion = (fs) => {
         '    float ao = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).r;',
         '    return mix(1.0, clamp(ao, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0));',
         '}',
-        '',
-    ].join('\n');
+    ].concat(skyDecls).concat(['']).join('\n');
     // Must land before the FIRST function definition, not before main():
     // the generator emits the ambient-occlusion slot inside a surface
     // evaluation function that precedes main, so declaring the helper any
@@ -5119,7 +5165,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowLightBegin = 0, shadowLightEnd = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowLightBegin = 0, shadowLightEnd = 0, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5140,6 +5186,19 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         // Which light slots the shadow map belongs to; equal means no caster.
         u_shadowLightBegin: { value: shadowLightBegin | 0 },
         u_shadowLightEnd: { value: shadowLightEnd | 0 },
+        // Baked sky visibility. Seeded unconditionally, NOT through has():
+        // parseUniforms' regex has no room for a precision qualifier, so
+        // `uniform highp sampler3D` is invisible to it just as
+        // `uniform highp sampler2D u_peelPrevDepth` is. An unseeded sampler
+        // sits on texture unit 0 next to a sampler2D, and ANGLE then rejects
+        // the entire draw with "Two textures of different types use the same
+        // sampler location", so the scene renders nothing at all.
+        // A white 1x1x1 volume at strength 0 is an exact no-op.
+        u_skyVisMap: { value: skyVisMap || getDummyTex3DWhite() },
+        u_skyVisMin: { value: skyVisMin ? skyVisMin.clone() : new THREE.Vector3() },
+        u_skyVisSize: { value: skyVisSize ? skyVisSize.clone() : new THREE.Vector3(1, 1, 1) },
+        u_skyVisCell: { value: skyVisCell || 0 },
+        u_skyVisStrength: { value: skyVisMap ? skyVisStrength : 0 },
     };
     applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
     const declared = new Set((compiled.declared || []).map((u) => u.name));
@@ -7171,6 +7230,14 @@ const createMtlxRenderView = async ({
                         // the white dummy moments map above says the same thing.
                         u_shadowLightBegin: { value: 0 },
                         u_shadowLightEnd: { value: 0 },
+                        // Same sampler-unit hazard as the Scene: see
+                        // createMtlxSceneUniforms. No stage volume here, so
+                        // the white 1x1x1 dummy at strength 0 is the value.
+                        u_skyVisMap: { value: getDummyTex3DWhite() },
+                        u_skyVisMin: { value: new THREE.Vector3() },
+                        u_skyVisSize: { value: new THREE.Vector3(1, 1, 1) },
+                        u_skyVisCell: { value: 0 },
+                        u_skyVisStrength: { value: 0 },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
@@ -8125,7 +8192,7 @@ Object.assign(window, {
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
     ensurePrefilteredEnv, getSpecularEnvMethod,
-    getDummyTexWhite,
+    getDummyTexWhite, getDummyTex3DWhite,
     createPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,

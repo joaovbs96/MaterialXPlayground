@@ -262,7 +262,7 @@ const VIEW_DEPS = {
         // vendor/utif/UTIF.js: loadTifTexture (js/mtlx-engine.js) needs it for
         // scene TIF/UDIM tiles, same dependency the viewer route already has.
         // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
-        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-lights.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
+        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
         babelScripts: ['js/shared/mtlx-ui.jsx'],
         app: 'js/usd-scene-app.jsx',
         globalName: 'SceneViewerApp',
