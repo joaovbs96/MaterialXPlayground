@@ -244,6 +244,9 @@
         );
         // Analytic lights imported from the stage. Count comes from the
         // handle once a stage is loaded; the two controls are live.
+        // Diagnostic groups: errors and warnings open, info and the source
+        // list collapsed, since those are the long ones.
+        const [diagOpen, setDiagOpen] = React.useState({ error: true, warning: true, info: false, materials: false });
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
@@ -880,57 +883,65 @@
                 <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
                     <SectionCard key={warnings.length > 0} icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen={warnings.length > 0} dense>
                         {warnings.length ? (
-                            <div className="space-y-2" data-testid="usd-material-warnings">
+                            <div data-testid="usd-material-warnings">
                                 {['error', 'warning', 'info'].map((severity) => {
                                     const records = grouped[severity];
                                     if (!records.length) return null;
                                     const style = SEVERITY_STYLE[severity];
+                                    const open = !!diagOpen[severity];
                                     return (
-                                        <details key={severity} open={severity !== 'info'} className="group">
-                                            <summary className={'cursor-pointer select-none flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] ' + style.text}>
-                                                <MtlxIcon name={style.icon} className="w-3.5 h-3.5 shrink-0" />
-                                                {style.label}
-                                                <span className="font-mono tabular-nums text-gray-500">{records.length}</span>
-                                            </summary>
-                                            <div className="mt-1.5 space-y-2 pl-1">
-                                                {records.map((record, i) => (
-                                                    <div key={severity + i} className={'flex items-start gap-1 font-mono text-xs break-all ' + style.text}>
-                                                        <MtlxIcon name={style.icon} className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                                                        <div>
+                                        <div key={severity} className="border-t border-gray-700/70 first:border-t-0">
+                                            <button
+                                                type="button"
+                                                onClick={() => setDiagOpen((prev) => ({ ...prev, [severity]: !prev[severity] }))}
+                                                aria-expanded={open}
+                                                className="w-full flex items-center gap-1.5 py-1.5 text-left hover:bg-gray-800/60 rounded px-1 -mx-1"
+                                            >
+                                                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                                                <MtlxIcon name={style.icon} className={'w-3.5 h-3.5 shrink-0 ' + style.text} />
+                                                <span className={'text-[10px] font-semibold uppercase tracking-[0.08em] ' + style.text}>{style.label}</span>
+                                                <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{records.length}</span>
+                                            </button>
+                                            {open ? (
+                                                <div className="pb-2 pl-5 space-y-2">
+                                                    {records.map((record, i) => (
+                                                        <div key={severity + i} className={'flex items-start gap-1 font-mono text-xs break-all ' + style.text}>
                                                             <span>{record.label}</span>
-                                                            {record.raw !== record.label && (
-                                                                <details className="mt-1 text-gray-500">
-                                                                    <summary className="cursor-pointer">Raw diagnostic</summary>
-                                                                    <div className="mt-1 break-all">{record.raw}</div>
-                                                                </details>
-                                                            )}
                                                         </div>
+                                                    ))}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    );
+                                })}
+                                {materials.length ? (
+                                    <div className="border-t border-gray-700/70">
+                                        <button
+                                            type="button"
+                                            onClick={() => setDiagOpen((prev) => ({ ...prev, materials: !prev.materials }))}
+                                            aria-expanded={!!diagOpen.materials}
+                                            className="w-full flex items-center gap-1.5 py-1.5 text-left hover:bg-gray-800/60 rounded px-1 -mx-1"
+                                        >
+                                            <MtlxIcon name={diagOpen.materials ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                                            <MtlxIcon name="file-text" className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Material sources</span>
+                                            <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{materials.length}</span>
+                                        </button>
+                                        {diagOpen.materials ? (
+                                            <div className="pb-2 pl-5 space-y-1">
+                                                {materials.map((material, i) => (
+                                                    <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                                                        {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
                                                     </div>
                                                 ))}
                                             </div>
-                                        </details>
-                                    );
-                                })}
+                                        ) : null}
+                                    </div>
+                                ) : null}
                             </div>
                         ) : (
                             <div className="text-xs text-gray-500">No warnings.</div>
                         )}
-                        {materials.length ? (
-                            <details className="mt-2">
-                                <summary className="cursor-pointer select-none flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">
-                                    <MtlxIcon name="file-text" className="w-3.5 h-3.5 shrink-0" />
-                                    Material sources
-                                    <span className="font-mono tabular-nums">{materials.length}</span>
-                                </summary>
-                                <div className="mt-1.5 space-y-1 pl-1">
-                                    {materials.map((material, i) => (
-                                        <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
-                                            {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
-                                        </div>
-                                    ))}
-                                </div>
-                            </details>
-                        ) : null}
                     </SectionCard>
                 </div>
             </div>
