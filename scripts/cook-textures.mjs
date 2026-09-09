@@ -77,6 +77,60 @@ function qualityToUastcLevel(quality) {
   return 2;
 }
 
+// Transfer function per texture, read from the MaterialX documents that
+// reference it rather than guessed from its name. The guess is wrong for
+// any map whose name happens to contain a colour word (a
+// "pencilColored_MAT_Normal" cooked as sRGB comes back decoded twice), and
+// the authored colorspace is the only authority on what a file holds.
+// Returns a basename -> "srgb" | "linear" map; names the documents disagree
+// about, and names no document references, are left out for the caller's
+// name heuristic to decide.
+async function readAuthoredColorspaces(dir) {
+  const seen = new Map(); // basename -> Set of "srgb"/"linear"
+  async function walk(current) {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      if (/^(\._|__MACOSX$|\.DS_Store$)/.test(entry.name)) continue;
+      const abs = path.join(current, entry.name);
+      if (entry.isDirectory()) { await walk(abs); continue; }
+      if (path.extname(entry.name).toLowerCase() !== ".mtlx") continue;
+      const text = await readFile(abs, "utf8");
+      // Scan to the self-closing "/>" rather than the first ">": a UDIM
+      // reference is written "<UDIM>" inside the value, so stopping at any
+      // ">" cuts the tag in half and loses the filename entirely.
+      const re = /<input\b[\s\S]*?\/>/g;
+      for (const tag of text.match(re) || []) {
+        if (!/\bname="file"/.test(tag)) continue;
+        const value = /\bvalue="([^"]*)"/.exec(tag);
+        if (!value) continue;
+        const cs = /\bcolorspace="([^"]*)"/.exec(tag);
+        // No authored colorspace means the document colorspace applies,
+        // which for every 1.39 document is a linear one.
+        const kind = cs && /^srgb/i.test(cs[1]) ? "srgb" : "linear";
+        const base = path.basename(value[1]).toLowerCase();
+        if (!seen.has(base)) seen.set(base, new Set());
+        seen.get(base).add(kind);
+      }
+    }
+  }
+  await walk(dir);
+  const out = new Map();
+  for (const [base, kinds] of seen) if (kinds.size === 1) out.set(base, [...kinds][0]);
+  return out;
+}
+
+// A UDIM reference names a token, not a file, so a cooked tile has to match
+// back against the "<UDIM>" pattern its document authored.
+function authoredColorspaceFor(map, basename) {
+  const lower = basename.toLowerCase();
+  if (map.has(lower)) return map.get(lower);
+  for (const [pattern, kind] of map) {
+    if (!pattern.includes("<udim>")) continue;
+    const re = new RegExp("^" + pattern.split("<udim>").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\d{4}") + "$");
+    if (re.test(lower)) return kind;
+  }
+  return null;
+}
+
 /** Recursively find source texture files under `dir`, skipping .ktx2 siblings unless --force. */
 async function findSources(dir, force) {
   const out = [];
@@ -298,7 +352,8 @@ async function runWorkerSlice({ files, quality, dryRun, encoder, toktxPath }) {
       continue;
     }
 
-    const isColor = SRGB_NAME_HINTS.test(path.basename(file.srcPath));
+    // Set by the main thread from the authored MaterialX colorspace.
+    const isColor = file.srgb === undefined ? SRGB_NAME_HINTS.test(path.basename(file.srcPath)) : !!file.srgb;
     let outBytes;
 
     if (useToktx) {
@@ -399,6 +454,17 @@ async function main() {
     console.log("no source textures to cook (all up to date, or none found).");
     return;
   }
+
+  // Stamp each file's transfer function before slicing, so every worker
+  // cooks against the authored colorspace instead of re-guessing.
+  const authored = await readAuthoredColorspaces(folder);
+  let guessed = 0;
+  for (const file of sources) {
+    const kind = authoredColorspaceFor(authored, path.basename(file.srcPath));
+    if (kind) file.srgb = kind === "srgb";
+    else { file.srgb = SRGB_NAME_HINTS.test(path.basename(file.srcPath)); guessed++; }
+  }
+  console.log(`colorspace: ${sources.length - guessed} from the MaterialX documents, ${guessed} guessed from the file name.`);
 
   const jobs = Math.min(args.jobs, sources.length);
   const slices = splitEvenly(sources, jobs);

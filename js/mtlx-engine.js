@@ -880,9 +880,6 @@ const encodeDisplay = (src) => {
 // alpha-composited background. Tune here.
 const PEEL_REFRACTION_SCALE = 0.5;
 
-// Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
-// then mixes toward a Schlick NdotV rim so grazing angles read as
-// reflective glass instead of a flat, view-independent haze. Fail-soft.
 // Bounds-guards MaterialX's mx_shadow_occlusion. The library samples the
 // moments map with no check at all, so a fragment outside the shadow
 // frustum reads a clamped edge texel and a fragment behind a perspective
@@ -903,6 +900,9 @@ const patchShadowBounds = (fs) => {
     return fs.replace(anchor, guard);
 };
 
+// Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
+// then mixes toward a Schlick NdotV rim so grazing angles read as
+// reflective glass instead of a flat, view-independent haze. Fail-soft.
 const patchTransmissionAlpha = (fs) => {
     let weightName = null;
     if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';
@@ -1264,6 +1264,100 @@ const applyColorspaceAliases = (doc, maxDepth) => {
     visit(doc, 0);
     const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
     return { restore, rewrites };
+};
+
+// cmlib nodes that convert an encoded texture to the lin_rec709 working
+// space. Only spaces cmlib can actually transform appear here; anything
+// else is reported rather than silently ignored.
+const COLORSPACE_TO_WORKING_NODE = {
+    srgb_texture: 'srgb_texture_to_lin_rec709',
+    g22_rec709: 'g22_rec709_to_lin_rec709',
+    g18_rec709: 'g18_rec709_to_lin_rec709',
+    acescg: 'acescg_to_lin_rec709',
+    lin_ap1: 'lin_ap1_to_lin_rec709',
+    g22_ap1: 'g22_ap1_to_lin_rec709',
+    adobergb: 'adobergb_to_lin_rec709',
+    lin_adobergb: 'lin_adobergb_to_lin_rec709',
+    srgb_displayp3: 'srgb_displayp3_to_lin_rec709',
+    lin_displayp3: 'lin_displayp3_to_lin_rec709',
+    rec709_display: 'rec709_display_to_lin_rec709',
+};
+
+// Inserts the colorspace transform MaterialX's own color management system
+// would have inserted, because this WASM build does not expose one: neither
+// mx.DefaultColorManagementSystem nor generator.setColorManagementSystem is
+// bound to JS, so a `colorspace` attribute on a filename input generates
+// NOTHING and every sRGB texture is sampled as if it were already linear
+// (measurably too bright and washed out). Verified by generating ESSL for a
+// tagged image and finding zero conversion nodes in the output.
+//
+// The rewrite is the CMS's own: put a cmlib conversion node between the
+// image and its consumers, and drop the attribute so a future build that
+// does bind a CMS cannot apply it twice. Runs on the LIVE document, so the
+// caller MUST call restore() in a finally.
+const applyColorspaceTransforms = (doc, maxDepth) => {
+    mxWarnIfLocked('applyColorspaceTransforms'); // exported doc-mutating helper, see mxWarnIfLocked's header comment
+    const cap = (typeof maxDepth === 'number') ? maxDepth : 10;
+    const restores = [];
+    const converted = new Map();
+    const unsupported = new Set();
+    // cmlib converts INTO lin_rec709 only. A document working in another
+    // space would need the inverse leg too, so leave it alone and say so.
+    const docSpace = mxElAttr(doc, 'colorspace');
+    if (docSpace && docSpace !== 'lin_rec709') {
+        return { restore: () => {}, converted, unsupported: new Set(['(document works in "' + docSpace + '", not lin_rec709)']) };
+    }
+    let serial = 0;
+    const visit = (parent, depth) => {
+        if (!parent || depth > cap) return;
+        const children = vecToArray(mxSafe(() => parent.getChildren(), []));
+        // Snapshot the child list first: the loop adds nodes to this parent.
+        const nodes = children.filter((c) => mxSafe(() => typeof c.getInput === 'function' && typeof c.getCategory === 'function', false));
+        for (const node of nodes) {
+            const fileInput = mxSafe(() => node.getInput('file'), null);
+            if (!fileInput || !mxElHasAttr(fileInput, 'colorspace')) { visit(node, depth + 1); continue; }
+            const cs = mxElAttr(fileInput, 'colorspace');
+            const type = String(mxSafe(() => node.getType(), ''));
+            if (type !== 'color3' && type !== 'color4') continue; // float/vector images carry data, never color
+            const category = COLORSPACE_TO_WORKING_NODE[cs];
+            if (!category) { unsupported.add(cs); continue; }
+            const nodeName = mxSafe(() => node.getName(), null);
+            if (!nodeName) continue;
+            const cmName = '__mtlx_cm_' + (serial++) + '_' + nodeName;
+            const cm = mxSafe(() => parent.addNode(category, cmName, type), null);
+            if (!cm) { unsupported.add(cs); continue; }
+            const cmIn = mxSafe(() => cm.addInput('in', type), null);
+            if (!cmIn || !mxSetAttr(cmIn, 'nodename', nodeName)) {
+                mxSafe(() => parent.removeChild(cmName), null);
+                unsupported.add(cs);
+                continue;
+            }
+            // Every consumer in this scope now reads the converted value.
+            // Done by attribute so multi-output and nodegraph references
+            // keep whatever `output` they already named. A nodegraph's own
+            // <output> element carries nodename directly rather than through
+            // an input, so redirect the element itself as well.
+            const redirect = (el) => {
+                if (mxElAttr(el, 'nodename') !== nodeName) return;
+                if (mxSetAttr(el, 'nodename', cmName)) {
+                    restores.push(() => mxSetAttr(el, 'nodename', nodeName));
+                }
+            };
+            for (const sibling of children) {
+                if (sibling === node || sibling === cm) continue;
+                redirect(sibling);
+                for (const input of vecToArray(mxSafe(() => sibling.getInputs(), []))) redirect(input);
+            }
+            mxRemoveAttr(fileInput, 'colorspace');
+            restores.push(() => mxSetAttr(fileInput, 'colorspace', cs));
+            restores.push(() => mxSafe(() => parent.removeChild(cmName), null));
+            converted.set(cs, (converted.get(cs) || 0) + 1);
+            visit(node, depth + 1);
+        }
+    };
+    visit(doc, 0);
+    const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
+    return { restore, converted, unsupported };
 };
 
 // Doc-level renderable scan: returns [{ name, node }], one entry per
@@ -4302,7 +4396,13 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // document (and any export of it) never actually changes.
     const colorspaceDoc = mxSafe(() => renderable.getDocument(), null) || documentArg;
     let colorspaceAliasResult = null;
-    if (colorspaceDoc) colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+    let colorspaceTransformResult = null;
+    if (colorspaceDoc) {
+        colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+        // Must follow the aliases: an authored "srgb_tx" only becomes a
+        // name cmlib knows once applyColorspaceAliases has normalized it.
+        colorspaceTransformResult = applyColorspaceTransforms(colorspaceDoc);
+    }
     // Catches a MaterialX type mismatch (no implicit coercion) BEFORE
     // generation, which otherwise fails deep inside an opaque nodegraph
     // call with a GLSL line number instead of naming the real culprit.
@@ -4327,6 +4427,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
                 + (detail ? `. ${detail}` : ''));
         }
     } finally {
+        // Reverse order: the transforms were layered on top of the aliases.
+        if (colorspaceTransformResult) colorspaceTransformResult.restore();
         if (colorspaceAliasResult) colorspaceAliasResult.restore();
     }
     if (window.MTLX_PERF_LOG) {
@@ -4356,6 +4458,14 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
             const [from, to] = key.split(' -> ');
             notices.push(`Colorspace "${from}" is not a MaterialX 1.39 name; ${count} inputs treated as `
                 + (to === '(removed)' ? 'no conversion' : to));
+        }
+    }
+    if (colorspaceTransformResult) {
+        for (const [cs, count] of colorspaceTransformResult.converted) {
+            notices.push(`Colorspace "${cs}": ${count} texture(s) converted to lin_rec709 in the shader`);
+        }
+        for (const cs of colorspaceTransformResult.unsupported) {
+            notices.push(`Colorspace "${cs}" has no conversion available; those textures are sampled unconverted`);
         }
     }
     fs = patchUnlitLightingRefs(fs);
