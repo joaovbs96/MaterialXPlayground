@@ -982,9 +982,13 @@ const patchShadowBounds = fs => {
   // A light inside the scene cannot be covered by one 2D map, so the
   // frustum always ends somewhere. Stopping dead at its edge draws a
   // hard straight line across the floor where shadowed meets
-  // unshadowed. Fading over the last few percent of the map, and near
-  // the far plane, makes that a gradient instead of a seam.
-  'vec2 mx_shadowEdge = min(shadowCoord.xy, vec2(1.0) - shadowCoord.xy);', 'float mx_shadowFade = smoothstep(0.0, 0.12, min(mx_shadowEdge.x, mx_shadowEdge.y))', '                    * (1.0 - smoothstep(0.85, 1.0, shadowCoord.z));', 'return mix(1.0, ' + call + ', mx_shadowFade);'].join('\n    ');
+  // unshadowed, so fade over the last few percent of the map instead.
+  //
+  // Only the XY edges. There is deliberately no far-plane term: under a
+  // perspective projection shadowCoord.z is not a distance, and with a
+  // near of 0.25 against a far of 399 the ENTIRE stage lands past 0.99,
+  // so any threshold on it fades every shadow in the scene to nothing.
+  'vec2 mx_shadowEdge = min(shadowCoord.xy, vec2(1.0) - shadowCoord.xy);', 'float mx_shadowFade = smoothstep(0.0, 0.12, min(mx_shadowEdge.x, mx_shadowEdge.y));', 'return mix(1.0, ' + call + ', mx_shadowFade);'].join('\n    ');
   return fs.replace(anchor, guard);
 };
 
