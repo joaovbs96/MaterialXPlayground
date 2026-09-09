@@ -34,6 +34,21 @@ const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
 const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
 const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
 
+// The Scene keeps its own view transform. A whole stage is a photographic
+// image, so a hard clip at 1.0 blows every highlight and shifts its hue; the
+// Material Viewer keeps plain sRGB because that is MaterialXView parity for
+// judging one material. Falls back to the shared setting when unset.
+const SCENE_DISPLAY_TRANSFORM_KEY = 'mtlx_scene_display_transform';
+const SCENE_DISPLAY_TRANSFORM_DEFAULT = 'neutral';
+const storedSceneDisplayTransform = () => {
+    if (window.top !== window) return SCENE_DISPLAY_TRANSFORM_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_DISPLAY_TRANSFORM_KEY);
+        const allowed = (window.getDisplayTransformValues && window.getDisplayTransformValues()) || [];
+        return allowed.includes(raw) ? raw : SCENE_DISPLAY_TRANSFORM_DEFAULT;
+    } catch (e) { return SCENE_DISPLAY_TRANSFORM_DEFAULT; }
+};
+
 // Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
 const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
@@ -792,6 +807,7 @@ const createMtlxSceneView = async ({
     let shadowBlurCamera = null;
     let shadowDepthMaterial = null;
     let shadowMatrix = null;
+    let sceneDisplayTransform = storedSceneDisplayTransform();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
     // every frame the camera moves, because the whole term is screen space.
@@ -1226,7 +1242,7 @@ const createMtlxSceneView = async ({
         // shaders were generated for the prefilter path.
         if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
         const uniforms = window.createMtlxSceneUniforms({
-            compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
+            compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
             thicknessScale, refractionTwoSided: true,
         });
@@ -1991,10 +2007,10 @@ const createMtlxSceneView = async ({
                 const compiled = material.userData && material.userData.mtlxSceneCompiled;
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const next = window.createMtlxSceneUniforms({
-                    compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
+                    compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
                     shadowMap: shadowsEnabled && shadowTarget ? shadowTarget.texture : null, shadowMatrix, envTilt,
                     thicknessScale, refractionTwoSided: true,
-                    envRotationRad, envExposure,
+                    envRotationRad, envExposure, displayTransform: sceneDisplayTransform,
                 });
                 for (const [name, slot] of Object.entries(next)) {
                     if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$|u_shadowMap$|u_shadowMatrix$)/).test(name) || !material.uniforms[name]) continue;
@@ -2011,8 +2027,22 @@ const createMtlxSceneView = async ({
         // MaterialX materials in front of them. CustomToneMapping carries our
         // own chunk, so every mode agrees; without it the backdrop had no curve
         // at all in srgb and could not respond to exposure in any mode.
+        // Both the curve and the exposure are uniforms, so a change is one write
+        // per material instead of regenerating every shader in the stage.
+        // Exposure is shared with the other tools; the curve is scene-local.
+        const pushDisplaySettings = () => {
+            const scale = window.displayExposureScale ? window.displayExposureScale() : 1;
+            const id = window.displayTransformId ? window.displayTransformId(sceneDisplayTransform) : 0;
+            materials.forEach((material) => {
+                const u = material.uniforms;
+                if (!u) return;
+                if (u.u_displayExposure) u.u_displayExposure.value = scale;
+                if (u.u_displayTransform) u.u_displayTransform.value = id;
+            });
+            updateRendererDisplayTransform();
+        };
         const updateRendererDisplayTransform = () => {
-            const mode = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
+            const mode = sceneDisplayTransform;
             const custom = window.applyThreeToneMappingChunk && window.applyThreeToneMappingChunk(mode);
             if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
             if ('toneMapping' in renderer) {
@@ -2608,6 +2638,21 @@ const createMtlxSceneView = async ({
         const getShadows = () => ({ enabled: shadowsEnabled, ready: !!shadowTarget });
         // AO is a pure screen-space pass, so turning it off just stops
         // running it and resets the uniform: no recompile, no rebuild.
+        // The Scene's own view transform. A uniform, so switching costs one
+        // write per material rather than regenerating every shader; the shared
+        // Material Viewer setting is deliberately left alone.
+        const getSceneDisplayTransform = () => sceneDisplayTransform;
+        const setSceneDisplayTransform = (mode) => {
+            const allowed = (window.getDisplayTransformValues && window.getDisplayTransformValues()) || [];
+            if (!allowed.includes(mode) || mode === sceneDisplayTransform) return sceneDisplayTransform;
+            sceneDisplayTransform = mode;
+            try {
+                if (window.top === window) localStorage.setItem(SCENE_DISPLAY_TRANSFORM_KEY, mode);
+            } catch (e) { /* privacy mode */ }
+            pushDisplaySettings();
+            renderFrame();
+            return sceneDisplayTransform;
+        };
         const setAmbientOcclusionEnabled = (on) => {
             aoEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -2711,6 +2756,7 @@ const createMtlxSceneView = async ({
             setStageLightsEnabled, setStageLightsEv, getStageLights,
             setShadowsEnabled, getShadows, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
+            getSceneDisplayTransform, setSceneDisplayTransform,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
@@ -2842,15 +2888,9 @@ const createMtlxSceneView = async ({
             // Camera exposure is a uniform, so this never regenerates a shader:
             // one write per material plus the renderer's own knob for the
             // built-in backdrop. Broadcast by setDisplayExposure via LIVE_VIEWS.
-            refreshDisplayExposure: () => {
+            refreshDisplaySettings: () => {
                 if (stopped) return;
-                const scale = window.displayExposureScale ? window.displayExposureScale() : 1;
-                materials.forEach((material) => {
-                    if (material.uniforms && material.uniforms.u_displayExposure) {
-                        material.uniforms.u_displayExposure.value = scale;
-                    }
-                });
-                if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
+                pushDisplaySettings();
                 renderFrame();
             },
             refreshRenderMode: () => {

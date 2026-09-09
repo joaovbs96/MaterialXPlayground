@@ -239,8 +239,11 @@
         );
         const subdivisionLevelRef = React.useRef(subdivisionLevel);
         subdivisionLevelRef.current = subdivisionLevel;
-        const [displayTransform, setDisplayTransformState] = React.useState(
-            () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
+        // The Scene keeps its own view transform (the Material Viewer stays on
+        // sRGB for MaterialXView parity); exposure is shared with the other tools.
+        const [displayTransform, setDisplayTransformState] = React.useState('neutral');
+        const [displayExposure, setDisplayExposureState] = React.useState(
+            () => (window.getDisplayExposure ? window.getDisplayExposure() : 0)
         );
         // Analytic lights imported from the stage. Count comes from the
         // handle once a stage is loaded; the two controls are live.
@@ -316,16 +319,21 @@
         }, [narrow]);
 
         React.useEffect(() => {
-            const onDisplayTransform = () => {
-                const v = window.getDisplayTransform ? window.getDisplayTransform() : null;
-                if (v) setDisplayTransformState(v);
+            const onDisplayExposure = () => {
+                if (window.getDisplayExposure) setDisplayExposureState(window.getDisplayExposure());
             };
-            window.addEventListener('mtlx-display-transform', onDisplayTransform);
-            return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+            window.addEventListener('mtlx-display-exposure', onDisplayExposure);
+            return () => window.removeEventListener('mtlx-display-exposure', onDisplayExposure);
         }, []);
         const pickDisplayTransform = (mode) => {
             setDisplayTransformState(mode);
-            if (window.setDisplayTransform) window.setDisplayTransform(mode);
+            callHandle('setSceneDisplayTransform', mode);
+        };
+        const applyDisplayExposure = (raw) => {
+            const value = Math.max(-8, Math.min(8, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setDisplayExposureState(value);
+            if (window.setDisplayExposure) window.setDisplayExposure(value);
         };
 
         const applyChosenFiles = async (next, generation) => {
@@ -438,6 +446,7 @@
                     // Mirror those into the card instead of replaying the
                     // card's defaults over them; a user import still wins.
                     if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
+                    if (nextHandle.getSceneDisplayTransform) setDisplayTransformState(nextHandle.getSceneDisplayTransform());
                     if (nextHandle.getAmbientOcclusion) {
                         const ao = nextHandle.getAmbientOcclusion();
                         setAoOn(ao.enabled);
@@ -853,7 +862,7 @@
                     <button type="button" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
                 </SectionCard>
 
-                <SectionCard icon="settings-cog" title="Rendering" summary={displayTransform === 'srgb' ? 'sRGB' : displayTransform === 'aces' ? 'ACES' : 'lin_rec709'} dense>
+                <SectionCard icon="settings-cog" title="Rendering" summary={({ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' })[displayTransform] || displayTransform} dense>
                     <div className="flex items-center justify-between gap-2">
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
                             Display transform
@@ -861,13 +870,25 @@
                         </span>
                         <MtlxSelect
                             value={displayTransform}
-                            options={['srgb', 'aces', 'lin_rec709']}
-                            labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
+                            options={['neutral', 'aces', 'srgb', 'lin_rec709']}
+                            labels={{ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' }}
                             onChange={pickDisplayTransform}
-                            defValue="srgb"
-                            title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+                            defValue="neutral"
+                            title="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue. sRGB clips at 1.0 and matches the official MaterialX viewer. This is the Scene's own setting; the Material Viewer keeps sRGB."
                             size="sm"
                         />
+                    </div>
+                    <SliderField
+                        label="Exposure" unit="EV"
+                        value={displayExposure}
+                        min={-8}
+                        max={8}
+                        step={0.25}
+                        onSlider={(v) => applyDisplayExposure(v)}
+                        onNumber={(v) => applyDisplayExposure(v)}
+                    />
+                    <div className="text-[11px] text-gray-400">
+                        Scales the whole image before the display transform, the way a camera would. Environment exposure gains only the image based lighting, so it cannot balance a stage that also has its own lights.
                     </div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Texture resolution</span>

@@ -892,6 +892,36 @@ const TONE_CURVE_GLSL = (mode, pad) => {
     return '';
 };
 
+// Numeric form of the mode, for the shader-side branch below. Kept beside
+// DISPLAY_TRANSFORM_VALUES so the two cannot disagree.
+const DISPLAY_TRANSFORM_IDS = { srgb: 0, aces: 1, lin_rec709: 2, neutral: 3 };
+const displayTransformId = (mode) => DISPLAY_TRANSFORM_IDS[mode] || 0;
+
+// Emits the whole transform as a runtime branch on `modeVar` instead of baking
+// one curve in. That is what lets a view pick its own transform (the Scene
+// wants a filmic default, the Material Viewer must stay on plain sRGB for
+// MaterialXView parity) and what makes switching cost a uniform write rather
+// than regenerating every material in the stage.
+const DISPLAY_TRANSFORM_SWITCH_GLSL = (inVar, outVar, modeVar, exposureVar) => {
+    const p = '        ';
+    return p + 'vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
+        (exposureVar ? p + '_c *= ' + exposureVar + ';\n' : '') +
+        p + 'if (' + modeVar + ' == 1) {\n' +
+        TONE_CURVE_GLSL('aces', p + '    ') +
+        p + '} else if (' + modeVar + ' == 3) {\n' +
+        TONE_CURVE_GLSL('neutral', p + '    ') +
+        p + '}\n' +
+        // lin_rec709 (2) is the inspection mode: no tone map, no OETF and no
+        // clamp, so over-range values survive a float readback.
+        p + 'vec3 ' + outVar + ' = _c;\n' +
+        p + 'if (' + modeVar + ' != 2) {\n' +
+        p + '    _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
+        p + '    vec3 _lo = _c * 12.92;\n' +
+        p + '    vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
+        p + '    ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n' +
+        p + '}\n';
+};
+
 const ACES_SRGB_GLSL = (inVar, outVar, mode, exposureVar) => {
     // Camera exposure, ahead of the tone curve. It belongs here and nowhere
     // else because it is the one scale that must apply to direct light, the
@@ -949,22 +979,21 @@ const encodeDisplay = (src) => {
     const m = src.match(/\bout\s+vec4\s+(\w+)\s*;/);
     if (!m) throw new Error('encodeDisplay: could not locate the fragment shader\'s "out vec4 <name>;" declaration, MaterialX output format may have changed');
     const v = m[1];
-    // Camera exposure rides along as a uniform so changing it never
-    // regenerates a shader; the curve itself stays baked (see setDisplayTransform).
+    // Both the curve and the exposure ride along as uniforms, so neither one
+    // regenerates a shader when it changes and each view can hold its own.
     let out = src;
-    const decl = 'uniform float u_displayExposure;';
-    if (out.indexOf(decl) === -1) {
+    const decl = 'uniform float u_displayExposure;\nuniform int u_displayTransform;';
+    if (out.indexOf('uniform int u_displayTransform;') === -1) {
         const mainIdx = out.indexOf('void main');
-        if (mainIdx === -1) throw new Error('encodeDisplay: could not locate "void main" to declare u_displayExposure, MaterialX output format may have changed');
+        if (mainIdx === -1) throw new Error('encodeDisplay: could not locate "void main" to declare the display uniforms, MaterialX output format may have changed');
         out = out.slice(0, mainIdx) + decl + '\n' + out.slice(mainIdx);
     }
     const idx = out.lastIndexOf('}');
     if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader, MaterialX output format may have changed');
-    const mode = getDisplayTransform();
     const inject =
         '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' +
         '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' +
-        ACES_SRGB_GLSL(v + '.rgb', '_enc', mode, 'u_displayExposure') +
+        DISPLAY_TRANSFORM_SWITCH_GLSL(v + '.rgb', '_enc', 'u_displayTransform', 'u_displayExposure') +
         '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' +
         '    }\n';
     return out.slice(0, idx) + inject + out.slice(idx);
@@ -2763,6 +2792,16 @@ const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'neutral', 'lin_rec709'];
 // Camera exposure in stops, shared by every view. Unlike the transform this is
 // a plain uniform (u_displayExposure), so a change costs one uniform write per
 // material instead of regenerating every shader.
+// Pushes the current transform and exposure onto every live view. Both are
+// uniforms now, so this replaces the full material regeneration a transform
+// change used to cost, and it reaches the docs node previews too: they are
+// LIVE_VIEWS members but have no display listener of their own.
+const broadcastDisplaySettings = () => {
+    LIVE_VIEWS.forEach((v) => {
+        try { v.refreshDisplaySettings && v.refreshDisplaySettings(); } catch (e) { /* view mid-teardown */ }
+    });
+};
+
 const DISPLAY_EXPOSURE_KEY = 'mtlx_display_exposure';
 let MTLX_DISPLAY_EXPOSURE = null;
 
@@ -2794,9 +2833,7 @@ const setDisplayExposure = (ev) => {
     // Broadcast rather than rely on per-app listeners: every render view is a
     // LIVE_VIEWS member, including the docs node previews, which have no
     // display listener of their own and would otherwise drift out of sync.
-    LIVE_VIEWS.forEach((v) => {
-        try { v.refreshDisplayExposure && v.refreshDisplayExposure(); } catch (e) { /* view mid-teardown */ }
-    });
+    broadcastDisplaySettings();
     window.dispatchEvent(new CustomEvent('mtlx-display-exposure', { detail: { value: next } }));
 };
 
@@ -2808,6 +2845,10 @@ const initDisplayTransform = () => {
     try { stored = localStorage.getItem(DISPLAY_TRANSFORM_KEY); } catch (e) { /* privacy mode */ }
     MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'srgb';
 };
+
+// Exposed so a view that keeps its own transform (the Scene) can validate a
+// persisted value against the same list the shared picker uses.
+const getDisplayTransformValues = () => DISPLAY_TRANSFORM_VALUES.slice();
 
 const getDisplayTransform = () => {
     if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
@@ -2824,6 +2865,7 @@ const setDisplayTransform = (value) => {
     if (window.self === window.top) {
         try { localStorage.setItem(DISPLAY_TRANSFORM_KEY, value); } catch (e) { /* privacy mode */ }
     }
+    broadcastDisplaySettings();
     window.dispatchEvent(new CustomEvent('mtlx-display-transform', { detail: { value } }));
 };
 
@@ -5021,7 +5063,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5033,9 +5075,12 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         u_peelPrevDepth: { value: getDummyTex() },
         u_opaqueDepth: { value: getDummyTexWhite() },
         u_peelLinear: { value: 0 },
-        // Injected by encodeDisplay, so it is never in MaterialX's own
-        // introspection and cannot be gated on has() like the rest.
+        // Injected by encodeDisplay, so these are never in MaterialX's own
+        // introspection and cannot be gated on has() like the rest. The
+        // transform defaults to the caller's, letting the Scene run a filmic
+        // curve while the Material Viewer stays on plain sRGB for parity.
         u_displayExposure: { value: displayExposureScale() },
+        u_displayTransform: { value: displayTransformId(displayTransform || getDisplayTransform()) },
     };
     applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
     const declared = new Set((compiled.declared || []).map((u) => u.name));
@@ -7062,6 +7107,7 @@ const createMtlxRenderView = async ({
                         // introspects it and the defaults pass below cannot
                         // supply it.
                         u_displayExposure: { value: displayExposureScale() },
+                        u_displayTransform: { value: displayTransformId(getDisplayTransform()) },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
@@ -7510,13 +7556,21 @@ const createMtlxRenderView = async ({
             // one write instead of the full regeneration a transform change
             // needs. Broadcast by setDisplayExposure through LIVE_VIEWS, which
             // is what keeps the docs node previews in sync too.
-            refreshDisplayExposure: () => {
+            refreshDisplaySettings: () => {
                 const scale = displayExposureScale();
-                if (uniforms.u_displayExposure) uniforms.u_displayExposure.value = scale;
-                sceneOwnedMaterials.forEach((m) => {
-                    if (m.uniforms && m.uniforms.u_displayExposure) m.uniforms.u_displayExposure.value = scale;
-                });
+                const id = displayTransformId(getDisplayTransform());
+                const push = (u) => {
+                    if (!u) return;
+                    if (u.u_displayExposure) u.u_displayExposure.value = scale;
+                    if (u.u_displayTransform) u.u_displayTransform.value = id;
+                };
+                push(uniforms);
+                sceneOwnedMaterials.forEach((m) => push(m.uniforms));
                 if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
+                applyThreeToneMappingChunk(getDisplayTransform());
+                scene.traverse((obj) => {
+                    if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
+                });
                 renderFrame();
             },
             // Live-swaps the environment without a shader rebuild, used
@@ -8000,6 +8054,7 @@ Object.assign(window, {
     getGlobalGeom, setGlobalGeom,
     getDisplayTransform, setDisplayTransform,
     getDisplayExposure, setDisplayExposure, displayExposureScale, applyThreeToneMappingChunk,
+    getDisplayTransformValues, displayTransformId,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, loadEnvironmentFromBuffer, makeFlatEnvironment,
