@@ -1005,9 +1005,16 @@ const patchAmbientOcclusion = fs => {
   if (!anchor.test(fs)) return fs;
   let out = fs.replace(anchor, '$1occlusion = mx_ssao_occlusion();');
   const decls = ['uniform sampler2D u_ssaoMap;', 'uniform vec2 u_ssaoTexel;', 'uniform float u_ssaoStrength;', 'float mx_ssao_occlusion() {', '    float ao = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).r;', '    return mix(1.0, clamp(ao, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0));', '}', ''].join('\n');
-  const mainIdx = out.indexOf('void main(');
-  if (mainIdx === -1) return fs; // no main: leave the shader untouched
-  return out.slice(0, mainIdx) + decls + out.slice(mainIdx);
+  // Must land before the FIRST function definition, not before main():
+  // the generator emits the ambient-occlusion slot inside a surface
+  // evaluation function that precedes main, so declaring the helper any
+  // later leaves it used before it is declared and nothing compiles.
+  // Only builtins are referenced here, so the top of the function section
+  // is always a legal home for it.
+  const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+  const at = firstFn !== -1 ? firstFn : out.indexOf('void main(');
+  if (at === -1) return fs; // nothing recognisable: leave the shader untouched
+  return out.slice(0, at) + decls + out.slice(at);
 };
 
 // Gives MaterialX's volume absorption the path length it is missing.
