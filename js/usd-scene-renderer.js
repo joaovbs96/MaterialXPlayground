@@ -1596,6 +1596,72 @@ const createMtlxSceneView = async ({
         // Renders the moments map from the brightest stage light, or from the
         // environment key direction when the stage has none. Runs on demand,
         // never per frame: nothing here changes while the camera moves.
+        // Fits an orthographic shadow frustum to what the camera can
+        // actually see, instead of to the whole stage. This is the difference
+        // between object shadows and none: a 2048 map stretched over a 525
+        // unit room is a quarter of a unit per texel, so a pencil is four
+        // texels wide and casts nothing legible. Fitted to a desk it is
+        // centimetres per texel and small props cast real shadows.
+        //
+        // Depth still spans the whole stage along the light axis, so a caster
+        // behind the camera still shadows what it should; only the X and Y
+        // extents tighten.
+        const fitShadowToView = (shadowCamera, box, radius) => {
+            const toLight = new THREE.Matrix4().copy(shadowCamera.matrixWorld).invert();
+            // The stage in light space: sets the depth range, and clamps the
+            // fit so it can never cover empty space.
+            const stageBox = new THREE.Box3().copy(box).applyMatrix4(toLight);
+            // Fit around what the camera is looking at, sized to what it can
+            // see at that distance.
+            //
+            // Two things that do NOT work, both measured: fitting to the
+            // camera frustum's corners (a close-up still has a distant far
+            // plane, so its corners span the whole room), and fitting to the
+            // bounds of the meshes in frustum (the floor is one mesh, so any
+            // view containing a sliver of it pulls the fit out to the full
+            // stage). Fitting to the orbit target sidesteps both, and it is
+            // what the viewer actually cares about seeing shadows on.
+            const target = (controls && controls.target)
+                ? controls.target.clone() : box.getCenter(new THREE.Vector3());
+            const distance = Math.max(1e-6, camera.position.distanceTo(target));
+            const halfHeight = distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+            const halfWidth = halfHeight * Math.max(1e-6, camera.aspect);
+            // Radius of the visible disc at the target's depth, padded by 20
+            // percent so the shader's edge fade (the last 12 percent of the
+            // map) lands outside the visible region rather than washing
+            // shadows out along the screen border. Never larger than the
+            // stage, and never so small that a stray orbit target degenerates.
+            const fit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.2));
+            const centreL = target.clone().applyMatrix4(toLight);
+            let left = Math.max(centreL.x - fit, stageBox.min.x);
+            let right = Math.min(centreL.x + fit, stageBox.max.x);
+            let bottom = Math.max(centreL.y - fit, stageBox.min.y);
+            let top = Math.min(centreL.y + fit, stageBox.max.y);
+            if (!(right > left) || !(top > bottom)) { // target off the stage
+                left = stageBox.min.x; right = stageBox.max.x;
+                bottom = stageBox.min.y; top = stageBox.max.y;
+            }
+            // Snap to whole texels, or the frustum slides continuously as the
+            // camera orbits and every shadow edge crawls.
+            const texelX = (right - left) / SHADOW_MAP_SIZE;
+            const texelY = (top - bottom) / SHADOW_MAP_SIZE;
+            if (texelX > 0 && texelY > 0) {
+                left = Math.floor(left / texelX) * texelX;
+                right = Math.ceil(right / texelX) * texelX;
+                bottom = Math.floor(bottom / texelY) * texelY;
+                top = Math.ceil(top / texelY) * texelY;
+            }
+            shadowCamera.left = left;
+            shadowCamera.right = right;
+            shadowCamera.bottom = bottom;
+            shadowCamera.top = top;
+            // Light space looks down -Z, so the nearest point carries the
+            // largest z. The FULL stage depth is kept regardless of the fit,
+            // so a caster above the visible region still reaches the map.
+            const margin = radius * 0.05;
+            shadowCamera.near = Math.max(0, -stageBox.max.z - margin);
+            shadowCamera.far = -stageBox.min.z + margin;
+        };
         const updateShadowMap = () => {
             if (!shadowsEnabled || !sceneRoot) { shadowMatrix = null; return; }
             const box = new THREE.Box3().setFromObject(sceneRoot);
@@ -1668,10 +1734,11 @@ const createMtlxSceneView = async ({
                     : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
                 if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
                 dir.normalize();
-                const extent = radius * 1.05;
-                shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, radius * 0.5, radius * 3.5);
+                shadowCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
                 shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
                 shadowCamera.lookAt(center);
+                shadowCamera.updateMatrixWorld(true);
+                fitShadowToView(shadowCamera, box, radius);
                 if (local && !directional) {
                     const note = '[info] Shadow caster ' + (local.primPath || 'light')
                         + ' stands inside the stage, so its shadows are cast along its direction rather than radiating from it';
@@ -1894,6 +1961,20 @@ const createMtlxSceneView = async ({
                 }
                 if (material.uniforms.u_thicknessScale) {
                     material.uniforms.u_thicknessScale.value = texture ? thicknessScale : 0;
+                }
+            }
+        };
+        // Refitting the frustum changes only the matrix, so push that alone.
+        // applyMaterialEnvironment rebuilds every material's whole uniform set
+        // and is far too heavy to run on each frame of an orbit.
+        const applyShadowMatrix = () => {
+            for (const material of materials) {
+                if (!material.uniforms) continue;
+                if (material.uniforms.u_shadowMatrix && shadowMatrix) {
+                    material.uniforms.u_shadowMatrix.value.copy(shadowMatrix);
+                }
+                if (material.uniforms.u_shadowMap && shadowTarget) {
+                    material.uniforms.u_shadowMap.value = shadowTarget.texture;
                 }
             }
         };
@@ -2459,6 +2540,18 @@ const createMtlxSceneView = async ({
             if (peelPipeline && forceOn && list.length) peelPipeline.render(scene, camera, list);
             else renderer.render(scene, camera);
         };
+        // The shadow frustum is fitted to the camera, so it goes stale the
+        // moment the camera moves. Compared against the last fit rather than
+        // redrawn every frame: an orbit that has come to rest costs nothing.
+        let shadowCameraKey = '';
+        const shadowViewChanged = () => {
+            const e = camera.matrixWorld.elements;
+            const key = camera.position.toArray().concat([e[8], e[9], e[10], camera.fov, camera.aspect])
+                .map((n) => (Math.round(n * 1000) / 1000)).join(',');
+            if (key === shadowCameraKey) return false;
+            shadowCameraKey = key;
+            return true;
+        };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
@@ -2466,6 +2559,10 @@ const createMtlxSceneView = async ({
             applyStudioPolarClamp();
             applyStudioDistanceClamp();
             if (controls) controls.update();
+            if (shadowsEnabled && shadowViewChanged()) {
+                updateShadowMap();
+                applyShadowMatrix();
+            }
             renderFrame();
             raf = requestAnimationFrame(render);
         };
