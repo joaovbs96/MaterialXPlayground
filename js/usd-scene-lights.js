@@ -286,6 +286,13 @@
             var want = Math.max(1, counts.get(item) || 1);
             var samples = emitterSamples(item.record, want);
             if (samples.length <= 1) {
+                item.entry.emitter = {
+                    primPath: item.record.primPath,
+                    intensity: item.entry.intensity,
+                    position: item.entry.position.clone(),
+                    direction: item.entry.direction.clone(),
+                    type: item.entry.type,
+                };
                 out.push(item.entry);
                 if (item.extent > 0) {
                     warn('[info] Light ' + item.record.primPath + ' (' + item.record.type
@@ -296,12 +303,23 @@
             // Fixed total power: each sample carries its share, so the split
             // changes the shape of the falloff without changing the energy.
             var share = item.entry.intensity / samples.length;
+            // Each sample carries the emitter it came from, so consumers that
+            // reason about whole lights (the shadow caster picks one) are not
+            // fooled into treating a fraction of a lamp as a separate light.
+            var emitter = {
+                primPath: item.record.primPath,
+                intensity: item.entry.intensity,
+                position: item.entry.position.clone(),
+                direction: item.entry.direction.clone(),
+                type: item.entry.type,
+            };
             for (var sIdx = 0; sIdx < samples.length; sIdx++) {
                 var local = samples[sIdx].clone().applyMatrix4(item.matrix);
                 var sub = Object.assign({}, item.entry, {
                     position: local,
                     intensity: share,
                     color: item.entry.color.clone(),
+                    emitter: emitter,
                 });
                 out.push(sub);
             }

@@ -564,6 +564,20 @@
             warning: { icon: 'alert-triangle', text: 'text-amber-300/90', label: 'Warnings' },
             info: { icon: 'info-circle', text: 'text-gray-400', label: 'Info' },
         };
+        // SliderField reports the raw input string through onSlider/onNumber
+        // (it has no onChange), so every slider coerces and clamps here.
+        const applyAoStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setAoStrength(value);
+            callHandle('setAmbientOcclusionStrength', value);
+        };
+        const applyStageLightsEv = (raw) => {
+            const value = Math.max(-8, Math.min(8, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setStageLightsEv(value);
+            callHandle('setStageLightsEv', value);
+        };
         const callHandle = (name, ...args) => {
             const fn = handleRef.current && handleRef.current[name];
             if (typeof fn !== 'function') return false;
@@ -961,21 +975,19 @@
                                     min={0}
                                     max={1}
                                     step={0.05}
-                                    onChange={(value) => { setAoStrength(value); callHandle('setAmbientOcclusionStrength', value); }}
-                                    format={(v) => v.toFixed(2)}
-                                    title="Full strength is the physical estimate; lower values blend back toward unoccluded ambient."
+                                    onSlider={(v) => applyAoStrength(v)}
+                                    onNumber={(v) => applyAoStrength(v)}
                                 />
                             ) : null}
                             {stageLightsOn ? (
                                 <SliderField
-                                    label="Stage light intensity"
+                                    label="Stage light intensity" unit="EV"
                                     value={stageLightsEv}
                                     min={-8}
                                     max={8}
                                     step={0.25}
-                                    onChange={(value) => { setStageLightsEv(value); callHandle('setStageLightsEv', value); }}
-                                    format={formatEv}
-                                    title="USD light units have no fixed relationship to the environment's, so trim the imported lights by eye."
+                                    onSlider={(v) => applyStageLightsEv(v)}
+                                    onNumber={(v) => applyStageLightsEv(v)}
                                 />
                             ) : null}
                         </React.Fragment>

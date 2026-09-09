@@ -45,7 +45,12 @@ const storedSceneAo = () => {
 const storedSceneAoStrength = () => {
     if (window.top !== window) return 1;
     try {
-        const value = Number(localStorage.getItem(SCENE_AO_STRENGTH_KEY));
+        // getItem returns null when unset and Number(null) is 0, which is a
+        // finite number, so the fallback has to test the raw string first or
+        // an untouched setting reads as zero strength.
+        const raw = localStorage.getItem(SCENE_AO_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
         return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
     } catch (e) { return 1; }
 };
@@ -1606,23 +1611,48 @@ const createMtlxSceneView = async ({
             // frustum, and everything behind a perspective light, reads as
             // shadowed and streaks across the stage.
             const stageLights = activeStageLights() || [];
-            const brightest = (list) => list.slice().sort((a, b) => b.intensity - a.intensity)[0];
-            const directional = brightest(stageLights.filter((l) => l.type === 1));
-            const local = directional ? null : brightest(stageLights.filter(
-                (l) => (l.type === 2 || l.type === 3) && l.position && l.direction && l.direction.lengthSq() > 1e-9));
+            const directional = stageLights.filter((l) => l.type === 1)
+                .sort((a, b) => b.intensity - a.intensity)[0];
+            // Rank local casters by the light they actually deliver HERE, not
+            // by authored intensity. The Playground's screen lights are the
+            // most intense in the rig but sit hundreds of units outside the
+            // room, while the desk lamp that defines the shot delivers over
+            // twenty times their irradiance at the stage. Sub-lights from a
+            // split emitter are folded back together first, or a lamp cut
+            // into four would rank as a quarter of itself.
+            let local = null;
+            if (!directional) {
+                const emitters = new Map();
+                for (const light of stageLights) {
+                    if (light.type !== 2 && light.type !== 3) continue;
+                    if (!light.position || !light.direction) continue;
+                    const source = light.emitter || light;
+                    const key = source.primPath || light.primPath || String(emitters.size);
+                    if (emitters.has(key)) continue;
+                    const distance = Math.max(1e-6, source.position.distanceTo(center));
+                    emitters.set(key, { source, score: source.intensity / (distance * distance) });
+                }
+                const ranked = [...emitters.values()].sort((a, b) => b.score - a.score)[0];
+                local = ranked ? ranked.source : null;
+            }
             let shadowCamera;
             if (local) {
-                // Spot lights carry a real cone; a point stand-in for a rect or
-                // disk light emits over its whole forward hemisphere, so the
-                // widest frustum that still keeps usable texel density is used.
-                const fov = local.type === 3 && Number.isFinite(local.outer_angle)
-                    ? Math.min(150, Math.max(10, 2 * Math.acos(Math.min(1, Math.max(-1, local.outer_angle))) * 180 / Math.PI * 1.1))
-                    : 120;
+                // Aimed at the stage, NOT down the light's own -Z. A UsdLux
+                // rect light's forward axis is wherever the author pointed the
+                // panel: both Playground lamps sit over 80 degrees off the
+                // room centre, so a frustum built on that axis covers nothing
+                // and the bounds guard correctly reports every fragment as
+                // lit. Fitting the frustum to the stage instead keeps the
+                // caster at the light's real position, which is what casts a
+                // correct shadow, while guaranteeing it covers the geometry.
                 const eye = local.position.clone();
-                const near = Math.max(radius * 1e-3, eye.distanceTo(center) * 0.01);
-                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, near + radius * 4);
+                const distance = Math.max(1e-6, eye.distanceTo(center));
+                const halfAngle = Math.asin(Math.min(1, radius / distance));
+                const fov = Math.min(140, Math.max(10, 2 * halfAngle * 180 / Math.PI * 1.05));
+                const near = Math.max(radius * 1e-3, (distance - radius) * 0.5);
+                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, distance + radius * 1.5);
                 shadowCamera.position.copy(eye);
-                shadowCamera.lookAt(eye.clone().add(local.direction));
+                shadowCamera.lookAt(center);
             } else {
                 const dir = directional ? directional.direction.clone()
                     : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
