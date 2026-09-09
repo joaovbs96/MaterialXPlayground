@@ -1010,6 +1010,36 @@ const patchAmbientOcclusion = fs => {
   return out.slice(0, mainIdx) + decls + out.slice(mainIdx);
 };
 
+// Gives MaterialX's volume absorption the path length it is missing.
+//
+// mx_anisotropic_vdf.glsl computes `vdf.throughput = exp(-absorption)` with
+// NO distance term, so Beer-Lambert is evaluated as though every ray
+// travelled exactly one unit. The absorption coefficient is
+// -ln(transmission_color) / transmission_depth, which for a shallow depth is
+// enormous: the Playground's bottle authors color (0.50, 1, 0.05) at depth
+// 0.001, giving a coefficient near 700 and a throughput of exactly zero. The
+// transmission lobe is extinguished instead of tinted green.
+//
+// The path length comes from a back-face distance map: how far the ray still
+// has to travel inside the object. Nothing bound means zero thickness, which
+// reads as clear rather than black, so an unbound material is safe.
+const patchTransmissionThickness = fs => {
+  const anchor = 'vdf.throughput = exp(-absorption);';
+  if (fs.indexOf(anchor) === -1) return fs;
+  // Needs the standard HW varyings to locate the fragment along the ray.
+  const hasVars = /\bin\s+vec3\s+positionWorld\s*;/.test(fs) && /uniform\s+vec3\s+u_viewPosition\s*;/.test(fs);
+  if (!hasVars) return fs;
+  let out = fs.replace(anchor, 'vdf.throughput = exp(-absorption * mx_transmission_path_length());');
+  const decls = ['uniform sampler2D u_thicknessMap;', 'uniform vec2 u_thicknessTexel;',
+  // Scene units to the units transmission_depth is authored in. USD
+  // stages are commonly centimetres while depths are written in metres,
+  // so this is metersPerUnit rather than a fudge factor.
+  'uniform float u_thicknessScale;', 'float mx_transmission_path_length() {', '    float back = texture(u_thicknessMap, gl_FragCoord.xy * u_thicknessTexel).r;', '    if (back <= 0.0) return 0.0; // nothing behind: treat as clear, never as opaque', '    float front = distance(positionWorld, u_viewPosition);', '    return max(back - front, 0.0) * u_thicknessScale;', '}', ''].join('\n');
+  const fnIdx = out.indexOf('void mx_anisotropic_vdf');
+  if (fnIdx === -1) return fs;
+  return out.slice(0, fnIdx) + decls + out.slice(fnIdx);
+};
+
 // Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
 // then mixes toward a Schlick NdotV rim so grazing angles read as
 // reflective glass instead of a flat, view-independent haze. Fail-soft.
@@ -5358,6 +5388,7 @@ const generatePreviewSourcesUnlocked = ({
   fs = patchTransmissionAlpha(fs);
   fs = patchShadowBounds(fs);
   fs = patchAmbientOcclusion(fs);
+  fs = patchTransmissionThickness(fs);
   // Depth-peel machinery: baked into every fragment shader
   // UNCONDITIONALLY (not just when Force Transparency is on), see
   // injectPeelDiscard's header comment above for why this keeps
@@ -5454,6 +5485,10 @@ const createMtlxSceneUniforms = ({
   ssaoMap = null,
   ssaoTexel = null,
   ssaoStrength = 1,
+  thicknessMap = null,
+  thicknessTexel = null,
+  thicknessScale = 1,
+  refractionTwoSided = false,
   envTilt = null,
   envRotationRad = 0,
   envExposure = 1
@@ -5535,9 +5570,6 @@ const createMtlxSceneUniforms = ({
   if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = {
     value: envExposure
   };
-  if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = {
-    value: false
-  };
   // White moments read as fully lit, so materials are unaffected until a
   // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
   // matrix here is a raw world-to-light-clip transform.
@@ -5551,6 +5583,23 @@ const createMtlxSceneUniforms = ({
   };
   if (has('u_ssaoStrength')) uniforms.u_ssaoStrength = {
     value: ssaoMap ? ssaoStrength : 0
+  };
+  // Zero scale means zero path length, which is clear glass: the safe
+  // reading when no back-face pass has run.
+  if (has('u_thicknessMap')) uniforms.u_thicknessMap = {
+    value: thicknessMap || getDummyTex()
+  };
+  if (has('u_thicknessTexel')) uniforms.u_thicknessTexel = {
+    value: thicknessTexel ? thicknessTexel.clone() : new THREE.Vector2()
+  };
+  if (has('u_thicknessScale')) uniforms.u_thicknessScale = {
+    value: thicknessMap ? thicknessScale : 0
+  };
+  // Squares the tint for a closed solid, where the ray crosses the surface
+  // twice. MaterialXView sets this from the geometry; a USD stage's
+  // transmissive props are solids, so this follows the peel state.
+  if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = {
+    value: !!refractionTwoSided
   };
   if (has('u_shadowMap')) uniforms.u_shadowMap = {
     value: shadowMap || getDummyTexWhite()
