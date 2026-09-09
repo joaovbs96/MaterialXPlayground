@@ -248,6 +248,37 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
 // vec2(z, z*z) rather than reuse three's VSM target, whose packing is not
 // guaranteed to match and would misread rather than error.
 const SHADOW_MAP_SIZE = 2048;
+// Variance shadow maps are meant to be blurred: filtering the moments is what
+// turns the hard per-texel test into a soft edge. Without it an orthographic
+// frustum covering a whole room stair-steps every silhouette.
+const SHADOW_BLUR_RADIUS = 2;
+const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'in vec2 uv;',
+        'out vec2 vUv;',
+        'void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec2 vUv;',
+        'out vec4 fragColor;',
+        'uniform sampler2D tMoments;',
+        'uniform vec2 uStep;',
+        // Gaussian weights for a 9 tap separable kernel.
+        'void main() {',
+        '    vec2 sum = texture(tMoments, vUv).xy * 0.2270270270;',
+        '    sum += texture(tMoments, vUv + uStep * 1.3846153846).xy * 0.3162162162;',
+        '    sum += texture(tMoments, vUv - uStep * 1.3846153846).xy * 0.3162162162;',
+        '    sum += texture(tMoments, vUv + uStep * 3.2307692308).xy * 0.0702702703;',
+        '    sum += texture(tMoments, vUv - uStep * 3.2307692308).xy * 0.0702702703;',
+        '    fragColor = vec4(sum, 0.0, 1.0);',
+        '}',
+    ].join('\n'),
+    depthTest: false,
+    depthWrite: false,
+});
 const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: [
@@ -561,13 +592,21 @@ const createMtlxSceneView = async ({
     // per-fragment scalar shared by every light and the environment, so there
     // is nowhere to put a second map.
     let shadowTarget = null;
+    let shadowBlurTarget = null;
+    let shadowBlurMaterial = null;
+    let shadowBlurScene = null;
+    let shadowBlurCamera = null;
     let shadowDepthMaterial = null;
     let shadowMatrix = null;
     let shadowsEnabled = storedSceneShadows();
     let shadowDirty = true;
     const disposeShadowResources = () => {
         if (shadowTarget) { shadowTarget.dispose(); shadowTarget = null; }
+        if (shadowBlurTarget) { shadowBlurTarget.dispose(); shadowBlurTarget = null; }
         if (shadowDepthMaterial) { shadowDepthMaterial.dispose(); shadowDepthMaterial = null; }
+        if (shadowBlurMaterial) { shadowBlurMaterial.dispose(); shadowBlurMaterial = null; }
+        shadowBlurScene = null;
+        shadowBlurCamera = null;
     };
     // Applies the sidebar toggle and EV multiplier without rebuilding the
     // converted list, so both are live controls.
@@ -1347,6 +1386,12 @@ const createMtlxSceneView = async ({
                     // must read as unshadowed rather than repeat the map.
                     wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
                 });
+                // Ping-pong buffer for the separable blur; no depth needed.
+                shadowBlurTarget = new THREE.WebGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, {
+                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType, depthBuffer: false,
+                    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+                });
             }
             if (!shadowDepthMaterial) shadowDepthMaterial = createShadowDepthMaterial();
             // Only stage geometry casts: the backdrop and catcher would wrap
@@ -1364,6 +1409,25 @@ const createMtlxSceneView = async ({
             renderer.clear();
             renderer.render(scene, shadowCamera);
             scene.overrideMaterial = null;
+            // Separable blur of the moments, horizontal then vertical, ending
+            // back in shadowTarget so the bound texture never changes.
+            if (!shadowBlurMaterial) {
+                shadowBlurMaterial = createShadowBlurMaterial();
+                shadowBlurMaterial.uniforms = { tMoments: { value: null }, uStep: { value: new THREE.Vector2() } };
+                shadowBlurScene = new THREE.Scene();
+                shadowBlurScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), shadowBlurMaterial));
+                shadowBlurCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            }
+            const texel = SHADOW_BLUR_RADIUS / SHADOW_MAP_SIZE;
+            for (const [target, source, step] of [
+                [shadowBlurTarget, shadowTarget, new THREE.Vector2(texel, 0)],
+                [shadowTarget, shadowBlurTarget, new THREE.Vector2(0, texel)],
+            ]) {
+                shadowBlurMaterial.uniforms.tMoments.value = source.texture;
+                shadowBlurMaterial.uniforms.uStep.value.copy(step);
+                renderer.setRenderTarget(target);
+                renderer.render(shadowBlurScene, shadowBlurCamera);
+            }
             renderer.setRenderTarget(previousTarget);
             renderer.setClearColor(0x111827, 1);
             hidden.forEach((object) => { object.visible = true; });
