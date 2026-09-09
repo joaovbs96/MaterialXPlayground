@@ -5140,7 +5140,7 @@ const applyPeelMaterialMode = (material, active) => {
 // peelLinearOk (mirrors the Viewer's own setSceneLinear/sceneLinearOn
 // bookkeeping, which callers that manage that transition themselves,
 // like the Viewer, should NOT also pass here).
-const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransformOpt, linearComposite } = {}) => {
+const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransformOpt, linearComposite, opaqueOutput } = {}) => {
     const getDT = getDisplayTransformOpt || getDisplayTransform;
     // Hoisted once: gates half-float peel/accum storage, the merged
     // linear-opaque pass, and finalMat's shader choice (see allocPeel).
@@ -5275,8 +5275,13 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             blendSrc: THREE.OneFactor,
             blendDst: THREE.SrcAlphaFactor,
             blendEquationAlpha: THREE.AddEquation,
-            blendSrcAlpha: THREE.OneMinusSrcAlphaFactor,
-            blendDstAlpha: THREE.SrcAlphaFactor,
+            // opaqueOutput keeps the destination alpha untouched. The default
+            // alpha blend drives it toward 0 wherever peeled geometry lands,
+            // which on an alpha:true canvas shows the page through the object
+            // and saves a screenshot with black holes. Embeds still want the
+            // transparent behaviour, so the Scene opts in and they do not.
+            blendSrcAlpha: opaqueOutput ? THREE.ZeroFactor : THREE.OneMinusSrcAlphaFactor,
+            blendDstAlpha: opaqueOutput ? THREE.OneFactor : THREE.SrcAlphaFactor,
         }));
 
         peel = { w, h, opaqueRT, peelA, peelB, accumRT, quadScene, quadCam, quadMesh, underMat, finalMat };

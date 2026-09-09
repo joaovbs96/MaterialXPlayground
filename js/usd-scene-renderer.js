@@ -1407,7 +1407,7 @@ const createMtlxSceneView = async ({
         // linearComposite:false forces the display-space peel path (the
         // Scene's u_peelLinear stays hard 0, see createMtlxSceneUniforms);
         // a linear merged pass is a recorded follow-up, not this pass.
-        peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, { linearComposite: false }) : null;
+        peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, { linearComposite: false, opaqueOutput: true }) : null;
         if (THREE.OrbitControls) {
             controls = new THREE.OrbitControls(camera, canvas);
             controls.enableDamping = true;
