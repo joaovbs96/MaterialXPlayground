@@ -946,6 +946,21 @@ const PEEL_REFRACTION_SCALE = 0.5;
 // Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
 // then mixes toward a Schlick NdotV rim so grazing angles read as
 // reflective glass instead of a flat, view-independent haze. Fail-soft.
+// Bounds-guards MaterialX's mx_shadow_occlusion. The library samples the
+// moments map with no check at all, so a fragment outside the shadow
+// frustum reads a clamped edge texel and a fragment behind a perspective
+// light projects through w < 0 onto arbitrary coordinates: both read as
+// shadowed and streak across the stage. Outside the map means unlit by
+// that caster, which is fully lit here. No-op when the shader has no
+// shadow map (the pattern is absent), so unshadowed materials are
+// untouched.
+const patchShadowBounds = fs => {
+  const call = 'mx_variance_shadow_occlusion(shadowMoments, shadowCoord.z)';
+  const anchor = 'return  ' + call;
+  if (fs.indexOf(anchor) === -1) return fs;
+  const guard = ['if (shadowCoord4.w <= 0.0) return 1.0;', 'if (any(lessThan(shadowCoord, vec3(0.0))) || any(greaterThan(shadowCoord, vec3(1.0)))) return 1.0;', anchor].join('\n    ');
+  return fs.replace(anchor, guard);
+};
 const patchTransmissionAlpha = fs => {
   let weightName = null;
   if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';else if (/uniform\s+float\s+transmission\s*;/.test(fs)) weightName = 'transmission';
@@ -5016,6 +5031,7 @@ const generatePreviewSourcesUnlocked = ({
   }
   // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
   fs = patchTransmissionAlpha(fs);
+  fs = patchShadowBounds(fs);
   // Depth-peel machinery: baked into every fragment shader
   // UNCONDITIONALLY (not just when Force Transparency is on), see
   // injectPeelDiscard's header comment above for why this keeps
