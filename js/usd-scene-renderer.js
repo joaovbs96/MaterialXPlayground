@@ -267,8 +267,8 @@ const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
     // Depth bias: without it a surface shadows itself and the whole stage
     // bands. Applied here rather than in the shader so it scales with slope.
     polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: 4,
+    polygonOffsetFactor: 4,
+    polygonOffsetUnits: 8,
 });
 
 // The same transform sceneRoot carries, needed before that group exists so
@@ -1325,15 +1325,20 @@ const createMtlxSceneView = async ({
             if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
             dir.normalize();
             const extent = radius * 1.05;
-            const shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, 0.01, radius * 4);
+            const shadowCamera = new THREE.OrthographicCamera(-extent, extent, extent, -extent, radius * 0.5, radius * 3.5);
             shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
             shadowCamera.lookAt(center);
             shadowCamera.updateMatrixWorld(true);
             shadowCamera.updateProjectionMatrix();
             if (!shadowTarget) {
+                // Full float where available: half float carries about 11 bits
+                // of mantissa, and storing both d and d*d over a stage-sized
+                // ortho range quantises the variance test into visible bands.
+                const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    && !!renderer.extensions.get('EXT_color_buffer_float');
                 shadowTarget = new THREE.WebGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, {
                     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
-                    format: THREE.RGBAFormat, type: THREE.HalfFloatType, depthBuffer: true,
+                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType, depthBuffer: true,
                     // Clamped to a white border-equivalent: mx_shadow_occlusion
                     // does not bounds-check, so anything outside the frustum
                     // must read as unshadowed rather than repeat the map.
@@ -1869,6 +1874,7 @@ const createMtlxSceneView = async ({
         // pipeline only when Force Transparency is on and at least one
         // mesh under sceneRoot currently carries a transparent material;
         // the mesh list is cached and invalidated on material rebuild.
+        let transparentSetReported = false;
         const collectTransparentMeshes = () => {
             if (transparentMeshCache) return transparentMeshCache;
             const list = [];
@@ -1878,6 +1884,21 @@ const createMtlxSceneView = async ({
                 if (mats.some((m) => m && m.userData && m.userData.mtlxSceneTransparent)) list.push(object);
             });
             transparentMeshCache = list;
+            // Name the peel set once: MaterialX classifies transparency as a
+            // threshold-free boolean, so a material with transmission 0.05
+            // lands here alongside genuinely clear glass, and that is the
+            // usual explanation for an "opaque" object behaving oddly.
+            if (!transparentSetReported && list.length) {
+                transparentSetReported = true;
+                const names = Array.from(new Set(list.map((object) => {
+                    const mats = Array.isArray(object.material) ? object.material : [object.material];
+                    const hit = mats.find((m) => m && m.userData && m.userData.mtlxSceneTransparent);
+                    return String((hit && hit.userData && hit.userData.mtlxSceneMaterialPath) || 'unknown');
+                })));
+                warnings.push('Force Transparency: ' + list.length + ' mesh(es) across ' + names.length
+                    + ' material(s) are treated as transparent: ' + names.slice(0, 8).join(', ')
+                    + (names.length > 8 ? ', ...' : ''));
+            }
             return list;
         };
         const renderFrame = () => {
