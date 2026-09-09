@@ -242,6 +242,11 @@
         const [displayTransform, setDisplayTransformState] = React.useState(
             () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
         );
+        // Analytic lights imported from the stage. Count comes from the
+        // handle once a stage is loaded; the two controls are live.
+        const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
+        const [stageLightsOn, setStageLightsOn] = React.useState(true);
+        const [stageLightsEv, setStageLightsEv] = React.useState(0);
         // Local mirror of the engine's persisted Force Transparency flag
         // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
         // toggle from the Viewer or Compare tab reflects here too.
@@ -420,6 +425,12 @@
                     // renderer with its own environment, rotation and exposure.
                     // Mirror those into the card instead of replaying the
                     // card's defaults over them; a user import still wins.
+                    if (nextHandle.getStageLights) {
+                        const info = nextHandle.getStageLights();
+                        setStageLightInfo(info);
+                        setStageLightsOn(info.enabled);
+                        setStageLightsEv(info.ev);
+                    }
                     const dome = nextHandle.getDomeLight ? nextHandle.getDomeLight() : null;
                     const useDome = !!dome && !envOverrideRef.current;
                     if (useDome) {
@@ -801,6 +812,38 @@
                     <div className="mt-1 text-[11px] text-gray-400">
                         Render opacity/transmission with real alpha blending in the Scene. When off, transparent materials render opaque. Applies immediately.
                     </div>
+                    {stageLightInfo.count > 0 ? (
+                        <React.Fragment>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Stage lights
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={stageLightsOn}
+                                    onChange={(next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                {stageLightInfo.count} light{stageLightInfo.count === 1 ? '' : 's'} imported from the stage. Area lights are approximated as points at their centre, matching Hydra Storm, and cast no shadows yet.
+                            </div>
+                            {stageLightsOn ? (
+                                <SliderField
+                                    label="Stage light intensity"
+                                    value={stageLightsEv}
+                                    min={-8}
+                                    max={8}
+                                    step={0.25}
+                                    onChange={(value) => { setStageLightsEv(value); callHandle('setStageLightsEv', value); }}
+                                    format={formatEv}
+                                    title="USD light units have no fixed relationship to the environment's, so trim the imported lights by eye."
+                                />
+                            ) : null}
+                        </React.Fragment>
+                    ) : null}
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Subdivision</span>
                         <MtlxSelect

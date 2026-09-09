@@ -27,6 +27,24 @@ const storedSceneTextureMaxSize = () => {
     } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
 };
 
+// Analytic lights imported from the stage. USD intensity units and our
+// environment units share no calibration, so the multiplier lets the user
+// match a reference by eye instead of us hardcoding a factor.
+const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
+const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
+
+const storedSceneStageLights = () => {
+    if (window.top !== window) return true;
+    try { return localStorage.getItem(SCENE_STAGE_LIGHTS_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneStageLightsEv = () => {
+    if (window.top !== window) return 0;
+    try {
+        const value = Number(localStorage.getItem(SCENE_STAGE_LIGHTS_EV_KEY));
+        return Number.isFinite(value) ? Math.max(-8, Math.min(8, value)) : 0;
+    } catch (e) { return 0; }
+};
+
 // Texture memory budget: caps the total decoded bytes the planner will
 // allow across every ordinary and UDIM texture combined. Persisted at the
 // top realm only, like the size tier above.
@@ -218,6 +236,16 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
         warn('Dome light import failed: ' + String(error && error.message || error));
         return null;
     }
+};
+
+// The same transform sceneRoot carries, needed before that group exists so
+// lights and the dome can be placed in final world space.
+const sceneRootMatrix = (stage) => {
+    const m = new THREE.Matrix4();
+    if (String(stage && stage.upAxis || 'Y').toUpperCase() === 'Z') m.makeRotationX(-Math.PI / 2);
+    const meters = Number(stage && stage.metersPerUnit);
+    if (Number.isFinite(meters) && meters > 0) m.multiply(new THREE.Matrix4().makeScale(meters, meters, meters));
+    return m;
 };
 
 const sceneUdimCode = (u, v) => 1001 + u + v * 10;
@@ -495,12 +523,22 @@ const createMtlxSceneView = async ({
     const prims = [];
     let rebuildingProvisional = null;
     const scene = new THREE.Scene();
+    // Applies the sidebar toggle and EV multiplier without rebuilding the
+    // converted list, so both are live controls.
+    const activeStageLights = () => {
+        if (!stageLightsEnabled || !stageLights.length) return null;
+        const gain = Math.pow(2, stageLightsEv);
+        return stageLights.map((light) => Object.assign({}, light, { intensity: light.intensity * gain }));
+    };
     const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);
     camera.position.set(0, 0, 4);
     let env = null;
     let mxEnv = null;
     let domeLight = null;
     let domeEnv = null;
+    let stageLights = [];
+    let stageLightsEnabled = storedSceneStageLights();
+    let stageLightsEv = storedSceneStageLightsEv();
     const sceneOptions = {
         udimTileSize: Math.max(128, Number(udimTileSize) || 512),
         udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 1024),
@@ -870,7 +908,7 @@ const createMtlxSceneView = async ({
         if (!ensured.compiled) return { material: sceneNeutralMaterial(label), compiled: null };
         const { compiled, cacheKey } = ensured;
         const uniforms = window.createMtlxSceneUniforms({
-            compiled, env, lightData: mxEnv.lightData || [],
+            compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
         });
         // USD value overrides (record.overrides) are applied onto the
         // MaterialX document itself in loadRenderable/applyUsdOverrides,
@@ -963,6 +1001,18 @@ const createMtlxSceneView = async ({
                 env = domeResult.env;
                 domeEnv = domeResult.env;
                 domeLight = domeResult.descriptor;
+            }
+        }
+        if (window.convertUsdStageLights) {
+            try {
+                stageLights = window.convertUsdStageLights(stage.lights, {
+                    rootMatrix: sceneRootMatrix(stage),
+                    limit: 8,
+                    warn: (message) => { if (warnings.indexOf(message) < 0) warnings.push(message); },
+                });
+            } catch (e) {
+                warnings.push('Stage light import failed: ' + String(e && e.message || e));
+                stageLights = [];
             }
         }
         if (!isMounted()) throw new Error('USD scene view was cancelled.');
@@ -1220,7 +1270,7 @@ const createMtlxSceneView = async ({
                 const compiled = material.userData && material.userData.mtlxSceneCompiled;
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const next = window.createMtlxSceneUniforms({
-                    compiled, env, lightData: mxEnv.lightData || [],
+                    compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(),
                     envRotationRad, envExposure,
                 });
                 for (const [name, slot] of Object.entries(next)) {
@@ -1740,6 +1790,25 @@ const createMtlxSceneView = async ({
             applyMaterialEnvironment();
             return envRotationRad;
         };
+        // Stage lights are live: both controls only re-push uniforms, no
+        // recompile, because the slots were reserved at generation time.
+        const setStageLightsEnabled = (on) => {
+            stageLightsEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            applyMaterialEnvironment();
+            return stageLightsEnabled;
+        };
+        const setStageLightsEv = (value) => {
+            stageLightsEv = Math.max(-8, Math.min(8, Number(value) || 0));
+            try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_EV_KEY, String(stageLightsEv)); } catch (e) { /* privacy mode */ }
+            applyMaterialEnvironment();
+            return stageLightsEv;
+        };
+        const getStageLights = () => ({
+            count: stageLights.length,
+            enabled: stageLightsEnabled,
+            ev: stageLightsEv,
+        });
         const setEnvExposure = (value) => {
             envExposure = Math.max(0, Number(value) || 0);
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
@@ -1809,6 +1878,7 @@ const createMtlxSceneView = async ({
             },
             resize, frameAll,
             getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
+            setStageLightsEnabled, setStageLightsEv, getStageLights,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
