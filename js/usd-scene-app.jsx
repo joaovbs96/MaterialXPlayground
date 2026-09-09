@@ -472,6 +472,22 @@
         const materials = stageMaterials(stage);
         const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
         const warnings = warningDetails.map((record) => record.label);
+        // Diagnostics carry no severity of their own, so classify by wording:
+        // anything that stopped working is an error, anything that merely
+        // reports what we did is info, and the rest stays a warning.
+        const severityOf = (text) => {
+            const value = String(text || '');
+            if (/(failed|error|could not|cannot|unsupported|invalid|aborted)/i.test(value)) return 'error';
+            if (/(applied as the environment|approximated as a point|loaded from|imported from|skipped)/i.test(value)) return 'info';
+            return 'warning';
+        };
+        const grouped = { error: [], warning: [], info: [] };
+        warningDetails.forEach((record) => { grouped[severityOf(record.raw || record.label)].push(record); });
+        const SEVERITY_STYLE = {
+            error: { icon: 'alert-triangle', text: 'text-red-300/90', label: 'Errors' },
+            warning: { icon: 'alert-triangle', text: 'text-amber-300/90', label: 'Warnings' },
+            info: { icon: 'info-circle', text: 'text-gray-400', label: 'Info' },
+        };
         const callHandle = (name, ...args) => {
             const fn = handleRef.current && handleRef.current[name];
             if (typeof fn !== 'function') return false;
@@ -865,29 +881,56 @@
                     <SectionCard key={warnings.length > 0} icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen={warnings.length > 0} dense>
                         {warnings.length ? (
                             <div className="space-y-2" data-testid="usd-material-warnings">
-                                {warningDetails.map((record, i) => (
-                                    <div key={'w' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all">
-                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                                        <div>
-                                            <span>{record.label}</span>
-                                            {record.raw !== record.label && (
-                                                <details className="mt-1 text-gray-500">
-                                                    <summary className="cursor-pointer">Raw diagnostic</summary>
-                                                    <div className="mt-1 break-all">{record.raw}</div>
-                                                </details>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
+                                {['error', 'warning', 'info'].map((severity) => {
+                                    const records = grouped[severity];
+                                    if (!records.length) return null;
+                                    const style = SEVERITY_STYLE[severity];
+                                    return (
+                                        <details key={severity} open={severity !== 'info'} className="group">
+                                            <summary className={'cursor-pointer select-none flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] ' + style.text}>
+                                                <MtlxIcon name={style.icon} className="w-3.5 h-3.5 shrink-0" />
+                                                {style.label}
+                                                <span className="font-mono tabular-nums text-gray-500">{records.length}</span>
+                                            </summary>
+                                            <div className="mt-1.5 space-y-2 pl-1">
+                                                {records.map((record, i) => (
+                                                    <div key={severity + i} className={'flex items-start gap-1 font-mono text-xs break-all ' + style.text}>
+                                                        <MtlxIcon name={style.icon} className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                                        <div>
+                                                            <span>{record.label}</span>
+                                                            {record.raw !== record.label && (
+                                                                <details className="mt-1 text-gray-500">
+                                                                    <summary className="cursor-pointer">Raw diagnostic</summary>
+                                                                    <div className="mt-1 break-all">{record.raw}</div>
+                                                                </details>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </details>
+                                    );
+                                })}
                             </div>
                         ) : (
                             <div className="text-xs text-gray-500">No warnings.</div>
                         )}
-                        {materials.map((material, i) => (
-                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
-                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
-                            </div>
-                        ))}
+                        {materials.length ? (
+                            <details className="mt-2">
+                                <summary className="cursor-pointer select-none flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                                    <MtlxIcon name="file-text" className="w-3.5 h-3.5 shrink-0" />
+                                    Material sources
+                                    <span className="font-mono tabular-nums">{materials.length}</span>
+                                </summary>
+                                <div className="mt-1.5 space-y-1 pl-1">
+                                    {materials.map((material, i) => (
+                                        <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                                            {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
+                                        </div>
+                                    ))}
+                                </div>
+                            </details>
+                        ) : null}
                     </SectionCard>
                 </div>
             </div>

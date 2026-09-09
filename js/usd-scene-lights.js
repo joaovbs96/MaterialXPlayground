@@ -49,9 +49,8 @@
         );
     }
 
-    // UsdLux normalize: intensity is power spread over the emitter, so the
-    // radiance a point stand-in should carry is divided by the area. Without
-    // this a large rect light reads orders of magnitude too bright.
+    // Emitter area in world units, used to convert authored radiance into the
+    // radiant intensity a point stand-in needs.
     function emitterArea(record, scale) {
         var kind = String(record.type || '').toLowerCase();
         if (kind === 'spherelight') {
@@ -78,9 +77,12 @@
         var color = Array.isArray(record.color) && record.color.length >= 3
             ? record.color : [1, 1, 1];
         var scalar = num(record.intensity, 1) * Math.pow(2, num(record.exposure, 0));
-        if (record.normalize) {
+        // A point stand-in carries radiant intensity, which is radiance times
+        // area. With normalize the authored value is already power-like, so
+        // the area cancels; without it the area has to be multiplied back in.
+        if (!record.normalize) {
             var area = emitterArea(record, scale);
-            if (area > 1e-9) scalar /= area;
+            if (area > 1e-9) scalar *= area;
         }
         if (num(record.diffuse, 1) !== 1 || num(record.specular, 1) !== 1) {
             warn('Light ' + record.primPath + ' sets diffuse/specular multipliers, which are not applied');
