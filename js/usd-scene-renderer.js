@@ -2006,20 +2006,37 @@ const createMtlxSceneView = async ({
                 material.uniformsNeedUpdate = true;
             }
         };
+        // Keeps three's built-in materials (the backdrop sky, the studio parts,
+        // the shadow catcher) on the same curve and the same exposure as the
+        // MaterialX materials in front of them. CustomToneMapping carries our
+        // own chunk, so every mode agrees; without it the backdrop had no curve
+        // at all in srgb and could not respond to exposure in any mode.
+        const updateRendererDisplayTransform = () => {
+            const mode = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
+            const custom = window.applyThreeToneMappingChunk && window.applyThreeToneMappingChunk(mode);
+            if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
+            if ('toneMapping' in renderer) {
+                renderer.toneMapping = custom ? THREE.CustomToneMapping
+                    : (mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
+                renderer.toneMappingExposure = window.displayExposureScale ? window.displayExposureScale() : 1;
+            }
+            // The chunk is a compile-time include, so a mode change needs the
+            // built-ins recompiled; three r128's needsProgramChange never fires
+            // on a toneMapping-only change.
+            scene.traverse((obj) => {
+                if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
+            });
+        };
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
         // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
         renderer.resetState();
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         renderer.setClearColor(0x111827, 1);
-        const displayTransform = window.getDisplayTransform && window.getDisplayTransform();
-        if (displayTransform && 'outputEncoding' in renderer) {
-            renderer.outputEncoding = displayTransform === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-        }
-        if ('toneMapping' in renderer) {
-            renderer.toneMapping = displayTransform === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-            renderer.toneMappingExposure = 1;
-        }
+        // Same fallback as updateRendererDisplayTransform: without it a missing
+        // getDisplayTransform left outputEncoding at Linear while the shaders
+        // still emitted sRGB, so objects and backdrop disagreed.
+        updateRendererDisplayTransform();
         // linearComposite:false forces the display-space peel path (the
         // Scene's u_peelLinear stays hard 0, see createMtlxSceneUniforms);
         // a linear merged pass is a recorded follow-up, not this pass.
@@ -2226,17 +2243,6 @@ const createMtlxSceneView = async ({
             return true;
         };
         const resetCamera = () => { applyCamera(selectedCameraPath); };
-        const updateRendererDisplayTransform = () => {
-            const mode = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
-            if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-            if ('toneMapping' in renderer) {
-                renderer.toneMapping = mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-                // Exposure is applied exactly once, through u_envLightIntensity
-                // (applyMaterialEnvironment/envExposure below), matching the
-                // Viewer (js/mtlx-engine.js pins this to 1.0 too).
-                renderer.toneMappingExposure = 1;
-            }
-        };
         const disposeMaterial = (material) => {
             if (!material) return;
             materials.delete(material);
@@ -2252,6 +2258,15 @@ const createMtlxSceneView = async ({
             invalidateTransparentMeshCache();
         };
         const rebuildDisplayMaterials = async () => {
+            // Renderer state first, and unconditionally: it is cheap and
+            // idempotent, and the early return below (no material regenerated)
+            // and the catch path both used to skip it, which left the backdrop
+            // on the previous transform for good on any stage whose materials
+            // all failed, or that had none at all.
+            updateRendererDisplayTransform();
+            if (environmentBridge && typeof environmentBridge.refreshDisplayTransform === 'function') {
+                environmentBridge.refreshDisplayTransform();
+            }
             // Every material regenerates below, so drop stale reservations
             // and byte counters up front (as setTextureMaxSize/
             // setTextureBudgetBytes already do before enqueueing this).
@@ -2824,6 +2839,20 @@ const createMtlxSceneView = async ({
             // through LIVE_VIEWS. Drops the pipeline when peeling turns off
             // or nothing in the scene is transparent (nothing to free by
             // keeping it allocated).
+            // Camera exposure is a uniform, so this never regenerates a shader:
+            // one write per material plus the renderer's own knob for the
+            // built-in backdrop. Broadcast by setDisplayExposure via LIVE_VIEWS.
+            refreshDisplayExposure: () => {
+                if (stopped) return;
+                const scale = window.displayExposureScale ? window.displayExposureScale() : 1;
+                materials.forEach((material) => {
+                    if (material.uniforms && material.uniforms.u_displayExposure) {
+                        material.uniforms.u_displayExposure.value = scale;
+                    }
+                });
+                if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
+                renderFrame();
+            },
             refreshRenderMode: () => {
                 if (stopped) return;
                 const forceOn = window.getForceTransparency && window.getForceTransparency();
