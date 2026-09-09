@@ -5366,18 +5366,24 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             // captured directly into accumRT via the shader's own mode-2
             // premultiply epilogue, each mesh's blend state temporarily
             // switched to underMat's exact under-blend factors.
-            const saved = meshes.map((m) => {
+            // Keyed by MATERIAL, not by mesh: a USD stage binds one compiled
+            // material to many prims, so saving per mesh would capture the
+            // already-mutated state on the second mesh and leave the material
+            // stuck in tail-pass blending (depthTest off) forever after.
+            const saved = new Map();
+            for (const m of meshes) {
                 const mat = m.material;
+                if (saved.has(mat)) continue;
                 const mu = mat.uniforms;
                 mu.u_peelMode.value = 2;
                 mu.u_peelHasPrev.value = 1;
                 mu.u_peelPrevDepth.value = prev ? prev.depthTexture : getDummyTex();
-                const s = {
+                saved.set(mat, {
                     blending: mat.blending, blendEquation: mat.blendEquation,
                     blendEquationAlpha: mat.blendEquationAlpha, blendSrc: mat.blendSrc,
                     blendDst: mat.blendDst, blendSrcAlpha: mat.blendSrcAlpha,
                     blendDstAlpha: mat.blendDstAlpha, depthTest: mat.depthTest,
-                };
+                });
                 mat.blending = THREE.CustomBlending;
                 mat.blendEquation = THREE.AddEquation;
                 mat.blendEquationAlpha = THREE.AddEquation;
@@ -5388,13 +5394,12 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
                 // accumRT has no depth attachment (depthBuffer:false
                 // above), disabled explicitly anyway for defensiveness.
                 mat.depthTest = false;
-                return s;
-            });
+            }
             renderer.setRenderTarget(peel.accumRT);
             renderer.render(scene, camera);
-            meshes.forEach((m, i) => {
-                Object.assign(m.material, saved[i]);
-                m.material.uniforms.u_peelMode.value = 0;
+            saved.forEach((state, mat) => {
+                Object.assign(mat, state);
+                mat.uniforms.u_peelMode.value = 0;
             });
 
             hidden.forEach((o) => { o.visible = true; });

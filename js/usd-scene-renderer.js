@@ -1703,15 +1703,26 @@ const createMtlxSceneView = async ({
                     oldUdimCache.forEach((value, key) => udimVariantByMaterial.set(key, value));
                     continue;
                 }
-                if (replacementInfo.size !== materialRecords.size
-                    || Array.from(replacementInfo.values()).some((info) => !info || !info.compiled)) {
+                // Partial refresh: a stage with one un-compilable material used
+                // to discard the whole rebuild, so switching sRGB to ACES did
+                // nothing at all on any large stage. Keep every material that
+                // did regenerate and leave the failures on their old shader.
+                const failed = [];
+                for (const [path, info] of replacementInfo) {
+                    if (!info || !info.compiled) failed.push(path);
+                }
+                if (failed.length) {
+                    warnings.push('USD display-transform refresh kept ' + failed.length
+                        + ' material(s) on the previous shader because they failed to regenerate: ' + failed.slice(0, 3).join(', ')
+                        + (failed.length > 3 ? ', ...' : ''));
+                }
+                if (!replacements.size) {
                     provisional.forEach(disposeMaterial);
                     rebuildingProvisional = null;
                     udimVariantByMaterial.clear();
                     oldUdimCache.forEach((value, key) => udimVariantByMaterial.set(key, value));
                     displayDirty = false;
-                    warnings.push('USD display-transform refresh kept the previous materials because one or more materials failed to regenerate.');
-                    report({ phase: 'display-transform', status: 'error', value: targetMode, error: 'incomplete material regeneration' });
+                    report({ phase: 'display-transform', status: 'error', value: targetMode, error: 'no material regenerated' });
                     return;
                 }
                 replaceMaterialReferences(replacements);
