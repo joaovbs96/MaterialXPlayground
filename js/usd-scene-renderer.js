@@ -1649,8 +1649,14 @@ const createMtlxSceneView = async ({
                 const distance = Math.max(1e-6, eye.distanceTo(center));
                 const halfAngle = Math.asin(Math.min(1, radius / distance));
                 const fov = Math.min(140, Math.max(10, 2 * halfAngle * 180 / Math.PI * 1.05));
-                const near = Math.max(radius * 1e-3, (distance - radius) * 0.5);
-                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, distance + radius * 1.5);
+                // The near plane sets the depth precision the variance test
+                // has to work with, and radius * 1e-3 against a far of
+                // distance + radius gave a 1600:1 range that crushed every
+                // stored moment up against 1.0. A hundredth of the stage is
+                // still far closer than anything a caster realistically
+                // touches, and it cuts the range by about five times.
+                const near = Math.max(radius * 0.005, distance * 0.02);
+                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, distance + radius * 1.1);
                 shadowCamera.position.copy(eye);
                 shadowCamera.lookAt(center);
                 // A caster standing inside the stage needs a wider frustum
