@@ -254,8 +254,8 @@
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
         const [shadowsOn, setShadowsOn] = React.useState(true);
-        const [aoOn, setAoOn] = React.useState(false);
-        const [aoStrength, setAoStrength] = React.useState(0.7);
+        const [aoOn, setAoOn] = React.useState(true);
+        const [aoStrength, setAoStrength] = React.useState(0.85);
         const [skyVisOn, setSkyVisOn] = React.useState(true);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
         const [transparentPrims, setTransparentPrims] = React.useState([]);

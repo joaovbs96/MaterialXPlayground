@@ -73,24 +73,27 @@ const storedSceneSkyVisStrength = () => {
 const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
 
+// Default on. The environment is most of the light in an interior and it has
+// no visibility term of its own, so without this every object sits on its
+// surroundings with no contact shading at all.
 const storedSceneAo = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_AO_KEY) === '1'; } catch (e) { return false; }
+    try { return localStorage.getItem(SCENE_AO_KEY) !== '0'; } catch (e) { return true; }
 };
 // Default 0.7 rather than full strength: the term multiplies the WHOLE
 // environment contribution in one flat multiply (MaterialX has no per-lobe
 // occlusion), so 1.0 reads as the picture getting dimmer rather than as
 // contact shading.
 const storedSceneAoStrength = () => {
-    if (window.top !== window) return 0.7;
+    if (window.top !== window) return 0.85;
     try {
         // getItem returns null when unset and Number(null) is 0, which is a
         // finite number, so the fallback has to test the raw string first or
         // an untouched setting reads as zero strength.
         const raw = localStorage.getItem(SCENE_AO_STRENGTH_KEY);
-        if (raw == null || raw === '') return 0.7;
+        if (raw == null || raw === '') return 0.85;
         const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.7;
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.85;
     } catch (e) { return 0.7; }
 };
 
@@ -324,7 +327,7 @@ const SHADOW_MAP_SIZE = 2048;
 // depth+normal prepass, then a box blur. Half res is standard practice here:
 // AO is low frequency and the cost is a full extra geometry pass per frame.
 const AO_SCALE = 0.5;
-const AO_SAMPLES = 12;
+const AO_SAMPLES = 16;
 const AO_BLUR_RADIUS = 2;
 
 // Prepass target: view-space normal in rgb, positive view depth in a.
@@ -1740,28 +1743,23 @@ const createMtlxSceneView = async ({
             // overlaps the fitted X and Y, not of the whole stage. Casters
             // above the region are still included, because a mesh only has to
             // overlap in X and Y to be able to cast into it.
-            const depth = new THREE.Box3();
-            const meshBox = new THREE.Box3();
-            sceneRoot.traverse((object) => {
-                if (!object.isMesh || !object.geometry) return;
-                if (object.userData && object.userData.excludeFromFrame) return;
-                if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
-                if (!object.geometry.boundingBox) return;
-                meshBox.copy(object.geometry.boundingBox)
-                    .applyMatrix4(object.matrixWorld).applyMatrix4(toLight);
-                if (meshBox.max.x < left || meshBox.min.x > right) return;
-                if (meshBox.max.y < bottom || meshBox.min.y > top) return;
-                depth.union(meshBox);
-            });
-            const margin = radius * 0.05;
-            if (depth.isEmpty()) {
-                shadowCamera.near = Math.max(0, -stageBox.max.z - margin);
-                shadowCamera.far = -stageBox.min.z + margin;
-            } else {
-                const pad = Math.max(1e-4, (depth.max.z - depth.min.z) * 0.05);
-                shadowCamera.near = Math.max(0, -depth.max.z - pad);
-                shadowCamera.far = -depth.min.z + pad;
-            }
+            // Centred on what the camera is looking at, not on the geometry
+            // that overlaps the frustum: the floor and the walls are single
+            // huge meshes, so any union that includes one spans the whole room
+            // and puts the range straight back where it started. Measured that
+            // way the lamp's whole tile covered a depth spread of 0.003, which
+            // no variance test can resolve.
+            //
+            // A depth of one and a half times the fit around the target keeps
+            // every caster that can plausibly shadow the visible region,
+            // including the lamp above it, while cutting the range by an order
+            // of magnitude.
+            const halfDepth = Math.max(fit * 1.5, radius * 0.02);
+            const zMax = Math.min(stageBox.max.z, centreL.z + halfDepth);
+            const zMin = Math.max(stageBox.min.z, centreL.z - halfDepth);
+            const margin = Math.max(1e-4, (zMax - zMin) * 0.05);
+            shadowCamera.near = Math.max(0, -zMax - margin);
+            shadowCamera.far = -zMin + margin;
         };
         // Allocates the atlas once. One texture holding SHADOW_CASTERS tiles,
         // because GLSL ES 3.0 only allows a constant index into a sampler
@@ -1806,14 +1804,22 @@ const createMtlxSceneView = async ({
                 shadowCamera.updateProjectionMatrix();
                 return shadowCamera;
             }
+            // Aim at what the camera is looking at, NOT at the stage centre.
+            // A room's bounding box centre is up near the ceiling, so a desk
+            // lamp sitting below it produced a direction pointing UP and cast
+            // its shadows at the ceiling: measured, the lamp's own tile stored
+            // geometry 68 units nearer the light than the desk it was supposed
+            // to be shadowing. The shadow map covers the viewed region, so the
+            // caster has to be aimed at that region too.
+            const aim = (controls && controls.target) ? controls.target.clone() : center.clone();
             const dir = rec.directional && source.direction ? source.direction.clone()
-                : position ? center.clone().sub(position)
+                : position ? aim.clone().sub(position)
                 : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
             if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
             dir.normalize();
             shadowCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-            shadowCamera.position.copy(center).addScaledVector(dir, -radius * 2);
-            shadowCamera.lookAt(center);
+            shadowCamera.position.copy(aim).addScaledVector(dir, -radius * 2);
+            shadowCamera.lookAt(aim);
             shadowCamera.updateMatrixWorld(true);
             fitShadowToView(shadowCamera, box, radius);
             shadowCamera.updateMatrixWorld(true);
@@ -1915,15 +1921,17 @@ const createMtlxSceneView = async ({
             });
 
             const previousTarget = renderer.getRenderTarget();
-            // The viewport is renderer-global, so it has to be restored to
-            // whatever it was, NOT to the atlas size: leaving it at 2048 makes
-            // every later draw render into an oversized viewport and the canvas
-            // shows a magnified corner of the scene.
-            const previousViewport = renderer.getViewport(new THREE.Vector4());
             const tile = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+            // Tiling goes on the TARGET, not the renderer: setRenderTarget
+            // copies viewport, scissor and scissorTest off the target itself
+            // (three r128), so renderer.setViewport is overwritten the moment
+            // render() rebinds. Setting it renderer-side left every tile
+            // holding a crop of one full-size render, which showed up as half
+            // the atlas being empty.
+            shadowTarget.viewport.set(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+            shadowTarget.scissorTest = false;
             renderer.setRenderTarget(shadowTarget);
             renderer.setClearColor(0xffffff, 1); // white moments read as fully lit
-            renderer.setScissorTest(false);
             renderer.clear();
             scene.overrideMaterial = shadowDepthMaterial;
 
@@ -1936,9 +1944,10 @@ const createMtlxSceneView = async ({
                 const row = Math.floor(c / SHADOW_ATLAS_COLS);
                 const px = col * tile;
                 const py = row * tile;
-                renderer.setViewport(px, py, tile, tile);
-                renderer.setScissor(px, py, tile, tile);
-                renderer.setScissorTest(true);
+                shadowTarget.viewport.set(px, py, tile, tile);
+                shadowTarget.scissor.set(px, py, tile, tile);
+                shadowTarget.scissorTest = true;
+                renderer.setRenderTarget(shadowTarget); // re-applies the tile
                 renderer.render(scene, shadowCamera);
                 built.push({
                     rec,
@@ -1955,8 +1964,10 @@ const createMtlxSceneView = async ({
             }
 
             scene.overrideMaterial = null;
-            renderer.setScissorTest(false);
-            renderer.setViewport(previousViewport);
+            // Leave the target as a plain full-size one, or the next pass that
+            // binds it inherits the last tile.
+            shadowTarget.viewport.set(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+            shadowTarget.scissorTest = false;
             renderer.setRenderTarget(previousTarget);
             renderer.setClearColor(0x111827, 1);
             hidden.forEach((object) => { object.visible = true; });
@@ -2040,16 +2051,18 @@ const createMtlxSceneView = async ({
             aoMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
             aoMaterial.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
             aoMaterial.uniforms.uSize.value.set(aw, ah);
-            // Contact occlusion, so the radius follows what is on screen rather
-            // than the stage: half the stage diagonal put it around ten world
-            // units, which is a broad low frequency dimming of the whole
-            // environment term, not the tight darkening AO is meant to be.
-            // Floored and capped against the stage so it stays sane at both
-            // extremes of the orbit.
-            const aoTarget3 = (controls && controls.target) ? controls.target : box.getCenter(new THREE.Vector3());
-            const aoViewDistance = Math.max(1e-6, camera.position.distanceTo(aoTarget3));
-            const aoOnScreen = aoViewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-            aoMaterial.uniforms.uRadius.value = Math.min(radius * 0.05, Math.max(radius * 0.002, aoOnScreen * 0.06));
+            // A WORLD radius, tied to the stage rather than to the view.
+            // Deriving it from what is on screen was wrong: it shrank as the
+            // camera zoomed in, reaching under two units on a desk close-up,
+            // which is far too small to darken anything and is why the term
+            // looked absent exactly where contact shading matters most.
+            // Occlusion is a property of the geometry, not of the framing.
+            // Measured on the Playground: the term is worth about one percent
+            // of the final image there, because it multiplies only the
+            // environment and the environment is under a third of the light on
+            // a lamp-lit desk. Widening it further buys nothing, so this stays
+            // at contact scale rather than pretending to be a global term.
+            aoMaterial.uniforms.uRadius.value = radius * 0.05;
             aoMaterial.uniforms.uBias.value = radius * 0.0015;
             aoQuadScene.children[0].material = aoMaterial;
             renderer.setRenderTarget(aoTarget);
@@ -2161,7 +2174,7 @@ const createMtlxSceneView = async ({
             const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
             let result = null;
             try {
-                result = window.buildSkyVisibility(meshes, stageBox, { resolution: 32, rays: 32 });
+                result = window.buildSkyVisibility(meshes, stageBox, { resolution: 48, rays: 32 });
             } catch (error) {
                 const note = 'Sky visibility bake failed: ' + (error && error.message || error);
                 if (warnings.indexOf(note) < 0) warnings.push(note);
@@ -3210,35 +3223,66 @@ const createMtlxSceneView = async ({
             // Reads the moments map back. An all-1.0 map means the depth pass
             // drew nothing, which looks identical to a correctly bound shadow
             // that simply never darkens anything.
-            __shadowDebug: () => {
-                if (!shadowTarget) return { ready: false };
-                const w = 128;
-                const ox = Math.max(0, Math.floor((SHADOW_MAP_SIZE - w) / 2));
-                const buf = new Float32Array(w * w * 4);
+            // Reads the AO buffer back. A mean near 1.0 means the pass ran but
+            // found no occlusion, which looks identical on screen to the pass
+            // never running at all.
+            __aoDebug: () => {
+                const t = aoBlurTarget || aoTarget;
+                if (!t) return { ready: false };
+                const w = Math.min(128, t.width), hgt = Math.min(128, t.height);
+                const buf = new Uint8Array(w * hgt * 4);
                 const prev = renderer.getRenderTarget();
                 try {
+                    renderer.readRenderTargetPixels(t, Math.floor((t.width - w) / 2), Math.floor((t.height - hgt) / 2), w, hgt, buf);
+                } catch (e) { renderer.setRenderTarget(prev); return { ready: true, error: String(e && e.message || e) }; }
+                renderer.setRenderTarget(prev);
+                let mn = 255, mx = 0, sum = 0, n = 0;
+                for (let i = 0; i < buf.length; i += 4) { const v = buf[i]; if (v < mn) mn = v; if (v > mx) mx = v; sum += v; n++; }
+                return { ready: true, size: [t.width, t.height], min: mn, max: mx, mean: +(sum / n).toFixed(1),
+                    radius: aoMaterial ? aoMaterial.uniforms.uRadius.value : null,
+                    bias: aoMaterial ? aoMaterial.uniforms.uBias.value : null };
+            },
+            __shadowDebug: () => {
+                if (!shadowTarget) return { ready: false };
+                const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+                const w = 160;
+                const prev = renderer.getRenderTarget();
+                const tiles = [];
+                try {
                     renderer.setRenderTarget(shadowTarget);
-                    renderer.readRenderTargetPixels(shadowTarget, ox, ox, w, w, buf);
+                    for (let c = 0; c < SHADOW_CASTERS; c++) {
+                        const col = c % SHADOW_ATLAS_COLS;
+                        const row = Math.floor(c / SHADOW_ATLAS_COLS);
+                        const ox = col * tileSize + Math.floor((tileSize - w) / 2);
+                        const oy = row * tileSize + Math.floor((tileSize - w) / 2);
+                        const buf = new Float32Array(w * w * 4);
+                        renderer.readRenderTargetPixels(shadowTarget, ox, oy, w, w, buf);
+                        let mn = Infinity, mx = -Infinity, sum = 0, n = 0, cleared = 0;
+                        for (let i = 0; i < buf.length; i += 4) {
+                            const v = buf[i];
+                            if (!Number.isFinite(v)) continue;
+                            if (v >= 0.99999) cleared++;
+                            if (v < mn) mn = v;
+                            if (v > mx) mx = v;
+                            sum += v; n++;
+                        }
+                        tiles.push({
+                            caster: shadowCasters[c] ? shadowCasters[c].rec.key : null,
+                            min: Number(mn.toFixed(5)), max: Number(mx.toFixed(5)),
+                            mean: Number((sum / Math.max(1, n)).toFixed(5)),
+                            clearedFraction: Number((cleared / Math.max(1, n)).toFixed(3)),
+                        });
+                    }
                 } catch (e) {
                     renderer.setRenderTarget(prev);
                     return { ready: true, error: String(e && e.message || e) };
                 }
                 renderer.setRenderTarget(prev);
-                let mn = Infinity, mx = -Infinity, sum = 0, n = 0;
-                for (let i = 0; i < buf.length; i += 4) {
-                    const v = buf[i];
-                    if (!Number.isFinite(v)) continue;
-                    if (v < mn) mn = v;
-                    if (v > mx) mx = v;
-                    sum += v; n++;
-                }
                 return {
-                    ready: true, sampled: n,
-                    depthMin: Number(mn.toFixed(5)), depthMax: Number(mx.toFixed(5)),
-                    depthMean: Number((sum / Math.max(1, n)).toFixed(5)),
+                    ready: true,
+                    tiles,
                     casters: shadowCasters.length,
                     shadowedSlots: Array.from(shadowSlotCaster).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
-                    caster: shadowCasterLabel,
                 };
             },
         };

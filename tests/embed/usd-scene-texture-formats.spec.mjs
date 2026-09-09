@@ -184,9 +184,18 @@ test('@scene UDIM TIF tiles follow the texture resolution tier and shared budget
   expect(Math.abs(rightMean.r - UDIM_TILE_1002_RGB[0])).toBeLessThan(30);
   expect(Math.abs(rightMean.g - UDIM_TILE_1002_RGB[1])).toBeLessThan(30);
 
-  const widths = await page.evaluate(() => window.__mtlxUsdSceneHandle.__debug().materials
-    .map((m) => m.uniforms && Object.values(m.uniforms).map((u) => u && u.value && u.value.image && u.value.image.width).filter(Boolean))
-    .flat());
+  // Material samplers only. The engine also binds its own render targets on
+  // every material (the shadow atlas, the AO buffer, the sky visibility
+  // volume), and those are sized by the renderer, not by the texture budget.
+  const widths = await page.evaluate(() => {
+    const engineOwned = /^u_(shadow|ssao|skyVis|thickness|env|peel|opaqueDepth)/;
+    return window.__mtlxUsdSceneHandle.__debug().materials
+      .map((m) => (m.uniforms ? Object.entries(m.uniforms)
+        .filter(([name]) => !engineOwned.test(name))
+        .map(([, u]) => u && u.value && u.value.image && u.value.image.width)
+        .filter(Boolean) : []))
+      .flat();
+  });
   expect(widths.length).toBeGreaterThan(0);
   for (const w of widths) expect(w).toBeLessThanOrEqual(1024);
 });

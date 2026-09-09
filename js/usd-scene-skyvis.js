@@ -100,7 +100,7 @@
     // ready for a DataTexture3D, or null when the stage is degenerate.
     function buildSkyVisibility(meshes, box, options) {
         const opts = options || {};
-        const resolution = Math.max(8, Math.min(64, opts.resolution || 32));
+        const resolution = Math.max(8, Math.min(96, opts.resolution || 32));
         const rayCount = Math.max(8, Math.min(128, opts.rays || 32));
         if (!meshes || !meshes.length || !box || box.isEmpty()) return null;
 
