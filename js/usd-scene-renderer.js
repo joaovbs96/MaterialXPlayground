@@ -34,6 +34,22 @@ const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
 const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
 const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
 
+// Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
+const SCENE_AO_KEY = 'mtlx_scene_ao';
+const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
+
+const storedSceneAo = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_AO_KEY) === '1'; } catch (e) { return false; }
+};
+const storedSceneAoStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const value = Number(localStorage.getItem(SCENE_AO_STRENGTH_KEY));
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
+};
+
 const storedSceneShadows = () => {
     if (window.top !== window) return false;
     try { return localStorage.getItem(SCENE_SHADOWS_KEY) === '1'; } catch (e) { return false; }
@@ -251,6 +267,143 @@ const SHADOW_MAP_SIZE = 2048;
 // Variance shadow maps are meant to be blurred: filtering the moments is what
 // turns the hard per-texel test into a soft edge. Without it an orthographic
 // frustum covering a whole room stair-steps every silhouette.
+// Screen-space ambient occlusion, feeding MaterialX's own "// Ambient
+// occlusion" slot (see patchAmbientOcclusion in js/mtlx-engine.js). This is
+// the visibility term MaterialX's IBL does not have: without it a dome light
+// reaches every surface in a closed room at full strength, which is what
+// makes an interior read flat next to an offline render.
+//
+// Half resolution, horizon-style hemisphere sampling against a view-space
+// depth+normal prepass, then a box blur. Half res is standard practice here:
+// AO is low frequency and the cost is a full extra geometry pass per frame.
+const AO_SCALE = 0.5;
+const AO_SAMPLES = 12;
+const AO_BLUR_RADIUS = 2;
+
+// Prepass target: view-space normal in rgb, positive view depth in a.
+const createAoPrepassMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'in vec3 normal;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'uniform mat3 normalMatrix;',
+        'out vec3 vNormal;',
+        'out vec3 vViewPos;',
+        'void main() {',
+        '    vNormal = normalMatrix * normal;',
+        '    vec4 mv = modelViewMatrix * vec4(position, 1.0);',
+        '    vViewPos = mv.xyz;',
+        '    gl_Position = projectionMatrix * mv;',
+        '}',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec3 vNormal;',
+        'in vec3 vViewPos;',
+        'out vec4 fragColor;',
+        'void main() {',
+        // Two-sided geometry is everywhere on a USD stage, so flip the
+        // normal toward the eye rather than trusting the winding.
+        '    vec3 n = normalize(vNormal);',
+        '    if (dot(n, -normalize(vViewPos)) < 0.0) n = -n;',
+        '    fragColor = vec4(n, -vViewPos.z);',
+        '}',
+    ].join('\n'),
+    side: THREE.DoubleSide,
+});
+
+const createAoMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+    fragmentShader: [
+        'precision highp float;',
+        'uniform sampler2D tPrepass;',
+        'uniform mat4 uProjection;',
+        'uniform mat4 uInverseProjection;',
+        'uniform vec2 uSize;',
+        'uniform float uRadius;',
+        'uniform float uBias;',
+        'out vec4 fragColor;',
+        'const int SAMPLES = ' + AO_SAMPLES + ';',
+        'const float M_PI = 3.1415926535897932;',
+        // View-space position of a prepass texel, rebuilt from its depth.
+        'vec3 viewPosAt(vec2 uv, float depth) {',
+        '    vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0, 1.0);',
+        '    vec4 dir = uInverseProjection * ndc;',
+        '    vec3 ray = dir.xyz / dir.w;',
+        '    return ray * (depth / max(-ray.z, 1e-6));',
+        '}',
+        'float hash12(vec2 p) {',
+        '    vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+        '    p3 += dot(p3, p3.yzx + 33.33);',
+        '    return fract((p3.x + p3.y) * p3.z);',
+        '}',
+        'void main() {',
+        '    vec2 uv = gl_FragCoord.xy / uSize;',
+        '    vec4 pre = texture(tPrepass, uv);',
+        '    float depth = pre.a;',
+        // Background texels (nothing drawn) stay fully lit.
+        '    if (depth <= 0.0) { fragColor = vec4(1.0); return; }',
+        '    vec3 N = normalize(pre.rgb);',
+        '    vec3 P = viewPosAt(uv, depth);',
+        '    float angleOffset = hash12(gl_FragCoord.xy) * 2.0 * M_PI;',
+        '    float occlusion = 0.0;',
+        '    for (int i = 0; i < SAMPLES; i++) {',
+        // Cosine-weighted hemisphere direction around N, spiralled so the
+        // samples spread over the disc rather than clustering.
+        '        float t = (float(i) + 0.5) / float(SAMPLES);',
+        '        float angle = angleOffset + t * float(SAMPLES) * 2.399963;',
+        '        float r = sqrt(t);',
+        '        vec3 tangent = normalize(abs(N.z) < 0.999 ? cross(vec3(0.0, 0.0, 1.0), N) : vec3(1.0, 0.0, 0.0));',
+        '        vec3 bitangent = cross(N, tangent);',
+        '        vec3 dir = normalize(tangent * (r * cos(angle)) + bitangent * (r * sin(angle)) + N * sqrt(max(1.0 - t, 0.0)));',
+        '        vec3 samplePos = P + dir * uRadius * (0.3 + 0.7 * t);',
+        '        vec4 clip = uProjection * vec4(samplePos, 1.0);',
+        '        vec2 sampleUv = (clip.xy / clip.w) * 0.5 + 0.5;',
+        '        if (any(lessThan(sampleUv, vec2(0.0))) || any(greaterThan(sampleUv, vec2(1.0)))) continue;',
+        '        float sceneDepth = texture(tPrepass, sampleUv).a;',
+        '        if (sceneDepth <= 0.0) continue;',
+        '        float sampleDepth = -samplePos.z;',
+        // Occluded when real geometry sits in front of the sample point.
+        '        float occluded = (sceneDepth < sampleDepth - uBias) ? 1.0 : 0.0;',
+        // Range check: a distant foreground object must not darken this
+        // pixel, otherwise every silhouette grows a black halo.
+        '        occluded *= smoothstep(0.0, 1.0, uRadius / max(abs(depth - sceneDepth), 1e-6));',
+        '        occlusion += occluded;',
+        '    }',
+        '    fragColor = vec4(vec3(1.0 - occlusion / float(SAMPLES)), 1.0);',
+        '}',
+    ].join('\n'),
+    depthTest: false,
+    depthWrite: false,
+});
+
+const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+    fragmentShader: [
+        'precision highp float;',
+        'uniform sampler2D tAo;',
+        'uniform vec2 uTexel;',
+        'out vec4 fragColor;',
+        'void main() {',
+        '    float sum = 0.0;',
+        '    float count = 0.0;',
+        '    for (int x = -' + AO_BLUR_RADIUS + '; x <= ' + AO_BLUR_RADIUS + '; x++) {',
+        '        for (int y = -' + AO_BLUR_RADIUS + '; y <= ' + AO_BLUR_RADIUS + '; y++) {',
+        '            sum += texture(tAo, gl_FragCoord.xy * uTexel + vec2(x, y) * uTexel).r;',
+        '            count += 1.0;',
+        '        }',
+        '    }',
+        '    fragColor = vec4(vec3(sum / count), 1.0);',
+        '}',
+    ].join('\n'),
+    depthTest: false,
+    depthWrite: false,
+});
+
 const SHADOW_BLUR_RADIUS = 2;
 const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
@@ -599,6 +752,28 @@ const createMtlxSceneView = async ({
     let shadowDepthMaterial = null;
     let shadowMatrix = null;
     let shadowsEnabled = storedSceneShadows();
+    // Ambient occlusion resources. Unlike the shadow map these are rebuilt
+    // every frame the camera moves, because the whole term is screen space.
+    let aoTarget = null;
+    let aoBlurTarget = null;
+    let aoPrepassTarget = null;
+    let aoPrepassMaterial = null;
+    let aoMaterial = null;
+    let aoBlurMaterial = null;
+    let aoQuadScene = null;
+    let aoQuadCamera = null;
+    let aoEnabled = storedSceneAo();
+    let aoStrength = storedSceneAoStrength();
+    const disposeAoResources = () => {
+        if (aoTarget) { aoTarget.dispose(); aoTarget = null; }
+        if (aoBlurTarget) { aoBlurTarget.dispose(); aoBlurTarget = null; }
+        if (aoPrepassTarget) { aoPrepassTarget.dispose(); aoPrepassTarget = null; }
+        if (aoPrepassMaterial) { aoPrepassMaterial.dispose(); aoPrepassMaterial = null; }
+        if (aoMaterial) { aoMaterial.dispose(); aoMaterial = null; }
+        if (aoBlurMaterial) { aoBlurMaterial.dispose(); aoBlurMaterial = null; }
+        aoQuadScene = null;
+        aoQuadCamera = null;
+    };
     let shadowDirty = true;
     const disposeShadowResources = () => {
         if (shadowTarget) { shadowTarget.dispose(); shadowTarget = null; }
@@ -1461,6 +1636,104 @@ const createMtlxSceneView = async ({
             shadowMatrix = new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
             shadowDirty = false;
         };
+        // Renders the AO buffer for the current camera. Cheap enough to run
+        // per frame at half resolution, and it has to: the term is screen
+        // space, so it is invalid the moment the camera moves.
+        const updateAmbientOcclusion = () => {
+            if (!aoEnabled || !sceneRoot) return null;
+            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            const aw = Math.max(1, Math.floor(size.x * AO_SCALE));
+            const ah = Math.max(1, Math.floor(size.y * AO_SCALE));
+            if (aoTarget && (aoTarget.width !== aw || aoTarget.height !== ah)) disposeAoResources();
+            if (!aoTarget) {
+                const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    && !!renderer.extensions.get('EXT_color_buffer_float');
+                // The prepass packs a real view depth into alpha, so it needs
+                // more range than 8 bits; AO itself is a single [0,1] factor.
+                aoPrepassTarget = new THREE.WebGLRenderTarget(aw, ah, {
+                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                    depthBuffer: true, stencilBuffer: false,
+                });
+                const plain = {
+                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+                    depthBuffer: false, stencilBuffer: false,
+                    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+                };
+                aoTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+                aoBlurTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+                aoPrepassMaterial = createAoPrepassMaterial();
+                aoMaterial = createAoMaterial();
+                aoMaterial.uniforms = {
+                    tPrepass: { value: null }, uProjection: { value: new THREE.Matrix4() },
+                    uInverseProjection: { value: new THREE.Matrix4() }, uSize: { value: new THREE.Vector2() },
+                    uRadius: { value: 1 }, uBias: { value: 0.01 },
+                };
+                aoBlurMaterial = createAoBlurMaterial();
+                aoBlurMaterial.uniforms = { tAo: { value: null }, uTexel: { value: new THREE.Vector2() } };
+                aoQuadScene = new THREE.Scene();
+                aoQuadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial));
+                aoQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            }
+            // Backdrop and shadow catcher would occlude the whole stage.
+            const hidden = [];
+            scene.traverse((object) => {
+                if (object.isMesh && object.userData && object.userData.excludeFromFrame && object.visible) {
+                    object.visible = false; hidden.push(object);
+                }
+            });
+            const previousTarget = renderer.getRenderTarget();
+            const previousClear = renderer.getClearAlpha();
+            scene.overrideMaterial = aoPrepassMaterial;
+            renderer.setRenderTarget(aoPrepassTarget);
+            renderer.setClearColor(0x000000, 0); // alpha 0 marks "no geometry"
+            renderer.clear();
+            renderer.render(scene, camera);
+            scene.overrideMaterial = null;
+            hidden.forEach((object) => { object.visible = true; });
+
+            // Radius in world units, scaled to the stage so one setting works
+            // for a teapot and for a room.
+            const box = new THREE.Box3().setFromObject(sceneRoot);
+            const radius = box.isEmpty() ? 1 : Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
+            aoMaterial.uniforms.tPrepass.value = aoPrepassTarget.texture;
+            aoMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
+            aoMaterial.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
+            aoMaterial.uniforms.uSize.value.set(aw, ah);
+            aoMaterial.uniforms.uRadius.value = radius * 0.06;
+            aoMaterial.uniforms.uBias.value = radius * 0.0015;
+            aoQuadScene.children[0].material = aoMaterial;
+            renderer.setRenderTarget(aoTarget);
+            renderer.render(aoQuadScene, aoQuadCamera);
+
+            aoBlurMaterial.uniforms.tAo.value = aoTarget.texture;
+            aoBlurMaterial.uniforms.uTexel.value.set(1 / aw, 1 / ah);
+            aoQuadScene.children[0].material = aoBlurMaterial;
+            renderer.setRenderTarget(aoBlurTarget);
+            renderer.render(aoQuadScene, aoQuadCamera);
+
+            renderer.setRenderTarget(previousTarget);
+            renderer.setClearColor(0x111827, previousClear);
+            return aoBlurTarget.texture;
+        };
+        // Pushes the AO buffer onto every live material. Separate from
+        // applyMaterialEnvironment because it runs per frame, so it only
+        // touches the three uniforms that changed.
+        const applyAmbientOcclusion = (texture, width, height) => {
+            for (const material of materials) {
+                if (!material.uniforms) continue;
+                if (material.uniforms.u_ssaoMap) {
+                    material.uniforms.u_ssaoMap.value = texture || (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+                }
+                if (material.uniforms.u_ssaoTexel && width && height) {
+                    material.uniforms.u_ssaoTexel.value.set(1 / width, 1 / height);
+                }
+                if (material.uniforms.u_ssaoStrength) {
+                    material.uniforms.u_ssaoStrength.value = texture ? aoStrength : 0;
+                }
+            }
+        };
         const applyMaterialEnvironment = () => {
             if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
             const radiance = env && env.radiance;
@@ -1990,6 +2263,13 @@ const createMtlxSceneView = async ({
             };
         }).sort((a, b) => a.primPath.localeCompare(b.primPath));
         const renderFrame = () => {
+            // AO first: the materials sample its buffer, so it has to be
+            // valid for THIS camera before any of them draw.
+            if (aoEnabled) {
+                const aoTexture = updateAmbientOcclusion();
+                const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+                applyAmbientOcclusion(aoTexture, size.x, size.y);
+            }
             const forceOn = window.getForceTransparency && window.getForceTransparency();
             const list = forceOn ? collectTransparentMeshes() : [];
             if (peelPipeline && forceOn && list.length) peelPipeline.render(scene, camera, list);
@@ -2030,6 +2310,21 @@ const createMtlxSceneView = async ({
             return shadowsEnabled;
         };
         const getShadows = () => ({ enabled: shadowsEnabled, ready: !!shadowTarget });
+        // AO is a pure screen-space pass, so turning it off just stops
+        // running it and resets the uniform: no recompile, no rebuild.
+        const setAmbientOcclusionEnabled = (on) => {
+            aoEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
+            return aoEnabled;
+        };
+        const setAmbientOcclusionStrength = (value) => {
+            const next = Number(value);
+            aoStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
+            try { if (window.top === window) localStorage.setItem(SCENE_AO_STRENGTH_KEY, String(aoStrength)); } catch (e) { /* privacy mode */ }
+            return aoStrength;
+        };
+        const getAmbientOcclusion = () => ({ enabled: aoEnabled, strength: aoStrength });
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -2119,6 +2414,7 @@ const createMtlxSceneView = async ({
             getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
             setStageLightsEnabled, setStageLightsEv, getStageLights,
             setShadowsEnabled, getShadows, getTransparentPrims,
+            setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
@@ -2263,6 +2559,7 @@ const createMtlxSceneView = async ({
                 if (stopped) return;
                 stopped = true;
                 disposeShadowResources();
+                disposeAoResources();
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
                     window.removeEventListener('mtlx-settings-changed', settingsChangedListener);

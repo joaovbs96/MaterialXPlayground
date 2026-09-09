@@ -251,6 +251,8 @@
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
         const [shadowsOn, setShadowsOn] = React.useState(false);
+        const [aoOn, setAoOn] = React.useState(false);
+        const [aoStrength, setAoStrength] = React.useState(1);
         const [transparentPrims, setTransparentPrims] = React.useState([]);
         // Local mirror of the engine's persisted Force Transparency flag
         // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
@@ -436,6 +438,11 @@
                     // Mirror those into the card instead of replaying the
                     // card's defaults over them; a user import still wins.
                     if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
+                    if (nextHandle.getAmbientOcclusion) {
+                        const ao = nextHandle.getAmbientOcclusion();
+                        setAoOn(ao.enabled);
+                        setAoStrength(ao.strength);
+                    }
                     if (nextHandle.getTransparentPrims && window.getForceTransparency && window.getForceTransparency()) {
                         try { setTransparentPrims(nextHandle.getTransparentPrims()); } catch (e) { /* pre-render */ }
                     }
@@ -931,6 +938,34 @@
                             <div className="mt-1 text-[11px] text-gray-400">
                                 One shadow caster only, from the brightest light: MaterialX computes a single occlusion value shared by every light and the environment, so shadowed areas also lose ambient light.
                             </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={aoOn ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Ambient occlusion
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={aoOn}
+                                    onChange={(next) => { setAoOn(next); callHandle('setAmbientOcclusionEnabled', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Screen space, so it only knows about geometry on screen.
+                            </div>
+                            {aoOn ? (
+                                <SliderField
+                                    label="Ambient occlusion strength"
+                                    value={aoStrength}
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                    onChange={(value) => { setAoStrength(value); callHandle('setAmbientOcclusionStrength', value); }}
+                                    format={(v) => v.toFixed(2)}
+                                    title="Full strength is the physical estimate; lower values blend back toward unoccluded ambient."
+                                />
+                            ) : null}
                             {stageLightsOn ? (
                                 <SliderField
                                     label="Stage light intensity"
