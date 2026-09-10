@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_tex" type="color3">
+    <input name="file" type="filename" value="tex-a.png" colorspace="srgb_texture" />
+  </image>
+  <surface_unlit name="connected_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="img_tex" />
+  </surface_unlit>
+  <surfacematerial name="connected" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="connected_surface" />
+  </surfacematerial>
+</materialx>

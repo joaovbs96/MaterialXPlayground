@@ -9,7 +9,7 @@
 // engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
 // Formats the engine's exr/hdr/tif loaders decode whole (never resized by
 // createImageBitmap, unlike the bounded PNG/JPEG path).
-const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff'];
+const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff', 'ktx2'];
 
 const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
 // Original is unbounded (Infinity internally); persisted as the string
@@ -25,6 +25,288 @@ const storedSceneTextureMaxSize = () => {
         const stored = Number(raw);
         return SCENE_TEXTURE_MAX_SIZE_VALUES.includes(stored) ? stored : SCENE_TEXTURE_MAX_SIZE_DEFAULT;
     } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
+};
+
+// Analytic lights imported from the stage. USD intensity units and our
+// environment units share no calibration, so the multiplier lets the user
+// match a reference by eye instead of us hardcoding a factor.
+const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
+const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
+const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
+
+// The Scene keeps its own view transform. A whole stage is a photographic
+// image, so a hard clip at 1.0 blows every highlight and shifts its hue; the
+// Material Viewer keeps plain sRGB because that is MaterialXView parity for
+// judging one material. Falls back to the shared setting when unset.
+const SCENE_DISPLAY_TRANSFORM_KEY = 'mtlx_scene_display_transform';
+const SCENE_DISPLAY_TRANSFORM_DEFAULT = 'neutral';
+const storedSceneDisplayTransform = () => {
+    if (window.top !== window) return SCENE_DISPLAY_TRANSFORM_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_DISPLAY_TRANSFORM_KEY);
+        const allowed = (window.getDisplayTransformValues && window.getDisplayTransformValues()) || [];
+        return allowed.includes(raw) ? raw : SCENE_DISPLAY_TRANSFORM_DEFAULT;
+    } catch (e) { return SCENE_DISPLAY_TRANSFORM_DEFAULT; }
+};
+
+// Baked sky visibility: the room-scale half of the same missing visibility
+// term. Screen space AO handles contacts, this handles walls. Default on,
+// because an interior lit by a dome is wrong without it and the bake is a
+// one-off cost per stage.
+const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
+const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
+const storedSceneSkyVis = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SKYVIS_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneSkyVisStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const raw = localStorage.getItem(SCENE_SKYVIS_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
+};
+
+// Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
+const SCENE_AO_KEY = 'mtlx_scene_ao';
+const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
+
+// Default on. The environment is most of the light in an interior and it has
+// no visibility term of its own, so without this every object sits on its
+// surroundings with no contact shading at all.
+const storedSceneAo = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_AO_KEY) !== '0'; } catch (e) { return true; }
+};
+// Default 0.7 rather than full strength: the term multiplies the WHOLE
+// environment contribution in one flat multiply (MaterialX has no per-lobe
+// occlusion), so 1.0 reads as the picture getting dimmer rather than as
+// contact shading.
+const storedSceneAoStrength = () => {
+    if (window.top !== window) return 0.85;
+    try {
+        // getItem returns null when unset and Number(null) is 0, which is a
+        // finite number, so the fallback has to test the raw string first or
+        // an untouched setting reads as zero strength.
+        const raw = localStorage.getItem(SCENE_AO_STRENGTH_KEY);
+        if (raw == null || raw === '') return 0.85;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.85;
+    } catch (e) { return 0.7; }
+};
+
+// Default on. Shadows are what makes objects sit in a scene rather than float
+// in it, and the cost is bounded: the atlas is redrawn only when the camera
+// actually moves, and the caster count drops on very large stages.
+const storedSceneShadows = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SHADOWS_KEY) !== '0'; } catch (e) { return true; }
+};
+
+// Scene transparency is independent from the shared Material Viewer Force
+// Transparency setting. An explicit legacy value is migrated once; a fresh
+// Scene profile opts into authored opacity/transmission.
+const SCENE_TRANSPARENCY_KEY = 'mtlxUsdSceneTransparency';
+let USD_SCENE_TRANSPARENCY = (() => {
+    try {
+        const stored = localStorage.getItem(SCENE_TRANSPARENCY_KEY);
+        if (stored === '0') return false;
+        if (stored === '1') return true;
+        const legacy = localStorage.getItem('mtlxForceTransparency');
+        if (legacy === '0' || legacy === '1') {
+            localStorage.setItem(SCENE_TRANSPARENCY_KEY, legacy);
+            return legacy === '1';
+        }
+    } catch (e) { /* privacy mode, use the documented default */ }
+    return true;
+})();
+const getUsdSceneTransparency = () => USD_SCENE_TRANSPARENCY;
+const setUsdSceneTransparency = (value, { persist = true } = {}) => {
+    USD_SCENE_TRANSPARENCY = !!value;
+    if (persist) {
+        try { localStorage.setItem(SCENE_TRANSPARENCY_KEY, USD_SCENE_TRANSPARENCY ? '1' : '0'); } catch (e) { /* best-effort */ }
+    }
+    try {
+        window.dispatchEvent(new CustomEvent('mtlx-usd-scene-transparency', {
+            detail: { value: USD_SCENE_TRANSPARENCY },
+        }));
+    } catch (e) { /* non-browser embed */ }
+    return USD_SCENE_TRANSPARENCY;
+};
+const sceneTransparencyEnabled = () => (typeof window.getUsdSceneTransparency === 'function'
+    ? !!window.getUsdSceneTransparency() : true);
+
+// MaterialX's transparency verdict is deliberately threshold-free: it is
+// needed to decide whether a surface enters the peel pipeline, but it does
+// not describe the surface's opaque coverage. Auxiliary visibility passes
+// use this separate contract. The direct source-node metadata below is
+// required before reducing a static transmission value; a matching uniform
+// path alone can belong to a nested closure or layer.
+const sceneMaterialSurfaceMetadata = (renderable) => {
+    if (!renderable) return { direct: false, reason: 'missing source surface' };
+    let category = '';
+    try { category = String(renderable.getCategory ? renderable.getCategory() : ''); } catch (e) {}
+    if (category !== 'standard_surface' && category !== 'open_pbr_surface') {
+        return { direct: false, category, reason: 'layered or non-surface renderable' };
+    }
+    let inputs = [];
+    try {
+        const vector = renderable.getInputs ? renderable.getInputs() : null;
+        inputs = vector ? Array.from(vector) : [];
+        // Some MaterialX embind builds expose VectorInput only through
+        // size()/get() and Array.from yields an empty array. Keep metadata
+        // source-qualified across both binding shapes.
+        if (!inputs.length && vector && typeof vector.size === 'function' && typeof vector.get === 'function') {
+            const count = Number(vector.size());
+            for (let index = 0; index < count; index++) inputs.push(vector.get(index));
+        }
+    } catch (e) { inputs = []; }
+    const byName = {};
+    for (const input of inputs) {
+        if (!input || !input.getName) continue;
+        const name = String(input.getName());
+        const attr = (key) => window.mxSafe(() => window.mxElAttr(input, key), '');
+        const value = window.mxSafe(() => input.getValueString ? String(input.getValueString()) : '', '');
+        const connected = ['nodename', 'nodegraph', 'output', 'interfacename']
+            .some((key) => String(attr(key) || '') !== '');
+        byName[name] = {
+            type: window.mxSafe(() => String(input.getType()), ''), value,
+            hasValue: value !== '', connected,
+        };
+    }
+    return { direct: true, category, inputs: byName };
+};
+
+const sceneMaterialPrepassCoverage = (compiled, sourceMetadata = null) => {
+    const meta = sourceMetadata || (compiled && compiled.mtlxSceneSurfaceMetadata);
+    const compiledTransparent = !!(compiled && compiled.transparent);
+    if (!meta || !meta.direct) {
+        return compiledTransparent
+            ? { mode: 'unknown', opacity: 1, reason: (meta && meta.reason) || 'unclassified surface graph' }
+            : { mode: 'opaque', opacity: 1 };
+    }
+    const inputs = meta.inputs || {};
+    const weightName = meta.category === 'open_pbr_surface' ? 'transmission_weight' : 'transmission';
+    // Standard/OpenPBR define transmission as zero when the optional input
+    // is absent. Keep that authored default distinct from a connected value.
+    const weight = inputs[weightName] || { type: 'float', value: '0', hasValue: true, connected: false };
+    if (!weight || weight.type !== 'float') {
+        return compiledTransparent
+            ? { mode: 'unknown', opacity: 1, reason: 'missing or non-scalar transmission' }
+            : { mode: 'opaque', opacity: 1 };
+    }
+    const weightValue = weight.hasValue && Number.isFinite(Number(weight.value)) ? Number(weight.value) : null;
+    if (weight.connected || weightValue == null) {
+        return compiledTransparent
+            ? { mode: 'unknown', opacity: 1, reason: weight.connected ? 'connected transmission' : 'non-static transmission' }
+            : { mode: 'opaque', opacity: 1 };
+    }
+    const weightBounded = Math.max(0, Math.min(1, weightValue));
+    // A zero transmission weight needs no tint or volume path. This also
+    // keeps an opacity-only surface classified as partial coverage when the
+    // generator's transparent verdict came from opacity.
+    let transmission = 0;
+    if (weightBounded > 0) {
+        const tint = inputs.transmission_color;
+        if (!tint) return { mode: 'unknown', opacity: 1, reason: 'absent transmission tint' };
+        if (tint.type !== 'color3' || tint.connected || !tint.hasValue) {
+            return { mode: 'unknown', opacity: 1, reason: tint.connected ? 'connected transmission tint' : 'missing transmission tint value' };
+        }
+        const tintValues = String(tint.value).split(',').slice(0, 3).map(Number);
+        if (tintValues.length < 3 || tintValues.some((value) => !Number.isFinite(value))) {
+            return { mode: 'unknown', opacity: 1, reason: 'non-scalar transmission tint' };
+        }
+        const boundedTint = tintValues.map((value) => Math.max(0, Math.min(1, value)));
+        transmission = weightBounded * (boundedTint[0] + boundedTint[1] + boundedTint[2]) / 3;
+    }
+    // Metal transmission is not a clear line of sight. Keep any statically
+    // metallic direct surface conservative, including metalness=1 with
+    // transmission=1, rather than treating a transparent verdict as glass.
+    const metal = inputs[meta.category === 'open_pbr_surface' ? 'base_metalness' : 'metalness'];
+    if (metal) {
+        if (metal.connected || metal.type !== 'float' || !metal.hasValue || !Number.isFinite(Number(metal.value))) {
+            return { mode: 'unknown', opacity: 1, reason: 'connected or non-static metalness' };
+        }
+        if (Number(metal.value) !== 0) return { mode: 'unknown', opacity: 1, reason: 'metallic transmission is not clear' };
+    }
+    const opacityInput = inputs[meta.category === 'open_pbr_surface' ? 'geometry_opacity' : 'opacity'];
+    let surfaceOpacity = 1;
+    if (opacityInput) {
+        if (opacityInput.connected || !opacityInput.hasValue) return { mode: 'unknown', opacity: 1, reason: 'connected surface opacity' };
+        const opacityValues = String(opacityInput.value).split(',').slice(0, 3).map(Number);
+        if (!opacityValues.length || opacityValues.some((value) => !Number.isFinite(value))) {
+            return { mode: 'unknown', opacity: 1, reason: 'connected surface opacity' };
+        }
+        surfaceOpacity = opacityValues.reduce((sum, value) => sum + Math.max(0, Math.min(1, value)), 0) / opacityValues.length;
+    }
+    const opacity = Math.max(0, Math.min(1, surfaceOpacity * (1 - transmission)));
+    return { mode: opacity === 0 ? 'clear' : 'static', opacity, transmission, surfaceOpacity };
+};
+
+const sceneMaterialClassification = (compiled, sourceMetadata = null) => {
+    const meta = sourceMetadata || (compiled && compiled.mtlxSceneSurfaceMetadata);
+    const inputs = meta && meta.direct ? (meta.inputs || {}) : {};
+    const weightName = meta && meta.category === 'open_pbr_surface' ? 'transmission_weight' : 'transmission';
+    const weight = inputs[weightName];
+    const dynamicTransmission = !!(weight && (weight.connected || !weight.hasValue
+        || weight.type !== 'float' || !Number.isFinite(Number(weight.value))));
+    const staticTransmission = !!(weight && weight.type === 'float' && weight.hasValue
+        && !weight.connected && Number.isFinite(Number(weight.value)) && Number(weight.value) > 0);
+    const opacityName = meta && meta.category === 'open_pbr_surface' ? 'geometry_opacity' : 'opacity';
+    const opacityInput = inputs[opacityName];
+    const opacityValues = opacityInput && opacityInput.hasValue
+        ? String(opacityInput.value).split(',').slice(0, 3).map(Number) : [];
+    const staticOpacity = !!(opacityInput && !opacityInput.connected && opacityValues.length
+        && opacityValues.every(Number.isFinite));
+    const dynamicOpacity = !!(opacityInput && (opacityInput.connected || !staticOpacity));
+    const partialOpacity = staticOpacity && opacityValues.some((value) => value < 1);
+    // A direct surface input is source-qualified; a generic u_thicknessScale
+    // uniform is intentionally insufficient because the shader injector adds
+    // it to many opaque programs. Unknown graphs stay peel candidates only
+    // when MaterialX already marked their compiled output transparent.
+    const peel = !!(compiled && compiled.transparent) || staticTransmission || dynamicTransmission
+        || partialOpacity || dynamicOpacity;
+    // Unknown layered shaders can still contain a real volume path, but the
+    // generic injected uniform is not enough to classify known opaque direct
+    // surfaces. Restrict this fallback to an already-transparent compiled
+    // graph whose source surface could not be qualified.
+    const volume = !!(meta && meta.direct && (staticTransmission || dynamicTransmission))
+        || !!(!meta?.direct && compiled && compiled.transparent && /u_thicknessScale/.test(compiled.fs || ''));
+    return {
+        peel, volume,
+        coverage: sceneMaterialPrepassCoverage(compiled, meta),
+    };
+};
+const sceneMaterialIsFullyTransmissive = (compiled) => sceneMaterialPrepassCoverage(compiled).mode === 'clear';
+const sceneObjectPrepassCoverage = (object, group = null) => {
+    const materials = object && object.material
+        ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+    if (!materials.length) return 1;
+    if (group && materials[group.materialIndex]) {
+        const info = materials[group.materialIndex].userData && materials[group.materialIndex].userData.mtlxScenePrepassCoverage;
+        return info && Number.isFinite(info.opacity) ? Math.max(0, Math.min(1, info.opacity)) : 1;
+    }
+    // A mesh part can carry several group materials. The maximum is a
+    // conservative coverage for the shared prepass geometry; material-group
+    // partitioning remains the renderer's source of exact draw coverage.
+    return materials.reduce((value, material) => {
+        const info = material && material.userData && material.userData.mtlxScenePrepassCoverage;
+        return Math.max(value, info && Number.isFinite(info.opacity) ? info.opacity : 1);
+    }, 0);
+};
+
+const storedSceneStageLights = () => {
+    if (window.top !== window) return true;
+    try { return localStorage.getItem(SCENE_STAGE_LIGHTS_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneStageLightsEv = () => {
+    if (window.top !== window) return 0;
+    try {
+        const value = Number(localStorage.getItem(SCENE_STAGE_LIGHTS_EV_KEY));
+        return Number.isFinite(value) ? Math.max(-8, Math.min(8, value)) : 0;
+    } catch (e) { return 0; }
 };
 
 // Texture memory budget: caps the total decoded bytes the planner will
@@ -69,7 +351,12 @@ const SCENE_SUBDIVISION_DEFAULT = 1;
 const storedSceneSubdivisionLevel = () => {
     if (window.top !== window) return SCENE_SUBDIVISION_DEFAULT;
     try {
-        const stored = Number(localStorage.getItem(SCENE_SUBDIVISION_KEY));
+        const raw = localStorage.getItem(SCENE_SUBDIVISION_KEY);
+        // Number(null) is 0, which silently disabled subdivision in a fresh
+        // profile. Preserve an explicit stored "0", while an unset/blank
+        // preference uses the documented default level 1.
+        if (raw === null || raw.trim() === '') return SCENE_SUBDIVISION_DEFAULT;
+        const stored = Number(raw);
         return SCENE_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_SUBDIVISION_DEFAULT;
     } catch (e) { return SCENE_SUBDIVISION_DEFAULT; /* privacy mode */ }
 };
@@ -98,6 +385,7 @@ const sceneFileMap = (files, stage) => {
         const typeByExtension = {
             png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
             tif: 'image/tiff', tiff: 'image/tiff', exr: 'image/x-exr', hdr: 'image/vnd.radiance',
+            ktx2: 'image/ktx2',
         };
         // Preserve the user's authored file when the Worker also returns a
         // composed/generated payload at the same path. Stage assets remain a
@@ -121,9 +409,384 @@ const sceneJoinPath = (base, value) => sceneNormPath((base ? base + '/' : '') + 
         if (part === '..') { out.pop(); return out; }
         out.push(part); return out;
     }, []).join('/');
+// Given a resolved map path, prefer a sibling "<stem>.ktx2" in the same
+// directory when one exists, and never touch the original file.
+const sceneKtx2SiblingPath = (map, path) => {
+    if (/\.ktx2$/i.test(path) || /\.mtlx$/i.test(path)) return path; // documents, not textures
+    const dot = path.lastIndexOf('.');
+    if (dot < 0) return path;
+    const ktx2Path = path.slice(0, dot) + '.ktx2';
+    return map[ktx2Path] ? ktx2Path : path;
+};
 const sceneExactFile = (map, ref, fromDir) => {
     const want = sceneJoinPath(fromDir, ref);
-    return map[want] ? { path: want, blob: map[want] } : null;
+    if (!map[want]) return null;
+    const path = sceneKtx2SiblingPath(map, want);
+    return { path, blob: map[path], substituted: path !== want, originalPath: want, originalBlob: map[want] };
+};
+
+// A dome light's texture is authored relative to the layer that declares it,
+// and the runtime does not report which layer that was. Every directory that
+// holds a USD layer is therefore a candidate base, deepest first, with the
+// stage root next and a unique basename match as the last resort.
+const sceneDomeTextureCandidates = (fileMap, stage) => {
+    const dirs = new Set();
+    for (const path of Object.keys(fileMap)) {
+        if (/\.usd[ac]?$/i.test(path)) dirs.add(sceneDir(path));
+    }
+    const ordered = Array.from(dirs).sort((a, b) => b.split('/').length - a.split('/').length);
+    ordered.push(sceneDir(stage && stage.rootPath), '');
+    return Array.from(new Set(ordered));
+};
+const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
+    const match = String(rawRef || '').trim().match(/^@(.*)@$/);
+    const ref = sceneNormPath(match ? match[1] : rawRef);
+    if (!ref) return { path: null, reason: 'empty' };
+    for (const dir of sceneDomeTextureCandidates(fileMap, stage)) {
+        const candidate = sceneJoinPath(dir, ref);
+        if (fileMap[candidate]) return { path: candidate, ref };
+    }
+    const base = ref.split('/').pop().toLowerCase();
+    const hits = Object.keys(fileMap).filter((path) => path.toLowerCase().split('/').pop() === base);
+    if (hits.length === 1) return { path: hits[0], ref, byBasename: true };
+    return { path: null, ref, reason: hits.length ? 'ambiguous' : 'missing' };
+};
+
+// Builds the environment a stage's own dome light describes, so a stage
+// renders under the lighting it was authored with. Returns null when the
+// stage has no dome; never throws, since a light must not block a load.
+const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
+    const dome = sceneArray(stage && stage.lights)
+        .find((light) => String(light && light.type || '').toLowerCase() === 'domelight');
+    if (!dome) return null;
+    const warn = (message) => { if (warnings && warnings.indexOf(message) < 0) warnings.push(message); };
+    try {
+        let env = null;
+        let fileName = null;
+        if (dome.textureFile) {
+            const resolved = sceneResolveDomeTexture(fileMap, stage, dome.textureFile);
+            if (!resolved.path) {
+                warn(resolved.reason === 'ambiguous'
+                    ? 'Dome light texture "' + resolved.ref + '" is ambiguous, using the default environment'
+                    : 'Dome light texture not found: "' + String(dome.textureFile) + '"');
+                return null;
+            }
+            const ext = resolved.path.slice(resolved.path.lastIndexOf('.')).toLowerCase();
+            if (ext !== '.hdr' && ext !== '.exr') {
+                warn('Dome light texture "' + resolved.path + '" is not a .hdr or .exr environment');
+                return null;
+            }
+            const buffer = await fileMap[resolved.path].arrayBuffer();
+            env = await window.loadEnvironmentFromBuffer(buffer, ext, resolved.path, false);
+            fileName = resolved.path.split('/').pop();
+        } else {
+            if (!window.makeFlatEnvironment) return null;
+            env = window.makeFlatEnvironment(dome.color);
+            fileName = 'dome colour';
+        }
+        if (!env) return null;
+        // Only a Y rotation is representable, so take the yaw and report a
+        // tilt the environment cannot express rather than silently dropping it.
+        // Decompose YXZ into a yaw the rotation slider owns and the residual
+        // tilt, so the slider stays a plain yaw while the dome's full authored
+        // orientation still reaches u_envMatrix.
+        const euler = new THREE.Euler().setFromRotationMatrix(sceneMatrix(dome.matrix), 'YXZ');
+        const tilt = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(euler.x, 0, euler.z, 'YXZ'));
+        const rotationDeg = ((euler.y * 180 / Math.PI) % 360 + 360) % 360;
+        const exposure = (Number(dome.intensity) || 0) * Math.pow(2, Number(dome.exposure) || 0);
+        if (Number(dome.diffuse) !== 1 || Number(dome.specular) !== 1) {
+            warn('Dome light ' + dome.primPath + ' sets diffuse/specular multipliers, which are not applied');
+        }
+        warn('[info] Dome light ' + dome.primPath + ' applied as the environment (' + fileName
+            + ', rotation ' + rotationDeg.toFixed(0) + ' deg)');
+        return { env, tilt, descriptor: { primPath: dome.primPath, fileName, rotationDeg, exposure } };
+    } catch (error) {
+        warn('Dome light import failed: ' + String(error && error.message || error));
+        return null;
+    }
+};
+
+// Shadow pass for MaterialX materials. MaterialX generates
+// mx_shadow_occlusion() against a variance (moments) map, so we render our own
+// vec2(z, z*z) rather than reuse three's VSM target, whose packing is not
+// guaranteed to match and would misread rather than error.
+const SHADOW_MAP_SIZE = 2048;
+// Variance shadow maps are meant to be blurred: filtering the moments is what
+// turns the hard per-texel test into a soft edge. Without it an orthographic
+// frustum covering a whole room stair-steps every silhouette.
+// Screen-space ambient occlusion, feeding MaterialX's own "// Ambient
+// occlusion" slot (see patchAmbientOcclusion in js/mtlx-engine.js). This is
+// the visibility term MaterialX's IBL does not have: without it a dome light
+// reaches every surface in a closed room at full strength, which is what
+// makes an interior read flat next to an offline render.
+//
+// Half resolution, horizon-style hemisphere sampling against a view-space
+// depth+normal prepass, then a box blur. Half res is standard practice here:
+// AO is low frequency and the cost is a full extra geometry pass per frame.
+const AO_SCALE = 0.5;
+const AO_SAMPLES = 16;
+const AO_BLUR_RADIUS = 2;
+
+// Prepass target: view-space normal in rgb, positive view depth in a. The
+// normal magnitude carries static surface coverage so the AO pass can weight
+// a partial blocker without allocating a second full-resolution target.
+const createAoPrepassMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'in vec3 normal;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'uniform mat3 normalMatrix;',
+        'out vec3 vNormal;',
+        'out vec3 vViewPos;',
+        'void main() {',
+        '    vNormal = normalMatrix * normal;',
+        '    vec4 mv = modelViewMatrix * vec4(position, 1.0);',
+        '    vViewPos = mv.xyz;',
+        '    gl_Position = projectionMatrix * mv;',
+        '}',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec3 vNormal;',
+        'in vec3 vViewPos;',
+        'uniform float uCoverage;',
+        'out vec4 fragColor;',
+        'void main() {',
+        // Two-sided geometry is everywhere on a USD stage, so flip the
+        // normal toward the eye rather than trusting the winding.
+        '    vec3 n = normalize(vNormal);',
+        '    if (dot(n, -normalize(vViewPos)) < 0.0) n = -n;',
+        '    fragColor = vec4(n * clamp(uCoverage, 0.0, 1.0), -vViewPos.z);',
+        '}',
+    ].join('\n'),
+    side: THREE.DoubleSide,
+});
+
+const createAoMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+    fragmentShader: [
+        'precision highp float;',
+        'uniform sampler2D tPrepass;',
+        'uniform mat4 uProjection;',
+        'uniform mat4 uInverseProjection;',
+        'uniform vec2 uSize;',
+        'uniform float uRadius;',
+        'uniform float uBias;',
+        'out vec4 fragColor;',
+        'const int SAMPLES = ' + AO_SAMPLES + ';',
+        'const float M_PI = 3.1415926535897932;',
+        // View-space position of a prepass texel, rebuilt from its depth.
+        'vec3 viewPosAt(vec2 uv, float depth) {',
+        '    vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0, 1.0);',
+        '    vec4 dir = uInverseProjection * ndc;',
+        '    vec3 ray = dir.xyz / dir.w;',
+        '    return ray * (depth / max(-ray.z, 1e-6));',
+        '}',
+        'float hash12(vec2 p) {',
+        '    vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+        '    p3 += dot(p3, p3.yzx + 33.33);',
+        '    return fract((p3.x + p3.y) * p3.z);',
+        '}',
+        'void main() {',
+        '    vec2 uv = gl_FragCoord.xy / uSize;',
+        '    vec4 pre = texture(tPrepass, uv);',
+        '    float depth = pre.a;',
+        // Background texels (nothing drawn) stay fully lit.
+        '    if (depth <= 0.0) { fragColor = vec4(1.0); return; }',
+        '    vec3 N = normalize(pre.rgb);',
+        '    vec3 P = viewPosAt(uv, depth);',
+        '    float angleOffset = hash12(gl_FragCoord.xy) * 2.0 * M_PI;',
+        '    float occlusion = 0.0;',
+        '    for (int i = 0; i < SAMPLES; i++) {',
+        // Cosine-weighted hemisphere direction around N, spiralled so the
+        // samples spread over the disc rather than clustering.
+        '        float t = (float(i) + 0.5) / float(SAMPLES);',
+        '        float angle = angleOffset + t * float(SAMPLES) * 2.399963;',
+        '        float r = sqrt(t);',
+        '        vec3 tangent = normalize(abs(N.z) < 0.999 ? cross(vec3(0.0, 0.0, 1.0), N) : vec3(1.0, 0.0, 0.0));',
+        '        vec3 bitangent = cross(N, tangent);',
+        '        vec3 dir = normalize(tangent * (r * cos(angle)) + bitangent * (r * sin(angle)) + N * sqrt(max(1.0 - t, 0.0)));',
+        '        vec3 samplePos = P + dir * uRadius * (0.3 + 0.7 * t);',
+        '        vec4 clip = uProjection * vec4(samplePos, 1.0);',
+        '        vec2 sampleUv = (clip.xy / clip.w) * 0.5 + 0.5;',
+        '        if (any(lessThan(sampleUv, vec2(0.0))) || any(greaterThan(sampleUv, vec2(1.0)))) continue;',
+        '        vec4 samplePre = texture(tPrepass, sampleUv);',
+        '        float sceneDepth = samplePre.a;',
+        '        if (sceneDepth <= 0.0) continue;',
+        '        float sampleDepth = -samplePos.z;',
+        // Occluded when real geometry sits in front of the sample point.
+        '        float occluded = (sceneDepth < sampleDepth - uBias) ? 1.0 : 0.0;',
+        // Range check: a distant foreground object must not darken this
+        // pixel, otherwise every silhouette grows a black halo.
+        // Range check. This used to be a RATIO (uRadius / distance), which is
+        // above 1 for every occluder nearer than the radius and therefore
+        // clamped to 1 almost always: occlusion was applied at any distance,
+        // which is what turned contact darkening into a global dimming.
+        // Falling off over the radius itself is what localises it.
+        // Coverage belongs to the sampled blocker, not the receiver pixel.
+        // A partial receiver must not make every AO ray weaker; a partial
+        // blocker should contribute only in proportion to its static coverage.
+        '        float blockerCoverage = clamp(length(samplePre.rgb), 0.0, 1.0);',
+        '        occluded *= blockerCoverage;',
+        '        occluded *= 1.0 - smoothstep(0.0, 1.0, abs(depth - sceneDepth) / max(uRadius, 1e-6));',
+        '        occlusion += occluded;',
+        '    }',
+        '    fragColor = vec4(vec3(1.0 - occlusion / float(SAMPLES)), 1.0);',
+        '}',
+    ].join('\n'),
+    depthTest: false,
+    depthWrite: false,
+});
+
+const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+    fragmentShader: [
+        'precision highp float;',
+        'uniform sampler2D tAo;',
+        'uniform vec2 uTexel;',
+        'out vec4 fragColor;',
+        'void main() {',
+        '    float sum = 0.0;',
+        '    float count = 0.0;',
+        '    for (int x = -' + AO_BLUR_RADIUS + '; x <= ' + AO_BLUR_RADIUS + '; x++) {',
+        '        for (int y = -' + AO_BLUR_RADIUS + '; y <= ' + AO_BLUR_RADIUS + '; y++) {',
+        '            sum += texture(tAo, gl_FragCoord.xy * uTexel + vec2(x, y) * uTexel).r;',
+        '            count += 1.0;',
+        '        }',
+        '    }',
+        '    fragColor = vec4(vec3(sum / count), 1.0);',
+        '}',
+    ].join('\n'),
+    depthTest: false,
+    depthWrite: false,
+});
+
+// Back-face distance for transmissive prims, the path length MaterialX's
+// volume absorption needs (see patchTransmissionThickness in
+// js/mtlx-engine.js). Renders only the far side of each transmissive mesh,
+// so a fragment can measure how much medium is still in front of it.
+// Layer the thickness pass draws, so it selects its meshes with a camera
+// mask instead of walking the scene graph every frame.
+const THICKNESS_LAYER = 1;
+const createThicknessMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'uniform mat4 modelMatrix;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'out vec3 vWorld;',
+        'void main() {',
+        '    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;',
+        '    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec3 vWorld;',
+        'uniform vec3 uEye;',
+        'out vec4 fragColor;',
+        'void main() { float d = distance(vWorld, uEye); fragColor = vec4(d, d, d, 1.0); }',
+    ].join('\n'),
+    // Far side only, nearest first: for a convex solid the nearest back face
+    // IS where the ray leaves the medium, which is the segment Beer-Lambert
+    // wants. A concave or multi-shell prop underestimates the path, which
+    // errs toward clear rather than toward black.
+    side: THREE.BackSide,
+    depthTest: true,
+    depthWrite: true,
+});
+
+// Independent shadow casters packed into one atlas. GLSL ES 3.0 only allows a
+// constant index into a sampler array, so a per-light lookup has to address
+// tiles inside a single map. Must match the engine's SHADOW_CASTER_SLOTS.
+const SHADOW_CASTERS = 4;
+const SHADOW_ATLAS_COLS = 2;
+const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'in vec2 uv;',
+        'out vec2 vUv;',
+        'void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec2 vUv;',
+        'out vec4 fragColor;',
+        'uniform sampler2D tMoments;',
+        'uniform vec2 uStep;',
+        // Gaussian weights for a 9 tap separable kernel.
+        'void main() {',
+        '    vec2 sum = texture(tMoments, vUv).xy * 0.2270270270;',
+        '    sum += texture(tMoments, vUv + uStep * 1.3846153846).xy * 0.3162162162;',
+        '    sum += texture(tMoments, vUv - uStep * 1.3846153846).xy * 0.3162162162;',
+        '    sum += texture(tMoments, vUv + uStep * 3.2307692308).xy * 0.0702702703;',
+        '    sum += texture(tMoments, vUv - uStep * 3.2307692308).xy * 0.0702702703;',
+        '    fragColor = vec4(sum, 0.0, 1.0);',
+        '}',
+    ].join('\n'),
+    depthTest: false,
+    depthWrite: false,
+});
+const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'uniform mat4 modelMatrix;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'out vec3 vWorld;',
+        'void main() { vWorld = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec3 vWorld;',
+        'uniform vec4 uDepthPlane;',
+        'uniform float uCoverage;',
+        'out vec4 fragColor;',
+        // Store linear light-view depth. Post-projection z allocates almost
+        // all precision to the near plane for perspective emitters, which
+        // collapses tabletop blocker separation across a room scale. The
+        // renderer computes this plane from the same camera near/far pair
+        // used by the receiver lookup, so both sides compare identical d.
+        // Store the finite texel footprint in the second moment. This is the
+        // standard VSM derivative correction and replaces polygonOffset,
+        // which only affects the depth buffer and cannot bias color moments.
+        // A standard 4x4 Bayer permutation keeps approximately coverage*16
+        // texels (the old thresholds kept only 3/16 at coverage .5). Compute
+        // derivatives before the coverage discard so their values remain
+        // defined across the fragment quad.
+        'float mx_shadowDither() { int x = int(mod(gl_FragCoord.x, 4.0)); int y = int(mod(gl_FragCoord.y, 4.0)); vec4 row = y == 0 ? vec4(0.0, 8.0, 2.0, 10.0) : (y == 1 ? vec4(12.0, 4.0, 14.0, 6.0) : (y == 2 ? vec4(3.0, 11.0, 1.0, 9.0) : vec4(15.0, 7.0, 13.0, 5.0))); return (row[x] + 0.5) / 16.0; }',
+        'void main() { float d = clamp(dot(vec4(vWorld, 1.0), uDepthPlane), 0.0, 1.0); float dx = dFdx(d); float dy = dFdy(d); float m2 = d * d + 0.25 * (dx * dx + dy * dy); if (uCoverage < 0.99999 && uCoverage <= mx_shadowDither()) discard; fragColor = vec4(d, m2, 0.0, 1.0); }',
+    ].join('\n'),
+    uniforms: {
+        uDepthPlane: { value: new THREE.Vector4(0, 0, 0, 1) },
+        uCoverage: { value: 1 },
+    },
+    // Cast from both faces. USD stages carry plenty of single-sided and
+    // inverted-winding geometry (17 of the 21 chess meshes are leftHanded, and
+    // props are routinely open shells), and front-face-only casting made all of
+    // it transparent to the shadow pass.
+    side: THREE.DoubleSide,
+    // Color moments carry the writer-side texel-footprint correction with the standard
+    // derivative variance term. WebGL polygonOffset changes only the depth
+    // buffer and cannot bias these color moments, so it is intentionally not
+    // used as a false acne fix here.
+});
+
+// The same transform sceneRoot carries, needed before that group exists so
+// lights and the dome can be placed in final world space.
+const sceneRootMatrix = (stage) => {
+    const m = new THREE.Matrix4();
+    if (String(stage && stage.upAxis || 'Y').toUpperCase() === 'Z') m.makeRotationX(-Math.PI / 2);
+    const meters = Number(stage && stage.metersPerUnit);
+    if (Number.isFinite(meters) && meters > 0) m.multiply(new THREE.Matrix4().makeScale(meters, meters, meters));
+    return m;
 };
 
 const sceneUdimCode = (u, v) => 1001 + u + v * 10;
@@ -166,7 +829,8 @@ const sceneUdimTiles = (ref, map) => {
         if (code < 1001) continue;
         const offset = code - 1001;
         const u = offset % 10, v = Math.floor(offset / 10);
-        tiles.set(code, { path, blob, u, v });
+        const ktx2Path = sceneKtx2SiblingPath(map, path);
+        tiles.set(code, { path: ktx2Path, blob: map[ktx2Path], u, v, substituted: ktx2Path !== path, originalPath: path, originalBlob: map[path] });
     }
     return tiles;
 };
@@ -323,7 +987,10 @@ const createMtlxSceneView = async ({
     if (!window.THREE || !THREE.WebGLRenderer) throw new Error('Three.js WebGL renderer is unavailable.');
     const report = (event) => { if (onProgress) { try { onProgress(event); } catch (e) {} } };
     const warnings = Array.isArray(stage.warnings) ? stage.warnings.slice() : [];
+    const prepassWarnings = new Set();
     let displayTransformListener = null;
+    let sceneTransparencyRefresh = null;
+    let sceneTransparencyListener = null;
     let queueDisplayRebuild = null;
     let displayRebuildPromise = null;
     let displayDirty = false;
@@ -334,6 +1001,14 @@ const createMtlxSceneView = async ({
         if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
     };
     window.addEventListener('mtlx-display-transform', displayTransformListener);
+    sceneTransparencyListener = () => { if (sceneTransparencyRefresh) sceneTransparencyRefresh(); };
+    window.addEventListener('mtlx-usd-scene-transparency', sceneTransparencyListener);
+    // heightToNormalTexel is generation-affecting like the display
+    // transform: reuse the same rebuild path so a flag flip recompiles.
+    const settingsChangedListener = (e) => {
+        if (e.detail && e.detail.key === 'heightToNormalTexel') displayTransformListener();
+    };
+    window.addEventListener('mtlx-settings-changed', settingsChangedListener);
     const fileMap = sceneFileMap(files, stage);
     const creationDisplayRevision = displayRevision;
     const creationDisplayTransform = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
@@ -349,8 +1024,16 @@ const createMtlxSceneView = async ({
     // cached list of transparent meshes under sceneRoot; the cache is
     // invalidated on every material create/replace and on refreshRenderMode.
     let peelPipeline = null;
+    const sceneRgbtState = {
+        mode: 'inactive', reason: null, payloadMaterials: 0,
+        unsupportedLabels: [],
+    };
     let transparentMeshCache = null;
-    const invalidateTransparentMeshCache = () => { transparentMeshCache = null; };
+    let thicknessMeshCache = null;
+    const invalidateTransparentMeshCache = () => {
+        transparentMeshCache = null;
+        thicknessMeshCache = null;
+    };
     let resizeObserver = null;
     let stopped = false;
     let active = true;
@@ -394,10 +1077,115 @@ const createMtlxSceneView = async ({
     const prims = [];
     let rebuildingProvisional = null;
     const scene = new THREE.Scene();
+    // One shadow caster only: MaterialX's generated `occlusion` is a single
+    // per-fragment scalar shared by every light and the environment, so there
+    // is nowhere to put a second map.
+    let shadowTarget = null;
+    let shadowDepthMaterial = null;
+    let shadowCasters = [];
+    // Which u_lightData slots the shadow map belongs to. MaterialX shadows one
+    // light, and until this existed it always shadowed slot 0 (the environment
+    // key light) no matter which light the map was actually drawn from.
+    let shadowSlotCaster = new Int32Array(window.SHADOW_LIGHT_SLOTS_MAX || 32).fill(-1);
+    // Always full length: the uniform is a fixed-size GLSL array, so an unused
+    // caster gets an identity matrix that nothing indexes into (its slots map
+    // to -1). Declared beside the state they read, not inside the render
+    // closure, because the material builder runs in the outer scope.
+    const shadowCasterMatrices = () => Array.from({ length: SHADOW_CASTERS }, (_, i) =>
+        (shadowCasters[i] ? shadowCasters[i].matrix : new THREE.Matrix4()));
+    const shadowCasterTiles = () => Array.from({ length: SHADOW_CASTERS }, (_, i) =>
+        (shadowCasters[i] ? shadowCasters[i].tileRect : new THREE.Vector4(0, 0, 1, 1)));
+    const shadowCasterDepthPlanes = () => Array.from({ length: SHADOW_CASTERS }, (_, i) =>
+        (shadowCasters[i] && shadowCasters[i].depthPlane
+            ? shadowCasters[i].depthPlane : new THREE.Vector4(0, 0, 0, 1)));
+    const shadowCasterDepthRanges = () => Array.from({ length: SHADOW_CASTERS }, (_, i) => {
+        const caster = shadowCasters[i];
+        if (!caster) return new THREE.Vector2(0, 1);
+        return new THREE.Vector2(caster.near, Math.max(1e-9, caster.far - caster.near));
+    });
+    const shadowCasterSourceRadii = () => Array.from({ length: SHADOW_CASTERS }, (_, i) => {
+        const caster = shadowCasters[i];
+        const extent = caster && Number(caster.sourceExtent);
+        const radius = Number.isFinite(extent) ? Math.max(0, extent * 0.5) : 0;
+        // xy = source radius in world units; zw = explicit perspective
+        // projection scale. The shadow matrix is P*V, so its diagonal cannot
+        // be used as a projection factor after light rotation.
+        const scale = caster && caster.projectionScale;
+        return new THREE.Vector4(radius, radius,
+            scale && Number.isFinite(scale[0]) ? Math.abs(scale[0]) : 0,
+            scale && Number.isFinite(scale[1]) ? Math.abs(scale[1]) : 0);
+    });
+    let shadowCasterLabel = null;
+    // Baked coarse sky visibility (js/usd-scene-skyvis.js). Built once per
+    // stage, never per frame: it depends only on geometry.
+    let skyVisTexture = null;
+    let skyVisMin = null;
+    let skyVisSize = null;
+    let skyVisCell = 0;
+    let skyVisEnabled = storedSceneSkyVis();
+    let skyVisStrength = storedSceneSkyVisStrength();
+    let skyVisInfo = null;
+    let sceneDisplayTransform = storedSceneDisplayTransform();
+    let shadowsEnabled = storedSceneShadows();
+    // Ambient occlusion resources. Unlike the shadow map these are rebuilt
+    // every frame the camera moves, because the whole term is screen space.
+    let aoTarget = null;
+    let aoBlurTarget = null;
+    let aoPrepassTarget = null;
+    let aoPrepassMaterial = null;
+    let aoMaterial = null;
+    let aoBlurMaterial = null;
+    let aoQuadScene = null;
+    let aoQuadCamera = null;
+    let thicknessTarget = null;
+    let thicknessMaterial = null;
+    let thicknessDiscardMaterial = null;
+    let thicknessCamera = null;
+    // World positions are already in metres after sceneRoot applies
+    // metersPerUnit. MaterialX has no UnitSystem in this compiler, so a raw
+    // transmission_depth is still in source scene units; convert the measured
+    // world-space path back to those units before applying absorption.
+    let thicknessScale = 1;
+    let aoEnabled = storedSceneAo();
+    let aoStrength = storedSceneAoStrength();
+    const disposeThicknessResources = () => {
+        if (thicknessTarget) { thicknessTarget.dispose(); thicknessTarget = null; }
+        if (thicknessMaterial) { thicknessMaterial.dispose(); thicknessMaterial = null; }
+        if (thicknessDiscardMaterial) { thicknessDiscardMaterial.dispose(); thicknessDiscardMaterial = null; }
+        thicknessCamera = null;
+    };
+    const disposeAoResources = () => {
+        if (aoTarget) { aoTarget.dispose(); aoTarget = null; }
+        if (aoBlurTarget) { aoBlurTarget.dispose(); aoBlurTarget = null; }
+        if (aoPrepassTarget) { aoPrepassTarget.dispose(); aoPrepassTarget = null; }
+        if (aoPrepassMaterial) { aoPrepassMaterial.dispose(); aoPrepassMaterial = null; }
+        if (aoMaterial) { aoMaterial.dispose(); aoMaterial = null; }
+        if (aoBlurMaterial) { aoBlurMaterial.dispose(); aoBlurMaterial = null; }
+        aoQuadScene = null;
+        aoQuadCamera = null;
+    };
+    let shadowDirty = true;
+    const disposeShadowResources = () => {
+        if (shadowTarget) { shadowTarget.dispose(); shadowTarget = null; }
+        if (shadowDepthMaterial) { shadowDepthMaterial.dispose(); shadowDepthMaterial = null; }
+    };
+    // Applies the sidebar toggle and EV multiplier without rebuilding the
+    // converted list, so both are live controls.
+    const activeStageLights = () => {
+        if (!stageLightsEnabled || !stageLights.length) return null;
+        const gain = Math.pow(2, stageLightsEv);
+        return stageLights.map((light) => Object.assign({}, light, { intensity: light.intensity * gain }));
+    };
     const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);
     camera.position.set(0, 0, 4);
     let env = null;
     let mxEnv = null;
+    let domeLight = null;
+    let domeEnv = null;
+    let envTilt = null;
+    let stageLights = [];
+    let stageLightsEnabled = storedSceneStageLights();
+    let stageLightsEv = storedSceneStageLightsEv();
     const sceneOptions = {
         udimTileSize: Math.max(128, Number(udimTileSize) || 512),
         udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 1024),
@@ -409,7 +1197,7 @@ const createMtlxSceneView = async ({
         // budgets); persistence still only happens for the 1/2/4 GiB steps.
         textureMaxBytes: (Number(textureMaxBytes) > 0) ? Number(textureMaxBytes) : storedSceneTextureBudgetBytes(),
     };
-    const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0 };
+    const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0, ktx2Substituted: 0 };
     let samplerReport = [];
     const textureReservations = new Set();
     // One shared budget: ordinary and UDIM textures both reserve against
@@ -449,7 +1237,9 @@ const createMtlxSceneView = async ({
             const h = (dimensions && dimensions.height) || 4096;
             const isFloat = ext === 'exr' || ext === 'hdr';
             const mipmapped = !isFloat; // 8-bit formats get mips; float unbounded formats do not
-            const bytesPerPixel = isFloat ? 16 : 4;
+            // KTX2 (UASTC, our cook script's only mode) already carries its own
+            // mip chain at ~1 byte/pixel; the 4/3 factor below still applies.
+            const bytesPerPixel = ext === 'ktx2' ? 1 : (isFloat ? 16 : 4);
             return { w, h, bytesPerPixel, mipmapped };
         }));
         const textureCount = dims.length;
@@ -493,17 +1283,47 @@ const createMtlxSceneView = async ({
     // EXR/HDR/TIF are not resized by createImageBitmap (the bounded PNG/JPEG
     // path), so they are decoded then explicitly bounded to the planned tier
     // via boundDecodedTexture before their real bytes are known/reserved.
-    const decodeUnboundedSceneTexture = async (blob, ext, path) => {
+    const decodeUnboundedSceneTexture = async (blob, ext, path, fallback) => {
         let tex = null;
         try {
-            if (ext === 'exr') tex = await window.loadExrTexture(blob);
+            if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob, null, path);
+            else if (ext === 'exr') tex = await window.loadExrTexture(blob);
             else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
-            else tex = await window.loadTifTexture(blob);
-        } catch (error) { return null; }
+            else tex = await window.loadTifTexture(blob, path);
+        } catch (error) {
+            if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== path) {
+                const notice = 'KTX2 texture ' + path + ' is not a multiple of 4; falling back to ' + fallback.path;
+                if (!udimWarnings.has(notice)) { udimWarnings.add(notice); warnings.push(notice); }
+                const fallbackExt = String(fallback.path).split('.').pop().toLowerCase();
+                if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(fallbackExt)) {
+                    return decodeUnboundedSceneTexture(fallback.blob, fallbackExt, fallback.path, null);
+                }
+                // Ordinary 8-bit source (png/jpg): bound it the same way the
+                // regular (non-unbounded) texture path does.
+                try {
+                    const boundedTex = await window.loadBoundedBitmapTexture(fallback.blob, plannedTextureSize);
+                    if (!boundedTex) return null;
+                    window.configureLoadedTexture(boundedTex);
+                    const bytes = Math.ceil((boundedTex.image.width || 0) * (boundedTex.image.height || 0) * 4 * 4 / 3);
+                    return { tex: boundedTex, bytes };
+                } catch (e) { return null; }
+            }
+            const warning = (error && error.message) || ('MaterialX texture decode failed for ' + (path || '(unknown)'));
+            if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+            return null;
+        }
         if (!tex || !tex.image) {
             const warning = 'MaterialX texture decode failed for ' + (path || '(unknown)');
             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
             return null;
+        }
+        if (ext === 'ktx2') {
+            // Already GPU block data with its own mip chain: cap by dropping
+            // the largest levels instead of resampling, then bytes are the
+            // exact sum of the kept levels (no 4/3 mip-factor estimate).
+            const bytes = window.capKtx2MipLevels(tex, plannedTextureSize);
+            window.configureLoadedTexture(tex);
+            return { tex, bytes };
         }
         try {
             tex = await window.boundDecodedTexture(tex, plannedTextureSize);
@@ -520,6 +1340,92 @@ const createMtlxSceneView = async ({
     const programByKey = new Map();
     const sourceXmlByRecord = new WeakMap();
     const materialRecords = new Map();
+
+    // USD `over` blocks recorded by the worker (usd-stage-worker.js
+    // collectMaterialOverrides) as { node, input, value } text triples.
+    // node is null when the attribute sits on the Material prim itself,
+    // meaning it targets the bound surface shader node.
+    const findMxNode = (doc, name) => {
+        let node = window.mxSafe(() => doc.getNode(name), null);
+        if (node) return node;
+        const graphs = window.vecToArray(window.mxSafe(() => doc.getNodeGraphs(), []));
+        for (const graph of graphs) {
+            node = window.mxSafe(() => graph.getNode(name), null);
+            if (node) return node;
+        }
+        return null;
+    };
+    const findOrAddInput = (node, inputName) => {
+        let input = window.mxSafe(() => node.getInput(inputName), null);
+        if (input) return input;
+        input = window.mxSafe(() => (typeof node.addInputFromNodeDef === 'function' ? node.addInputFromNodeDef(inputName) : null), null);
+        return input || null;
+    };
+    const convertUsdOverrideValue = (rawText, declaredType, baseDirs) => {
+        const raw = String(rawText || '').trim();
+        if (declaredType === 'filename' || declaredType === 'asset') {
+            const match = raw.match(/^@(.*)@$/);
+            const ref = match ? match[1] : raw;
+            // USD resolves the asset against the layer that authored the
+            // override; that layer normally sits beside the .mtlx, so try the
+            // material's directory first and the stage root as a fallback.
+            const candidates = baseDirs.map((dir) => sceneJoinPath(dir, ref));
+            return candidates.find((candidate) => fileMap[candidate]) || candidates[0];
+        }
+        if (/^\(.*\)$/.test(raw)) return raw.slice(1, -1).split(',').map((v) => v.trim()).join(', ');
+        return raw; // bool/number/plain string, verbatim
+    };
+    // Applies one material record's overrides onto its freshly parsed
+    // document, before generation. `matchedNode` is the surface shader
+    // node already resolved for this record (used when override.node is
+    // null). Missing nodes/inputs each push one deduped warning.
+    const applyUsdOverrides = (doc, matchedNode, record, baseDirs) => {
+        const overrides = Array.isArray(record && record.overrides) ? record.overrides : [];
+        if (!overrides.length) return;
+        const label = record.materialName || String(record.path || '').split('/').filter(Boolean).pop() || record.sourceAsset || 'material';
+        for (const ov of overrides) {
+            const targetNode = ov.node ? findMxNode(doc, ov.node) : matchedNode;
+            if (!targetNode) {
+                const warning = `USD override targets missing MaterialX node "${ov.node}" in ${label}`;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+                continue;
+            }
+            const input = findOrAddInput(targetNode, ov.input);
+            if (!input) {
+                const nodeLabel = ov.node || window.mxSafe(() => targetNode.getName(), label);
+                const warning = `USD override targets missing input "${ov.input}" on node "${nodeLabel}" in ${label}`;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+                continue;
+            }
+            const declaredType = window.mxSafe(() => input.getType(), 'string');
+            const value = convertUsdOverrideValue(ov.value, declaredType, baseDirs);
+            const readValue = () => window.mxSafe(() => {
+                const attrValue = window.mxElAttr(input, 'value');
+                if (attrValue !== null && attrValue !== undefined && attrValue !== '') return String(attrValue);
+                return input.getValueString ? String(input.getValueString()) : '';
+            }, '');
+            const previousValue = readValue();
+            // MaterialX rejects an input carrying both a literal value and a
+            // connection. USD permits both and gives the connection
+            // precedence, while the native bridge currently exposes only
+            // the fallback value. Preserve an existing graph connection and
+            // report that the fallback was intentionally ignored.
+            const connected = ['nodename', 'nodegraph', 'output', 'interfacename']
+                .some((attr) => !!window.mxElAttr(input, attr));
+            const nodeLabel = ov.node || window.mxSafe(() => targetNode.getName(), label);
+            if (connected) {
+                const warning = '[info] USD override fallback preserved MaterialX connection on "' + nodeLabel + '.' + ov.input + '" in ' + label;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+                continue;
+            }
+            window.mxWriteValue(input, value, declaredType);
+            const nextValue = readValue();
+            if (nextValue !== previousValue) {
+                const applied = '[info] USD override applied "' + nodeLabel + '.' + ov.input + '" = ' + nextValue + ' in ' + label;
+                if (!udimWarnings.has(applied)) { udimWarnings.add(applied); warnings.push(applied); }
+            }
+        }
+    };
 
     const loadRenderable = async (record) => {
         if (record && (record.renderable || record.node)) {
@@ -562,15 +1468,20 @@ const createMtlxSceneView = async ({
             const names = [explicitName, explicitName ? null : record.materialName]
                 .filter((value, index, values) => value && values.indexOf(value) === index)
                 .map((value) => String(value));
+            const usdaDir = [sceneDir(source), sceneDir(stage.rootPath)];
             for (const name of names) {
                 const matches = renderables.filter((r) => String(r.name || '') === name);
-                if (matches.length === 1) return { node: matches[0].node, document: doc };
+                if (matches.length === 1) {
+                    await window.mxExclusive(() => applyUsdOverrides(doc, matches[0].node, record, usdaDir));
+                    return { node: matches[0].node, document: doc };
+                }
             }
             // A composed alias can differ from the sole authored renderable
             // name (the common sourceAsset-only case).  This fallback is
             // safe only for the native inferred-selection path; an authored
             // subidentifier that did not match must remain an error.
             if (renderables.length === 1 && !explicitName) {
+                await window.mxExclusive(() => applyUsdOverrides(doc, renderables[0].node, record, usdaDir));
                 return { node: renderables[0].node, document: doc };
             }
             throw new Error('MaterialX source has no unambiguous renderable for ' + (record.materialName || record.subIdentifier || source));
@@ -627,9 +1538,13 @@ const createMtlxSceneView = async ({
             sourceDocument = loaded.document;
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, isMounted, document: sourceDocument,
+                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true,
             });
             if (!compiled) return null;
+            // Uniform paths alone cannot distinguish a direct
+            // standard_surface/OpenPBR input from a nested layer closure.
+            // Keep source-node qualification beside the detached shader data.
+            compiled.mtlxSceneSurfaceMetadata = sceneMaterialSurfaceMetadata(renderable);
             // Reuse the engine's hidden KHR warm context before this
             // scene's display WebGL context submits the same source.
             if (window.prewarmShaderCompile) {
@@ -661,18 +1576,21 @@ const createMtlxSceneView = async ({
         if (!ensured) return null;
         if (!ensured.compiled) return { material: sceneNeutralMaterial(label), compiled: null };
         const { compiled, cacheKey } = ensured;
+        // Builds the GGX-prefiltered radiance chain on first use; the
+        // uniform builder below picks it over the FIS chain when the
+        // shaders were generated for the prefilter path.
+        if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
         const uniforms = window.createMtlxSceneUniforms({
-            compiled, env, lightData: mxEnv.lightData || [],
+            compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
+            shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowSlotCaster,
+            skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
+            envTilt,
+            thicknessScale, refractionTwoSided: true,
         });
-        // USD typed material inputs may override scalar shader parameters. The
-        // stage bridge keeps these separate from structural MaterialX graph
-        // selection; only uniforms already declared by the generated shader
-        // are eligible here.
-        for (const [key, value] of Object.entries(record && record.overrides || {})) {
-            const uniformName = key.startsWith('u_') ? key : 'u_' + key;
-            if (uniforms[uniformName]) uniforms[uniformName].value = value;
-            else warnings.push('Unsupported scalar MaterialX override ' + key + ' on ' + label);
-        }
+        // USD value overrides (record.overrides) are applied onto the
+        // MaterialX document itself in loadRenderable/applyUsdOverrides,
+        // before generation, so the compiled shader here already reflects them.
         const material = new THREE.RawShaderMaterial({
             vertexShader: compiled.vs,
             fragmentShader: compiled.fs,
@@ -686,9 +1604,23 @@ const createMtlxSceneView = async ({
         material.userData.mtlxSceneSourceAsset = record.sourceAsset || '';
         material.userData.mtlxSceneSubIdentifier = record.subIdentifier || '';
         material.userData.mtlxSceneMaterialPath = String(record.path || '');
-        material.userData.mtlxSceneTransparent = !!compiled.transparent;
+        const classification = sceneMaterialClassification(compiled, compiled.mtlxSceneSurfaceMetadata);
+        material.userData.mtlxSceneTransparent = !!classification.peel;
+        material.userData.mtlxScenePeel = !!classification.peel;
+        material.userData.mtlxSceneVolume = !!classification.volume;
+        material.userData.mtlxSceneRgbt = !!compiled.sceneRgbt;
+        material.userData.mtlxSceneRgbtPayload = !!compiled.payloadSupported;
+        material.userData.mtlxScenePrepassCoverage = classification.coverage;
+        if (classification.coverage.mode === 'unknown') {
+            const key = String(record.path || label);
+            if (!prepassWarnings.has(key)) {
+                prepassWarnings.add(key);
+                warnings.push('[info] Material prepass classification is conservative for ' + key + ': ' + classification.coverage.reason);
+            }
+        }
+        material.userData.mtlxSceneFullyTransmissive = sceneMaterialIsFullyTransmissive(compiled);
         if (window.applyPeelMaterialMode) {
-            window.applyPeelMaterialMode(material, material.userData.mtlxSceneTransparent && window.getForceTransparency && window.getForceTransparency());
+            window.applyPeelMaterialMode(material, material.userData.mtlxScenePeel && sceneTransparencyEnabled());
         }
         materials.add(material);
         invalidateTransparentMeshCache();
@@ -701,7 +1633,9 @@ const createMtlxSceneView = async ({
             for (const u of compiled.introspected || []) {
                 if (u.type !== 'filename' || u.data == null) continue;
                 if (/<UDIM>/i.test(String(u.data))) {
-                    udimRefs.push({ uniform: u, tiles: sceneUdimTiles(u.data, fileMap) });
+                    const tiles = sceneUdimTiles(u.data, fileMap);
+                    tiles.forEach((tile) => { if (tile.substituted) textureStats.ktx2Substituted += 1; });
+                    udimRefs.push({ uniform: u, tiles });
                     continue;
                 }
                 // Filename values were canonicalized against their declaring
@@ -710,12 +1644,15 @@ const createMtlxSceneView = async ({
                 // from an unrelated layer.
                 const hit = sceneExactFile(fileMap, u.data, '');
                 if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); continue; }
+                if (hit.substituted) textureStats.ktx2Substituted += 1;
                 const extension = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(extension)) {
                     // Decode+bound first (boundDecodedTexture inside), then
                     // account the real post-resize bytes via the bytes
                     // override so a rebuild does not double count.
-                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path).then((result) => {
+                    const fallbackHit = hit.substituted && hit.originalBlob
+                        ? { path: hit.originalPath, blob: hit.originalBlob } : null;
+                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path, fallbackHit).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, false, bytes)) {
@@ -746,7 +1683,46 @@ const createMtlxSceneView = async ({
     try {
         report({ phase: 'renderer', status: 'start' });
         mxEnv = await window.getMxEnv(version);
-        env = await window.getEnvOverride() || await window.getEnvironment();
+        const userEnv = await window.getEnvOverride();
+        env = userEnv || await window.getEnvironment();
+        // A stage's own dome light is its authored lighting, so apply it
+        // unless the user already imported an environment this session.
+        if (!userEnv) {
+            const domeResult = await sceneDomeEnvironment(stage, fileMap, warnings);
+            if (domeResult && domeResult.env) {
+                env = domeResult.env;
+                domeEnv = domeResult.env;
+                domeLight = domeResult.descriptor;
+                envTilt = domeResult.tilt || null;
+            }
+        }
+        // Splitting an area light across its surface needs to know how far it
+        // is from what it lights, and geometry does not exist yet. Convert
+        // once now so early frames have lighting, and again below once the
+        // bounds are real. The first pass weighs every emitter equally.
+        const convertLights = (sceneCenter) => {
+            if (!window.convertUsdStageLights) return;
+            try {
+                stageLights = window.convertUsdStageLights(stage.lights, {
+                    rootMatrix: sceneRootMatrix(stage),
+                    limit: 16, // must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js
+                    sceneCenter,
+                    metersPerUnit: Number(stage.metersPerUnit),
+                    warn: (message) => { if (warnings.indexOf(message) < 0) warnings.push(message); },
+                });
+            } catch (e) {
+                warnings.push('Stage light import failed: ' + String(e && e.message || e));
+                stageLights = [];
+            }
+        };
+        convertLights(null);
+        // sceneRoot has already converted geometry to metres. Convert the
+        // measured world-space path back to source scene units because the
+        // compiler passes raw MaterialX transmission_depth values through.
+        {
+            const meters = Number(stage.metersPerUnit);
+            thicknessScale = Number.isFinite(meters) && meters > 0 ? 1 / meters : 1;
+        }
         if (!isMounted()) throw new Error('USD scene view was cancelled.');
         const byPath = new Map();
         const pendingTextures = [];
@@ -851,9 +1827,23 @@ const createMtlxSceneView = async ({
             material.userData.mtlxSceneSourceAsset = label;
             material.userData.mtlxSceneMaterialPath = info.materialPath || '';
             material.userData.mtlxSceneUdimTile = code;
-            material.userData.mtlxSceneTransparent = !!info.compiled.transparent;
+            const classification = sceneMaterialClassification(info.compiled, info.compiled.mtlxSceneSurfaceMetadata);
+            material.userData.mtlxSceneTransparent = !!classification.peel;
+            material.userData.mtlxScenePeel = !!classification.peel;
+            material.userData.mtlxSceneVolume = !!classification.volume;
+            material.userData.mtlxSceneRgbt = !!info.compiled.sceneRgbt;
+            material.userData.mtlxSceneRgbtPayload = !!info.compiled.payloadSupported;
+            material.userData.mtlxScenePrepassCoverage = classification.coverage;
+            if (classification.coverage.mode === 'unknown') {
+                const warningKey = String(info.materialPath || label) + '|' + code;
+                if (!prepassWarnings.has(warningKey)) {
+                    prepassWarnings.add(warningKey);
+                    warnings.push('[info] Material prepass classification is conservative for ' + warningKey + ': ' + classification.coverage.reason);
+                }
+            }
+            material.userData.mtlxSceneFullyTransmissive = classification.coverage.mode === 'clear';
             if (window.applyPeelMaterialMode) {
-                window.applyPeelMaterialMode(material, material.userData.mtlxSceneTransparent && window.getForceTransparency && window.getForceTransparency());
+                window.applyPeelMaterialMode(material, material.userData.mtlxScenePeel && sceneTransparencyEnabled());
             }
             materials.add(material);
             invalidateTransparentMeshCache();
@@ -862,7 +1852,9 @@ const createMtlxSceneView = async ({
                 const hit = tileHits[index];
                 const ext = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) {
-                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path).then((result) => {
+                    const fallbackHit = hit.substituted && hit.originalBlob
+                        ? { path: hit.originalPath, blob: hit.originalBlob } : null;
+                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path, fallbackHit).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, true, bytes)) {
@@ -984,9 +1976,835 @@ const createMtlxSceneView = async ({
             }
             return parts;
         };
-        let envRotationRad = 0;
-        let envExposure = 1;
+        // A stage dome seeds rotation and exposure so the render matches the
+        // authored lighting; the sidebar mirrors these through getDomeLight().
+        let envRotationRad = domeLight ? domeLight.rotationDeg * Math.PI / 180 : 0;
+        let envExposure = domeLight ? domeLight.exposure : 1;
+        // Renders moments maps from the dominant stage/environment emitters.
+        // Rebuilds happen when the camera, environment, or light controls
+        // change; a settled frame does not redraw the atlas.
+        // Fits lateral extents to the active view, preserving useful atlas
+        // texel coverage for small props while retaining full caster depth.
+        const fitShadowToView = (shadowCamera, box, radius) => {
+            const toLight = new THREE.Matrix4().copy(shadowCamera.matrixWorld).invert();
+            // The stage in light space: sets the depth range, and clamps the
+            // fit so it can never cover empty space.
+            const stageBox = new THREE.Box3().copy(box).applyMatrix4(toLight);
+            // Fit around what the camera is looking at, sized to what it can
+            // see at that distance.
+            //
+            // Two things that do NOT work, both measured: fitting to the
+            // camera frustum's corners (a close-up still has a distant far
+            // plane, so its corners span the whole room), and fitting to the
+            // bounds of the meshes in frustum (the floor is one mesh, so any
+            // view containing a sliver of it pulls the fit out to the full
+            // stage). Fitting to the orbit target sidesteps both, and it is
+            // what the viewer actually cares about seeing shadows on.
+            const rawTarget = (controls && controls.target)
+                ? controls.target.clone() : box.getCenter(new THREE.Vector3());
+            // Authored focus targets can lie outside the stage (they are
+            // useful for depth of field). Shadow frusta need an actual
+            // receiver anchor, so clamp only that aim point to stage bounds.
+            const target = box.clampPoint(rawTarget, new THREE.Vector3());
+            const distance = Math.max(1e-6, camera.position.distanceTo(target));
+            const halfHeight = distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+            const halfWidth = halfHeight * Math.max(1e-6, camera.aspect);
+            // Radius of the visible disc at the target's depth, padded by 40
+            // percent so the shader's edge fade (the last 4 percent of the
+            // map) lands outside the visible region rather than washing
+            // shadows out along the screen border. Never larger than the
+            // stage, and never so small that a stray orbit target degenerates.
+            const fit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.4));
+            const centreL = target.clone().applyMatrix4(toLight);
+            let left = Math.max(centreL.x - fit, stageBox.min.x);
+            let right = Math.min(centreL.x + fit, stageBox.max.x);
+            let bottom = Math.max(centreL.y - fit, stageBox.min.y);
+            let top = Math.min(centreL.y + fit, stageBox.max.y);
+            if (!(right > left) || !(top > bottom)) { // target off the stage
+                left = stageBox.min.x; right = stageBox.max.x;
+                bottom = stageBox.min.y; top = stageBox.max.y;
+            }
+            // Snap to whole texels, or the frustum slides continuously as the
+            // camera orbits and every shadow edge crawls.
+            // Each caster occupies one atlas tile, so snapping against the
+            // full atlas dimension would use half-sized texels and still let
+            // the projected edge crawl inside a tile.
+            const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+            const texelX = (right - left) / tileSize;
+            const texelY = (top - bottom) / tileSize;
+            if (texelX > 0 && texelY > 0) {
+                left = Math.floor(left / texelX) * texelX;
+                right = Math.ceil(right / texelX) * texelX;
+                bottom = Math.floor(bottom / texelY) * texelY;
+                top = Math.ceil(top / texelY) * texelY;
+            }
+            shadowCamera.left = left;
+            shadowCamera.right = right;
+            shadowCamera.bottom = bottom;
+            shadowCamera.top = top;
+            // Directional shadows retain the complete light-space depth of
+            // the stage. A caster may sit anywhere along a parallel ray, so
+            // clipping this axis to the active target silently removes valid
+            // blockers. Linear depth moments preserve useful separation over
+            // this full range.
+            const zMin = stageBox.min.z;
+            const zMax = stageBox.max.z;
+            const depthSpan = Math.max(0, zMax - zMin);
+            const margin = Math.max(radius * 1e-5, depthSpan * 0.02, Number.EPSILON * 1024);
+            shadowCamera.near = Math.max(Number.EPSILON * 1024, -zMax - margin);
+            shadowCamera.far = Math.max(shadowCamera.near + margin, -zMin + margin);
+        };
+        // Allocates the atlas once. One texture holding SHADOW_CASTERS tiles,
+        // because GLSL ES 3.0 only allows a constant index into a sampler
+        // array, so a per-light lookup has to address tiles inside one map.
+        const ensureShadowTargets = () => {
+            if (shadowTarget) return;
+            // Full float where available: half float carries about 11 bits of
+            // mantissa, and storing both d and d*d quantises the variance test
+            // into visible bands.
+            const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                && !!renderer.extensions.get('EXT_color_buffer_float');
+            const floatLinear = !floatOk || !!renderer.extensions.get('OES_texture_float_linear');
+            shadowTarget = new THREE.WebGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, {
+                minFilter: floatLinear ? THREE.LinearFilter : THREE.NearestFilter,
+                magFilter: floatLinear ? THREE.LinearFilter : THREE.NearestFilter,
+                format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                depthBuffer: true,
+                wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+            });
+        };
+
+        // One caster's camera. A directional light gets an orthographic frustum
+        // along its own direction. Every local source gets a perspective
+        // frustum from the actual emitter position. Using an orthographic
+        // camera for an emitter inside the stage is geometrically wrong: it
+        // turns a point/area source into parallel rays, and it also includes
+        // geometry behind the emitter which cannot occlude a receiver in
+        // front of it. The receiver fit below keeps the perspective depth
+        // interval fully encloses the stage depth while the lateral fit keeps
+        // the map useful for the visible image.
+        const buildCasterCamera = (rec, box, center, radius) => {
+            const source = rec.source;
+            let shadowCamera;
+            const position = source.position || null;
+            if (!rec.directional && position) {
+                const rawAim = (controls && controls.target) ? controls.target.clone() : center.clone();
+                const aim = box.clampPoint(rawAim, new THREE.Vector3());
+                const distance = position.distanceTo(aim);
+                // Fit the receiver patch to the active view. Keep the full
+                // patch even when it surrounds the emitter: clipping it at a
+                // source distance would drop valid receivers and blockers.
+                // The perspective FOV is allowed to widen for near sources;
+                // the linear depth metric used by the shadow lookup keeps a
+                // broad local-light interval numerically usable.
+                const viewDistance = Math.max(1e-6, camera.position.distanceTo(aim));
+                const halfHeight = viewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+                const halfWidth = halfHeight * Math.max(1e-6, camera.aspect);
+                const viewFit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.4));
+                const receiverRadius = viewFit;
+                const safeDistance = Math.max(distance, radius * 0.001);
+                const lookTarget = aim;
+                if (distance < 1e-6) lookTarget.add(new THREE.Vector3(0, 0, -safeDistance));
+                const halfAngle = Math.atan(receiverRadius / safeDistance);
+                const fov = Math.min(175, Math.max(20, 2 * halfAngle * 180 / Math.PI * 1.1));
+                // Include every front-facing stage caster. A receiver may be
+                // near the source, so near is a small scale-relative epsilon;
+                // using the receiver interval here clipped legitimate blockers
+                // before they reached the receiver. Far is tightened to the
+                // stage bounds after the camera is oriented below.
+                const depthEpsilon = Math.max(radius * 1e-5, Number.EPSILON * 1024);
+                const near = depthEpsilon;
+                const farFallback = near + depthEpsilon;
+                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, farFallback);
+                shadowCamera.position.copy(position);
+                shadowCamera.lookAt(lookTarget);
+                shadowCamera.updateMatrixWorld(true);
+                const stageBox = new THREE.Box3().copy(box);
+                const corners = [];
+                for (const x of [stageBox.min.x, stageBox.max.x]) {
+                    for (const y of [stageBox.min.y, stageBox.max.y]) {
+                        for (const z of [stageBox.min.z, stageBox.max.z]) {
+                            corners.push(new THREE.Vector3(x, y, z).applyMatrix4(shadowCamera.matrixWorldInverse));
+                        }
+                    }
+                }
+                const maxDepth = corners.reduce((m, p) => Math.max(m, -p.z), 0);
+                shadowCamera.far = Math.max(farFallback, maxDepth + depthEpsilon);
+                shadowCamera.updateProjectionMatrix();
+                shadowCamera.userData.shadowAim = aim.toArray();
+                return shadowCamera;
+            }
+            // Aim at what the camera is looking at, NOT at the stage centre.
+            // A room's bounding box centre is up near the ceiling, so a desk
+            // lamp sitting below it produced a direction pointing UP and cast
+            // its shadows at the ceiling: measured, the lamp's own tile stored
+            // geometry 68 units nearer the light than the desk it was supposed
+            // to be shadowing. The shadow map covers the viewed region, so the
+            // caster has to be aimed at that region too.
+            const rawAim = (controls && controls.target) ? controls.target.clone() : center.clone();
+            const aim = box.clampPoint(rawAim, new THREE.Vector3());
+            const dir = rec.directional && source.direction ? source.direction.clone()
+                : position ? aim.clone().sub(position)
+                : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
+            if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
+            dir.normalize();
+            shadowCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            shadowCamera.position.copy(aim).addScaledVector(dir, -radius * 2);
+            shadowCamera.lookAt(aim);
+            shadowCamera.updateMatrixWorld(true);
+            fitShadowToView(shadowCamera, box, radius);
+            shadowCamera.updateMatrixWorld(true);
+            shadowCamera.updateProjectionMatrix();
+            shadowCamera.userData.shadowAim = aim.toArray();
+            return shadowCamera;
+        };
+
+        // Builds one shadow map per dominant emitter, packed into a single
+        // atlas, and records which light slots each one shadows.
+        //
+        // One caster was never enough. MaterialX generates a single shadow
+        // term, so the previous version bound one map to one emitter; measured
+        // on the Playground that emitter carried 12.6 percent of the direct
+        // light, which is invisible no matter how correct the binding is. The
+        // rig has two window lights and two lamp emitters, and shadows only
+        // read once most of the illumination casts.
+        const updateShadowMap = () => {
+            if (!shadowsEnabled || !sceneRoot) {
+                shadowCasters = [];
+                shadowSlotCaster.fill(-1);
+                shadowCasterLabel = null;
+                return;
+            }
+            const box = new THREE.Box3().setFromObject(sceneRoot);
+            if (box.isEmpty()) return;
+            const center = box.getCenter(new THREE.Vector3());
+            const radius = Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
+            // Caster selection is a bounded budget, so estimate contribution
+            // at the active receiver target rather than at the stage center.
+            // The source cosine prevents an upward-facing area emitter from
+            // displacing a downward-facing light that actually reaches the
+            // visible tabletop. This changes ranking only; all selected maps
+            // still use the complete stage bounds.
+            const rawReceiverTarget = controls && controls.target ? controls.target.clone() : center.clone();
+            const receiverTarget = box.clampPoint(rawReceiverTarget, new THREE.Vector3());
+            const stageLights = activeStageLights() || [];
+
+            // Fold a split area emitter back together before ranking, or a lamp
+            // cut into four would rank as a quarter of itself. Slot layout is
+            // [rig..., key, stage...] (js/mtlx-engine.js currentLights), so a
+            // stage index needs the rig and key offset to address u_lightData.
+            const slotOffset = ((mxEnv && mxEnv.lightData) ? mxEnv.lightData.length : 0) + 1;
+            const emitters = new Map();
+            for (let i = 0; i < stageLights.length; i++) {
+                const light = stageLights[i];
+                if (light.type !== 1 && light.type !== 2 && light.type !== 3) continue;
+                const source = light.emitter || light;
+                const key = source.primPath || ('slot' + i);
+                let rec = emitters.get(key);
+                if (!rec) {
+                    const position = source.position || light.position || center;
+                    const toReceiver = receiverTarget.clone().sub(position);
+                    // Only planar rect/disk sources have a meaningful
+                    // authored normal. Point/sphere/cylinder samples carry a
+                    // direction for shading but must not be culled by it.
+                    const planarSource = Number(light.sourceKind ?? source.sourceKind) === 1;
+                    const sourceCosine = planarSource && source.direction && toReceiver.lengthSq() > 1e-12
+                        ? Math.max(0, source.direction.clone().normalize().dot(toReceiver.normalize())) : 1;
+                    const receiverDistance = Math.max(1e-6, position.distanceTo(receiverTarget));
+                    const lightEnergy = Math.max(0, Number(light.intensity) || 0);
+                    const lightColor = light.color || source.color;
+                    const luminance = lightColor
+                        ? (0.2126 * Number(lightColor.r ?? lightColor[0] ?? 1)
+                            + 0.7152 * Number(lightColor.g ?? lightColor[1] ?? 1)
+                            + 0.0722 * Number(lightColor.b ?? lightColor[2] ?? 1)) : 1;
+                    const sourceEnergy = lightEnergy * Math.max(0, luminance) * sourceCosine;
+                    rec = {
+                        key, source, slots: [],
+                        directional: light.type === 1,
+                        energy: sourceEnergy,
+                        cosine: sourceCosine,
+                        // Irradiance HERE, not authored intensity: the
+                        // Playground's window lights are the most intense in
+                        // the rig but sit hundreds of units outside the room.
+                        // Directional lights have no inverse-square falloff;
+                        // their score still reflects authored energy and the
+                        // fraction that reaches the active receiver.
+                        score: light.type === 1 ? sourceEnergy : sourceEnergy / (receiverDistance * receiverDistance),
+                    };
+                    emitters.set(key, rec);
+                } else {
+                    const lightEnergy = Math.max(0, Number(light.intensity) || 0);
+                    const lightColor = light.color || source.color;
+                    const luminance = lightColor
+                        ? (0.2126 * Number(lightColor.r ?? lightColor[0] ?? 1)
+                            + 0.7152 * Number(lightColor.g ?? lightColor[1] ?? 1)
+                            + 0.0722 * Number(lightColor.b ?? lightColor[2] ?? 1)) : 1;
+                    rec.energy += lightEnergy * Math.max(0, luminance) * rec.cosine;
+                    rec.score = rec.directional ? rec.energy : rec.energy / Math.max(1e-6, source.position.distanceTo(receiverTarget) ** 2);
+                }
+                rec.slots.push(i);
+            }
+            // The dome's extracted key occupies the reserved slot immediately
+            // before stage lights. It remains a real direct-light source when
+            // stage emitters exist, so omitting it from the ranking leaves the
+            // dominant directional term permanently unshadowed. Include it as
+            // one candidate and let the same fixed atlas budget rank it
+            // against local emitters by irradiance.
+            const envKey = env && env.keyLight;
+            if (envKey && envKey.direction) {
+                const keyDirection = envKey.direction.clone()
+                    .applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad));
+                const keyIntensity = Math.max(0, Number(envKey.intensity) || 0) * (Number.isFinite(envExposure) ? envExposure : 1);
+                // An exhausted environment contribution must not consume one
+                // of the bounded caster slots.  This also keeps env exposure
+                // changes from leaving a stale zero-energy atlas entry.
+                if (keyIntensity > 0) {
+                    emitters.set('environment key light', {
+                        key: 'environment key light',
+                        source: Object.assign({}, envKey, { direction: keyDirection, intensity: keyIntensity }),
+                        slots: [-1],
+                        directional: true,
+                        score: keyIntensity,
+                    });
+                }
+            }
+            // Each caster is a full geometry pass, redrawn whenever the camera
+            // moves, so a heavy stage gets fewer of them. Ranked by irradiance
+            // first, so the ones dropped are always the least significant.
+            let meshCount = 0;
+            sceneRoot.traverse((o) => { if (o.isMesh) meshCount++; });
+            const casterBudget = meshCount > 1200 ? 1 : meshCount > 500 ? 2 : SHADOW_CASTERS;
+            const ranked = [...emitters.values()]
+                .sort((a, b) => b.score - a.score)
+                .slice(0, casterBudget);
+
+            // A stage with no analytic lights is lit by the environment alone,
+            // and the key light extracted from it sits in the reserved slot
+            // right after the rig. Casting along its direction is what gives
+            // those stages a shadow at all.
+            if (!ranked.length) {
+                const keyDir = env && env.keyLight && env.keyLight.direction
+                    ? env.keyLight.direction.clone().applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad)) : null;
+                const keyEnergy = env && env.keyLight
+                    ? Math.max(0, Number(env.keyLight.intensity) || 0) * Math.max(0, Number(envExposure) || 0) : 0;
+                if (!keyDir || keyEnergy <= 0) {
+                    shadowCasters = [];
+                    shadowSlotCaster.fill(-1);
+                    return;
+                }
+                ranked.push({
+                    key: 'environment key light',
+                    source: { direction: keyDir, position: null, intensity: keyEnergy },
+                    directional: true,
+                    slots: [-1], // the key slot, addressed as slotOffset - 1
+                    score: keyEnergy,
+                });
+            }
+
+            ensureShadowTargets();
+            if (!shadowDepthMaterial) shadowDepthMaterial = createShadowDepthMaterial();
+
+            // The backdrop and catcher would wrap the scene and shadow
+            // everything. A statically clear MaterialX surface has no blocker
+            // coverage and is omitted. Partial and graph-connected transmission
+            // stays in the caster set; the shadow writer can consume the same
+            // per-material coverage metadata when it supports fractional depth.
+            const hidden = [];
+            const shadowCallbacks = [];
+            scene.traverse((object) => {
+                const clearTransmission = sceneObjectPrepassCoverage(object) === 0;
+                if (object.isMesh && object.visible && ((object.userData && object.userData.excludeFromFrame) || clearTransmission)) {
+                    hidden.push({ object, visible: object.visible });
+                    object.visible = false;
+                } else if (object.isMesh && object.visible) {
+                    const previous = object.onBeforeRender;
+                    object.onBeforeRender = function (...args) {
+                        if (previous) previous.apply(this, args);
+                        shadowDepthMaterial.uniforms.uCoverage.value = sceneObjectPrepassCoverage(object, args[5] || null);
+                        shadowDepthMaterial.uniformsNeedUpdate = true;
+                    };
+                    shadowCallbacks.push({ object, previous });
+                }
+            });
+
+            const previousTarget = renderer.getRenderTarget();
+            const previousViewport = renderer.getViewport(new THREE.Vector4());
+            const previousScissor = renderer.getScissor(new THREE.Vector4());
+            const previousScissorTest = renderer.getScissorTest();
+            const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
+            const previousClearAlpha = renderer.getClearAlpha();
+            const previousOverrideMaterial = scene.overrideMaterial;
+            const tile = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+            const built = [];
+            try {
+            // Tiling goes on the TARGET, not the renderer: setRenderTarget
+            // copies viewport, scissor and scissorTest off the target itself
+            // (three r128), so renderer.setViewport is overwritten the moment
+            // render() rebinds. Setting it renderer-side left every tile
+            // holding a crop of one full-size render, which showed up as half
+            // the atlas being empty.
+            shadowTarget.viewport.set(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+            shadowTarget.scissorTest = false;
+            renderer.setRenderTarget(shadowTarget);
+            renderer.setClearColor(0xffffff, 1); // white moments read as fully lit
+            renderer.clear();
+            scene.overrideMaterial = shadowDepthMaterial;
+
+            for (let c = 0; c < ranked.length; c++) {
+                const rec = ranked[c];
+                const shadowCamera = buildCasterCamera(rec, box, center, radius);
+                if (!shadowCamera) continue;
+                const col = c % SHADOW_ATLAS_COLS;
+                const row = Math.floor(c / SHADOW_ATLAS_COLS);
+                const px = col * tile;
+                const py = row * tile;
+                shadowTarget.viewport.set(px, py, tile, tile);
+                shadowTarget.scissor.set(px, py, tile, tile);
+                shadowTarget.scissorTest = true;
+                renderer.setRenderTarget(shadowTarget); // re-applies the tile
+                const view = shadowCamera.matrixWorldInverse.elements;
+                const depthRange = Math.max(1e-6, shadowCamera.far - shadowCamera.near);
+                const depthPlane = new THREE.Vector4(
+                    -view[2] / depthRange, -view[6] / depthRange,
+                    -view[10] / depthRange,
+                    (-view[14] - shadowCamera.near) / depthRange
+                );
+                shadowDepthMaterial.uniforms.uDepthPlane.value.copy(depthPlane);
+                shadowDepthMaterial.uniformsNeedUpdate = true;
+                renderer.render(scene, shadowCamera);
+                const receiverView = receiverTarget.clone().applyMatrix4(shadowCamera.matrixWorldInverse);
+                const projectedCorners = [];
+                for (const x of [box.min.x, box.max.x]) {
+                    for (const y of [box.min.y, box.max.y]) {
+                        for (const z of [box.min.z, box.max.z]) {
+                            const clip = new THREE.Vector4(x, y, z, 1).applyMatrix4(shadowCamera.matrixWorldInverse)
+                                .applyMatrix4(shadowCamera.projectionMatrix);
+                            if (Number.isFinite(clip.w) && Math.abs(clip.w) > 1e-9) {
+                                projectedCorners.push([clip.x / clip.w, clip.y / clip.w]);
+                            }
+                        }
+                    }
+                }
+                const projectedSpan = projectedCorners.length ? {
+                    x: Number(((Math.max(...projectedCorners.map((p) => p[0]))
+                        - Math.min(...projectedCorners.map((p) => p[0]))) * 0.5 * tile).toFixed(2)),
+                    y: Number(((Math.max(...projectedCorners.map((p) => p[1]))
+                        - Math.min(...projectedCorners.map((p) => p[1]))) * 0.5 * tile).toFixed(2)),
+                } : null;
+                const sourceExtent = Number(rec.source && rec.source.extent);
+                built.push({
+                    rec,
+                    projection: shadowCamera.isPerspectiveCamera ? 'perspective' : 'orthographic',
+                    near: shadowCamera.near,
+                    far: shadowCamera.far,
+                    fov: shadowCamera.isPerspectiveCamera ? shadowCamera.fov : null,
+                    cameraPosition: shadowCamera.position.toArray(),
+                    aim: shadowCamera.userData && shadowCamera.userData.shadowAim ? shadowCamera.userData.shadowAim.slice() : null,
+                    sourceExtent: Number.isFinite(sourceExtent) ? sourceExtent : 0,
+                    sourceRadius: Number.isFinite(sourceExtent) ? sourceExtent * 0.5 : 0,
+                    projectionScale: shadowCamera.isPerspectiveCamera
+                        ? [shadowCamera.projectionMatrix.elements[0], shadowCamera.projectionMatrix.elements[5]] : null,
+                    receiverDepth: Number.isFinite(-receiverView.z) ? -receiverView.z : null,
+                    projectedStageSpanPixels: projectedSpan,
+                    // Linear light-view depth plane. The fragment shader uses
+                    // this alongside the projected XY coordinates, avoiding
+                    // perspective post-projection depth precision loss while
+                    // retaining the actual emitter projection.
+                    depthPlane,
+                    matrix: new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse),
+                    // Inset by half a texel so trilinear taps cannot reach into
+                    // the neighbouring tile along a shared edge.
+                    tileRect: new THREE.Vector4(
+                        (px + 0.5) / SHADOW_MAP_SIZE,
+                        (py + 0.5) / SHADOW_MAP_SIZE,
+                        (tile - 1) / SHADOW_MAP_SIZE,
+                        (tile - 1) / SHADOW_MAP_SIZE
+                    ),
+                });
+            }
+
+            } finally {
+            scene.overrideMaterial = previousOverrideMaterial;
+            shadowCallbacks.forEach(({ object, previous }) => { object.onBeforeRender = previous; });
+            shadowDepthMaterial.uniforms.uCoverage.value = 1;
+            shadowDepthMaterial.uniformsNeedUpdate = true;
+            // Leave the target as a plain full-size one, or the next pass that
+            // binds it inherits the last tile.
+            shadowTarget.viewport.set(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+            shadowTarget.scissorTest = false;
+            renderer.setRenderTarget(previousTarget);
+            renderer.setViewport(previousViewport);
+            renderer.setScissor(previousScissor);
+            renderer.setScissorTest(previousScissorTest);
+            renderer.setClearColor(previousClearColor, previousClearAlpha);
+            hidden.forEach(({ object, visible }) => { object.visible = visible; });
+            }
+
+            // No blur pass: a separable blur would bleed moments across tile
+            // boundaries, and the bleed reduction in mx_shadow_atlas already
+            // does the softening the blur was there for.
+            shadowCasters = built;
+            shadowSlotCaster.fill(-1);
+            for (let c = 0; c < built.length; c++) {
+                for (const stageIndex of built[c].rec.slots) {
+                    const slot = slotOffset + stageIndex;
+                    if (slot >= 0 && slot < shadowSlotCaster.length) shadowSlotCaster[slot] = c;
+                }
+            }
+            shadowCasterLabel = built.map((b) => b.rec.key).join(', ');
+            shadowDirty = false;
+        };
+        // Renders the AO buffer for the current camera. Cheap enough to run
+        // per frame at half resolution, and it has to: the term is screen
+        // space, so it is invalid the moment the camera moves.
+        const updateAmbientOcclusion = () => {
+            if (!aoEnabled || !sceneRoot) return null;
+            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            const aw = Math.max(1, Math.floor(size.x * AO_SCALE));
+            const ah = Math.max(1, Math.floor(size.y * AO_SCALE));
+            if (aoTarget && (aoTarget.width !== aw || aoTarget.height !== ah)) disposeAoResources();
+            if (!aoTarget) {
+                const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    && !!renderer.extensions.get('EXT_color_buffer_float');
+                // The prepass packs a real view depth into alpha, so it needs
+                // more range than 8 bits; AO itself is a single [0,1] factor.
+                aoPrepassTarget = new THREE.WebGLRenderTarget(aw, ah, {
+                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                    depthBuffer: true, stencilBuffer: false,
+                });
+                const plain = {
+                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+                    depthBuffer: false, stencilBuffer: false,
+                    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+                };
+                aoTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+                aoBlurTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+                aoPrepassMaterial = createAoPrepassMaterial();
+                aoPrepassMaterial.uniforms = { uCoverage: { value: 1 } };
+                aoMaterial = createAoMaterial();
+                aoMaterial.uniforms = {
+                    tPrepass: { value: null }, uProjection: { value: new THREE.Matrix4() },
+                    uInverseProjection: { value: new THREE.Matrix4() }, uSize: { value: new THREE.Vector2() },
+                    uRadius: { value: 1 }, uBias: { value: 0.01 },
+                };
+                aoBlurMaterial = createAoBlurMaterial();
+                aoBlurMaterial.uniforms = { tAo: { value: null }, uTexel: { value: new THREE.Vector2() } };
+                aoQuadScene = new THREE.Scene();
+                aoQuadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial));
+                aoQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            }
+            // Backdrop and shadow catcher would occlude the whole stage. Keep
+            // partial/unknown transmission in this prepass so its static
+            // opaque contribution still participates in contact AO.
+            const hidden = [];
+            const coverageHooks = [];
+            scene.traverse((object) => {
+                const clearTransmission = sceneObjectPrepassCoverage(object) === 0;
+                if (object.isMesh && object.visible && ((object.userData && object.userData.excludeFromFrame) || clearTransmission)) {
+                    hidden.push({ object, visible: object.visible });
+                    object.visible = false;
+                } else if (object.isMesh && object.visible) {
+                    const previousHook = object.onBeforeRender;
+                    object.onBeforeRender = (...args) => {
+                        aoPrepassMaterial.uniforms.uCoverage.value = sceneObjectPrepassCoverage(object, args[5] || null);
+                        aoPrepassMaterial.uniformsNeedUpdate = true;
+                        if (previousHook) previousHook.apply(object, args);
+                    };
+                    coverageHooks.push({ object, previousHook });
+                }
+            });
+            const previousTarget = renderer.getRenderTarget();
+            const previousViewport = renderer.getViewport(new THREE.Vector4());
+            const previousScissor = renderer.getScissor(new THREE.Vector4());
+            const previousScissorTest = renderer.getScissorTest();
+            const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
+            const previousClearAlpha = renderer.getClearAlpha();
+            const previousOverrideMaterial = scene.overrideMaterial;
+            try {
+                scene.overrideMaterial = aoPrepassMaterial;
+                renderer.setRenderTarget(aoPrepassTarget);
+                renderer.setClearColor(0x000000, 0); // alpha 0 marks "no geometry"
+                renderer.clear();
+                renderer.render(scene, camera);
+            } finally {
+                scene.overrideMaterial = previousOverrideMaterial;
+                coverageHooks.forEach(({ object, previousHook }) => { object.onBeforeRender = previousHook; });
+                aoPrepassMaterial.uniforms.uCoverage.value = 1;
+                hidden.forEach(({ object, visible }) => { object.visible = visible; });
+                renderer.setRenderTarget(previousTarget);
+                renderer.setViewport(previousViewport);
+                renderer.setScissor(previousScissor);
+                renderer.setScissorTest(previousScissorTest);
+                renderer.setClearColor(previousClearColor, previousClearAlpha);
+            }
+
+            try {
+            // Radius in world units, scaled to the stage so one setting works
+            // for a teapot and for a room.
+            const box = new THREE.Box3().setFromObject(sceneRoot);
+            const radius = box.isEmpty() ? 1 : Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
+            aoMaterial.uniforms.tPrepass.value = aoPrepassTarget.texture;
+            aoMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
+            aoMaterial.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
+            aoMaterial.uniforms.uSize.value.set(aw, ah);
+            // A WORLD radius, tied to the stage rather than to the view.
+            // Deriving it from what is on screen was wrong: it shrank as the
+            // camera zoomed in, reaching under two units on a desk close-up,
+            // which is far too small to darken anything and is why the term
+            // looked absent exactly where contact shading matters most.
+            // Occlusion is a property of the geometry, not of the framing.
+            // Measured on the Playground: the term is worth about one percent
+            // of the final image there, because it multiplies only the
+            // environment and the environment is under a third of the light on
+            // a lamp-lit desk. Widening it further buys nothing, so this stays
+            // at contact scale rather than pretending to be a global term.
+            aoMaterial.uniforms.uRadius.value = radius * 0.05;
+            aoMaterial.uniforms.uBias.value = radius * 0.0015;
+            aoQuadScene.children[0].material = aoMaterial;
+            renderer.setRenderTarget(aoTarget);
+            renderer.render(aoQuadScene, aoQuadCamera);
+
+            aoBlurMaterial.uniforms.tAo.value = aoTarget.texture;
+            aoBlurMaterial.uniforms.uTexel.value.set(1 / aw, 1 / ah);
+            aoQuadScene.children[0].material = aoBlurMaterial;
+            renderer.setRenderTarget(aoBlurTarget);
+            renderer.render(aoQuadScene, aoQuadCamera);
+
+            return aoBlurTarget.texture;
+            } finally {
+                renderer.setRenderTarget(previousTarget);
+                renderer.setViewport(previousViewport);
+                renderer.setScissor(previousScissor);
+                renderer.setScissorTest(previousScissorTest);
+                renderer.setClearColor(previousClearColor, previousClearAlpha);
+            }
+        };
+        // Pushes the AO buffer onto every live material. Separate from
+        // applyMaterialEnvironment because it runs per frame, so it only
+        // touches the three uniforms that changed.
+        const applyAmbientOcclusion = (texture, width, height) => {
+            for (const material of materials) {
+                if (!material.uniforms) continue;
+                if (material.uniforms.u_ssaoMap) {
+                    material.uniforms.u_ssaoMap.value = texture || (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+                }
+                if (material.uniforms.u_ssaoTexel && width && height) {
+                    material.uniforms.u_ssaoTexel.value.set(1 / width, 1 / height);
+                }
+                if (material.uniforms.u_ssaoStrength) {
+                    material.uniforms.u_ssaoStrength.value = texture ? aoStrength : 0;
+                }
+            }
+        };
+        // Renders the back-face distance map for transmissive prims. Only
+        // runs when the stage has any, so an opaque stage pays nothing.
+        const updateThickness = () => {
+            const list = collectThicknessMeshes();
+            if (!list.length) return null;
+            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            const tw = Math.max(1, Math.floor(size.x));
+            const th = Math.max(1, Math.floor(size.y));
+            if (thicknessTarget && (thicknessTarget.width !== tw || thicknessTarget.height !== th)) {
+                thicknessTarget.dispose();
+                thicknessTarget = null;
+            }
+            if (!thicknessTarget) {
+                const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    && !!renderer.extensions.get('EXT_color_buffer_float');
+                thicknessTarget = new THREE.WebGLRenderTarget(tw, th, {
+                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                    depthBuffer: true, stencilBuffer: false,
+                });
+            }
+            if (!thicknessMaterial) thicknessMaterial = createThicknessMaterial();
+            if (!thicknessDiscardMaterial) {
+                thicknessDiscardMaterial = new THREE.MeshBasicMaterial({
+                    colorWrite: false, depthWrite: false, depthTest: false,
+                });
+            }
+            thicknessMaterial.uniforms = thicknessMaterial.uniforms || {};
+            thicknessMaterial.uniforms.uEye = thicknessMaterial.uniforms.uEye || { value: new THREE.Vector3() };
+            thicknessMaterial.uniforms.uEye.value.copy(camera.position);
+
+            // Only the transmissive meshes take part; everything else would
+            // put its own back faces into the map and bound the wrong medium.
+            if (!thicknessCamera) thicknessCamera = camera.clone();
+            thicknessCamera.copy(camera);
+            thicknessCamera.layers.set(THICKNESS_LAYER);
+            const previousTarget = renderer.getRenderTarget();
+            const previousViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
+            const previousScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
+            const previousScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
+            const previousClearColor = renderer.getClearColor(new THREE.Color());
+            const previousClearAlpha = renderer.getClearAlpha();
+            const previousOverrideMaterial = scene.overrideMaterial;
+            const materialState = new Map();
+            try {
+                // Override material ignores geometry groups, so replace each
+                // candidate mesh's slots explicitly. This keeps opaque
+                // subgroups out of the back-face distance map while retaining
+                // the transmissive subgroup on a mixed USD mesh.
+                list.forEach((object) => {
+                    const original = object.material;
+                    const mats = Array.isArray(original) ? original : [original];
+                    materialState.set(object, original);
+                    const replacement = mats.map((material) => material && material.userData
+                        && material.userData.mtlxSceneVolume ? thicknessMaterial : thicknessDiscardMaterial);
+                    object.material = Array.isArray(original) ? replacement : replacement[0];
+                });
+                scene.overrideMaterial = null;
+                renderer.setRenderTarget(thicknessTarget);
+                renderer.setClearColor(0x000000, 1); // 0 distance means "no medium"
+                renderer.render(scene, thicknessCamera);
+                return thicknessTarget.texture;
+            } finally {
+                materialState.forEach((original, object) => { object.material = original; });
+                scene.overrideMaterial = previousOverrideMaterial;
+                renderer.setRenderTarget(previousTarget);
+                if (renderer.setViewport && previousViewport) renderer.setViewport(previousViewport);
+                if (renderer.setScissor && previousScissor) renderer.setScissor(previousScissor);
+                if (renderer.setScissorTest) renderer.setScissorTest(previousScissorTest);
+                renderer.setClearColor(previousClearColor, previousClearAlpha);
+            }
+        };
+        // Pushes the thickness map onto every live material, per frame.
+        const applyThickness = (texture, width, height) => {
+            for (const material of materials) {
+                if (!material.uniforms || !material.uniforms.u_thicknessMap) continue;
+                material.uniforms.u_thicknessMap.value = texture
+                    || (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+                if (material.uniforms.u_thicknessTexel && width && height) {
+                    material.uniforms.u_thicknessTexel.value.set(1 / width, 1 / height);
+                }
+                if (material.uniforms.u_thicknessScale) {
+                    material.uniforms.u_thicknessScale.value = texture ? thicknessScale : 0;
+                }
+            }
+        };
+        // Refitting the frustum changes only the matrix, so push that alone.
+        // applyMaterialEnvironment rebuilds every material's whole uniform set
+        // and is far too heavy to run on each frame of an orbit.
+        // Bakes the sky visibility volume for the loaded stage. Geometry only,
+        // so it runs once after the bounds are final and never per frame.
+        const buildSkyVisibilityVolume = (stageBox) => {
+            if (skyVisTexture) { try { skyVisTexture.dispose(); } catch (e) {} }
+            skyVisTexture = null;
+            skyVisMin = null;
+            skyVisSize = null;
+            skyVisCell = 0;
+            skyVisInfo = null;
+            if (!skyVisEnabled || !window.buildSkyVisibility || !THREE.DataTexture3D) return;
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return;
+            const meshes = [];
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                if (object.userData && object.userData.excludeFromFrame) return;
+                // A statically clear MaterialX surface is composited after the
+                // opaque environment pass and has no sky blocker coverage.
+                // Partial and graph-connected transmission remains in the bake
+                // with conservative coverage; the CPU baker weights those
+                // cells without changing opaque geometry behavior.
+                const opacity = sceneObjectPrepassCoverage(object);
+                if (opacity === 0) return;
+                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity });
+            });
+            if (!meshes.length) return;
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            let result = null;
+            try {
+                result = window.buildSkyVisibility(meshes, stageBox, { resolution: 48, rays: 32 });
+            } catch (error) {
+                const note = 'Sky visibility bake failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return;
+            }
+            if (!result) return;
+            const texture = new THREE.DataTexture3D(result.data, result.dim[0], result.dim[1], result.dim[2]);
+            // Sky visibility stores first-order moments in RGBA8: R is the
+            // mean visibility and GBA encodes the signed directional term.
+            // Binding RedFormat would drop the directional channels and make
+            // every normal use the same scalar visibility.
+            texture.format = THREE.RGBAFormat;
+            texture.type = THREE.UnsignedByteType;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.wrapR = THREE.ClampToEdgeWrapping;
+            texture.unpackAlignment = 1;
+            texture.needsUpdate = true;
+            skyVisTexture = texture;
+            skyVisCell = result.cell;
+            skyVisMin = new THREE.Vector3(result.min[0], result.min[1], result.min[2]);
+            skyVisSize = new THREE.Vector3(result.size[0], result.size[1], result.size[2]);
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            skyVisInfo = {
+                dim: result.dim.slice(),
+                cell: result.cell,
+                occupiedFraction: result.occupiedFraction,
+                triangles: result.triangles,
+                stride: result.stride,
+                ms,
+            };
+            const note = '[info] Sky visibility baked at ' + result.dim.join('x')
+                + ' (' + result.cell.toFixed(2) + ' units per cell, '
+                + Math.round(result.occupiedFraction * 100) + ' percent of cells inside geometry, '
+                + Math.round(ms) + ' ms)';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+        };
+        // Pushes the baked volume onto every live material without a rebuild.
+        const applySkyVisibility = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_skyVisMap) u.u_skyVisMap.value = (skyVisEnabled && skyVisTexture) ? skyVisTexture : (window.getDummyTex3DWhite ? window.getDummyTex3DWhite() : u.u_skyVisMap.value);
+                if (u.u_skyVisMin && skyVisMin) u.u_skyVisMin.value.copy(skyVisMin);
+                if (u.u_skyVisSize && skyVisSize) u.u_skyVisSize.value.copy(skyVisSize);
+                if (u.u_skyVisCell) u.u_skyVisCell.value = skyVisCell;
+                if (u.u_skyVisStrength) u.u_skyVisStrength.value = (skyVisEnabled && skyVisTexture) ? skyVisStrength : 0;
+            }
+        };
+        const applyShadowMatrix = () => {
+            for (const material of materials) {
+                if (!material.uniforms) continue;
+                const u = material.uniforms;
+                if (u.u_shadowAtlas) {
+                    u.u_shadowAtlas.value = (shadowsEnabled && shadowTarget)
+                        ? shadowTarget.texture
+                        : (window.getDummyTexWhite ? window.getDummyTexWhite() : u.u_shadowAtlas.value);
+                }
+                if (u.u_shadowMatrices) {
+                    const src = shadowCasterMatrices();
+                    for (let i = 0; i < src.length; i++) u.u_shadowMatrices.value[i].copy(src[i]);
+                }
+                if (u.u_shadowTiles) {
+                    const src = shadowCasterTiles();
+                    for (let i = 0; i < src.length; i++) u.u_shadowTiles.value[i].copy(src[i]);
+                }
+                if (u.u_shadowDepthPlanes) {
+                    const src = shadowCasterDepthPlanes();
+                    for (let i = 0; i < src.length; i++) u.u_shadowDepthPlanes.value[i].copy(src[i]);
+                }
+                if (u.u_shadowDepthRanges) {
+                    const src = shadowCasterDepthRanges();
+                    for (let i = 0; i < src.length; i++) u.u_shadowDepthRanges.value[i].copy(src[i]);
+                }
+                // Area-light PCSS uses the same authored source extent for the
+                // receiver lookup as the shadow-map fit.  Keep this optional so
+                // older generated materials continue to render while the
+                // engine-side uniform rolls out.
+                if (u.u_shadowSourceRadii) {
+                    const src = shadowCasterSourceRadii();
+                    for (let i = 0; i < src.length; i++) u.u_shadowSourceRadii.value[i].copy(src[i]);
+                }
+                if (u.u_shadowSlotCaster) u.u_shadowSlotCaster.value.set(shadowSlotCaster);
+            }
+        };
         const applyMaterialEnvironment = () => {
+            if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
                 console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');
@@ -998,7 +2816,12 @@ const createMtlxSceneView = async ({
                 const compiled = material.userData && material.userData.mtlxSceneCompiled;
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const next = window.createMtlxSceneUniforms({
-                    compiled, env, lightData: mxEnv.lightData || [],
+                    compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
+            shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowSlotCaster,
+            skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
+                    envTilt,
+                    thicknessScale, refractionTwoSided: true,
                     envRotationRad, envExposure,
                 });
                 for (const [name, slot] of Object.entries(next)) {
@@ -1011,24 +2834,106 @@ const createMtlxSceneView = async ({
                 material.uniformsNeedUpdate = true;
             }
         };
+        // Keeps three's built-in materials (the backdrop sky, the studio parts,
+        // the shadow catcher) on the same curve and the same exposure as the
+        // MaterialX materials in front of them. CustomToneMapping carries our
+        // own chunk, so every mode agrees; without it the backdrop had no curve
+        // at all in srgb and could not respond to exposure in any mode.
+        // Both the curve and the exposure are uniforms, so a change is one write
+        // per material instead of regenerating every shader in the stage.
+        // Exposure is shared with the other tools; the curve is scene-local.
+        const pushDisplaySettings = () => {
+            const scale = window.displayExposureScale ? window.displayExposureScale() : 1;
+            const id = window.displayTransformId ? window.displayTransformId(sceneDisplayTransform) : 0;
+            materials.forEach((material) => {
+                const u = material.uniforms;
+                if (!u) return;
+                if (u.u_displayExposure) u.u_displayExposure.value = scale;
+                if (u.u_displayTransform) u.u_displayTransform.value = id;
+            });
+            updateRendererDisplayTransform();
+        };
+        const updateRendererDisplayTransform = () => {
+            const mode = sceneDisplayTransform;
+            const custom = window.applyThreeToneMappingChunk && window.applyThreeToneMappingChunk(mode);
+            if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
+            if ('toneMapping' in renderer) {
+                renderer.toneMapping = custom ? THREE.CustomToneMapping
+                    : (mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
+                renderer.toneMappingExposure = window.displayExposureScale ? window.displayExposureScale() : 1;
+            }
+            // The chunk is a compile-time include, so a mode change needs the
+            // built-ins recompiled; three r128's needsProgramChange never fires
+            // on a toneMapping-only change.
+            scene.traverse((obj) => {
+                if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
+            });
+        };
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
         // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
         renderer.resetState();
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         renderer.setClearColor(0x111827, 1);
-        const displayTransform = window.getDisplayTransform && window.getDisplayTransform();
-        if (displayTransform && 'outputEncoding' in renderer) {
-            renderer.outputEncoding = displayTransform === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-        }
-        if ('toneMapping' in renderer) {
-            renderer.toneMapping = displayTransform === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-            renderer.toneMappingExposure = 1;
-        }
-        // linearComposite:false forces the display-space peel path (the
-        // Scene's u_peelLinear stays hard 0, see createMtlxSceneUniforms);
-        // a linear merged pass is a recorded follow-up, not this pass.
-        peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, { linearComposite: false }) : null;
+        // Same fallback as updateRendererDisplayTransform: without it a missing
+        // getDisplayTransform left outputEncoding at Linear while the shaders
+        // still emitted sRGB, so objects and backdrop disagreed.
+        updateRendererDisplayTransform();
+        // The Scene uses the float linear composite when the GPU exposes
+        // EXT_color_buffer_float. MaterialX layers and the built-in backdrop
+        // are then transformed exactly once by the final composite quad.
+        // Viewer parity remains in createMtlxRenderView, which supplies its
+        // own transform/exposure callbacks.
+        let sceneLinearState = null;
+        const setSceneLinear = (on) => {
+            if (!on) {
+                if (!sceneLinearState) return;
+                sceneLinearState.materials.forEach((value, material) => {
+                    material.toneMapped = value.toneMapped;
+                    if (material.uniforms && material.uniforms.uLinearOut) material.uniforms.uLinearOut.value = value.linearOut;
+                    material.needsUpdate = true;
+                });
+                if (sceneLinearState.toneMapping != null) renderer.toneMapping = sceneLinearState.toneMapping;
+                if (sceneLinearState.outputEncoding != null) renderer.outputEncoding = sceneLinearState.outputEncoding;
+                sceneLinearState = null;
+                return;
+            }
+            if (sceneLinearState) return;
+            sceneLinearState = {
+                toneMapping: renderer.toneMapping,
+                outputEncoding: renderer.outputEncoding,
+                materials: new Map(),
+            };
+            scene.traverse((object) => {
+                const list = object && object.material
+                    ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+                list.forEach((material) => {
+                    if (!material || sceneLinearState.materials.has(material)) return;
+                    const isMaterialX = !!(material.userData && material.userData.mtlxSceneCompiled);
+                    const hasLinearOut = !!(material.uniforms && material.uniforms.uLinearOut);
+                    // Raw MaterialX shaders are switched by u_peelLinear in
+                    // the shared pipeline. Built-ins need tone mapping and
+                    // output encoding disabled while writing the float RT;
+                    // the studio gradient has its own uLinearOut inverse.
+                    if (isMaterialX) return;
+                    sceneLinearState.materials.set(material, {
+                        toneMapped: material.toneMapped,
+                        linearOut: hasLinearOut ? material.uniforms.uLinearOut.value : 0,
+                    });
+                    material.toneMapped = false;
+                    if (hasLinearOut) material.uniforms.uLinearOut.value = 1;
+                    material.needsUpdate = true;
+                });
+            });
+            renderer.toneMapping = THREE.NoToneMapping;
+            if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.LinearEncoding;
+        };
+        peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, {
+            getDisplayTransform: () => sceneDisplayTransform,
+            getDisplayExposure: () => (window.displayExposureScale ? window.displayExposureScale() : 1),
+            linearComposite: true, sceneRgbt: true,
+            opaqueOutput: true,
+        }) : null;
         if (THREE.OrbitControls) {
             controls = new THREE.OrbitControls(camera, canvas);
             controls.enableDamping = true;
@@ -1042,6 +2947,10 @@ const createMtlxSceneView = async ({
         if (window.createUsdSceneEnvironment) {
             environmentBridge = window.createUsdSceneEnvironment({ scene, renderer, camera, contentRoot: sceneRoot });
             if (env) environmentBridge.setEnvironment(env);
+            if (domeLight) {
+                environmentBridge.setEnvRotation(envRotationRad);
+                environmentBridge.setEnvExposure(envExposure);
+            }
         }
         for (let i = 0; i < stage.meshes.length; i++) {
             if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
@@ -1114,9 +3023,21 @@ const createMtlxSceneView = async ({
         }
         await awaitTextureJobs(pendingTextures);
         if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+        const stageBox = new THREE.Box3().setFromObject(sceneRoot);
         if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
-            environmentBridge.updateBounds(new THREE.Box3().setFromObject(sceneRoot));
+            environmentBridge.updateBounds(stageBox);
         }
+        // Now that the stage has real bounds, redo the light split with the
+        // distances it needs. The info lines from the first pass are already
+        // deduped by primPath, so this only adds ones that actually changed.
+        if (!stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
+        // Geometry and lights are final here, so draw the map once before the
+        // first frame rather than leaving the opening frames unshadowed.
+        // Materials were built during the geometry pass, before the volume
+        // existed, so push it onto them once it does.
+        buildSkyVisibilityVolume(stageBox);
+        applySkyVisibility();
+        if (shadowsEnabled) updateShadowMap();
         applyMaterialEnvironment();
         const resize = () => {
             if (!renderer || !container || resizeSuspended) return;
@@ -1153,6 +3074,24 @@ const createMtlxSceneView = async ({
         const getCameras = () => sceneArray(stage.cameras).map((record) => ({
             primPath: String(record.primPath || ''),
             name: String(record.name || record.primPath || ''),
+        }));
+        // The dome light the stage supplied, so the Environment card can show
+        // what is actually applied instead of its own stale defaults.
+        const getDomeLight = () => (domeLight ? Object.assign({}, domeLight) : null);
+        // Restores the stage's own dome after a user import, so Reset means
+        // "back to how this stage was authored" when the stage supplied one.
+        const applyDomeLight = () => {
+            if (!domeEnv || !domeLight || stopped) return false;
+            env = domeEnv;
+            if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(domeEnv);
+            setEnvRotation(domeLight.rotationDeg * Math.PI / 180);
+            setEnvExposure(domeLight.exposure);
+            return true;
+        };
+        const getLights = () => sceneArray(stage.lights).map((record) => ({
+            primPath: String(record.primPath || ''),
+            name: String(record.name || record.primPath || ''),
+            type: String(record.type || ''),
         }));
         // Positions the camera/controls rig at a USD camera prim's composed
         // world pose. Fov is set directly from the aperture/focal length
@@ -1201,17 +3140,6 @@ const createMtlxSceneView = async ({
             return true;
         };
         const resetCamera = () => { applyCamera(selectedCameraPath); };
-        const updateRendererDisplayTransform = () => {
-            const mode = window.getDisplayTransform ? window.getDisplayTransform() : 'srgb';
-            if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-            if ('toneMapping' in renderer) {
-                renderer.toneMapping = mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-                // Exposure is applied exactly once, through u_envLightIntensity
-                // (applyMaterialEnvironment/envExposure below), matching the
-                // Viewer (js/mtlx-engine.js pins this to 1.0 too).
-                renderer.toneMappingExposure = 1;
-            }
-        };
         const disposeMaterial = (material) => {
             if (!material) return;
             materials.delete(material);
@@ -1227,6 +3155,15 @@ const createMtlxSceneView = async ({
             invalidateTransparentMeshCache();
         };
         const rebuildDisplayMaterials = async () => {
+            // Renderer state first, and unconditionally: it is cheap and
+            // idempotent, and the early return below (no material regenerated)
+            // and the catch path both used to skip it, which left the backdrop
+            // on the previous transform for good on any stage whose materials
+            // all failed, or that had none at all.
+            updateRendererDisplayTransform();
+            if (environmentBridge && typeof environmentBridge.refreshDisplayTransform === 'function') {
+                environmentBridge.refreshDisplayTransform();
+            }
             // Every material regenerates below, so drop stale reservations
             // and byte counters up front (as setTextureMaxSize/
             // setTextureBudgetBytes already do before enqueueing this).
@@ -1303,15 +3240,26 @@ const createMtlxSceneView = async ({
                     oldUdimCache.forEach((value, key) => udimVariantByMaterial.set(key, value));
                     continue;
                 }
-                if (replacementInfo.size !== materialRecords.size
-                    || Array.from(replacementInfo.values()).some((info) => !info || !info.compiled)) {
+                // Partial refresh: a stage with one un-compilable material used
+                // to discard the whole rebuild, so switching sRGB to ACES did
+                // nothing at all on any large stage. Keep every material that
+                // did regenerate and leave the failures on their old shader.
+                const failed = [];
+                for (const [path, info] of replacementInfo) {
+                    if (!info || !info.compiled) failed.push(path);
+                }
+                if (failed.length) {
+                    warnings.push('USD display-transform refresh kept ' + failed.length
+                        + ' material(s) on the previous shader because they failed to regenerate: ' + failed.slice(0, 3).join(', ')
+                        + (failed.length > 3 ? ', ...' : ''));
+                }
+                if (!replacements.size) {
                     provisional.forEach(disposeMaterial);
                     rebuildingProvisional = null;
                     udimVariantByMaterial.clear();
                     oldUdimCache.forEach((value, key) => udimVariantByMaterial.set(key, value));
                     displayDirty = false;
-                    warnings.push('USD display-transform refresh kept the previous materials because one or more materials failed to regenerate.');
-                    report({ phase: 'display-transform', status: 'error', value: targetMode, error: 'incomplete material regeneration' });
+                    report({ phase: 'display-transform', status: 'error', value: targetMode, error: 'no material regenerated' });
                     return;
                 }
                 replaceMaterialReferences(replacements);
@@ -1320,9 +3268,10 @@ const createMtlxSceneView = async ({
                 // must drop the pipeline; re-apply modes from each new
                 // material's own userData so the peel/opaque split survives.
                 if (window.applyPeelMaterialMode) {
-                    const forceOn = window.getForceTransparency && window.getForceTransparency();
+                    const forceOn = sceneTransparencyEnabled();
                     replacements.forEach((material) => {
-                        window.applyPeelMaterialMode(material, !!(material.userData && material.userData.mtlxSceneTransparent) && forceOn);
+                        window.applyPeelMaterialMode(material, !!(material.userData
+                            && (material.userData.mtlxScenePeel ?? material.userData.mtlxSceneTransparent)) && forceOn);
                     });
                 }
                 if (peelPipeline) peelPipeline.dispose();
@@ -1460,16 +3409,149 @@ const createMtlxSceneView = async ({
             sceneRoot.traverse((object) => {
                 if (!object || !object.isMesh || !object.material) return;
                 const mats = Array.isArray(object.material) ? object.material : [object.material];
-                if (mats.some((m) => m && m.userData && m.userData.mtlxSceneTransparent)) list.push(object);
+                if (mats.some((m) => m && m.userData && (m.userData.mtlxScenePeel
+                    ?? m.userData.mtlxSceneTransparent))) list.push(object);
             });
             transparentMeshCache = list;
             return list;
         };
+        // Thickness is a separate volume participant set. In particular, the
+        // shader injector reserves u_thicknessScale on opaque programs too;
+        // that uniform is not evidence that a mesh belongs in this capture.
+        const collectThicknessMeshes = () => {
+            if (thicknessMeshCache) return thicknessMeshCache;
+            const list = [];
+            sceneRoot.traverse((object) => {
+                if (!object || !object.isMesh || !object.material) return;
+                object.layers.disable(THICKNESS_LAYER);
+                const mats = Array.isArray(object.material) ? object.material : [object.material];
+                if (mats.some((m) => m && m.userData && m.userData.mtlxSceneVolume)) {
+                    object.layers.enable(THICKNESS_LAYER);
+                    list.push(object);
+                }
+            });
+            thicknessMeshCache = list;
+            return list;
+        };
+        // The full peel set, one entry per prim, for the sidebar. MaterialX
+        // classifies transparency as a threshold-free boolean, so a material
+        // with transmission 0.05 lands here beside genuinely clear glass.
+        const getTransparentPrims = () => collectTransparentMeshes().map((object) => {
+            const mats = Array.isArray(object.material) ? object.material : [object.material];
+            const hit = mats.find((m) => m && m.userData
+                && (m.userData.mtlxScenePeel ?? m.userData.mtlxSceneTransparent));
+            return {
+                primPath: String((object.userData && object.userData.primPath) || object.name || 'unknown'),
+                materialPath: String((hit && hit.userData && hit.userData.mtlxSceneMaterialPath) || 'unknown'),
+            };
+        }).sort((a, b) => a.primPath.localeCompare(b.primPath));
         const renderFrame = () => {
-            const forceOn = window.getForceTransparency && window.getForceTransparency();
+            ensureShadowCurrent();
+            // AO first: the materials sample its buffer, so it has to be
+            // valid for THIS camera before any of them draw.
+            if (aoEnabled) {
+                const aoTexture = updateAmbientOcclusion();
+                const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+                applyAmbientOcclusion(aoTexture, size.x, size.y);
+            }
+            // Volume absorption needs a path length whether or not the
+            // peel pipeline is running, so this is not gated on the toggle.
+            {
+                const thicknessTexture = updateThickness();
+                const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+                applyThickness(thicknessTexture, size.x, size.y);
+            }
+            const forceOn = sceneTransparencyEnabled();
+            // The shadow caster set changes when Scene transparency toggles:
+            // transparent meshes are excluded from the opaque VSM pass, so
+            // rebuild once at the transition even if the camera is stationary.
+            if (shadowsEnabled && shadowForceState !== forceOn) {
+                shadowForceState = forceOn;
+                updateShadowMap();
+                applyShadowMatrix();
+            }
             const list = forceOn ? collectTransparentMeshes() : [];
-            if (peelPipeline && forceOn && list.length) peelPipeline.render(scene, camera, list);
-            else renderer.render(scene, camera);
+            if (peelPipeline && forceOn && list.length) {
+                const payloadMaterials = [];
+                const unsupportedLabels = [];
+                const seenPayload = new Set();
+                list.forEach((object) => {
+                    const mats = Array.isArray(object.material) ? object.material : [object.material];
+                    mats.forEach((material) => {
+                        if (!material || seenPayload.has(material) || !material.uniforms?.u_peelMode) return;
+                        seenPayload.add(material);
+                        payloadMaterials.push(material);
+                        if (!material.uniforms.u_peelRgbtPass || !material.uniforms.u_peelRgbt) {
+                            unsupportedLabels.push(String(material.userData?.mtlxSceneMaterialPath || material.name || 'material'));
+                        }
+                    });
+                });
+                sceneRgbtState.mode = 'rgbt';
+                sceneRgbtState.reason = null;
+                sceneRgbtState.payloadMaterials = payloadMaterials.length;
+                sceneRgbtState.unsupportedLabels = unsupportedLabels.slice(0, 32);
+                try {
+                    peelPipeline.render(scene, camera, list, {
+                        setSceneLinear,
+                        onUnsupported: (reason) => {
+                            sceneRgbtState.mode = 'legacy';
+                            sceneRgbtState.reason = String(reason || 'RGBT unsupported');
+                            sceneRgbtState.unsupportedLabels = unsupportedLabels.slice(0, 32);
+                            const warning = '[info] Scene RGB-T fallback: ' + sceneRgbtState.reason;
+                            if (!warnings.includes(warning)) warnings.push(warning);
+                        },
+                    });
+                } finally {
+                    // createPeelPipeline restores MaterialX u_peelLinear in
+                    // its own finally block; the Scene owns the renderer and
+                    // built-in material state around that callback.
+                    setSceneLinear(false);
+                }
+            } else {
+                sceneRgbtState.mode = forceOn ? 'opaque' : 'inactive';
+                sceneRgbtState.reason = null;
+                sceneRgbtState.payloadMaterials = 0;
+                sceneRgbtState.unsupportedLabels = [];
+                renderer.render(scene, camera);
+            }
+        };
+        // The shadow frustum is fitted to the camera, so it goes stale the
+        // moment the camera moves. Compared against the last fit rather than
+        // redrawn every frame: an orbit that has come to rest costs nothing.
+        let shadowCameraKey = '';
+        let shadowForceState = null;
+        const shadowViewChanged = () => {
+            const e = camera.matrixWorld.elements;
+            const key = camera.position.toArray().concat([e[8], e[9], e[10], camera.fov, camera.aspect])
+                .map((n) => (Math.round(n * 1000) / 1000)).join(',');
+            if (key === shadowCameraKey) return false;
+            shadowCameraKey = key;
+            return true;
+        };
+        // Keep every render entry point honest. Previously only the RAF loop
+        // refreshed camera-dependent shadows, so renderNow()/snapshot() after
+        // an authored-camera or capture-size change could present a stale
+        // atlas. The render loop and synchronous capture paths share this
+        // gate through renderFrame().
+        const ensureShadowCurrent = () => {
+            if (shadowsEnabled && shadowViewChanged()) {
+                updateShadowMap();
+                applyShadowMatrix();
+            }
+        };
+        sceneTransparencyRefresh = () => {
+            if (stopped) return;
+            const enabled = sceneTransparencyEnabled();
+            let anyTransparent = false;
+            materials.forEach((material) => {
+                const transparent = !!(material.userData && (material.userData.mtlxScenePeel
+                    ?? material.userData.mtlxSceneTransparent));
+                if (transparent) anyTransparent = true;
+                if (window.applyPeelMaterialMode) window.applyPeelMaterialMode(material, transparent && enabled);
+            });
+            invalidateTransparentMeshCache();
+            if (peelPipeline && (!enabled || !anyTransparent)) peelPipeline.dispose();
+            renderFrame();
         };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
@@ -1488,18 +3570,110 @@ const createMtlxSceneView = async ({
             env = next;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(next);
             applyMaterialEnvironment();
+            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return true;
         };
         const setEnvRotation = (radians) => {
             envRotationRad = Number(radians) || 0;
             if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad);
             applyMaterialEnvironment();
+            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envRotationRad;
         };
+        // Stage lights are live: both controls only re-push uniforms, no
+        // recompile, because the slots were reserved at generation time.
+        const setShadowsEnabled = (on) => {
+            shadowsEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            updateShadowMap();
+            applyShadowMatrix();
+            applyMaterialEnvironment();
+            return shadowsEnabled;
+        };
+        const getShadows = () => ({ enabled: shadowsEnabled, ready: !!shadowTarget });
+        // AO is a pure screen-space pass, so turning it off just stops
+        // running it and resets the uniform: no recompile, no rebuild.
+        // The Scene's own view transform. A uniform, so switching costs one
+        // write per material rather than regenerating every shader; the shared
+        // Material Viewer setting is deliberately left alone.
+        const getSceneDisplayTransform = () => sceneDisplayTransform;
+        const setSceneDisplayTransform = (mode) => {
+            const allowed = (window.getDisplayTransformValues && window.getDisplayTransformValues()) || [];
+            if (!allowed.includes(mode) || mode === sceneDisplayTransform) return sceneDisplayTransform;
+            sceneDisplayTransform = mode;
+            try {
+                if (window.top === window) localStorage.setItem(SCENE_DISPLAY_TRANSFORM_KEY, mode);
+            } catch (e) { /* privacy mode */ }
+            pushDisplaySettings();
+            renderFrame();
+            return sceneDisplayTransform;
+        };
+        const setSkyVisibility = (on) => {
+            const next = !!on;
+            if (next === skyVisEnabled) return skyVisEnabled;
+            skyVisEnabled = next;
+            try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_KEY, skyVisEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            // Turning it back on has to re-bake: the volume is dropped when off.
+            if (skyVisEnabled && !skyVisTexture && sceneRoot) {
+                buildSkyVisibilityVolume(new THREE.Box3().setFromObject(sceneRoot));
+            }
+            applySkyVisibility();
+            renderFrame();
+            return skyVisEnabled;
+        };
+        const setSkyVisibilityStrength = (value) => {
+            skyVisStrength = Math.max(0, Math.min(1, Number(value) || 0));
+            try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_STRENGTH_KEY, String(skyVisStrength)); } catch (e) { /* privacy mode */ }
+            applySkyVisibility();
+            renderFrame();
+            return skyVisStrength;
+        };
+        const getSkyVisibility = () => ({
+            enabled: skyVisEnabled,
+            strength: skyVisStrength,
+            ready: !!skyVisTexture,
+            info: skyVisInfo ? Object.assign({}, skyVisInfo) : null,
+        });
+        const setAmbientOcclusionEnabled = (on) => {
+            aoEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
+            return aoEnabled;
+        };
+        const setAmbientOcclusionStrength = (value) => {
+            const next = Number(value);
+            aoStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
+            try { if (window.top === window) localStorage.setItem(SCENE_AO_STRENGTH_KEY, String(aoStrength)); } catch (e) { /* privacy mode */ }
+            return aoStrength;
+        };
+        const getAmbientOcclusion = () => ({ enabled: aoEnabled, strength: aoStrength });
+        const setStageLightsEnabled = (on) => {
+            stageLightsEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            // The active stage-light set also determines caster ranking and
+            // slot ownership. Rebuild immediately so toggling the rig cannot
+            // leave an atlas tile shadowing a light that is no longer active.
+            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            applyMaterialEnvironment();
+            return stageLightsEnabled;
+        };
+        const setStageLightsEv = (value) => {
+            stageLightsEv = Math.max(-8, Math.min(8, Number(value) || 0));
+            if (shadowsEnabled) updateShadowMap();
+            try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_EV_KEY, String(stageLightsEv)); } catch (e) { /* privacy mode */ }
+            applyMaterialEnvironment();
+            return stageLightsEv;
+        };
+        const getStageLights = () => ({
+            count: stageLights.length,
+            enabled: stageLightsEnabled,
+            ev: stageLightsEv,
+        });
         const setEnvExposure = (value) => {
             envExposure = Math.max(0, Number(value) || 0);
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
             applyMaterialEnvironment();
+            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envExposure;
         };
         // Changes the ordinary-texture resolution cap, persists it (top
@@ -1550,6 +3724,10 @@ const createMtlxSceneView = async ({
             return sceneOptions.textureMaxBytes;
         };
         const getTextureBudgetBytes = () => sceneOptions.textureMaxBytes;
+        if (textureStats.ktx2Substituted > 0) {
+            warnings.push('[info] ' + textureStats.ktx2Substituted + ' texture' + (textureStats.ktx2Substituted === 1 ? '' : 's')
+                + ' loaded from KTX2 sibling' + (textureStats.ktx2Substituted === 1 ? '' : 's'));
+        }
         const handle = {
             scene, camera, renderer, controls, prims, warnings, textureStats,
             udimStats: {
@@ -1560,7 +3738,12 @@ const createMtlxSceneView = async ({
                 get bytes() { return textureStats.udimBytes; },
             },
             resize, frameAll,
-            getCameras, applyCamera, resetCamera,
+            getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
+            setStageLightsEnabled, setStageLightsEv, getStageLights,
+            setShadowsEnabled, getShadows, getTransparentPrims,
+            setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
+            getSceneDisplayTransform, setSceneDisplayTransform,
+            setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
@@ -1584,6 +3767,7 @@ const createMtlxSceneView = async ({
                 budgetBytes: sceneOptions.textureMaxBytes,
                 plannedBytes,
                 fullBytes,
+                ktx2Substituted: textureStats.ktx2Substituted,
             }),
             getSamplerReport: () => samplerReport.slice(),
             setBackdrop: (mode) => {
@@ -1688,24 +3872,33 @@ const createMtlxSceneView = async ({
             // through LIVE_VIEWS. Drops the pipeline when peeling turns off
             // or nothing in the scene is transparent (nothing to free by
             // keeping it allocated).
+            // Camera exposure is a uniform, so this never regenerates a shader:
+            // one write per material plus the renderer's own knob for the
+            // built-in backdrop. Broadcast by setDisplayExposure via LIVE_VIEWS.
+            refreshDisplaySettings: () => {
+                if (stopped) return;
+                pushDisplaySettings();
+                renderFrame();
+            },
             refreshRenderMode: () => {
                 if (stopped) return;
-                const forceOn = window.getForceTransparency && window.getForceTransparency();
-                let anyTransparent = false;
-                materials.forEach((material) => {
-                    const transparent = !!(material.userData && material.userData.mtlxSceneTransparent);
-                    if (transparent) anyTransparent = true;
-                    if (window.applyPeelMaterialMode) window.applyPeelMaterialMode(material, transparent && forceOn);
-                });
-                invalidateTransparentMeshCache();
-                if (peelPipeline && (!forceOn || !anyTransparent)) peelPipeline.dispose();
+                if (sceneTransparencyRefresh) sceneTransparencyRefresh();
             },
             dispose: () => {
                 if (stopped) return;
                 stopped = true;
+                disposeShadowResources();
+                disposeAoResources();
+                disposeThicknessResources();
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
+                    window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
                     displayTransformListener = null;
+                }
+                if (sceneTransparencyListener) {
+                    window.removeEventListener('mtlx-usd-scene-transparency', sceneTransparencyListener);
+                    sceneTransparencyListener = null;
+                    sceneTransparencyRefresh = null;
                 }
                 if (raf) cancelAnimationFrame(raf);
                 if (resizeObserver) resizeObserver.disconnect();
@@ -1727,7 +3920,197 @@ const createMtlxSceneView = async ({
             },
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
-            __debug: () => ({ renderer, scene, camera, materials: Array.from(materials) }),
+            __debug: () => ({ renderer, scene, camera, materials: Array.from(materials), thicknessScale, thicknessTarget,
+                sceneRgbt: Object.assign({}, sceneRgbtState) }),
+            // Reads the moments map back. An all-1.0 map means the depth pass
+            // drew nothing, which looks identical to a correctly bound shadow
+            // that simply never darkens anything.
+            // Reads the AO buffer back. A mean near 1.0 means the pass ran but
+            // found no occlusion, which looks identical on screen to the pass
+            // never running at all.
+            __aoDebug: () => {
+                const t = aoBlurTarget || aoTarget;
+                if (!t) return { ready: false };
+                const w = Math.min(128, t.width), hgt = Math.min(128, t.height);
+                const buf = new Uint8Array(w * hgt * 4);
+                const prev = renderer.getRenderTarget();
+                try {
+                    renderer.readRenderTargetPixels(t, Math.floor((t.width - w) / 2), Math.floor((t.height - hgt) / 2), w, hgt, buf);
+                } catch (e) { renderer.setRenderTarget(prev); return { ready: true, error: String(e && e.message || e) }; }
+                renderer.setRenderTarget(prev);
+                let mn = 255, mx = 0, sum = 0, n = 0;
+                for (let i = 0; i < buf.length; i += 4) { const v = buf[i]; if (v < mn) mn = v; if (v > mx) mx = v; sum += v; n++; }
+                return { ready: true, size: [t.width, t.height], min: mn, max: mx, mean: +(sum / n).toFixed(1),
+                    radius: aoMaterial ? aoMaterial.uniforms.uRadius.value : null,
+                    bias: aoMaterial ? aoMaterial.uniforms.uBias.value : null };
+            },
+            __shadowDebug: () => {
+                if (!shadowTarget) return { ready: false };
+                const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+                const w = 160;
+                const prev = renderer.getRenderTarget();
+                const tiles = [];
+                try {
+                    renderer.setRenderTarget(shadowTarget);
+                    for (let c = 0; c < SHADOW_CASTERS; c++) {
+                        const col = c % SHADOW_ATLAS_COLS;
+                        const row = Math.floor(c / SHADOW_ATLAS_COLS);
+                        const ox = col * tileSize + Math.floor((tileSize - w) / 2);
+                        const oy = row * tileSize + Math.floor((tileSize - w) / 2);
+                        const buf = new Float32Array(w * w * 4);
+                        renderer.readRenderTargetPixels(shadowTarget, ox, oy, w, w, buf);
+                        let mn = Infinity, mx = -Infinity, sum = 0, n = 0, cleared = 0;
+                        for (let i = 0; i < buf.length; i += 4) {
+                            const v = buf[i];
+                            if (!Number.isFinite(v)) continue;
+                            if (v >= 0.99999) cleared++;
+                            if (v < mn) mn = v;
+                            if (v > mx) mx = v;
+                            sum += v; n++;
+                        }
+                        tiles.push({
+                            caster: shadowCasters[c] ? shadowCasters[c].rec.key : null,
+                            projection: shadowCasters[c] ? shadowCasters[c].projection : null,
+                            near: shadowCasters[c] ? Number(shadowCasters[c].near.toFixed(5)) : null,
+                            far: shadowCasters[c] ? Number(shadowCasters[c].far.toFixed(5)) : null,
+                            fov: shadowCasters[c] && shadowCasters[c].fov != null ? Number(shadowCasters[c].fov.toFixed(3)) : null,
+                            cameraPosition: shadowCasters[c] ? shadowCasters[c].cameraPosition.map((v) => Number(v.toFixed(4))) : null,
+                            aim: shadowCasters[c] && shadowCasters[c].aim ? shadowCasters[c].aim.map((v) => Number(v.toFixed(4))) : null,
+                            sourceKind: shadowCasters[c] && shadowCasters[c].rec && shadowCasters[c].rec.source
+                                ? Number(shadowCasters[c].rec.source.sourceKind || 0) : null,
+                            sourceExtent: shadowCasters[c] ? shadowCasters[c].sourceExtent : null,
+                            sourceRadius: shadowCasters[c] ? shadowCasters[c].sourceRadius : null,
+                            projectionScale: shadowCasters[c] ? shadowCasters[c].projectionScale : null,
+                            receiverDepth: shadowCasters[c] ? shadowCasters[c].receiverDepth : null,
+                            projectedStageSpanPixels: shadowCasters[c] ? shadowCasters[c].projectedStageSpanPixels : null,
+                            min: Number(mn.toFixed(5)), max: Number(mx.toFixed(5)),
+                            mean: Number((sum / Math.max(1, n)).toFixed(5)),
+                            clearedFraction: Number((cleared / Math.max(1, n)).toFixed(3)),
+                        });
+                    }
+                } catch (e) {
+                    renderer.setRenderTarget(prev);
+                    return { ready: true, error: String(e && e.message || e) };
+                }
+                renderer.setRenderTarget(prev);
+                const prepass = { opaque: 0, partial: 0, clear: 0, unknown: 0 };
+                const seenMaterials = new Set();
+                scene.traverse((object) => {
+                    if (!object || !object.isMesh || !object.material) return;
+                    const mats = Array.isArray(object.material) ? object.material : [object.material];
+                    mats.forEach((material) => {
+                        if (!material || seenMaterials.has(material)) return;
+                        seenMaterials.add(material);
+                        const info = material && material.userData && material.userData.mtlxScenePrepassCoverage;
+                        if (!info || info.mode === 'unknown') prepass.unknown++;
+                        else if (info.mode === 'clear') prepass.clear++;
+                        else if (info.mode === 'static' && Number(info.opacity) < 0.99999) prepass.partial++;
+                        else prepass.opaque++;
+                    });
+                });
+                return {
+                    ready: true,
+                    tiles,
+                    casters: shadowCasters.length,
+                    shadowedSlots: Array.from(shadowSlotCaster).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
+                    prepass,
+                };
+            },
+            // Scratch diagnostics can probe the exact moments lookup at a
+            // receiver hit. This is intentionally read-only and unavailable
+            // to the product UI; it makes an atlas-coverage claim testable by
+            // reporting the projected UV, linear receiver depth, sampled
+            // moments and Chebyshev visibility for one world-space point.
+            __shadowProbe: (point, casterIndex = 0) => {
+                const c = Math.floor(Number(casterIndex));
+                const b = shadowCasters[c];
+                if (!b || !point || !Array.isArray(point) || point.length < 3) return { ready: false };
+                const p = new THREE.Vector3(Number(point[0]), Number(point[1]), Number(point[2]));
+                const c4 = new THREE.Vector4(p.x, p.y, p.z, 1).applyMatrix4(b.matrix);
+                if (!Number.isFinite(c4.w) || c4.w <= 0) return { ready: true, inside: false, reason: 'behind', clip: [c4.x, c4.y, c4.z, c4.w] };
+                const sc = c4.multiplyScalar(1 / c4.w).multiplyScalar(0.5).addScalar(0.5);
+                const inside = sc.x >= 0 && sc.x <= 1 && sc.y >= 0 && sc.y <= 1 && sc.z >= 0 && sc.z <= 1;
+                if (!inside) return { ready: true, inside: false, projected: [sc.x, sc.y, sc.z] };
+                const uv = b.tileRect.clone();
+                const px = Math.max(0, Math.min(SHADOW_MAP_SIZE - 1, Math.floor((uv.x + sc.x * uv.z) * SHADOW_MAP_SIZE)));
+                const py = Math.max(0, Math.min(SHADOW_MAP_SIZE - 1, Math.floor((uv.y + sc.y * uv.w) * SHADOW_MAP_SIZE)));
+                const buf = new Float32Array(4);
+                const prev = renderer.getRenderTarget();
+                try {
+                    renderer.readRenderTargetPixels(shadowTarget, px, py, 1, 1, buf);
+                } catch (e) {
+                    renderer.setRenderTarget(prev);
+                    return { ready: true, inside: true, error: String(e && e.message || e) };
+                }
+                renderer.setRenderTarget(prev);
+                const receiverDepth = p.x * b.depthPlane.x + p.y * b.depthPlane.y + p.z * b.depthPlane.z + b.depthPlane.w;
+                const variance = Math.max(2e-7, buf[1] - buf[0] * buf[0]);
+                const delta = receiverDepth - buf[0];
+                const lit = Math.max(receiverDepth <= buf[0] ? 1 : 0, variance / (variance + delta * delta));
+                return { ready: true, inside: true, projected: [sc.x, sc.y, sc.z], atlasPixel: [px, py], receiverDepth,
+                    moments: [buf[0], buf[1]], variance, delta, visibility: lit, caster: b.rec.key };
+            },
+            // Reads the occupied fraction of a projected world-space bounds
+            // rectangle from one atlas tile. This is a diagnostic for Bayer
+            // coverage: averaging final luma can hide the writer's coverage
+            // behind VSM's nonlinear Chebyshev bound.
+            __shadowCoverageProbe: (bounds, casterIndex = 0) => {
+                const c = Math.floor(Number(casterIndex));
+                const b = shadowCasters[c];
+                if (!b || !bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) return { ready: false };
+                const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+                const col = c % SHADOW_ATLAS_COLS;
+                const row = Math.floor(c / SHADOW_ATLAS_COLS);
+                const corners = [];
+                for (const x of [bounds.min[0], bounds.max[0]]) {
+                    for (const y of [bounds.min[1], bounds.max[1]]) {
+                        for (const z of [bounds.min[2], bounds.max[2]]) {
+                            const q = new THREE.Vector4(x, y, z, 1).applyMatrix4(b.matrix);
+                            if (!Number.isFinite(q.w) || q.w <= 0) continue;
+                            const d = x * b.depthPlane.x + y * b.depthPlane.y + z * b.depthPlane.z + b.depthPlane.w;
+                            corners.push([q.x / q.w * 0.5 + 0.5, q.y / q.w * 0.5 + 0.5, d]);
+                        }
+                    }
+                }
+                if (!corners.length) return { ready: true, inside: false, reason: 'behind' };
+                const expectedDepths = corners.map((q) => q[2]);
+                const minUv = [Math.max(0, Math.min(...corners.map((q) => q[0]))), Math.max(0, Math.min(...corners.map((q) => q[1])))];
+                const maxUv = [Math.min(1, Math.max(...corners.map((q) => q[0]))), Math.min(1, Math.max(...corners.map((q) => q[1])))];
+                const minDepth = Math.min(...expectedDepths);
+                const maxDepth = Math.max(...expectedDepths);
+                const depthPad = Math.max(1e-5, (maxDepth - minDepth) * 0.02);
+                const x0 = Math.max(0, Math.min(tileSize - 1, Math.floor(minUv[0] * tileSize)));
+                const y0 = Math.max(0, Math.min(tileSize - 1, Math.floor(minUv[1] * tileSize)));
+                const x1 = Math.max(x0 + 1, Math.min(tileSize, Math.ceil(maxUv[0] * tileSize)));
+                const y1 = Math.max(y0 + 1, Math.min(tileSize, Math.ceil(maxUv[1] * tileSize)));
+                const width = x1 - x0;
+                const height = y1 - y0;
+                const buf = new Float32Array(width * height * 4);
+                const previous = renderer.getRenderTarget();
+                try {
+                    renderer.setRenderTarget(shadowTarget);
+                    renderer.readRenderTargetPixels(shadowTarget, col * tileSize + x0, row * tileSize + y0, width, height, buf);
+                } catch (e) {
+                    renderer.setRenderTarget(previous);
+                    return { ready: true, error: String(e && e.message || e) };
+                }
+                renderer.setRenderTarget(previous);
+                let occupied = 0;
+                let depthMatched = 0;
+                let mean = 0;
+                let samples = 0;
+                for (let i = 0; i < buf.length; i += 4) {
+                    const d = buf[i];
+                    if (!Number.isFinite(d)) continue;
+                    if (d < 0.99999) occupied++;
+                    if (d >= minDepth - depthPad && d <= maxDepth + depthPad) depthMatched++;
+                    mean += d;
+                    samples++;
+                }
+                return { ready: true, inside: true, pixelRect: [x0, y0, x1, y1], samples,
+                    occupiedFraction: occupied / Math.max(1, samples), depthMatchedFraction: depthMatched / Math.max(1, samples),
+                    expectedDepth: [minDepth, maxDepth], meanDepth: mean / Math.max(1, samples), caster: b.rec.key };
+            },
         };
         if (window.registerLiveView) window.registerLiveView(handle);
         return handle;
@@ -1735,7 +4118,13 @@ const createMtlxSceneView = async ({
         stopped = true;
         if (displayTransformListener) {
             window.removeEventListener('mtlx-display-transform', displayTransformListener);
+                    window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
             displayTransformListener = null;
+        }
+        if (sceneTransparencyListener) {
+            window.removeEventListener('mtlx-usd-scene-transparency', sceneTransparencyListener);
+            sceneTransparencyListener = null;
+            sceneTransparencyRefresh = null;
         }
         if (raf) cancelAnimationFrame(raf);
         if (resizeObserver) resizeObserver.disconnect();
@@ -1756,4 +4145,8 @@ const createMtlxSceneView = async ({
     }
 };
 
-Object.assign(window, { createMtlxSceneView });
+Object.assign(window, {
+    createMtlxSceneView,
+    getUsdSceneTransparency,
+    setUsdSceneTransparency,
+});

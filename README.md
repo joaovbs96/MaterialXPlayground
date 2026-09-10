@@ -183,6 +183,25 @@ Drop a single material into any other web page as a lightweight, chromeless view
 - **Self-hostable**: the offline release zip ships everything the embed needs.
 
 See [docs/EMBEDDING.md](docs/EMBEDDING.md) for the full reference: every query parameter and attribute, the element's methods and events, loading documents the embed can't fetch itself, performance notes, and self-hosting instructions.
+
+## Compressed textures (KTX2)
+
+Both the Viewer and the Scene understand `.ktx2` (Basis Universal UASTC) textures through the same texture path as `.png`/`.jpg`/`.tif`/`.exr`/`.hdr`. Install the encoder once with:
+
+```
+npm run setup:ktx
+```
+
+This downloads Khronos [KTX-Software](https://github.com/KhronosGroup/KTX-Software) into a repo-local `tools/ktx/` folder (not committed) and reports the resulting `toktx --version`. Then cook a folder of textures with:
+
+```
+node scripts/cook-textures.mjs <folder> [--quality fast|default|high] [--jobs N] [--dry-run] [--force] [--encoder auto|toktx|basis]
+```
+
+This recurses into subfolders and writes a `.ktx2` sibling next to each source texture (skipping `.tx`/`.tex` and never overwriting an existing `.ktx2`, unless `--force`). When you drop or pick a folder that contains both `name.<ext>` and `name.ktx2` (per UDIM tile too), the app always prefers the `.ktx2` sibling and ignores the original — the original file is never modified or deleted.
+
+`--encoder auto` (the default) uses `toktx` when it can be found (`KTX_TOKTX` env var, `tools/ktx/bin/toktx`, or PATH), and otherwise falls back to a vendored wasm Basis Universal encoder with a loud warning. The wasm fallback hard-caps source images at 12,582,912 pixels, so a 4096x4096 source is silently downscaled to about 3547x3547 before encoding; `toktx` has no such cap and encodes true 4096x4096 output. Run `npm run setup:ktx` to get `toktx` and avoid the fallback.
+
 ## Tech stack
 
 - [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) (WebAssembly build: core + GenShader)

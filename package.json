@@ -17,6 +17,7 @@
     "url": "https://github.com/joaovbs96/MaterialXPlayground"
   },
   "scripts": {
+    "setup:ktx": "node scripts/setup-ktx.mjs",
     "vendor": "node scripts/vendor.mjs",
     "vendor:offline": "node scripts/vendor.mjs --with-materialx",
     "vendor:versions": "node scripts/fetch-mtlx-versions.mjs",

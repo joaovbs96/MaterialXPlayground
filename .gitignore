@@ -52,3 +52,6 @@ gallery/
 .tmp-teapot-diag.mjs
 *.log
 .tmp-chess-graph.mjs
+
+# repo-local KTX-Software install (scripts/setup-ktx.mjs)
+tools/

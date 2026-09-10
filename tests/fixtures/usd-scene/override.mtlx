@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <surface_unlit name="override_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" value="0, 0, 1" />
+  </surface_unlit>
+  <surfacematerial name="override" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="override_surface" />
+  </surfacematerial>
+
+  <image name="img_tex" type="color3">
+    <input name="file" type="filename" value="tex-a.png" colorspace="srgb_texture" />
+  </image>
+  <surface_unlit name="texswap_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="img_tex" />
+  </surface_unlit>
+  <surfacematerial name="texswap" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="texswap_surface" />
+  </surfacematerial>
+
+  <constant name="const_doc_only" type="color3">
+    <input name="value" type="color3" value="0, 1, 0" />
+  </constant>
+  <surface_unlit name="doconly_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="const_doc_only" />
+  </surface_unlit>
+  <surfacematerial name="doconly" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="doconly_surface" />
+  </surfacematerial>
+</materialx>

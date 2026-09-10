@@ -7,12 +7,19 @@ Format: one item per bullet, `- [status] **Title**: one or two sentences.` Statu
 
 Where MaterialX Playground is heading, grouped by area: the rendering engine shared by the Material Viewer and the Scene Viewer, the tools around them, and the desktop and editor integrations. Everything here is open for discussion, including the order and whether an item belongs at all. Missing something? Open an issue on the [GitHub issues page](https://github.com/joaovbs96/MaterialXPlayground/issues) to suggest, question or voice your support for an item.
 
+## Known issues
+
+- [parked] **Bump and heighttonormal speckle**: MaterialX 1.39 computes heighttonormal from screen derivatives per UV unit, so high resolution height maps at the default scale produce per pixel noise on bumps (Stirling tires and sand, Playground skirting). An opt-in texel-space variant exists behind a flag; the default follows upstream.
+- [parked] **Sub-pixel flake sparkle**: procedural flakes smaller than a pixel (Stirling car paint) alias into white specks in a single-sample rasterizer; a supersampling or accumulation pass is the fix.
+- [parked] **Glossy sparkle under high contrast HDRIs**: 16-sample environment importance sampling shows fireflies on smooth surfaces; the prefiltered environment reflections item above removes it.
+
 ## Rendering Engine
 
 - [planned] **One renderer for both viewers**: the Material Viewer and the Scene Viewer still keep separate copies of some rendering code. Move it into shared modules so every feature (transparency, textures, environment, diagnostics) works the same in both.
 - [in progress] **KTX2 compressed textures**: GPU-compressed textures cut memory use by about four times, so large scenes can load at full resolution. Includes a script that converts a folder of textures once. Branch `ktx2-textures`.
 - [planned] **Displacement**: render MaterialX displacement by baking it to a texture and moving the mesh vertices on the CPU, in both viewers.
 - [planned] **MaterialXView parity**: close the known differences to the reference MaterialX viewer: per-image sampler settings, shadows, lights authored in the document, document validation, mipmaps on float textures, extra vertex streams.
+- [planned] **Prefiltered environment reflections**: replace per-pixel importance sampling of the environment with a GGX prefiltered mip chain, as MaterialXView does, so smooth surfaces stop sparkling under high contrast HDRIs.
 - [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces, type mismatches and mix weights outside 0 to 1 instead of letting MaterialX drop them silently.
 - [planned] **Correct transparency blending**: blend transparent layers in linear light instead of display space.
 - [planned] **Faster, quieter texture loading**: decode textures off the main thread, keep objects neutral until their textures are ready, show one progress line, allow cancelling.

@@ -50,6 +50,11 @@ test('@scene roughness affects specular sharpness in the scene view', async ({ p
   ]);
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
+  // Roughness is a BRDF regression. Disable the scene's room-scale directional
+  // sky visibility so the comparison isolates FIS LOD sharpness rather than
+  // changing the two spheres' indirect illumination.
+  await page.evaluate(() => window.__mtlxUsdSceneHandle?.setSkyVisibility?.(false));
+  await page.waitForTimeout(100);
   // Switch off the studio backdrop so the near-black clear color isolates
   // each sphere's own lit pixels instead of diluting the stats with a
   // bright shared background.

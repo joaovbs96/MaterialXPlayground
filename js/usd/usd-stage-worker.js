@@ -76,6 +76,157 @@ function normalizePath(path) {
   return parts.join("/");
 }
 
+// OpenStage's public summary currently exposes upAxis but omits the resolved
+// metersPerUnit metadata.  Recover only the root USDA header here. Stage
+// metadata lives in the root layer's header; values inside customLayerData,
+// sublayers, prims or quoted comments must not be mistaken for stage units.
+// Binary roots are deliberately left to the native API (or the USD default)
+// because this worker cannot parse a crate layer. Keep this bounded: large
+// ASCII geometry files must not be decoded into a second whole-file string.
+const USD_HEADER_SCAN_BYTES = 1024 * 1024;
+
+function parseRootUsdMetrics(data) {
+  if (data == null) return { ascii: false, metersPerUnit: null, upAxis: null };
+  let bytes;
+  try {
+    if (data instanceof Uint8Array) bytes = data;
+    else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+    else bytes = arrayCopy(data, Uint8Array);
+  } catch { bytes = null; }
+  if (!bytes || bytes.length < 5) return { ascii: false, metersPerUnit: null, upAxis: null };
+  let offset = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  const magic = String.fromCharCode(...bytes.slice(offset, offset + 5));
+  if (magic !== "#usda") return { ascii: false, metersPerUnit: null, upAxis: null };
+  const scanTruncated = bytes.length - offset > USD_HEADER_SCAN_BYTES;
+  let source;
+  try {
+    // Decode from after the optional BOM. TextDecoder normally removes a BOM,
+    // but using an offset also keeps source indices aligned in every browser.
+    source = new TextDecoder().decode(bytes.slice(offset, offset + USD_HEADER_SCAN_BYTES));
+  } catch {
+    return { ascii: true, metersPerUnit: null, upAxis: null, truncated: scanTruncated };
+  }
+
+  // The root layer metadata parenthesis must be the first non-comment token
+  // after the #usda version line. A later '(' can belong to a prim field and
+  // must never be treated as stage metadata.
+  let i = source.indexOf("\n");
+  if (i < 0) return { ascii: true, metersPerUnit: null, upAxis: null, truncated: scanTruncated, headerFound: false };
+  i++;
+  const skipSpaceAndCommentsAt = (at) => {
+    let cursor = at;
+    for (;;) {
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor++;
+      if (source[cursor] !== '#') return cursor;
+      while (cursor < source.length && source[cursor] !== '\n' && source[cursor] !== '\r') cursor++;
+    }
+  };
+  const open = skipSpaceAndCommentsAt(i);
+  if (source[open] !== '(') {
+    // Seeing a non-'(' token immediately after the version line proves that
+    // this layer has no root metadata block, even when geometry continues
+    // beyond the bounded prefix.
+    return { ascii: true, metersPerUnit: null, upAxis: null, truncated: false, headerFound: false };
+  }
+
+  let metersPerUnit = null;
+  let upAxis = null;
+  let depthParen = 1;
+  let depthBracket = 0;
+  let depthBrace = 0;
+  let quote = null;
+  let escaped = false;
+  let comment = false;
+  const isIdentStart = c => /[A-Za-z_]/.test(c);
+  const isIdent = c => /[A-Za-z0-9_:]/.test(c);
+  const skipSpaceAndComments = (at) => {
+    let cursor = at;
+    for (;;) {
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor++;
+      if (source[cursor] !== '#') return cursor;
+      while (cursor < source.length && source[cursor] !== '\n' && source[cursor] !== '\r') cursor++;
+    }
+  };
+  let closed = false;
+  for (i = open + 1; i < source.length && depthParen > 0; i++) {
+    const c = source[i];
+    if (comment) { if (c === "\n" || c === "\r") comment = false; continue; }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (quote === 'tripleSingle' && source.startsWith("'''", i)) { quote = null; i += 2; }
+      else if (quote === 'triple' && source.startsWith('"""', i)) { quote = null; i += 2; }
+      else if (quote === 'single' && c === "'") quote = null;
+      else if (quote === 'double' && c === '"') quote = null;
+      continue;
+    }
+    if (c === '#') { comment = true; continue; }
+    if (source.startsWith("'''", i)) { quote = 'tripleSingle'; i += 2; continue; }
+    if (source.startsWith('"""', i)) { quote = 'triple'; i += 2; continue; }
+    if (c === "'") { quote = 'single'; continue; }
+    if (c === '"') { quote = 'double'; continue; }
+    // Asset paths are delimited by @ and may contain parentheses or quotes.
+    if (c === '@') {
+      const close = source.indexOf('@', i + 1);
+      if (close < 0) break;
+      i = close;
+      continue;
+    }
+    if (c === '(') { depthParen++; continue; }
+    if (c === ')') { depthParen--; if (depthParen === 0) closed = true; continue; }
+    if (c === '[') { depthBracket++; continue; }
+    if (c === ']') { depthBracket = Math.max(0, depthBracket - 1); continue; }
+    if (c === '{') { depthBrace++; continue; }
+    if (c === '}') { depthBrace = Math.max(0, depthBrace - 1); continue; }
+    if (depthParen !== 1 || depthBracket !== 0 || depthBrace !== 0 || !isIdentStart(c)) continue;
+    let end = i + 1;
+    while (end < source.length && isIdent(source[end])) end++;
+    const key = source.slice(i, end);
+    const equals = skipSpaceAndComments(end);
+    if (source[equals] !== '=') { i = end - 1; continue; }
+    const valueStart = skipSpaceAndComments(equals + 1);
+    if (key === 'metersPerUnit' && metersPerUnit === null) {
+      const match = source.slice(valueStart).match(/^[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?/);
+      const value = match ? Number(match[0]) : NaN;
+      if (Number.isFinite(value) && value > 0) metersPerUnit = value;
+    } else if (key === 'upAxis' && upAxis === null && (source[valueStart] === '"' || source[valueStart] === "'")) {
+      const delimiter = source[valueStart];
+      const triple = source.startsWith(delimiter.repeat(3), valueStart);
+      const start = valueStart + (triple ? 3 : 1);
+      const closeToken = delimiter.repeat(triple ? 3 : 1);
+      const close = source.indexOf(closeToken, start);
+      const value = close >= 0 ? source.slice(start, close).toUpperCase() : '';
+      if (value === 'Y' || value === 'Z') upAxis = value;
+    }
+    i = end - 1;
+  }
+  return { ascii: true, metersPerUnit, upAxis, truncated: scanTruncated && !closed, headerFound: closed };
+}
+
+function resolveStageMetrics(summary, rootMetrics) {
+  const nativeMeters = Number(summary?.metersPerUnit);
+  const nativeUp = text(summary?.upAxis)?.toUpperCase();
+  const metersPerUnit = Number.isFinite(nativeMeters) && nativeMeters > 0
+    ? nativeMeters
+    : Number.isFinite(rootMetrics?.metersPerUnit) && rootMetrics.metersPerUnit > 0
+      ? rootMetrics.metersPerUnit : 0.01; // USD's documented default
+  const headerUp = rootMetrics?.upAxis === 'Y' || rootMetrics?.upAxis === 'Z' ? rootMetrics.upAxis : null;
+  const upAxis = nativeUp === 'Y' || nativeUp === 'Z' ? nativeUp : (headerUp || 'Y');
+  const warnings = [];
+  if (!(Number.isFinite(nativeMeters) && nativeMeters > 0)) {
+    if (rootMetrics?.ascii && Number.isFinite(rootMetrics.metersPerUnit)) {
+      warnings.push(`[info] Native USD summary omitted metersPerUnit; using root USDA header value ${rootMetrics.metersPerUnit}`);
+    } else if (!rootMetrics?.ascii) {
+      warnings.push('[info] Native USD summary omitted metersPerUnit for a binary root; using USD default 0.01 (authored binary metadata unavailable)');
+    }
+  }
+  if (!(nativeUp === 'Y' || nativeUp === 'Z')) {
+    if (headerUp) warnings.push(`[info] Native USD summary omitted upAxis; using root USDA header value ${headerUp}`);
+    else if (!rootMetrics?.ascii) warnings.push('[info] Native USD summary omitted upAxis for a binary root; using USD default Y (authored binary metadata unavailable)');
+  }
+  return { metersPerUnit, upAxis, warnings };
+}
+
 function copyTexture(texture, assets) {
   if (!texture) return undefined;
   const data = arrayCopy(texture.data, Uint8Array);
@@ -447,8 +598,8 @@ const ROTATE_AXIS_FN = { X: rotateXM, Y: rotateYM, Z: rotateZM };
 
 // Composes one prim's local matrix from its own xformOpOrder tokens.
 // Returns { matrix, unsupported } where unsupported names the first op kind
-// this worker cannot compose (the caller drops the camera in that case).
-function composeLocalMatrix(orderTokens, attrMap, primPath, warn) {
+// this worker cannot compose (the caller drops the prim in that case).
+function composeLocalMatrix(orderTokens, attrMap, primPath, warn, label = "Camera") {
   let m = identity4();
   for (const token of orderTokens) {
     if (token === "!resetXformStack!") continue;
@@ -473,11 +624,13 @@ function composeLocalMatrix(orderTokens, attrMap, primPath, warn) {
     } else if (kind === "transform") {
       opM = nums.length >= 16 ? nums.slice(0, 16) : identity4();
     } else {
-      warn(`Camera ${primPath}: unsupported transform op ${name}, camera skipped`);
+      warn(`${label} ${primPath}: unsupported transform op ${name}, ${label.toLowerCase()} skipped`);
       return { matrix: identity4(), unsupported: true };
     }
     if (invert) opM = invert4(opM);
-    m = mul4(m, opM);
+    // xformOpOrder lists the outermost op first: a point meets the last op
+    // first, so each op is prepended (row vectors: p' = p * opN * ... * op1).
+    m = mul4(opM, m);
   }
   return { matrix: m, unsupported: false };
 }
@@ -496,34 +649,175 @@ function readPrimAttrMap(api, root, primPath) {
   return map;
 }
 
-function collectCameras(api, root, graph, warn) {
-  const cameraEntries = arrayItems(graph).filter(entry => {
-    if ((text(entry?.typeName) ?? "").toLowerCase() !== "camera") return false;
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Finds the `{ ... }` body of a `def "name" ... {` or `over "name" ... {`
+// block in a USD text layer (balanced braces, nested prim blocks included),
+// trying every occurrence of the name in turn and accepting only a body
+// that actually authors at least one `inputs:` attribute. This is tolerant
+// of an unrelated prim (e.g. a Mesh) sharing the Material's leaf name: such
+// a block has no `inputs:` lines and is skipped in favor of the real one.
+function findNamedBlockBodyWithInputs(usdaText, name) {
+  const openRe = new RegExp('(?:\\bdef\\b|\\bover\\b)\\s+(?:\\w+\\s+)?"' + escapeRegExp(name) + '"[^{]*\\{', "g");
+  let match;
+  while ((match = openRe.exec(usdaText))) {
+    const braceStart = match.index + match[0].length - 1;
+    let depth = 0;
+    for (let i = braceStart; i < usdaText.length; i++) {
+      const c = usdaText[i];
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          const body = usdaText.slice(braceStart + 1, i);
+          if (/\binputs:/.test(body)) return body;
+          openRe.lastIndex = i + 1;
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// `over`/`def` prim names declared anywhere inside a block body, regardless
+// of nesting depth (a shader-node override sits one level under its
+// Material's own `over` block, but this stays correct if a DCC nests it
+// deeper).
+function collectNamedChildren(blockBody) {
+  const names = new Set();
+  const re = /\b(?:def|over)\s+(?:\w+\s+)?"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(blockBody))) names.add(m[1]);
+  return names;
+}
+
+// Element names declared in a MaterialX document's XML text: any tag with a
+// `name="..."` attribute (nodes, nodegraph children, the surfacematerial),
+// excluding structural elements (`materialx`, and an element's own `input`/
+// `output`/`token`/`member` children, which are not themselves override
+// targets).
+const MTLX_NON_TARGET_TAGS = new Set(["materialx", "input", "output", "token", "member"]);
+function collectMtlxElementNames(mtlxText) {
+  const names = new Set();
+  const re = /<([A-Za-z_][\w.]*)\b[^>]*\bname\s*=\s*"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(mtlxText))) {
+    if (MTLX_NON_TARGET_TAGS.has(m[1])) continue;
+    names.add(m[2]);
+  }
+  return names;
+}
+
+// Text of the MaterialX document(s) relevant to one material record: the
+// native inline materialX.data payload when present (the resolved network
+// actually selected, includes composed from a usdMtlx nodegraph), plus the
+// uploaded sourceAsset .mtlx file's own text as a fallback/second source.
+function decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath) {
+  const texts = [];
+  try {
+    const data = material?.materialX?.data;
+    if (data) texts.push(new TextDecoder().decode(data));
+  } catch { /* not text, skip */ }
+  const sourceAsset = text(material?.sourceAsset) || text(material?.materialX?.path);
+  if (sourceAsset) {
+    const fromFiles = mtlxFileTextsByPath.get(normalizePath(sourceAsset));
+    if (fromFiles) texts.push(fromFiles);
+  }
+  return texts;
+}
+
+// USD `over` blocks under a Material prim (asset file swaps, place2d scale,
+// glass parameters, etc.) are authored on the material's descendant shader
+// prims. Candidate child names come from two sources: primarily the
+// material's own resolved MaterialX document text (mtlxTexts) -- the
+// authoritative node/nodegraph/material-alias namespace, and the only source
+// that still works when the override's root USD layer is a binary usdc file
+// -- and secondarily the uploaded USD text layers, scanned for the Material
+// prim's own named block, so an override naming a node that does not exist
+// in the document at all is still discovered and can be reported as a
+// missing-node warning instead of silently dropped (getSceneGraph itself
+// cannot help here: it only lists prims with a resolved type, and an
+// override-only prim has none, even though getPrimAttributes resolves it
+// directly once its path is known). The Scene applies the composed
+// attribute values onto the resolved MaterialX document.
+function collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, materialPath) {
+  const overrides = [];
+  if (!materialPath) return overrides;
+  const leafName = materialPath.split("/").filter(Boolean).pop();
+  if (!leafName) return overrides;
+  const childNames = new Set();
+  for (const mtlxText of mtlxTexts) {
+    for (const name of collectMtlxElementNames(mtlxText)) childNames.add(name);
+  }
+  for (const usdaText of usdaTexts) {
+    const body = findNamedBlockBodyWithInputs(usdaText, leafName);
+    if (!body) continue;
+    for (const name of collectNamedChildren(body)) childNames.add(name);
+  }
+  const readInto = (primPath, node) => {
+    const attrMap = readPrimAttrMap(api, root, primPath);
+    for (const [name, record] of attrMap) {
+      if (!name.startsWith("inputs:")) continue;
+      const valueText = text(record?.value);
+      if (!valueText) continue; // metadata-only attribute, no authored value
+      overrides.push({ node, input: name.slice("inputs:".length), value: valueText });
+    }
+  };
+  readInto(materialPath, null);
+  for (const name of childNames) readInto(materialPath + "/" + name, name);
+  return overrides;
+}
+
+// Walks a prim's ancestor chain and accumulates the world matrix, returning
+// the leaf's attribute map alongside it so the caller does not read it twice.
+// Shared by cameras and lights; `label` only shapes the unsupported-op warning.
+function composeWorldMatrix(api, root, primPath, warn, label) {
+  const segments = primPath.split("/").filter(Boolean);
+  let running = "";
+  const ancestorPaths = segments.map(seg => (running += "/" + seg, running));
+  let worldSoFar = identity4();
+  let leafMap = null;
+  for (const path of ancestorPaths) {
+    const attrMap = readPrimAttrMap(api, root, path);
+    if (path === primPath) leafMap = attrMap;
+    const orderRecord = attrMap.get("xformOpOrder");
+    const orderTokens = orderRecord ? parseOpOrderList(orderRecord.value) : [];
+    if (orderTokens.includes("!resetXformStack!")) worldSoFar = identity4();
+    const { matrix, unsupported } = composeLocalMatrix(orderTokens, attrMap, primPath, warn, label);
+    if (unsupported) return { matrix: identity4(), leafMap: null, unsupported: true };
+    worldSoFar = mul4(matrix, worldSoFar);
+  }
+  return {
+    matrix: worldSoFar,
+    leafMap: leafMap ?? readPrimAttrMap(api, root, primPath),
+    unsupported: false,
+  };
+}
+
+// Graph entries carry a resolved typeName, so prims are picked by type here.
+// A prim authored purely as an `over` has no resolved type and never appears.
+function graphEntriesOfType(graph, matches) {
+  return arrayItems(graph).filter(entry => {
+    const typeName = (text(entry?.typeName) ?? "").toLowerCase();
+    if (!typeName || !matches(typeName)) return false;
     if (!text(entry?.path)) return false;
     if (entry?.active === false || entry?.isActive === false) return false;
     return true;
   });
+}
+
+function collectCameras(api, root, graph, warn) {
+  const cameraEntries = graphEntriesOfType(graph, name => name === "camera");
   const cameras = [];
   for (const entry of cameraEntries) {
     const primPath = text(entry.path);
     const segments = primPath.split("/").filter(Boolean);
-    let running = "";
-    const ancestorPaths = segments.map(seg => (running += "/" + seg, running));
-    let worldSoFar = identity4();
-    let skip = false;
-    let leafMap = null;
-    for (const path of ancestorPaths) {
-      const attrMap = readPrimAttrMap(api, root, path);
-      if (path === primPath) leafMap = attrMap;
-      const orderRecord = attrMap.get("xformOpOrder");
-      const orderTokens = orderRecord ? parseOpOrderList(orderRecord.value) : [];
-      if (orderTokens.includes("!resetXformStack!")) worldSoFar = identity4();
-      const { matrix, unsupported } = composeLocalMatrix(orderTokens, attrMap, primPath, warn);
-      if (unsupported) { skip = true; break; }
-      worldSoFar = mul4(matrix, worldSoFar);
-    }
-    if (skip) continue;
-    const map = leafMap ?? readPrimAttrMap(api, root, primPath);
+    const { matrix: worldSoFar, leafMap, unsupported } = composeWorldMatrix(api, root, primPath, warn, "Camera");
+    if (unsupported) continue;
+    const map = leafMap;
     const numberOf = (name, fallback) => {
       const record = map.get(name);
       const nums = record ? parseNumbers(record.value) : [];
@@ -545,6 +839,75 @@ function collectCameras(api, root, graph, warn) {
     });
   }
   return cameras;
+}
+
+// UsdLux defaults for the attributes a dome light import reads, applied when
+// an attribute is unauthored. A DCC also writes declaration-only attributes
+// with no value at all, so an empty value text falls back the same way.
+const LIGHT_DEFAULTS = { intensity: 1, exposure: 0, diffuse: 1, specular: 1 };
+// Types the Scene converts to MaterialX lights. Anything else is reported
+// once so a dropped light is never silent.
+const IMPORTED_LIGHT_TYPES = new Set([
+  "domelight", "distantlight", "spherelight", "rectlight", "disklight", "cylinderlight",
+]);
+
+function collectLights(api, root, graph, warn) {
+  const entries = graphEntriesOfType(graph, name => name.endsWith("light"));
+  const lights = [];
+  for (const entry of entries) {
+    const primPath = text(entry.path);
+    const typeName = text(entry.typeName) ?? "";
+    const { matrix, leafMap, unsupported } = composeWorldMatrix(api, root, primPath, warn, "Light");
+    if (unsupported) continue;
+    const segments = primPath.split("/").filter(Boolean);
+    const valueOf = (name) => {
+      const record = leafMap.get(name);
+      const value = record ? text(record.value) : undefined;
+      return value && value.trim() ? value.trim() : undefined;
+    };
+    const numberOf = (name, fallback) => {
+      const nums = parseNumbers(valueOf(name));
+      return nums.length ? nums[0] : fallback;
+    };
+    const colorNums = parseNumbers(valueOf("inputs:color"));
+    lights.push({
+      primPath,
+      name: segments[segments.length - 1] || primPath,
+      type: typeName,
+      matrix,
+      textureFile: valueOf("inputs:texture:file") ?? null,
+      textureFormat: valueOf("inputs:texture:format") ?? "automatic",
+      intensity: numberOf("inputs:intensity", LIGHT_DEFAULTS.intensity),
+      exposure: numberOf("inputs:exposure", LIGHT_DEFAULTS.exposure),
+      diffuse: numberOf("inputs:diffuse", LIGHT_DEFAULTS.diffuse),
+      specular: numberOf("inputs:specular", LIGHT_DEFAULTS.specular),
+      color: colorNums.length >= 3 ? colorNums.slice(0, 3) : [1, 1, 1],
+      // Emitter shape, used to normalize intensity by area and to pick the
+      // MaterialX light type. Absent attributes stay null so the converter
+      // can tell "unauthored" from "authored zero".
+      radius: numberOf("inputs:radius", null),
+      width: numberOf("inputs:width", null),
+      height: numberOf("inputs:height", null),
+      length: numberOf("inputs:length", null),
+      angle: numberOf("inputs:angle", null),
+      normalize: valueOf("inputs:normalize") === "1" || valueOf("inputs:normalize") === "true",
+      treatAsPoint: valueOf("treatAsPoint") === "1" || valueOf("treatAsPoint") === "true",
+      // UsdLuxShapingAPI: how a real spot light is authored.
+      coneAngle: numberOf("inputs:shaping:cone:angle", null),
+      coneSoftness: numberOf("inputs:shaping:cone:softness", null),
+    });
+  }
+  const domes = lights.filter(light => light.type.toLowerCase() === "domelight");
+  if (domes.length > 1) warn(`Stage has ${domes.length} dome lights; using ${domes[0].primPath}`);
+  for (const light of lights) {
+    const kind = light.type.toLowerCase();
+    if (kind === "domelight") {
+      if (light !== domes[0]) warn(`Light ${light.primPath} (${light.type}) is not imported`);
+      continue;
+    }
+    if (!IMPORTED_LIGHT_TYPES.has(kind)) warn(`Light ${light.primPath} (${light.type}) is not imported`);
+  }
+  return lights;
 }
 
 function swapCorners(array, triangleIndex, stride) {
@@ -965,7 +1328,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   return warnings;
 }
 
-function copyStageResult(summary, draw, payloads, cameras) {
+function copyStageResult(summary, draw, payloads, cameras, lights, metrics = null) {
   const assets = new Map();
   const materials = new Map();
   for (const entry of arrayItems(payloads)) {
@@ -1006,13 +1369,14 @@ function copyStageResult(summary, draw, payloads, cameras) {
   const warnings = Array.from(new Set(nativeWarnings));
   return {
     rootPath: summary?.rootFile ?? "",
-    upAxis: summary?.upAxis,
-    metersPerUnit: summary?.metersPerUnit,
+    upAxis: metrics?.upAxis ?? summary?.upAxis,
+    metersPerUnit: metrics?.metersPerUnit ?? summary?.metersPerUnit,
     summary: summary ?? null,
     meshes,
     materials: materialList,
     assets: assetList,
     cameras: cameras ?? [],
+    lights: lights ?? [],
     warnings: Array.from(new Set(warnings)),
     transfer,
   };
@@ -1023,6 +1387,20 @@ async function load(request) {
   const fileTotal = (request.files ?? []).filter(file => file?.path).length;
   postMessage({ id: request.id, type: "progress", value: { phase: "worker", done: 0, total: fileTotal, fraction: 0.05, message: "Preparing input files" } });
   let loadedFiles = 0;
+  // Plain-text USD layers, kept so USD override `over` blocks can be found
+  // by name: getSceneGraph only lists prims with a resolved type, but an
+  // override-only child prim (no matching `def` anywhere) has none and
+  // never appears there, even though getPrimAttributes still resolves it
+  // directly once its path is known.
+  const usdaTexts = [];
+  const OVERRIDE_SCAN_MAX_BYTES = 32 * 1024 * 1024;
+  const scanWarnings = [];
+  const requestedRootPath = normalizePath(request.rootPath);
+  let rootMetrics = null;
+  // Uploaded .mtlx file text, keyed by normalized path, so a material whose
+  // native materialX.data payload is unavailable can still fall back to its
+  // sourceAsset's own uploaded bytes when enumerating override candidates.
+  const mtlxFileTextsByPath = new Map();
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
     const source = typeof file.data?.arrayBuffer === "function"
@@ -1032,6 +1410,36 @@ async function load(request) {
       ? new Uint8Array(source)
       : arrayCopy(source, Uint8Array);
     if (!data) continue;
+    if (normalizePath(file.path) === requestedRootPath) rootMetrics = parseRootUsdMetrics(data);
+    // Only text layers (#usda magic) under the cap are scanned; a binary
+    // crate (PXR-USDC) decoded as a string can exceed V8's limit and kill
+    // the tab before the stage loads (1.86 GB Lion crate, 2026-09-08).
+    if (/\.usda?$/i.test(String(file.path))) {
+      const isTextLayer = data.length >= 6 && data[0] === 0x23 && data[1] === 0x75 && data[2] === 0x73 && data[3] === 0x64 && data[4] === 0x61;
+      if (isTextLayer && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
+        try {
+          const textLayer = new TextDecoder().decode(data);
+          usdaTexts.push(textLayer);
+          // The native bridge currently exposes the fallback value for an
+          // input but not its composed shader connection. The renderer keeps
+          // source MaterialX connections intact; make authored USD connections
+          // visible as an explicit limitation instead of
+          // guessing at layer strength or rewiring the graph from text.
+          for (const line of textLayer.split(/\r?\n/)) {
+            if (/\binputs:[A-Za-z_][\w]*\.connect\s*=/.test(line)) {
+              scanWarnings.push(
+                "USD shader connections are not exposed by the MaterialX importer; source graph connections are preserved and authored rewires are not resolved (" + file.path + ")"
+              );
+              break;
+            }
+          }
+        } catch { /* skip */ }
+      } else if (isTextLayer) {
+        scanWarnings.push(`Override scan skipped for ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
+      }
+    } else if (/\.mtlx$/i.test(String(file.path)) && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
+      try { mtlxFileTextsByPath.set(normalizePath(file.path), new TextDecoder().decode(data)); } catch { /* skip */ }
+    }
     api.createDataFile(normalizePath(file.path), data);
     loadedFiles++;
     postMessage({ id: request.id, type: "progress", value: {
@@ -1048,6 +1456,7 @@ async function load(request) {
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing stage" } });
   const summary = api.openStage(root, true);
   if (summary?.error) throw new Error(summary.error);
+  const stageMetrics = resolveStageMetrics(summary, rootMetrics);
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
   if (!api.createStageDriver(root)) throw new Error("OpenUSD stage driver could not be created");
   // A full draw can itself grow the native heap while it is constructing
@@ -1191,8 +1600,18 @@ async function load(request) {
   } });
   const cameraWarnings = [];
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
-  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras);
+  const lightWarnings = [];
+  const lights = collectLights(api, root, graph, message => lightWarnings.push(message));
+  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
+  result.warnings.push(...stageMetrics.warnings);
+  for (const material of result.materials) {
+    const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
+    const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path);
+    if (overrides.length) material.overrides = overrides;
+  }
   result.warnings.push(...cameraWarnings);
+  result.warnings.push(...lightWarnings);
+  result.warnings.push(...scanWarnings);
   result.warnings.push(...normalRecoveryWarnings);
   if (drawSnapshot.warnings?.length) result.warnings.push(...drawSnapshot.warnings);
   const extractedOwners = new Set(result.meshes.map(mesh => mesh.instanceOwnerPath).filter(Boolean));

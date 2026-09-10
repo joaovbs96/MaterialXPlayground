@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_ktx2" type="color3">
+    <input name="file" type="filename" value="quad.png" colorspace="srgb_texture" />
+  </image>
+  <surface_unlit name="ktx2_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="img_ktx2" />
+  </surface_unlit>
+  <surfacematerial name="ktx2_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ktx2_surface" />
+  </surfacematerial>
+</materialx>

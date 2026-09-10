@@ -19,12 +19,13 @@ test('@scene preserves mirrored tangent-frame handedness for normal maps', async
       <constant name="normalValue" type="vector3"><input name="value" type="vector3" value="0.5, 1, 0.5"/></constant>
       <image name="normalImage" type="vector3"><input name="file" type="filename" value="normal.png"/></image>
       <normalmap name="normalMap" type="vector3"><input name="in" type="vector3" nodename="normalImage"/></normalmap>
+      <convert name="normalColor" type="color3"><input name="in" type="vector3" nodename="normalMap"/></convert>
       <standard_surface name="surface" type="surfaceshader">
         <input name="base_color" type="color3" nodename="base"/>
         <input name="specular_roughness" type="float" value="0.35"/>
         <input name="normal" type="vector3" nodename="normalMap"/>
         <input name="emission" type="float" value="1"/>
-        <input name="emission_color" type="color3" nodename="normalMap"/>
+        <input name="emission_color" type="color3" nodename="normalColor"/>
       </standard_surface>
       <surfacematerial name="material" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface"/></surfacematerial>
     </materialx>`;
@@ -68,6 +69,7 @@ test('@scene preserves mirrored tangent-frame handedness for normal maps', async
     const tangent = geometry.getAttribute('i_tangent');
     const bitangent = geometry.getAttribute('i_bitangent');
     const material = handle.prims[0].material;
+    if (!material?.userData?.mtlxSceneCompiled?.vs) throw new Error('normal-map fixture did not compile: ' + JSON.stringify(handle.warnings || []));
     const shader = material.userData.mtlxSceneCompiled.vs;
     // Exercise the non-indexed path directly as well. USD draw extraction
     // can return either indexed or already-expanded triangles.

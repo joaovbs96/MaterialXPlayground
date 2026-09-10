@@ -10,10 +10,10 @@ function fixtureFile(relativePath) {
 
 // Composed by hand from tests/fixtures/usd-scene/camera-root.usda:
 // CamSide sits under Xform "CamRig" (translate (2,0,0)); CamSide's own
-// xformOpOrder is [translate (0,0.5,3), rotateXYZ (0,90,0)]. With
-// upAxis=Y and metersPerUnit=1 (identity sceneRoot), the composed world
-// position works out to a clean (5, 0.5, 0).
-const CAM_SIDE_POSITION = [5, 0.5, 0];
+// xformOpOrder is [translate (0,0.5,3), rotateXYZ (0,90,0)]. USD applies the
+// listed ops right to left, so the rotation does not move the translation
+// and the composed world position is (2, 0.5, 3), looking along -X.
+const CAM_SIDE_POSITION = [2, 0.5, 3];
 const EXPECTED_FOV = 2 * Math.atan(24 / (2 * 50)) * 180 / Math.PI;
 
 function readCameraPosition() {

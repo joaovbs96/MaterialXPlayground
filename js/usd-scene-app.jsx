@@ -239,22 +239,47 @@
         );
         const subdivisionLevelRef = React.useRef(subdivisionLevel);
         subdivisionLevelRef.current = subdivisionLevel;
-        const [displayTransform, setDisplayTransformState] = React.useState(
-            () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
+        // The Scene keeps its own view transform (the Material Viewer stays on
+        // sRGB for MaterialXView parity); exposure is shared with the other tools.
+        const [displayTransform, setDisplayTransformState] = React.useState('neutral');
+        const [displayExposure, setDisplayExposureState] = React.useState(
+            () => (window.getDisplayExposure ? window.getDisplayExposure() : 0)
         );
-        // Local mirror of the engine's persisted Force Transparency flag
-        // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
-        // toggle from the Viewer or Compare tab reflects here too.
-        const [forceTransparency, setForceTransparencyState] = React.useState(
-            () => !!(window.getForceTransparency && window.getForceTransparency())
+        // Analytic lights imported from the stage. Count comes from the
+        // handle once a stage is loaded; the two controls are live.
+        // Diagnostic groups: errors and warnings open, info and the source
+        // list collapsed, since those are the long ones.
+        const [diagOpen, setDiagOpen] = React.useState({ error: true, warning: true, info: false, materials: false });
+        const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
+        const [stageLightsOn, setStageLightsOn] = React.useState(true);
+        const [stageLightsEv, setStageLightsEv] = React.useState(0);
+        const [shadowsOn, setShadowsOn] = React.useState(true);
+        const [aoOn, setAoOn] = React.useState(true);
+        const [aoStrength, setAoStrength] = React.useState(0.85);
+        const [skyVisOn, setSkyVisOn] = React.useState(true);
+        const [skyVisStrength, setSkyVisStrength] = React.useState(1);
+        const [transparentPrims, setTransparentPrims] = React.useState([]);
+        // Scene owns its transparency preference. It intentionally does not
+        // mirror the shared Viewer Force Transparency setting: Scene defaults
+        // to authored transmission/opacity and has its own explicit opt-out.
+        const [sceneTransparency, setSceneTransparencyState] = React.useState(
+            () => (typeof window.getUsdSceneTransparency === 'function' ? !!window.getUsdSceneTransparency() : true)
         );
         React.useEffect(() => {
-            const onSettingsChanged = (e) => {
-                if (!e.detail || e.detail.key !== 'forceTransparency') return;
-                setForceTransparencyState(!!e.detail.value);
+            const onSceneTransparencyChanged = (e) => {
+                const detail = e && e.detail;
+                const value = detail && detail.value != null ? detail.value : detail && detail.enabled;
+                if (value == null) return;
+                const enabled = !!value;
+                setSceneTransparencyState(enabled);
+                // The transparent-prims list only exists while Scene
+                // transparency is enabled, so refresh it from the live handle.
+                const fn = handleRef.current && handleRef.current.getTransparentPrims;
+                if (!enabled) setTransparentPrims([]);
+                else if (typeof fn === 'function') { try { setTransparentPrims(fn()); } catch (err) { /* not rendered yet */ } }
             };
-            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
-            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            window.addEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
+            return () => window.removeEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
         }, []);
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
@@ -299,16 +324,21 @@
         }, [narrow]);
 
         React.useEffect(() => {
-            const onDisplayTransform = () => {
-                const v = window.getDisplayTransform ? window.getDisplayTransform() : null;
-                if (v) setDisplayTransformState(v);
+            const onDisplayExposure = () => {
+                if (window.getDisplayExposure) setDisplayExposureState(window.getDisplayExposure());
             };
-            window.addEventListener('mtlx-display-transform', onDisplayTransform);
-            return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+            window.addEventListener('mtlx-display-exposure', onDisplayExposure);
+            return () => window.removeEventListener('mtlx-display-exposure', onDisplayExposure);
         }, []);
         const pickDisplayTransform = (mode) => {
             setDisplayTransformState(mode);
-            if (window.setDisplayTransform) window.setDisplayTransform(mode);
+            callHandle('setSceneDisplayTransform', mode);
+        };
+        const applyDisplayExposure = (raw) => {
+            const value = Math.max(-8, Math.min(8, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setDisplayExposureState(value);
+            if (window.setDisplayExposure) window.setDisplayExposure(value);
         };
 
         const applyChosenFiles = async (next, generation) => {
@@ -416,11 +446,46 @@
                     handleRef.current = nextHandle;
                     window.__mtlxUsdSceneHandle = nextHandle; // test and console access to the live scene handle.
                     const settings = envSettingsRef.current;
-                    callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
-                    callHandle('setEnvExposure', settings.exposureLinear);
+                    // A stage that ships a dome light has already seeded the
+                    // renderer with its own environment, rotation and exposure.
+                    // Mirror those into the card instead of replaying the
+                    // card's defaults over them; a user import still wins.
+                    if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
+                    if (nextHandle.getSceneDisplayTransform) setDisplayTransformState(nextHandle.getSceneDisplayTransform());
+                    if (nextHandle.getSkyVisibility) {
+                        const sky = nextHandle.getSkyVisibility();
+                        setSkyVisOn(sky.enabled);
+                        setSkyVisStrength(sky.strength);
+                    }
+                    if (nextHandle.getAmbientOcclusion) {
+                        const ao = nextHandle.getAmbientOcclusion();
+                        setAoOn(ao.enabled);
+                        setAoStrength(ao.strength);
+                    }
+                    const transparencyEnabled = typeof window.getUsdSceneTransparency === 'function'
+                        ? !!window.getUsdSceneTransparency() : sceneTransparency;
+                    if (nextHandle.getTransparentPrims && transparencyEnabled) {
+                        try { setTransparentPrims(nextHandle.getTransparentPrims()); } catch (e) { /* pre-render */ }
+                    }
+                    if (nextHandle.getStageLights) {
+                        const info = nextHandle.getStageLights();
+                        setStageLightInfo(info);
+                        setStageLightsOn(info.enabled);
+                        setStageLightsEv(info.ev);
+                    }
+                    const dome = nextHandle.getDomeLight ? nextHandle.getDomeLight() : null;
+                    const useDome = !!dome && !envOverrideRef.current;
+                    if (useDome) {
+                        setEnvFileName(dome.fileName || 'Stage dome light');
+                        setEnvRotation(Math.round(dome.rotationDeg));
+                        setEnvExposureLinear(dome.exposure);
+                    } else {
+                        callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
+                        callHandle('setEnvExposure', settings.exposureLinear);
+                    }
                     callHandle('setBackdrop', settings.backdrop);
                     callHandle('setAutoRotate', settings.autoRotate);
-                    if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
+                    if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current);
                     setHandle(nextHandle); setStatus('rendered');
                     if (nextHandle && nextHandle.frameAll) nextHandle.frameAll();
                 } catch (e) { if (live && mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted) { setError(String(e && e.message || e)); setStatus('error'); } }
@@ -449,6 +514,97 @@
         const materials = stageMaterials(stage);
         const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
         const warnings = warningDetails.map((record) => record.label);
+        // Diagnostics carry no severity of their own, so classify by wording:
+        // anything that stopped working is an error, anything that merely
+        // reports what we did is info, and the rest stays a warning.
+        const severityOf = (text) => {
+            const value = String(text || '');
+            // An explicit tag from the producer always wins; the wording rules
+            // below are only a fallback for messages that carry no tag.
+            if (/^\[info\]/.test(value)) return 'info';
+            if (/^\[error\]/.test(value)) return 'error';
+            if (/(failed|error|could not|cannot|unsupported|invalid|aborted)/i.test(value)) return 'error';
+            if (/(applied as the environment|approximated as a point|loaded from|imported from|skipped)/i.test(value)) return 'info';
+            return 'warning';
+        };
+        // One reusable disclosure row: chevron, icon, label, count badge and a
+        // copy button that puts the whole group on the clipboard.
+        const DiagGroup = ({ id, icon, tone, label, lines, children }) => {
+            const open = !!diagOpen[id];
+            const [copied, setCopied] = React.useState(false);
+            const copy = (event) => {
+                event.stopPropagation();
+                const text = lines.join('\n');
+                const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1200); };
+                if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => {});
+                else {
+                    // Clipboard API needs a secure context; fall back so this
+                    // still works when the site is served over plain http.
+                    const area = document.createElement('textarea');
+                    area.value = text; document.body.appendChild(area); area.select();
+                    try { document.execCommand('copy'); done(); } catch (e) { /* blocked */ }
+                    document.body.removeChild(area);
+                }
+            };
+            return (
+                <div className="border-t border-gray-700/70 first:border-t-0">
+                    <div className="w-full flex items-center gap-1.5 py-1.5 px-1 -mx-1 rounded hover:bg-gray-800/60">
+                        <button
+                            type="button"
+                            onClick={() => setDiagOpen((prev) => ({ ...prev, [id]: !prev[id] }))}
+                            aria-expanded={open}
+                            className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
+                        >
+                            <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                            <MtlxIcon name={icon} className={'w-3.5 h-3.5 shrink-0 ' + tone} />
+                            <span className={'text-[10px] font-semibold uppercase tracking-[0.08em] ' + tone}>{label}</span>
+                            <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{lines.length}</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={copy}
+                            title={'Copy all ' + lines.length + ' line(s)'}
+                            aria-label={'Copy ' + label}
+                            className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                        >
+                            <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                    {open ? <div className="pb-2 pl-5 space-y-1">{children}</div> : null}
+                </div>
+            );
+        };
+        const stripTag = (text) => String(text || '').replace(/^\[(?:info|error|warning)\]\s*/, '');
+        const grouped = { error: [], warning: [], info: [] };
+        warningDetails.forEach((record) => {
+            grouped[severityOf(record.raw || record.label)].push(
+                Object.assign({}, record, { label: stripTag(record.label), raw: stripTag(record.raw) }));
+        });
+        const SEVERITY_STYLE = {
+            error: { icon: 'alert-triangle', text: 'text-red-300/90', label: 'Errors' },
+            warning: { icon: 'alert-triangle', text: 'text-amber-300/90', label: 'Warnings' },
+            info: { icon: 'info-circle', text: 'text-gray-400', label: 'Info' },
+        };
+        // SliderField reports the raw input string through onSlider/onNumber
+        // (it has no onChange), so every slider coerces and clamps here.
+        const applyAoStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setAoStrength(value);
+            callHandle('setAmbientOcclusionStrength', value);
+        };
+        const applySkyVisStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setSkyVisStrength(value);
+            callHandle('setSkyVisibilityStrength', value);
+        };
+        const applyStageLightsEv = (raw) => {
+            const value = Math.max(-8, Math.min(8, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setStageLightsEv(value);
+            callHandle('setStageLightsEv', value);
+        };
         const callHandle = (name, ...args) => {
             const fn = handleRef.current && handleRef.current[name];
             if (typeof fn !== 'function') return false;
@@ -505,6 +661,18 @@
             let env = null;
             if (getter) { try { env = await getter(); } catch (e) {} }
             if (!mountedRef.current || generation !== environmentGenerationRef.current) return;
+            // Reset means "back to how this stage was authored", so a stage
+            // that supplied a dome light returns to the dome, not to the site
+            // default environment.
+            const dome = handleRef.current && handleRef.current.getDomeLight && handleRef.current.getDomeLight();
+            if (dome && callHandle('applyDomeLight')) {
+                currentEnvironmentRef.current = null;
+                setEnvFileName(dome.fileName || 'Stage dome light');
+                setEnvRotation(Math.round(dome.rotationDeg));
+                setEnvExposureLinear(dome.exposure);
+                setBackdrop('studio'); callHandle('setBackdrop', 'studio');
+                return;
+            }
             if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
             setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1); setBackdrop('studio'); callHandle('setBackdrop', 'studio');
         };
@@ -574,7 +742,7 @@
                                 placeholder="No stage loaded"
                                 multiple
                                 icon="files"
-                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                 onFiles={chooseFiles}
                                 inputTestId="usd-scene-file-picker"
                             />
@@ -712,7 +880,7 @@
                     <button type="button" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
                 </SectionCard>
 
-                <SectionCard icon="settings-cog" title="Rendering" summary={displayTransform === 'srgb' ? 'sRGB' : displayTransform === 'aces' ? 'ACES' : 'lin_rec709'} dense>
+                <SectionCard icon="settings-cog" title="Rendering" summary={({ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' })[displayTransform] || displayTransform} dense>
                     <div className="flex items-center justify-between gap-2">
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
                             Display transform
@@ -720,13 +888,25 @@
                         </span>
                         <MtlxSelect
                             value={displayTransform}
-                            options={['srgb', 'aces', 'lin_rec709']}
-                            labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
+                            options={['neutral', 'aces', 'srgb', 'lin_rec709']}
+                            labels={{ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' }}
                             onChange={pickDisplayTransform}
-                            defValue="srgb"
-                            title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
+                            defValue="neutral"
+                            title="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue. sRGB clips at 1.0 and matches the official MaterialX viewer. This is the Scene's own setting; the Material Viewer keeps sRGB."
                             size="sm"
                         />
+                    </div>
+                    <SliderField
+                        label="Camera exposure" unit="EV"
+                        value={displayExposure}
+                        min={-8}
+                        max={8}
+                        step={0.25}
+                        onSlider={(v) => applyDisplayExposure(v)}
+                        onNumber={(v) => applyDisplayExposure(v)}
+                    />
+                    <div className="text-[11px] text-gray-400">
+                        Scales the whole image before the display transform, the way a camera would. The Environment card's exposure gains only the image based lighting, so on a stage that also has its own lights it cannot balance the picture on its own.
                     </div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Texture resolution</span>
@@ -760,23 +940,124 @@
                     </div>
                     <label
                         className="flex items-center justify-between cursor-pointer"
-                        title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
+                        title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
                     >
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                            Force Transparency
+                            Transparency
                             <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
                         </span>
                         <Toggle
-                            checked={forceTransparency}
+                            checked={sceneTransparency}
                             onChange={(next) => {
-                                setForceTransparencyState(next);
-                                window.setForceTransparency && window.setForceTransparency(next);
+                                setSceneTransparencyState(next);
+                                window.setUsdSceneTransparency && window.setUsdSceneTransparency(next);
                             }}
                         />
                     </label>
                     <div className="mt-1 text-[11px] text-gray-400">
-                        Render opacity/transmission with real alpha blending in the Scene. When off, transparent materials render opaque. Applies immediately.
+                        Render opacity/transmission authored by scene materials. When off, transparent materials render opaque. Applies immediately.
                     </div>
+                    {stageLightInfo.count > 0 ? (
+                        <React.Fragment>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Stage lights
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={stageLightsOn}
+                                    onChange={(next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                {stageLightInfo.count} light{stageLightInfo.count === 1 ? '' : 's'} imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter's power; Diagnostics lists the split per light.
+                            </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={skyVisOn ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Sky visibility
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={skyVisOn}
+                                    onChange={(next) => { setSkyVisOn(next); callHandle('setSkyVisibility', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can actually see into a coarse volume, once per stage. Room scale, which screen space occlusion cannot reach.
+                            </div>
+                            {skyVisOn ? (
+                                <SliderField
+                                    label="Sky visibility strength"
+                                    value={skyVisStrength}
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                    onSlider={(v) => applySkyVisStrength(v)}
+                                    onNumber={(v) => applySkyVisStrength(v)}
+                                />
+                            ) : null}
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={shadowsOn ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Shadows
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={shadowsOn}
+                                    onChange={(next) => { setShadowsOn(next); callHandle('setShadowsEnabled', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Up to four lights cast, packed into one shadow atlas, chosen by the light they actually deliver to the stage. A heavy stage gets fewer casters, since each one is a full geometry pass whenever the camera moves. Shadowed areas also lose the environment light, because MaterialX shares one occlusion value between the two.
+                            </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={aoOn ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Ambient occlusion
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={aoOn}
+                                    onChange={(next) => { setAoOn(next); callHandle('setAmbientOcclusionEnabled', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Screen space, so it only knows about geometry on screen.
+                            </div>
+                            {aoOn ? (
+                                <SliderField
+                                    label="Ambient occlusion strength"
+                                    value={aoStrength}
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                    onSlider={(v) => applyAoStrength(v)}
+                                    onNumber={(v) => applyAoStrength(v)}
+                                />
+                            ) : null}
+                            {stageLightsOn ? (
+                                <SliderField
+                                    label="Stage light intensity" unit="EV"
+                                    value={stageLightsEv}
+                                    min={-8}
+                                    max={8}
+                                    step={0.25}
+                                    onSlider={(v) => applyStageLightsEv(v)}
+                                    onNumber={(v) => applyStageLightsEv(v)}
+                                />
+                            ) : null}
+                        </React.Fragment>
+                    ) : null}
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Subdivision</span>
                         <MtlxSelect
@@ -796,31 +1077,62 @@
 
                 <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
                     <SectionCard key={warnings.length > 0} icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen={warnings.length > 0} dense>
-                        {warnings.length ? (
-                            <div className="space-y-2" data-testid="usd-material-warnings">
-                                {warningDetails.map((record, i) => (
-                                    <div key={'w' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all">
-                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                                        <div>
-                                            <span>{record.label}</span>
-                                            {record.raw !== record.label && (
-                                                <details className="mt-1 text-gray-500">
-                                                    <summary className="cursor-pointer">Raw diagnostic</summary>
-                                                    <div className="mt-1 break-all">{record.raw}</div>
-                                                </details>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
+                        {warnings.length || transparentPrims.length ? (
+                            <div data-testid="usd-material-warnings">
+                                {['error', 'warning', 'info'].map((severity) => {
+                                    const records = grouped[severity];
+                                    if (!records.length) return null;
+                                    const style = SEVERITY_STYLE[severity];
+                                    return (
+                                        <DiagGroup
+                                            key={severity}
+                                            id={severity}
+                                            icon={style.icon}
+                                            tone={style.text}
+                                            label={style.label}
+                                            lines={records.map((record) => record.label)}
+                                        >
+                                            {records.map((record, i) => (
+                                                <div key={severity + i} className={'font-mono text-xs break-all ' + style.text}>{record.label}</div>
+                                            ))}
+                                        </DiagGroup>
+                                    );
+                                })}
+                                {transparentPrims.length ? (
+                                    <DiagGroup
+                                        id="transparent"
+                                        icon="color-filter"
+                                        tone="text-sky-300/90"
+                                        label="Transparency"
+                                        lines={transparentPrims.map((entry) => entry.primPath + ' [' + entry.materialPath + ']')}
+                                    >
+                                        {transparentPrims.map((entry, i) => (
+                                            <div key={'t' + i} className="font-mono text-xs break-all text-sky-300/90">
+                                                {entry.primPath}
+                                                <span className="text-gray-500"> [{entry.materialPath}]</span>
+                                            </div>
+                                        ))}
+                                    </DiagGroup>
+                                ) : null}
+                                {materials.length ? (
+                                    <DiagGroup
+                                        id="materials"
+                                        icon="file-text"
+                                        tone="text-gray-500"
+                                        label="Material sources"
+                                        lines={materials.map((material) => String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable'))}
+                                    >
+                                        {materials.map((material, i) => (
+                                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
+                                            </div>
+                                        ))}
+                                    </DiagGroup>
+                                ) : null}
                             </div>
                         ) : (
                             <div className="text-xs text-gray-500">No warnings.</div>
                         )}
-                        {materials.map((material, i) => (
-                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
-                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
-                            </div>
-                        ))}
                     </SectionCard>
                 </div>
             </div>

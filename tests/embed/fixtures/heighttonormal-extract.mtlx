@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_height" type="color3">
+    <input name="file" type="filename" value="heightfield.png" />
+  </image>
+  <extract name="ext_height" type="float">
+    <input name="in" type="color3" nodename="img_height" />
+    <input name="index" type="integer" value="0" />
+  </extract>
+  <heighttonormal name="h2n_height" type="vector3">
+    <input name="in" type="float" nodename="ext_height" />
+    <input name="scale" type="float" value="1.0" />
+  </heighttonormal>
+  <standard_surface name="SR_HeightExtract" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="specular_roughness" type="float" value="0.4" />
+    <input name="normal" type="vector3" nodename="h2n_height" />
+  </standard_surface>
+  <surfacematerial name="HeightExtract" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_HeightExtract" />
+  </surfacematerial>
+</materialx>

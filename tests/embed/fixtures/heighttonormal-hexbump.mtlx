@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <hextiledimage name="img_height" type="color3">
+    <input name="file" type="filename" value="heightfield.png" />
+  </hextiledimage>
+  <separate3 name="sep_height" type="multioutput">
+    <input name="in" type="color3" nodename="img_height" />
+  </separate3>
+  <bump name="bump_height" type="vector3">
+    <input name="height" type="float" nodename="sep_height" output="outr" />
+    <input name="scale" type="float" value="1.0" />
+  </bump>
+  <standard_surface name="SR_HexBump" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="specular_roughness" type="float" value="0.4" />
+    <input name="normal" type="vector3" nodename="bump_height" />
+  </standard_surface>
+  <surfacematerial name="HexBump" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_HexBump" />
+  </surfacematerial>
+</materialx>

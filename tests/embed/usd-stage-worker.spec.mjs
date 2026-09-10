@@ -51,6 +51,17 @@ function directMeshPrototypeFixture() {
     });
 }
 
+function metricsFixture(rootName) {
+  const fixtureRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'usd-scene');
+  return [rootName, 'metrics-distractor.usda', 'nested/nested.usda', 'nested/materials/red.mtlx', 'nested/materials/blue.mtlx'].map(filePath => {
+    const bytes = fs.readFileSync(path.join(fixtureRoot, filePath));
+    return {
+      path: filePath,
+      data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    };
+  });
+}
+
 test('@scene loadUsdStage extracts composed geometry and MaterialX in its Worker', async ({ page, embedURL }) => {
   await page.goto(embedURL + '/index.html');
   // Playwright serializes the fixture bytes as number arrays; the page then
@@ -146,6 +157,52 @@ test('@scene loadUsdStage extracts composed geometry and MaterialX in its Worker
   expect(fileProgress.at(-1)).toMatchObject({ done: 4, total: 4 });
   expect(result.progress.some(value => value.phase === 'geometry' && value.done === value.total && value.total === 2)).toBe(true);
   expect(result.progress.at(-1)).toMatchObject({ phase: 'material', done: 1, total: 1 });
+});
+
+test('@scene worker resolves root USDA stage metrics without confusing sublayers or customLayerData', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html');
+  const cases = ['metrics-authored.usda', 'metrics-one.usda', 'metrics-default.usda', 'metrics-no-header.usda'].map(rootName => ({
+    rootName,
+    files: metricsFixture(rootName).map(file => ({
+      path: file.path,
+      data: Array.from(new Uint8Array(file.data)),
+    })),
+  }));
+  const result = await page.evaluate(async ({ cases }) => {
+    const { loadUsdStage } = await import(`${location.origin}/js/usd/index.js`);
+    const output = [];
+    for (const item of cases) {
+      const stage = await loadUsdStage({
+        files: item.files.map(file => ({ path: file.path, data: Uint8Array.from(file.data).buffer })),
+        rootPath: item.rootName,
+      });
+      output.push({
+        rootName: item.rootName,
+        metersPerUnit: stage.metersPerUnit,
+        upAxis: stage.upAxis,
+        warnings: stage.warnings.filter(warning => /metersPerUnit|binary root|USD default/i.test(warning)),
+      });
+    }
+    return output;
+  }, { cases });
+
+  const authored = result.find(item => item.rootName === 'metrics-authored.usda');
+  expect(authored.metersPerUnit).toBeCloseTo(0.01, 8);
+  expect(authored.upAxis).toBe('Z');
+  expect(authored.warnings.some(warning => /root USDA header value 0.01/i.test(warning))).toBe(true);
+
+  const one = result.find(item => item.rootName === 'metrics-one.usda');
+  expect(one.metersPerUnit).toBeCloseTo(1, 8);
+  expect(one.upAxis).toBe('Z');
+  expect(one.warnings.some(warning => /root USDA header value 1/i.test(warning))).toBe(true);
+
+  const fallback = result.find(item => item.rootName === 'metrics-default.usda');
+  expect(fallback.metersPerUnit).toBeCloseTo(0.01, 8);
+  expect(fallback.upAxis).toBe('Y');
+
+  const noHeader = result.find(item => item.rootName === 'metrics-no-header.usda');
+  expect(noHeader.metersPerUnit).toBeCloseTo(0.01, 8);
+  expect(noHeader.upAxis).toBe('Y');
 });
 
 test('@scene loadUsdStage rejects an already cancelled request', async ({ page, embedURL }) => {

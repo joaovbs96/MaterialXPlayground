@@ -15,6 +15,27 @@
 // STAMP_TABLE, which fails CI if this literal drifts from
 // js/gen/mtlx-version.json.
 const MTLX_DEFAULT_VERSION = '1.39.5';
+// MaterialX light shader ids. The id bound with bindLightShader IS the
+// LightData.type the generated sampleLightSource() switches on, so these
+// are part of the shader contract and must not be renumbered.
+const LIGHT_TYPE_DIRECTIONAL = 1;
+const LIGHT_TYPE_POINT = 2;
+const LIGHT_TYPE_SPOT = 3;
+// Per-light source shape, kept separate from MaterialX's light type because
+// an area emitter is represented by several point/spot samples. The shader
+// uses this to apply the source-side cosine to only those samples.
+const LIGHT_SOURCE_KIND_AREA = 1;
+// Slots reserved for lights imported from a USD stage. This lands in the
+// generated GLSL as part of MAX_LIGHT_SOURCES, so it is decided once before
+// the first shader is generated and can never grow at runtime. Unused slots
+// cost nothing: the light loop is bounded by u_numActiveLightSources.
+//
+// 16 is a ceiling, not a preference. LightData is 8 vec4 slots wide (int +
+// 3 vec3 + 4 float), so 16 stage slots plus the env key light is 136 uniform
+// vectors, still inside the 224 that GLES 3 guarantees. Raising it buys
+// finer area-light subdivision at the risk of failing to link on a GPU at
+// that floor, and this define lands in EVERY material in both apps.
+const STAGE_LIGHT_SLOTS = 16;
 const mxEnvPromises = new Map();
 
 // Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
@@ -110,6 +131,10 @@ const getMxEnv = (version) => {
                 // maps. Older bindings may omit this option; the geometry
                 // path still supplies i_bitangent as an additive fallback.
                 try { genContext.getOptions().hwImplicitBitangents = false; } catch (e) { /* option absent */ }
+                // Shadow occlusion: MaterialX emits mx_shadow_occlusion() from a
+                // variance (moments) map. Safe to enable everywhere because the
+                // default u_shadowMap is white, which reads as fully lit.
+                try { genContext.getOptions().hwShadowMap = true; } catch (e) { /* option absent */ }
 
                 // Direct light, like the official viewer's registerLights():
                 // binds directional_light (id 1) from any <directional_light>
@@ -125,6 +150,17 @@ const getMxEnv = (version) => {
                             if (HwGen && HwGen.bindLightShader && ldef) {
                                 try { HwGen.unbindLightShaders(genContext); } catch (e) { /* fresh ctx */ }
                                 HwGen.bindLightShader(ldef, 1, genContext);
+                                // Point and spot as well, so USD stage lights
+                                // have a target: the id IS LightData.type in
+                                // the generated sampleLightSource() switch.
+                                // Each bind is guarded on its own, a missing
+                                // nodedef just leaves that type unavailable.
+                                for (const [name, id] of [['ND_point_light', LIGHT_TYPE_POINT], ['ND_spot_light', LIGHT_TYPE_SPOT]]) {
+                                    try {
+                                        const def = stdlib.getNodeDef ? stdlib.getNodeDef(name) : null;
+                                        if (def) HwGen.bindLightShader(def, id, genContext);
+                                    } catch (e) { console.warn('light shader ' + name + ' unavailable:', e); }
+                                }
                                 // Parses <directional_light> via DOMParser,
                                 // which handles self-closing tags unlike
                                 // regex. Parse failure warns, never throws.
@@ -167,13 +203,15 @@ const getMxEnv = (version) => {
                                         console.warn('direct-light rig: DOMParser failed on environment_map.mtlx, no rig lights loaded.', e);
                                     }
                                 }
-                                // Capacity must cover the rig PLUS one slot
-                                // reserved for the auto-extracted env key
-                                // light (extractKeyLight), fixed for good,
-                                // since a bound array's length can't change.
+                                // Capacity must cover the rig, the reserved
+                                // env key-light slot and STAGE_LIGHT_SLOTS for
+                                // imported USD lights. It becomes a #define in
+                                // the generated GLSL, so it is fixed for good:
+                                // a bound array's length can never change.
                                 try {
                                     const opts = genContext.getOptions();
-                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1);
+                                    const want = rigLights.length + 1 + STAGE_LIGHT_SLOTS;
+                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, want);
                                 } catch (e) { /* keep default */ }
                                 // No fallback light: an empty rig leaves
                                 // lightData empty, so u_numActiveLightSources
@@ -291,6 +329,50 @@ const setForceTransparency = (v, { persist = true } = {}) => {
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
 // (this material's hwTransparency verdict), see PEEL_LAYERS/getDummyTex.
 
+// Experimental, opt-in: mx_heighttonormal_vector3 (MaterialX 1.39) derives
+// its height gradient from screen-space derivatives divided by the UV
+// Jacobian, so on a high-resolution height texture a single-texel step
+// reads as an enormous per-pixel slope (speckle). When on, call sites
+// whose height comes straight from an mx_image_float() sample are
+// rewritten to a texel-space finite-difference gradient instead (see
+// applyHeightToNormalTexel below). Off by default: DCC parity is
+// unverified, this is for side-by-side comparison only. A `?heightToNormalTexel=1`
+// URL param seeds the flag for a page load without touching localStorage.
+let HEIGHT_TO_NORMAL_TEXEL = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('heightToNormalTexel')) return qs.get('heightToNormalTexel') === '1';
+        return localStorage.getItem('mtlxHeightToNormalTexel') === '1';
+    } catch (e) { return false; }
+})();
+// Specular environment method. 'prefilter' is MaterialXView's path: the
+// radiance map carries a GGX-prefiltered mip chain and the shader does one
+// textureLod, so a rough surface reads a correctly filtered value instead
+// of a 16-sample estimate. 'fis' is MaterialX's filtered-importance-
+// sampling default, kept for side-by-side comparison; its 16 samples are
+// what put per-pixel white specks on low-roughness surfaces under a map
+// with a small bright sun.
+let SPECULAR_ENV_METHOD = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('specularEnv')) return qs.get('specularEnv') === 'fis' ? 'fis' : 'prefilter';
+        return localStorage.getItem('mtlx_specular_env') === 'fis' ? 'fis' : 'prefilter';
+    } catch (e) { return 'prefilter'; }
+})();
+const getSpecularEnvMethod = () => SPECULAR_ENV_METHOD;
+
+const getHeightToNormalTexel = () => HEIGHT_TO_NORMAL_TEXEL;
+const setHeightToNormalTexel = (v, { persist = true } = {}) => {
+    HEIGHT_TO_NORMAL_TEXEL = !!v;
+    if (persist) {
+        try { localStorage.setItem('mtlxHeightToNormalTexel', HEIGHT_TO_NORMAL_TEXEL ? '1' : '0'); } catch (e) { /* best-effort */ }
+    }
+    // Generation-affecting: existing compiled sources bake in the old
+    // rewrite decision, so every live view must recompile its materials,
+    // mirroring how forceTransparency's setter above nudges live views.
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'heightToNormalTexel', value: HEIGHT_TO_NORMAL_TEXEL } })); } catch (e) { /* best-effort */ }
+};
+
 // Nearest transparent layers the peel loop resolves before giving up on
 // farther fragments, ample for the single-mesh shaderball preview this
 // targets. Each layer costs a full extra raster+composite pass, so this
@@ -314,12 +396,43 @@ const getDummyTex = () => {
 // u_opaqueDepth (see bindMaterialUniforms/renderFrame) so a stale/missing
 // binding reads as "nothing there", never triggering the peel discard.
 let MTLX_DUMMY_TEX_WHITE = null;
+// Shadow matrix meaning "no shadow": maps every world position to the origin,
+// so mx_shadow_occlusion samples the middle of a white moments map at depth
+// 0.5 and always returns fully lit. An identity matrix is NOT safe here, it
+// leaves fragmentDepth = worldZ * 0.5 + 0.5, which crosses the white map's
+// stored depth of 1.0 and hard-cuts the scene at worldZ = 1.
+let MTLX_SHADOW_OFF_MATRIX = null;
+const shadowOffMatrix = () => {
+    if (!MTLX_SHADOW_OFF_MATRIX) {
+        MTLX_SHADOW_OFF_MATRIX = new THREE.Matrix4().set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+    }
+    return MTLX_SHADOW_OFF_MATRIX.clone();
+};
 const getDummyTexWhite = () => {
     if (!MTLX_DUMMY_TEX_WHITE) {
         MTLX_DUMMY_TEX_WHITE = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
         MTLX_DUMMY_TEX_WHITE.needsUpdate = true;
     }
     return MTLX_DUMMY_TEX_WHITE;
+};
+
+// White 1x1x1 volume, so a material whose stage has no baked sky visibility
+// still has something to sample. Paired with u_skyVisStrength 0 it is an exact
+// no-op, which is what the Material Viewer runs with.
+let MTLX_DUMMY_TEX3D_WHITE = null;
+const getDummyTex3DWhite = () => {
+    if (!MTLX_DUMMY_TEX3D_WHITE && THREE.DataTexture3D) {
+        MTLX_DUMMY_TEX3D_WHITE = new THREE.DataTexture3D(new Uint8Array([255]), 1, 1, 1);
+        MTLX_DUMMY_TEX3D_WHITE.format = THREE.RedFormat;
+        MTLX_DUMMY_TEX3D_WHITE.type = THREE.UnsignedByteType;
+        MTLX_DUMMY_TEX3D_WHITE.minFilter = THREE.LinearFilter;
+        MTLX_DUMMY_TEX3D_WHITE.magFilter = THREE.LinearFilter;
+        MTLX_DUMMY_TEX3D_WHITE.wrapS = THREE.ClampToEdgeWrapping;
+        MTLX_DUMMY_TEX3D_WHITE.wrapT = THREE.ClampToEdgeWrapping;
+        MTLX_DUMMY_TEX3D_WHITE.wrapR = THREE.ClampToEdgeWrapping;
+        MTLX_DUMMY_TEX3D_WHITE.needsUpdate = true;
+    }
+    return MTLX_DUMMY_TEX3D_WHITE;
 };
 
 // Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
@@ -406,6 +519,303 @@ const patchGeompropVaryings = (vs, fs) => {
     return { vs: patchedVs, fs: patchedFs };
 };
 
+// Finds CALL sites of fnName in GLSL source text (not its definition:
+// generated fragment sources inline the library function body right
+// above its call sites, and a naive non-greedy ")...;" regex matches
+// INTO that definition's body instead of stopping at its own params).
+// Balances parens from the opening "(" to find the real end, then
+// requires the next non-space character to be ";" (a call statement;
+// a definition's params are followed by "{" instead).
+const findGlslCalls = (text, fnName) => {
+  const calls = [];
+  const idRe = new RegExp('\\b' + fnName + '\\s*\\(', 'g');
+  let m;
+  while ((m = idRe.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 8), m.index);
+    if (/\bvoid\s*$/.test(before)) continue; // "void fnName(" is the definition
+    const openParenIdx = m.index + m[0].length - 1;
+    let depth = 1, i = openParenIdx + 1;
+    while (i < text.length && depth > 0) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')') depth--;
+      i++;
+    }
+    if (depth !== 0) continue; // unbalanced, bail out defensively
+    const closeParenIdx = i - 1;
+    let j = i;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    if (text[j] !== ';') continue; // followed by "{" => a definition, skip
+    calls.push({ argsText: text.slice(openParenIdx + 1, closeParenIdx), start: m.index, end: j + 1 });
+  }
+  return calls;
+};
+
+// Splits a GLSL call's argument list on top-level commas only (args can
+// themselves be calls, e.g. "vec2(0.000000, 0.000000)").
+const splitGlslArgs = (argsText) => {
+    const out = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < argsText.length; i++) {
+        const c = argsText[i];
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        else if (c === ',' && depth === 0) { out.push(argsText.slice(start, i).trim()); start = i + 1; }
+    }
+    out.push(argsText.slice(start).trim());
+    return out;
+};
+
+// Generic version of findGlslCalls: finds every CALL statement (any
+// function name), not just one. Used to trace height sources through
+// arbitrary helper calls (separate3, extract, nodegraph wrappers).
+const findAllCallStatements = (text) => {
+    const calls = [];
+    const idRe = /\b(\w+)\s*\(/g;
+    let m;
+    while ((m = idRe.exec(text)) !== null) {
+        const before = text.slice(Math.max(0, m.index - 8), m.index);
+        if (/\bvoid\s*$/.test(before)) continue; // definition, not a call
+        const openParenIdx = m.index + m[0].length - 1;
+        let depth = 1, i = openParenIdx + 1;
+        while (i < text.length && depth > 0) {
+            if (text[i] === '(') depth++;
+            else if (text[i] === ')') depth--;
+            i++;
+        }
+        if (depth !== 0) continue;
+        const closeParenIdx = i - 1;
+        let j = i;
+        while (j < text.length && /\s/.test(text[j])) j++;
+        if (text[j] !== ';') continue;
+        calls.push({ fnName: m[1], argsText: text.slice(openParenIdx + 1, closeParenIdx), start: m.index, end: j + 1 });
+    }
+    return calls;
+};
+
+// Finds every "void NAME(params) { ... }" definition in GLSL source text
+// (generated shaders inline nodegraph bodies as plain functions, e.g.
+// NG_bump_vector3), including main() itself. Used to scope height-source
+// tracing per-function and to resolve a parameter back to its call-site
+// argument when a call site passes the height through a wrapper function.
+const findFunctionDefs = (text) => {
+    const defs = [];
+    const re = /\bvoid\s+(\w+)\s*\(/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        const openParenIdx = m.index + m[0].length - 1;
+        let depth = 1, i = openParenIdx + 1;
+        while (i < text.length && depth > 0) {
+            if (text[i] === '(') depth++;
+            else if (text[i] === ')') depth--;
+            i++;
+        }
+        if (depth !== 0) continue;
+        const paramsText = text.slice(openParenIdx + 1, i - 1);
+        let j = i;
+        while (j < text.length && /\s/.test(text[j])) j++;
+        if (text[j] !== '{') continue; // not immediately followed by a body: not a definition we can scope
+        let bodyDepth = 1, k = j + 1;
+        while (k < text.length && bodyDepth > 0) {
+            if (text[k] === '{') bodyDepth++;
+            else if (text[k] === '}') bodyDepth--;
+            k++;
+        }
+        if (bodyDepth !== 0) continue;
+        const params = splitGlslArgs(paramsText).filter((p) => p.length).map((p) => {
+            const parts = p.trim().split(/\s+/);
+            return { name: parts[parts.length - 1], type: parts.slice(0, -1).join(' ') };
+        });
+        defs.push({ name: m[1], params, bodyStart: j + 1, bodyEnd: k - 1 });
+    }
+    return defs;
+};
+
+const findEnclosingFunction = (pos, funcDefs) =>
+    funcDefs.find((f) => pos >= f.bodyStart && pos <= f.bodyEnd);
+
+// uv_scale/uv_offset arrive as UNIFORM NAMES in generated GLSL (MaterialX
+// never inlines them as literals), so "identity" is checked against the
+// uniform's own MaterialX-introspected default value (collectMxUniforms
+// entries, { name, type, data }), not the call-site text. A bare vec2(..)
+// literal is also accepted, in case a future codegen path does inline it.
+const isIdentityVec2Arg = (expr, introspected, x, y) => {
+    const lit = expr.match(/^vec2\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)$/);
+    if (lit) return Math.abs(parseFloat(lit[1]) - x) < 1e-4 && Math.abs(parseFloat(lit[2]) - y) < 1e-4;
+    const u = introspected && introspected.find((e) => e.name === expr && e.type === 'vector2');
+    if (!u || !Array.isArray(u.data) || u.data.length < 2) return false;
+    return Math.abs(u.data[0] - x) < 1e-4 && Math.abs(u.data[1] - y) < 1e-4;
+};
+
+const HEIGHTTONORMAL_TEXEL_FN = `
+void mx_heighttonormal_vector3_texel(sampler2D tex, vec2 uv, float scale, out vec3 result)
+{
+    // Finite-difference gradient over texels, matching common DCC bump
+    // nodes, instead of upstream's per-UV screen-derivative gradient
+    // (which blows up on high-resolution height textures).
+    vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+    float hL = texture(tex, uv - vec2(texel.x, 0.0)).r;
+    float hR = texture(tex, uv + vec2(texel.x, 0.0)).r;
+    float hD = texture(tex, uv - vec2(0.0, texel.y)).r;
+    float hU = texture(tex, uv + vec2(0.0, texel.y)).r;
+    float gx = (hR - hL) * 0.5;
+    float gy = (hU - hD) * 0.5;
+    // Mirrored UVs flip the tangent-frame handedness; match upstream's
+    // n.z<0 flip via the UV Jacobian's sign instead (no cross product here).
+    vec2 dUdS = vec2(dFdx(uv.x), dFdy(uv.x));
+    vec2 dVdS = vec2(dFdx(uv.y), dFdy(uv.y));
+    if (dUdS.x * dVdS.y - dUdS.y * dVdS.x < 0.0) { gx = -gx; gy = -gy; }
+    result = normalize(vec3(-gx * scale, -gy * scale, 1.0)) * 0.5 + 0.5;
+}
+`;
+
+// Hex-tiled height sampling blends three rotated tile lookups (no single
+// texel grid exists to resample), so this keeps upstream's own
+// screen-derivative formula and only divides the gradient by N (the
+// sampler's largest texel dimension) for texel-unit semantics.
+const HEIGHTTONORMAL_HEXTILE_TEXEL_FN = `
+void mx_heighttonormal_vector3_hextile_texel(float height, sampler2D tex, vec2 texcoord, float scale, out vec3 result)
+{
+    float N = float(max(textureSize(tex, 0).x, textureSize(tex, 0).y));
+    vec2 dHdS = vec2(dFdx(height), dFdy(height)) * scale * (1.0 / 16.0) / N;
+    vec2 dUdS = vec2(dFdx(texcoord.x), dFdy(texcoord.x));
+    vec2 dVdS = vec2(dFdx(texcoord.y), dFdy(texcoord.y));
+    vec3 tangent = vec3(dUdS.x, dVdS.x, dHdS.x);
+    vec3 bitangent = vec3(dUdS.y, dVdS.y, dHdS.y);
+    vec3 n = cross(tangent, bitangent);
+    if (dot(n, n) < 1e-16) { n = vec3(0, 0, 1); }
+    else if (n.z < 0.0) { n *= -1.0; }
+    result = normalize(n) * 0.5 + 0.5;
+}
+`;
+
+// Functions whose call passes the source vector as its first arg and the
+// extracted channel(s) as later "out" args, e.g. NG_separate3_color3(in1,
+// outr, outg, outb) or an inlined extract nodegraph's NG_extract_*(in1,
+// index, out). Matched by generated-name prefix, case sensitive.
+const CHANNEL_EXTRACT_FN_RE = /^(NG_separate[234]_|NG_extract_|mx_extract_)/;
+
+// Traces `varName` (used as the H argument of a heighttonormal call, or
+// as an intermediate found along the way) back to a sampler-based source,
+// within a single function's body text (GLSL has no nested functions, so
+// a function's own body is a closed scope for local variables).
+// Handles direct mx_image_*/mx_hextiledimage_* results, simple aliasing
+// ("H = tmp;"), component extracts ("H = tmp.x;"/"H = tmp[0];"), and
+// separate3/extract-style calls. Crosses into the caller's scope when
+// `varName` turns out to be a formal parameter (see resolveAcrossCall
+// below), so a height traced through a nodegraph-turned-function (e.g.
+// NG_bump_vector3) still resolves. Returns { kind: 'image', sampler,
+// texcoord } | { kind: 'hextiled', sampler } | null.
+const traceHeightSource = (varName, funcDef, fs, allFuncs, introspected, notices, depth) => {
+    if (depth > 6) return null; // defensive cap, real chains are 2-3 deep
+    const body = fs.slice(funcDef.bodyStart, funcDef.bodyEnd + 1);
+
+    // 1) Direct sampler-backed result: mx_image_<type>(...) / mx_hextiledimage_<type>(...).
+    for (const call of findAllCallStatements(body)) {
+        const args = splitGlslArgs(call.argsText);
+        const isImage = /^mx_image_(float|color3|color4|vector2|vector3|vector4)$/.test(call.fnName);
+        const isHextiled = /^mx_hextiledimage_(color3|color4)$/.test(call.fnName);
+        if (!isImage && !isHextiled) continue;
+        const resultVar = args[args.length - 1];
+        if (resultVar !== varName) continue;
+        if (isImage) {
+            if (args.length < 13) continue;
+            const sampler = args[0], texcoord = args[3], uvScale = args[10], uvOffset = args[11];
+            if (!isIdentityVec2Arg(uvScale, introspected, 1, 1) || !isIdentityVec2Arg(uvOffset, introspected, 0, 0)) {
+                notices.push(`heighttonormal: skipped a call site (non-identity uv_scale/uv_offset on "${resultVar}")`);
+                return null;
+            }
+            return { kind: 'image', sampler, texcoord };
+        }
+        return { kind: 'hextiled', sampler: args[0] };
+    }
+
+    // 2) Simple alias / component extract: "[type] H = X;" / "H = X.c;" / "H = X[n];".
+    const aliasRe = new RegExp('(?:^|[;{}\\s])(?:\\w+\\s+)?' + varName + '\\s*=\\s*([A-Za-z_]\\w*)\\s*(?:\\.\\w+|\\[\\s*\\d+\\s*\\])?\\s*;');
+    const aliasMatch = body.match(aliasRe);
+    if (aliasMatch && aliasMatch[1] !== varName) {
+        return traceHeightSource(aliasMatch[1], funcDef, fs, allFuncs, introspected, notices, depth + 1);
+    }
+
+    // 3) separate3/extract-style calls: varName is one of the output args.
+    for (const call of findAllCallStatements(body)) {
+        if (!CHANNEL_EXTRACT_FN_RE.test(call.fnName)) continue;
+        const args = splitGlslArgs(call.argsText);
+        if (args.length < 2 || !args.slice(1).includes(varName)) continue;
+        return traceHeightSource(args[0], funcDef, fs, allFuncs, introspected, notices, depth + 1);
+    }
+
+    // 4) varName is a formal parameter of this function: follow its ONLY
+    // call site back into the caller's scope. Skipped (ambiguous) if the
+    // function is called from more than one place, or the actual argument
+    // isn't a bare variable, since it isn't safe to rewrite a SHARED
+    // function body for just one of its callers.
+    const paramIdx = funcDef.params.findIndex((p) => p.name === varName);
+    if (paramIdx === -1) return null;
+    const callSites = findGlslCalls(fs, funcDef.name);
+    if (callSites.length !== 1) return null;
+    const callerArgs = splitGlslArgs(callSites[0].argsText);
+    const actualArg = callerArgs[paramIdx] && callerArgs[paramIdx].trim();
+    if (!actualArg || !/^\w+$/.test(actualArg)) return null;
+    const callerFunc = findEnclosingFunction(callSites[0].start, allFuncs);
+    if (!callerFunc) return null;
+    return traceHeightSource(actualArg, callerFunc, fs, allFuncs, introspected, notices, depth + 1);
+};
+
+// Experimental opt-in (see HEIGHT_TO_NORMAL_TEXEL above): rewrites
+// mx_heighttonormal_vector3(H, S, T, OUT) call sites whose height H
+// traces back (through assignments, component extracts, separate/extract
+// chains, and nodegraph-turned-function parameters) to a sampler-based
+// source, to a texel-space gradient instead. A plain mx_image_* source
+// resamples the sampler directly; a hextiledimage source (three rotated
+// tile blends, no single texel grid) keeps upstream's own screen-
+// derivative formula but scales it by 1/N instead. Anything that doesn't
+// trace to a sampler, or whose uv_scale/uv_offset aren't identity, is
+// left untouched (upstream behavior).
+const applyHeightToNormalTexel = (fs, notices, introspected) => {
+    if (!getHeightToNormalTexel()) return fs;
+    const allFuncs = findFunctionDefs(fs);
+    const h2nCalls = findGlslCalls(fs, 'mx_heighttonormal_vector3');
+    if (!h2nCalls.length) return fs;
+    let rewrittenImage = 0, rewrittenHextile = 0;
+    // Rebuild right-to-left so earlier offsets stay valid as later (later
+    // in text order, processed first here) spans are replaced.
+    for (let k = h2nCalls.length - 1; k >= 0; k--) {
+        const call = h2nCalls[k];
+        const args = splitGlslArgs(call.argsText);
+        if (args.length !== 4) continue;
+        const [heightVar, scale, texcoord, outVar] = args;
+        const enclosing = findEnclosingFunction(call.start, allFuncs);
+        if (!enclosing) continue;
+        const src = traceHeightSource(heightVar, enclosing, fs, allFuncs, introspected, notices, 0);
+        if (!src) continue;
+        let replacement;
+        if (src.kind === 'image') {
+            replacement = `mx_heighttonormal_vector3_texel(${src.sampler}, ${src.texcoord}, ${scale}, ${outVar});`;
+            rewrittenImage++;
+        } else {
+            replacement = `mx_heighttonormal_vector3_hextile_texel(${heightVar}, ${src.sampler}, ${texcoord}, ${scale}, ${outVar});`;
+            rewrittenHextile++;
+        }
+        fs = fs.slice(0, call.start) + replacement + fs.slice(call.end);
+    }
+    const rewritten = rewrittenImage + rewrittenHextile;
+    if (rewritten > 0) {
+        // Insert after any leading "precision ...;" directives, not at
+        // position 0: ESSL requires those before the first float/int/
+        // sampler use, and our injected functions have all three.
+        let insertAt = 0;
+        const precisionRe = /^precision\s+\w+\s+\w+\s*;\s*$/gm;
+        let pm;
+        while ((pm = precisionRe.exec(fs)) !== null) insertAt = pm.index + pm[0].length;
+        let injected = '';
+        if (rewrittenImage) injected += HEIGHTTONORMAL_TEXEL_FN;
+        if (rewrittenHextile) injected += HEIGHTTONORMAL_HEXTILE_TEXEL_FN;
+        fs = fs.slice(0, insertAt) + '\n' + injected + fs.slice(insertAt);
+        notices.push(`heighttonormal: ${rewritten} call(s) use texel-space gradients (experimental)`);
+    }
+    return fs;
+};
+
 // Hair helper pbrlib nodes pull in the full BSDF/lighting include chain,
 // which the generator only emits for LIT shaders, leaving an unlit
 // preview referencing undefined symbols; this patches in no-op stubs.
@@ -448,46 +858,156 @@ const patchUnlitLightingRefs = (src) => {
     return src;
 };
 
+// The shared MaterialX light library keeps a +1 scene-unit offset in point
+// and spot attenuation for the ordinary Material Viewer. Scene imports first
+// convert authored coordinates to metres, so that offset becomes an
+// arbitrary one-metre term and breaks inverse-square scale covariance. Scene
+// compilation opts into the physical form while the ordinary preview path
+// remains byte-for-byte compatible with the library output.
+const patchScenePhysicalLightFalloff = (src, sceneRgbt = false) => {
+    if (!sceneRgbt) return src;
+    return src.replace(/pow\s*\(\s*distance\s*\+\s*1\.0\s*,\s*light\.decay_rate\s*\+\s*M_FLOAT_EPS\s*\)/g,
+        'pow(max(distance, M_FLOAT_EPS), light.decay_rate)');
+};
+
 // Shared display-transform GLSL body (`inVar`/`outVar`: vec3 in/out).
-// `mode` ('aces'|'srgb'|'lin_rec709', see getDisplayTransform()) picks ACES
-// filmic (three r128's Hill fit) + sRGB OETF, sRGB OETF alone (MaterialXView
-// parity), or raw linear (no OETF, no tone map). Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
-const ACES_SRGB_GLSL = (inVar, outVar, mode) => {
-    // renderer.toneMappingExposure and this pre-scale are independent
-    // knobs; this one is baked straight into RawShaderMaterial GLSL and
-    // bypasses renderer.toneMappingExposure entirely, so keep them from drifting.
-    // srgb matches MaterialXView: glEnable(GL_FRAMEBUFFER_SRGB) wraps its env/
-    // opaque/transparent passes (RenderPipelineGL.cpp:357, disabled :458) for a
-    // hardware sRGB OETF only, no tone map (hwSrgbEncodeOutput false, GenOptions.h:92).
-    const acesBody = (mode === 'srgb' || mode === 'lin_rec709') ? '' :
-        '        const mat3 _acesIn = mat3(\n' +
-        '            vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
-        '            vec3(0.04823, 0.01566, 0.83777)\n' +
-        '        );\n' +
-        '        const mat3 _acesOut = mat3(\n' +
-        '            vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
-        '            vec3(-0.07367, -0.00605,  1.07602)\n' +
-        '        );\n' +
-        '        _c *= (1.0 / 0.6); // toneMappingExposure(=1.0) / 0.6, matching three\'s ACESFilmicToneMapping chunk\n' +
-        '        _c = _acesIn * _c;\n' +
-        '        vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
-        '        vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
-        '        _c = _acesOut * (_aces_a / _aces_b);\n';
-    const guarded = '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
-        acesBody +
+// `mode` (see getDisplayTransform()) picks the curve: 'aces' (three r128's Hill
+// fit), 'neutral' (Khronos PBR Neutral), 'srgb' (OETF alone, MaterialXView
+// parity) or 'lin_rec709' (nothing at all). `exposureVar`, when given, names a
+// float uniform applied as a camera exposure ahead of the curve.
+// Sole source: encodeDisplay() and finalMat both call it, so the two never drift apart.
+// The tone curve alone, operating in place on a vec3 named `_c`. Split out of
+// ACES_SRGB_GLSL so applyThreeToneMappingChunk can reuse the exact same source
+// for three's built-in materials: the backdrop and the objects then cannot
+// drift, which is the failure this split exists to prevent.
+// srgb emits nothing, matching MaterialXView: glEnable(GL_FRAMEBUFFER_SRGB) wraps
+// its env/opaque/transparent passes (RenderPipelineGL.cpp:357, disabled :458) for a
+// hardware sRGB OETF only, no tone map (hwSrgbEncodeOutput false, GenOptions.h:92).
+const TONE_CURVE_GLSL = (mode, pad) => {
+    const p = pad || '        ';
+    if (mode === 'aces') {
+        // three r128's Hill fit of the ACES RRT+ODT, kept byte-identical to the
+        // tonemapping_pars_fragment chunk so the two paths agree exactly.
+        return p + 'const mat3 _acesIn = mat3(\n' +
+            p + '    vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n' +
+            p + '    vec3(0.04823, 0.01566, 0.83777)\n' +
+            p + ');\n' +
+            p + 'const mat3 _acesOut = mat3(\n' +
+            p + '    vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n' +
+            p + '    vec3(-0.07367, -0.00605,  1.07602)\n' +
+            p + ');\n' +
+            p + '_c *= (1.0 / 0.6); // three\'s ACES normalisation constant, not an exposure\n' +
+            p + '_c = _acesIn * _c;\n' +
+            p + 'vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n' +
+            p + 'vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n' +
+            p + '_c = _acesOut * (_aces_a / _aces_b);\n';
+    }
+    if (mode === 'neutral') {
+        // Khronos PBR Neutral. Preserves the hue and saturation of in-gamut
+        // colour and rolls only the highlights toward white, where the ACES fit
+        // skews saturated hues badly (see studioInverseAcesSrgbGlsl's own note).
+        // Written as a block rather than the reference function's early returns
+        // so it can be spliced inline.
+        return p + '{\n' +
+            p + '    const float _nsc = 0.76; // startCompression, 0.8 - 0.04\n' +
+            p + '    const float _nds = 0.15; // desaturation\n' +
+            p + '    float _nx = min(_c.r, min(_c.g, _c.b));\n' +
+            p + '    float _noff = _nx < 0.08 ? _nx - 6.25 * _nx * _nx : 0.04;\n' +
+            p + '    _c -= _noff;\n' +
+            p + '    float _npk = max(_c.r, max(_c.g, _c.b));\n' +
+            p + '    if (_npk >= _nsc) {\n' +
+            p + '        const float _nd = 1.0 - _nsc;\n' +
+            p + '        float _nnp = 1.0 - _nd * _nd / (_npk + _nd - _nsc);\n' +
+            p + '        _c *= _nnp / _npk;\n' +
+            p + '        float _ng = 1.0 - 1.0 / (_nds * (_npk - _nnp) + 1.0);\n' +
+            p + '        _c = mix(_c, vec3(_nnp), _ng);\n' +
+            p + '    }\n' +
+            p + '}\n';
+    }
+    return '';
+};
+
+// Numeric form of the mode, for the shader-side branch below. Kept beside
+// DISPLAY_TRANSFORM_VALUES so the two cannot disagree.
+const DISPLAY_TRANSFORM_IDS = { srgb: 0, aces: 1, lin_rec709: 2, neutral: 3 };
+const displayTransformId = (mode) => DISPLAY_TRANSFORM_IDS[mode] || 0;
+
+// Emits the whole transform as a runtime branch on `modeVar` instead of baking
+// one curve in. That is what lets a view pick its own transform (the Scene
+// wants a filmic default, the Material Viewer must stay on plain sRGB for
+// MaterialXView parity) and what makes switching cost a uniform write rather
+// than regenerating every material in the stage.
+const DISPLAY_TRANSFORM_SWITCH_GLSL = (inVar, outVar, modeVar, exposureVar) => {
+    const p = '        ';
+    return p + 'vec3 _c = max(' + inVar + ', vec3(0.0));\n' +
+        (exposureVar ? p + '_c *= ' + exposureVar + ';\n' : '') +
+        p + 'if (' + modeVar + ' == 1) {\n' +
+        TONE_CURVE_GLSL('aces', p + '    ') +
+        p + '} else if (' + modeVar + ' == 3) {\n' +
+        TONE_CURVE_GLSL('neutral', p + '    ') +
+        p + '}\n' +
+        // lin_rec709 (2) is the inspection mode: no tone map, no OETF and no
+        // clamp, so over-range values survive a float readback.
+        p + 'vec3 ' + outVar + ' = _c;\n' +
+        p + 'if (' + modeVar + ' != 2) {\n' +
+        p + '    _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n' +
+        p + '    vec3 _lo = _c * 12.92;\n' +
+        p + '    vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
+        p + '    ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n' +
+        p + '}\n';
+};
+
+const ACES_SRGB_GLSL = (inVar, outVar, mode, exposureVar) => {
+    // Camera exposure, ahead of the tone curve. It belongs here and nowhere
+    // else because it is the one scale that must apply to direct light, the
+    // environment and emission alike; u_envLightIntensity gains only the IBL.
+    // It stays a uniform on purpose: `mode` is baked into source, so anything
+    // baked would cost a full regeneration of every material per tweak.
+    const exposeBody = exposureVar ? '        _c *= ' + exposureVar + ';\n' : '';
+    const head = '        vec3 _c = max(' + inVar + ', vec3(0.0));\n' + exposeBody;
+    // lin_rec709 is the inspection mode: no tone map, no OETF and no clamp, so
+    // over-range values survive a float readback. The saturate below belongs to
+    // the display-referred modes only, which is what it always meant.
+    if (mode === 'lin_rec709') return head + '        vec3 ' + outVar + ' = _c;\n';
+    const guarded = head +
+        TONE_CURVE_GLSL(mode) +
         '        _c = clamp(_c, vec3(0.0), vec3(1.0)); // saturate()\n';
-    // lin_rec709: raw linear passthrough, no OETF curve applied at all.
-    if (mode === 'lin_rec709') return guarded + '        vec3 ' + outVar + ' = _c;\n';
     return guarded +
         '        vec3 _lo = _c * 12.92;\n' +
         '        vec3 _hi = 1.055 * pow(_c, vec3(1.0 / 2.4)) - 0.055;\n' +
         '        vec3 ' + outVar + ' = mix(_hi, _lo, step(_c, vec3(0.0031308)));\n';
 };
 
+// Mirrors the same curve onto three's BUILT-IN materials: the backdrop sky
+// sphere, the studio parts and the shadow catcher. RawShaderMaterial bypasses
+// three's epilogue entirely, so without this the background keeps its own curve
+// and ignores exposure completely, which is what made the sky stop matching the
+// objects in front of it. three calls CustomToneMapping() when
+// renderer.toneMapping is CustomToneMapping; the sRGB OETF is left to
+// renderer.outputEncoding, exactly as it is for MaterialX materials.
+let BASE_TONEMAP_CHUNK = null;
+const CUSTOM_TONEMAP_STUB = 'vec3 CustomToneMapping( vec3 color ) { return color; }';
+const applyThreeToneMappingChunk = (mode) => {
+    if (!THREE.ShaderChunk || !THREE.ShaderChunk.tonemapping_pars_fragment) return false;
+    if (BASE_TONEMAP_CHUNK === null) BASE_TONEMAP_CHUNK = THREE.ShaderChunk.tonemapping_pars_fragment;
+    if (BASE_TONEMAP_CHUNK.indexOf(CUSTOM_TONEMAP_STUB) === -1) return false;
+    const body = mode === 'lin_rec709'
+        ? '\treturn color * toneMappingExposure;\n'
+        : '\tvec3 _c = max(color * toneMappingExposure, vec3(0.0));\n'
+            + TONE_CURVE_GLSL(mode, '\t')
+            + '\treturn clamp(_c, vec3(0.0), vec3(1.0));\n';
+    THREE.ShaderChunk.tonemapping_pars_fragment = BASE_TONEMAP_CHUNK.replace(
+        CUSTOM_TONEMAP_STUB,
+        'vec3 CustomToneMapping( vec3 color ) {\n' + body + '}'
+    );
+    return true;
+};
+
 // Injects the current display transform (getDisplayTransform(), see
 // ACES_SRGB_GLSL) before main()'s closing brace: RawShaderMaterial bypasses
 // renderer.toneMapping, so this is what keeps it matching the rest of the
-// scene. Gated at runtime (see the `if` below): linear peel/tail passes defer to finalMat's single composite-time pass instead, so it isn't applied twice.
+// scene. Linear peel and opaque passes defer to finalMat's single
+// composite-time pass instead, so the transform is never applied twice.
 const encodeDisplay = (src) => {
     // Both anchors are load-bearing: a silent skip here used to ship
     // raw-linear output straight to the display with no error anywhere.
@@ -495,16 +1015,24 @@ const encodeDisplay = (src) => {
     const m = src.match(/\bout\s+vec4\s+(\w+)\s*;/);
     if (!m) throw new Error('encodeDisplay: could not locate the fragment shader\'s "out vec4 <name>;" declaration, MaterialX output format may have changed');
     const v = m[1];
-    const idx = src.lastIndexOf('}');
+    // Both the curve and the exposure ride along as uniforms, so neither one
+    // regenerates a shader when it changes and each view can hold its own.
+    let out = src;
+    const decl = 'uniform float u_displayExposure;\nuniform int u_displayTransform;';
+    if (out.indexOf('uniform int u_displayTransform;') === -1) {
+        const mainIdx = out.indexOf('void main');
+        if (mainIdx === -1) throw new Error('encodeDisplay: could not locate "void main" to declare the display uniforms, MaterialX output format may have changed');
+        out = out.slice(0, mainIdx) + decl + '\n' + out.slice(mainIdx);
+    }
+    const idx = out.lastIndexOf('}');
     if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader, MaterialX output format may have changed');
-    const mode = getDisplayTransform();
     const inject =
         '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' +
-        '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' +
-        ACES_SRGB_GLSL(v + '.rgb', '_enc', mode) +
+        '    if (u_peelLinear == 0) {\n' +
+        DISPLAY_TRANSFORM_SWITCH_GLSL(v + '.rgb', '_enc', 'u_displayTransform', 'u_displayExposure') +
         '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' +
         '    }\n';
-    return src.slice(0, idx) + inject + src.slice(idx);
+    return out.slice(0, idx) + inject + out.slice(idx);
 };
 
 // Deliberate energy-compromise constant for the peel-mode env-refraction
@@ -514,6 +1042,373 @@ const encodeDisplay = (src) => {
 // double-counting against the real scene now showing through via the
 // alpha-composited background. Tune here.
 const PEEL_REFRACTION_SCALE = 0.5;
+
+// Bounds-guards MaterialX's mx_shadow_occlusion. The library samples the
+// moments map with no check at all, so a fragment outside the shadow
+// frustum reads a clamped edge texel and a fragment behind a perspective
+// light projects through w < 0 onto arbitrary coordinates: both read as
+// shadowed and streak across the stage. Outside the map means unlit by
+// that caster, which is fully lit here. No-op when the shader has no
+// shadow map (the pattern is absent), so unshadowed materials are
+// untouched.
+const patchShadowBounds = (fs) => {
+    const call = 'mx_variance_shadow_occlusion(shadowMoments, shadowCoord.z)';
+    const anchor = 'return  ' + call;
+    if (fs.indexOf(anchor) === -1) return fs;
+    const guard = [
+        'if (shadowCoord4.w <= 0.0) return 1.0;',
+        'if (any(lessThan(shadowCoord, vec3(0.0))) || any(greaterThan(shadowCoord, vec3(1.0)))) return 1.0;',
+        // A light inside the scene cannot be covered by one 2D map, so the
+        // frustum always ends somewhere. Stopping dead at its edge draws a
+        // hard straight line across the floor where shadowed meets
+        // unshadowed, so fade over the last few percent of the map instead.
+        //
+        // Only the XY edges. There is deliberately no far-plane term: under a
+        // perspective projection shadowCoord.z is not a distance, and with a
+        // near of 0.25 against a far of 399 the ENTIRE stage lands past 0.99,
+        // so any threshold on it fades every shadow in the scene to nothing.
+        'vec2 mx_shadowEdge = min(shadowCoord.xy, vec2(1.0) - shadowCoord.xy);',
+        'float mx_shadowFade = smoothstep(0.0, 0.12, min(mx_shadowEdge.x, mx_shadowEdge.y));',
+        // Variance shadow maps leak: Chebyshev's bound is only an upper bound,
+        // so a partly occluded texel reports far more light than it receives.
+        // The library has no bleed reduction at all, and with MIN_VARIANCE at
+        // 1e-5 across a whole stage's depth range an occluder needs roughly a
+        // world unit of separation before it even half darkens. Rescaling the
+        // tail of the bound is the standard fix and is what gives small props
+        // a readable shadow instead of a grey wash.
+        'float mx_shadowRaw = ' + call + ';',
+        'float mx_shadowLit = smoothstep(0.35, 1.0, mx_shadowRaw);',
+        'return mix(1.0, mx_shadowLit, mx_shadowFade);',
+    ].join('\n    ');
+    return fs.replace(anchor, guard);
+};
+
+// Points MaterialX's single shadow term at the light the map was actually
+// rendered from.
+//
+// The generator emits the shadow ONCE, before the light loop, and resets it at
+// the end of every iteration:
+//
+//     // Shadow occlusion
+//     occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);
+//     ... for (int activeLightIndex = ...) {
+//             // Clear shadow factor for next light
+//             occlusion = 1.0;
+//         }
+//
+// so only light slot 0 is ever shadowed. Our slot layout is [rig..., key,
+// stage...] and the site's environment_map.mtlx declares no rig lights, so slot
+// 0 is the environment key light while the caster is chosen from the STAGE
+// lights. The map was therefore drawn from one light and applied to a different
+// one pointing somewhere else, which is why no USD light cast a shadow and the
+// darkening that did appear sat at the wrong contact points.
+//
+// The fix keeps MaterialX's one map and selects per light instead: the caster's
+// slots (an area emitter is split across several) carry the shadow, everything
+// else stays lit. u_shadowLightBegin == u_shadowLightEnd means "no caster",
+// which is the safe default and what the Material Viewer runs with.
+// Number of independent shadow casters packed into the atlas, and the light
+// slots the per-light lookup can address. Both are compile-time array sizes,
+// so they are fixed here and must match the renderer's own constants.
+const SHADOW_CASTER_SLOTS = 4;
+const SHADOW_LIGHT_SLOTS_MAX = 32;
+
+const patchShadowLightScope = (fs) => {
+    const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
+    const site = 'L = lightShader.direction;';
+    if (fs.indexOf(call) === -1 || fs.indexOf(site) === -1) return fs;
+    // MaterialX's own single-map call is dropped: it computes the shadow once,
+    // before the loop, which is what limited it to light slot 0.
+    let out = fs.replace(call, 'occlusion = 1.0;');
+    // A material's light loop evaluates the same world-space point once per
+    // analytic sample. Area emitters split across several slots therefore
+    // used to execute the identical 19-tap search/filter for every sample.
+    // Keep visibility local to this fragment evaluation and fill lazily by
+    // caster index; the sentinel is reset for every invocation of main().
+    const lightLoop = '        // Light loop\n';
+    const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_CASTER_SLOTS + '];\n'
+        + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_CASTER_SLOTS + '; ++mx_shadowIndex) {\n'
+        + '            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'
+        + '        }\n\n';
+    if (out.indexOf(lightLoop) !== -1 && out.indexOf('mx_shadowVisibility[') === -1) {
+        out = out.replace(lightLoop, cacheDecl + lightLoop);
+    }
+    const shadowPerCaster = out.indexOf('mx_shadowVisibility[') !== -1
+        ? '\n                if (mx_caster < 0) {'
+        + '\n                    occlusion = 1.0;'
+        + '\n                } else if (mx_shadowVisibility[mx_caster] < -0.5) {'
+        + '\n                    mx_shadowVisibility[mx_caster] = mx_shadow_atlas(mx_caster, positionWorld);'
+        + '\n                    occlusion = mx_shadowVisibility[mx_caster];'
+        + '\n                } else {'
+        + '\n                    occlusion = mx_shadowVisibility[mx_caster];'
+        + '\n                }'
+        : '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld);';
+    out = out.replace(site, site
+        + '\n            {'
+        + '\n                int mx_caster = u_shadowSlotCaster[activeLightIndex];'
+        + shadowPerCaster
+        + '\n            }');
+    if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
+    const decl = [
+        'uniform sampler2D u_shadowAtlas;',
+        'uniform mat4 u_shadowMatrices[' + SHADOW_CASTER_SLOTS + '];',
+        // xy = tile origin in atlas UV, zw = tile size.
+        'uniform vec4 u_shadowTiles[' + SHADOW_CASTER_SLOTS + '];',
+        // Normalized positive light-view Z plane for linear moments.
+        'uniform vec4 u_shadowDepthPlanes[' + SHADOW_CASTER_SLOTS + '];',
+        // x = near, y = far - near, in the same world units used by the
+        // authored emitter radius. Kept separate because the normalized
+        // plane alone cannot recover its near offset.
+        'uniform vec2 u_shadowDepthRanges[' + SHADOW_CASTER_SLOTS + '];',
+        // x/y = authored source radius in world units; z/w = explicit
+        // perspective projection scale. Directional casters use all zeroes.
+        'uniform vec4 u_shadowSourceRadii[' + SHADOW_CASTER_SLOTS + '];',
+        // Per light slot: which caster shadows it, or -1 for none.
+        'uniform int u_shadowSlotCaster[' + SHADOW_LIGHT_SLOTS_MAX + '];',
+        'float mx_shadow_vsm(vec2 moments, float receiverDepth) {',
+        '    float p = (receiverDepth <= moments.x) ? 1.0 : 0.0;',
+        '    float variance = max(moments.y - moments.x * moments.x, 2e-7);',
+        '    float d = receiverDepth - moments.x;',
+        '    float lit = max(p, variance / (variance + d * d));',
+        '    return smoothstep(0.3, 1.0, lit);',
+        '}',
+        'float mx_shadow_atlas(int caster, vec3 P) {',
+        '    if (caster < 0) return 1.0;',
+        '    vec4 c4 = u_shadowMatrices[caster] * vec4(P, 1.0);',
+        '    if (c4.w <= 0.0) return 1.0;',
+        '    vec3 sc = c4.xyz / c4.w;',
+        '    sc = sc * 0.5 + 0.5;',
+        '    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return 1.0;',
+        '    vec4 tile = u_shadowTiles[caster];',
+        '    vec2 atlasTexel = 1.0 / vec2(textureSize(u_shadowAtlas, 0));',
+        '    vec2 tileTexel = atlasTexel / max(tile.zw, vec2(1e-6));',
+        '    vec2 centerUv = tile.xy + sc.xy * tile.zw;',
+        '    vec2 moments = texture(u_shadowAtlas, centerUv).xy;',
+        // Projected XY still comes from the real light camera, but moments
+        // use a linear light-view depth plane supplied by the renderer.
+        '    float receiverDepth = dot(vec4(P, 1.0), u_shadowDepthPlanes[caster]);',
+        '    vec2 depthRange = u_shadowDepthRanges[caster];',
+        '    float nearDepth = depthRange.x;',
+        '    float depthSpan = max(depthRange.y, 1e-9);',
+        '    float receiverZ = nearDepth + depthSpan * receiverDepth;',
+        '    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',
+        // A source with zero extent is a point/directional caster: retain the
+        // centre lookup and avoid nine redundant filtered samples. For area
+        // sources, search from the physical emitter footprint at the receiver
+        // plane, independent of the centre texel's current blocker estimate.
+        '    float lit = mx_shadow_vsm(moments, receiverDepth);',
+        '    if (sourceRadius.x <= 0.0 && sourceRadius.y <= 0.0) {',
+        '        vec2 e0 = min(sc.xy, vec2(1.0) - sc.xy);',
+        '        return mix(1.0, lit, smoothstep(0.0, 0.04, min(e0.x, e0.y)));',
+        '    }',
+        '    vec2 projectionScale = u_shadowSourceRadii[caster].zw;',
+        '    vec2 searchRadius = sourceRadius * projectionScale * 0.5 / max(nearDepth, 1e-9)',
+        '        * max(receiverZ - nearDepth, 0.0) / max(receiverZ, 1e-6);',
+        '    searchRadius = min(searchRadius, vec2(2.0) * tileTexel);',
+        // Estimate a blocker over a source-size footprint. The search and
+        // filter stay inside this caster tile, so atlas slots cannot bleed.
+        '    float blockerSum = 0.0;',
+        '    float blockerCount = 0.0;',
+        '    for (int oy = -1; oy <= 1; oy++) {',
+        '        for (int ox = -1; ox <= 1; ox++) {',
+        '            vec2 local = clamp(sc.xy + vec2(float(ox), float(oy)) * searchRadius, tileTexel * 0.5, vec2(1.0) - tileTexel * 0.5);',
+        '            vec2 sm = texture(u_shadowAtlas, tile.xy + local * tile.zw).xy;',
+        '            if (sm.x < receiverDepth) { blockerSum += sm.x; blockerCount += 1.0; }',
+        '        }',
+        '    }',
+        '    float blockerDepth = blockerCount > 0.0 ? blockerSum / blockerCount : moments.x;',
+        '    float blockerZ = nearDepth + depthSpan * blockerDepth;',
+        '    vec2 filterRadius = sourceRadius * projectionScale * 0.5',
+        '        * max(receiverZ - blockerZ, 0.0) / max(blockerZ, 1e-6)',
+        '        / max(receiverZ, 1e-6);',
+        '    filterRadius = min(filterRadius, vec2(2.0) * tileTexel);',
+        '    float filtered = 0.0;',
+        '    for (int oy = -1; oy <= 1; oy++) {',
+        '        for (int ox = -1; ox <= 1; ox++) {',
+        '            vec2 local = clamp(sc.xy + vec2(float(ox), float(oy)) * filterRadius, tileTexel * 0.5, vec2(1.0) - tileTexel * 0.5);',
+        '            vec2 sm = texture(u_shadowAtlas, tile.xy + local * tile.zw).xy;',
+        // Apply VSM bleed reduction per tap before averaging; reducing only
+        // after the average turns a partially visible area source nearly black.
+        '            filtered += mx_shadow_vsm(sm, receiverDepth);',
+        '        }',
+        '    }',
+        '    lit = filtered / 9.0;',
+        // One 2D map cannot cover a light inside the room, so the frustum ends
+        // somewhere; fade the last few percent instead of drawing a hard line.
+        '    vec2 e = min(sc.xy, vec2(1.0) - sc.xy);',
+        '    return mix(1.0, lit, smoothstep(0.0, 0.04, min(e.x, e.y)));',
+        '}',
+        '',
+    ].join('\n');
+    // Must land before the FIRST global function, not before main(): the light
+    // loop lives in a surface evaluation function that precedes main, so
+    // declaring any later leaves these used before declared and nothing
+    // compiles. Same trap patchAmbientOcclusion documents.
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : out.indexOf('void main');
+    if (at === -1) return fs;
+    return out.slice(0, at) + decl + out.slice(at);
+};
+
+// Adds the source shape to MaterialX's generated LightData struct. Area lights
+// are represented by point/spot quadrature samples, so the native light type
+// cannot identify their planar source geometry. Keeping the marker in the
+// struct means every existing light-data refresh carries it with the sample.
+const patchLightSourceKindStruct = (fs) => {
+    const match = fs.match(/struct\s+LightData\s*\{[\s\S]*?\n\};/);
+    if (!match || /\bsourceKind\b/.test(match[0])) return fs;
+    const struct = match[0].replace(/\n\};$/, '\n    int sourceKind;\n};');
+    return fs.slice(0, match.index) + struct + fs.slice(match.index + match[0].length);
+};
+
+// Applies finite planar emitter geometry to the point/spot quadrature used
+// for USD rect and disk lights. MaterialX's point and spot implementations
+// describe an isotropic source, while a rect or disk emits only from its
+// front hemisphere. The source normal is already present in LightData's
+// `direction` member; L is the normalized surface-to-source direction after
+// sampleLightSource(), so dot(direction, -L) is the source-side cosine at the
+// current shaded point. The injected sourceKind member avoids overloading the
+// MaterialX light type, which still selects point versus spot attenuation.
+const patchAreaLightSourceCosine = (fs) => {
+    const site = 'L = lightShader.direction;';
+    if (fs.indexOf(site) === -1 || fs.indexOf('u_lightData') === -1 || fs.indexOf('sourceKind') === -1) return fs;
+    let out = fs.replace(site, site
+        + '\n            if (u_lightData[activeLightIndex].sourceKind == ' + LIGHT_SOURCE_KIND_AREA + ') {'
+        + '\n                lightShader.intensity *= max(dot(u_lightData[activeLightIndex].direction, -L), 0.0);'
+        + '\n            }');
+    return out;
+};
+
+// Feeds a screen-space ambient occlusion factor into the slot MaterialX
+// already reserves for it. The generator emits, verbatim:
+//
+//     // Ambient occlusion
+//     occlusion = 1.0;
+//
+// immediately before the environment contribution, so replacing that one
+// assignment darkens ONLY the environment term. That is what AO means, and
+// it is why this is not folded into u_shadowMap: the shadow occlusion
+// scalar also multiplies every analytic light.
+//
+// The room in a closed interior is the whole point. MaterialX's IBL has no
+// visibility term at all, so a stage lit by a dome sees full sky radiance on
+// every surface including the ones facing a wall, which is what makes an
+// interior read flat and overlit next to an offline render that traces it.
+//
+// Fail-soft: no anchor means no AO, and the default 1x1 white map with
+// strength 0 makes the injected code an exact no-op until a pass binds one.
+const patchAmbientOcclusion = (fs) => {
+    const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
+    if (!anchor.test(fs)) return fs;
+    // Sky visibility needs the world position; without that varying only the
+    // screen space term is available and the volume lookup is skipped.
+    const hasWorldPos = /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
+        && /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
+    const out = fs.replace(anchor, hasWorldPos
+        ? '$1occlusion = mx_ssao_occlusion() * mx_sky_visibility();'
+        : '$1occlusion = mx_ssao_occlusion();');
+    const skyDecls = !hasWorldPos ? [] : [
+        // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
+        // MaterialX's IBL has no visibility term at all, so an interior lit by
+        // a dome sees full sky on every surface including ones facing a wall.
+        // Screen space AO cannot reach that scale; this can, and the two
+        // multiply: the volume carries the room, the screen space pass the
+        // contacts. An unbound volume is white at strength 0, an exact no-op.
+        'uniform highp sampler3D u_skyVisMap;',
+        'uniform vec3 u_skyVisMin;',
+        'uniform vec3 u_skyVisSize;',
+        // Sampled one cell along the normal, into the free space the surface
+        // faces, rather than at the surface itself where the cell is half solid.
+        'uniform float u_skyVisCell;',
+        'uniform float u_skyVisStrength;',
+        'float mx_sky_visibility() {',
+        '    if (u_skyVisStrength <= 0.0) return 1.0;',
+        // MaterialX's generated closures face-forward their shading normal,
+        // but normalWorld is the geometric varying and remains unchanged on
+        // a DoubleSide back face. Keep the voxel offset and directional
+        // moment evaluation on that same front-facing geometric hemisphere.
+        '    vec3 skyNormal = normalize(normalWorld);',
+        '    if (!gl_FrontFacing) skyNormal = -skyNormal;',
+        // A surface on the stage boundary can sit on the near face of its
+        // occupied voxel. One cell lands on the far boundary and trilinear
+        // sampling clamps back into that same occupied slice. Move to the
+        // first air-cell centre (one full cell plus half-cell margin) so a
+        // planar receiver never self-occludes its own sky sample.
+        '    vec3 uvw = (positionWorld + skyNormal * (1.5 * u_skyVisCell) - u_skyVisMin) / max(u_skyVisSize, vec3(1e-6));',
+        '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 1.0;',
+        // The bake stores the sky visibility function's first order moments:
+        // R = <V>, GBA = signed UNORM encoding of d = 2<V omega>.
+        // Decode the centered GBA channels before evaluating the diffuse
+        // directional response for this surface normal.
+        '    vec4 moments = texture(u_skyVisMap, uvw);',
+        '    float visibilityMean = moments.r;',
+        '    vec3 visibilityDirection = (moments.gba * 255.0 - vec3(128.0)) / 127.0;',
+        '    float vis = clamp(visibilityMean + dot(visibilityDirection, skyNormal), 0.0, 1.0);',
+        '    return mix(1.0, vis, clamp(u_skyVisStrength, 0.0, 1.0));',
+        '}',
+    ];
+    const decls = [
+        'uniform sampler2D u_ssaoMap;',
+        'uniform vec2 u_ssaoTexel;',
+        'uniform float u_ssaoStrength;',
+        'float mx_ssao_occlusion() {',
+        '    float ao = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).r;',
+        '    return mix(1.0, clamp(ao, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0));',
+        '}',
+    ].concat(skyDecls).concat(['']).join('\n');
+    // Must land before the FIRST function definition, not before main():
+    // the generator emits the ambient-occlusion slot inside a surface
+    // evaluation function that precedes main, so declaring the helper any
+    // later leaves it used before it is declared and nothing compiles.
+    // Only builtins are referenced here, so the top of the function section
+    // is always a legal home for it.
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : out.indexOf('void main(');
+    if (at === -1) return fs; // nothing recognisable: leave the shader untouched
+    return out.slice(0, at) + decls + out.slice(at);
+};
+
+// Gives MaterialX's volume absorption the path length it is missing.
+//
+// mx_anisotropic_vdf.glsl computes `vdf.throughput = exp(-absorption)` with
+// NO distance term, so Beer-Lambert is evaluated as though every ray
+// travelled exactly one unit. The absorption coefficient is
+// -ln(transmission_color) / transmission_depth, which for a shallow depth is
+// enormous: the Playground's bottle authors color (0.50, 1, 0.05) at depth
+// 0.001, giving a coefficient near 700 and a throughput of exactly zero. The
+// transmission lobe is extinguished instead of tinted green.
+//
+// The path length comes from a back-face distance map: how far the ray still
+// has to travel inside the object. Nothing bound means zero thickness, which
+// reads as clear rather than black, so an unbound material is safe.
+const patchTransmissionThickness = (fs) => {
+    const anchor = 'vdf.throughput = exp(-absorption);';
+    if (fs.indexOf(anchor) === -1) return fs;
+    // Needs the standard HW varyings to locate the fragment along the ray.
+    const hasVars = /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
+        && /uniform\s+vec3\s+u_viewPosition\s*;/.test(fs);
+    if (!hasVars) return fs;
+    let out = fs.replace(anchor, 'vdf.throughput = exp(-absorption * mx_transmission_path_length());');
+    const decls = [
+        'uniform sampler2D u_thicknessMap;',
+        'uniform vec2 u_thicknessTexel;',
+        // The renderer's sceneRoot has converted positions to metres. The
+        // compiler has no UnitSystem, so raw transmission_depth remains in
+        // source scene units and the renderer converts this measured path
+        // back before applying Beer-Lambert.
+        'uniform float u_thicknessScale;',
+        'float mx_transmission_path_length() {',
+        '    float back = texture(u_thicknessMap, gl_FragCoord.xy * u_thicknessTexel).r;',
+        '    if (back <= 0.0) return 0.0; // nothing behind: treat as clear, never as opaque',
+        '    float front = distance(positionWorld, u_viewPosition);',
+        '    return max(back - front, 0.0) * u_thicknessScale;',
+        '}',
+        '',
+    ].join('\n');
+    const fnIdx = out.indexOf('void mx_anisotropic_vdf');
+    if (fnIdx === -1) return fs;
+    return out.slice(0, fnIdx) + decls + out.slice(fnIdx);
+};
 
 // Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
 // then mixes toward a Schlick NdotV rim so grazing angles read as
@@ -573,6 +1468,109 @@ const patchTransmissionAlpha = (fs) => {
     return out;
 };
 
+// Enables the Scene RGB-T payload on generated MaterialX shaders. The
+// terminal viewing response is the closure's layered result; moving it to
+// surfaceshader.transparency lets the existing opacity block apply coverage
+// exactly once while keeping reflected/emissive C additive. The old scalar
+// transmission patch is intentionally bypassed for this mode.
+const patchRgbtPayload = (fs) => {
+    const original = fs;
+    let supported = true;
+    let out = fs;
+    const transFnIdx = out.indexOf('vec3 mx_surface_transmission');
+    if (transFnIdx !== -1) {
+        const bodyIdx = out.indexOf('{', transFnIdx);
+        if (bodyIdx === -1) supported = false;
+        else if (out.indexOf('u_peelRgbt', transFnIdx) === -1) {
+            out = out.slice(0, bodyIdx + 1) +
+                '\n    if (u_peelRgbt != 0) return tint;\n' + out.slice(bodyIdx + 1);
+        }
+    }
+    // Restrict the replacement to the generated viewing-transmission section
+    // so an unrelated color accumulation elsewhere cannot be redirected.
+    let cursor = 0;
+    let sectionCount = 0;
+    let routedCount = 0;
+    const sectionAnchor = '// Calculate the BSDF transmission for viewing direction';
+    const opacityAnchor = '// Compute and apply surface opacity';
+    while (true) {
+        const begin = out.indexOf(sectionAnchor, cursor);
+        if (begin === -1) break;
+        sectionCount++;
+        const end = out.indexOf(opacityAnchor, begin);
+        if (end === -1) { supported = false; break; }
+        const section = out.slice(begin, end);
+        // A generated viewing-transmission section has one terminal closure
+        // accumulation.  Picking the last match used to make a mixed graph
+        // look supported while silently routing an earlier closure (or a
+        // helper's unrelated accumulation) to T.  Require the contract to be
+        // unambiguous and fail the whole payload atomically when it is not.
+        const matches = [...section.matchAll(/(\w+)\.color\s*\+=\s*(\w+)\.response\s*;/g)];
+        if (matches.length !== 1) { supported = false; break; }
+        const match = matches[0];
+        const terminal = match[0];
+        const lhs = match[1];
+        const rhs = match[2];
+        const routed = 'if (u_peelRgbt != 0) ' + lhs + '.transparency = clamp(' + rhs + '.response, vec3(0.0), vec3(1.0));\n' +
+            '    else ' + terminal;
+        const at = begin + match.index;
+        out = out.slice(0, at) + routed + out.slice(at + terminal.length);
+        cursor = at + routed.length;
+        routedCount++;
+    }
+    if (!sectionCount || routedCount !== sectionCount) {
+        mtlxWarn('mtlx-engine: RGB-T payload section anchors changed; using Scene legacy peel.');
+        supported = false;
+    }
+    // The generated output is coverage-premultiplied C and transparency T.
+    // Pass 1 replaces RGB with T for the explicit transmission target; pass
+    // 0/2 retain C and the unmodified scalar coverage alpha for tail blending.
+    const output = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
+    if (output) {
+        const v = output[1];
+        // encodeDisplay() has already appended a second assignment to the
+        // output variable.  Select the one that carries the generated surface
+        // color and require exactly one such assignment, so an unfamiliar or
+        // mixed graph cannot accidentally receive a partial payload patch.
+        const assignments = [...out.matchAll(new RegExp('(' + v + '\\s*=\\s*vec4\\([^;]+\\);)', 'g'))]
+            .filter((m) => /vec4\(\s*\w+\.color\s*,/.test(m[0]));
+        const om = assignments.length === 1 ? assignments[0] : null;
+        if (!om) supported = false;
+        if (om && out.indexOf('u_peelRgbtPass', om.index) === -1) {
+            const surfaceMatch = om[0].match(/vec4\(\s*(\w+)\.color\s*,/);
+            if (!surfaceMatch) supported = false;
+            const surfaceVar = surfaceMatch ? surfaceMatch[1] : '';
+            const injectAt = om.index + om[0].length;
+            out = out.slice(0, injectAt) +
+                '\n    if (u_peelRgbt != 0 && u_peelRgbtPass == 1) ' + v + ' = vec4(' + surfaceVar + '.transparency, 1.0);' +
+                out.slice(injectAt);
+        }
+        // Clear transmissive emission has outAlpha=0 but still contributes C;
+        // only legacy mode uses the generator's alpha threshold discard.
+        // MaterialX emits this threshold in both compact and braced forms;
+        // clear transmission has outAlpha=0 and must remain a valid RGB-T C
+        // payload in either form.  Keep the threshold discard on legacy peel
+        // only, preserving the generated block's semantics exactly.
+        out = out.replace(/if\s*\(\s*outAlpha\s*<\s*u_alphaThreshold\s*\)\s*(?:\{\s*discard\s*;\s*\}|discard\s*;)/,
+            'if (u_peelRgbt == 0 && outAlpha < u_alphaThreshold) { discard; }');
+    }
+    else supported = false;
+    if (!supported) return original;
+    // Declarations must precede every generated function: transmission
+    // helpers are commonly emitted before main().
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const decl = 'uniform int u_peelRgbt;\nuniform int u_peelRgbtPass;\nuniform int u_peelRgbtLayer;\n/* MX_RGBT_PAYLOAD_SUPPORTED */\n';
+    if (firstFn === -1) return original;
+    if (out.indexOf('uniform int u_peelRgbt;') === -1) {
+        out = out.slice(0, firstFn) + decl + out.slice(firstFn);
+    }
+    // patchTransmissionAlpha runs first to preserve the complete legacy
+    // source; its scalar floor is disabled only while RGB-T is active.
+    out = out.replace(/if\s*\(\s*u_peelMode\s*!=\s*0\s*\)\s*\{/g,
+        'if (u_peelMode != 0 && u_peelRgbt == 0) {');
+    return out;
+};
+
 // injectPeelDiscard(src), bakes the depth-peel OIT machinery into
 // EVERY generated fragment shader unconditionally, gated behind a
 // runtime uniform (u_peelMode, default 0 = no-op) so toggling Force
@@ -586,7 +1584,7 @@ const patchTransmissionAlpha = (fs) => {
 // a premultiply epilogue (see below) so its output can under-blend
 // into accumRT. Fail-loud (throws) if main() can't be found, same
 // contract as encodeDisplay() above.
-const injectPeelDiscard = (src) => {
+const injectPeelDiscard = (src, sceneRgbt = false) => {
     // Skip decls patchTransmissionAlpha may have already inserted.
     const declIfAbsent = (line) => (src.indexOf(line) === -1 ? line + '\n' : '');
     const decls =
@@ -621,7 +1619,7 @@ const injectPeelDiscard = (src) => {
     if (outMatch) {
         const v = outMatch[1];
         const closeIdx = out.lastIndexOf('}');
-        const premult = '\n    if (u_peelMode == 2) { ' + v + '.rgb *= ' + v + '.a; }\n';
+        const premult = '\n    if (u_peelMode == 2 && ' + (sceneRgbt ? 'u_peelRgbt == 0' : 'true') + ') { ' + v + '.rgb *= ' + v + '.a; }\n';
         out = out.slice(0, closeIdx) + premult + out.slice(closeIdx);
     } else {
         mtlxWarn('mtlx-engine: injectPeelDiscard could not locate the fragment output variable, tail-pass premultiply skipped.');
@@ -881,6 +1879,100 @@ const applyColorspaceAliases = (doc, maxDepth) => {
     return { restore, rewrites };
 };
 
+// cmlib nodes that convert an encoded texture to the lin_rec709 working
+// space. Only spaces cmlib can actually transform appear here; anything
+// else is reported rather than silently ignored.
+const COLORSPACE_TO_WORKING_NODE = {
+    srgb_texture: 'srgb_texture_to_lin_rec709',
+    g22_rec709: 'g22_rec709_to_lin_rec709',
+    g18_rec709: 'g18_rec709_to_lin_rec709',
+    acescg: 'acescg_to_lin_rec709',
+    lin_ap1: 'lin_ap1_to_lin_rec709',
+    g22_ap1: 'g22_ap1_to_lin_rec709',
+    adobergb: 'adobergb_to_lin_rec709',
+    lin_adobergb: 'lin_adobergb_to_lin_rec709',
+    srgb_displayp3: 'srgb_displayp3_to_lin_rec709',
+    lin_displayp3: 'lin_displayp3_to_lin_rec709',
+    rec709_display: 'rec709_display_to_lin_rec709',
+};
+
+// Inserts the colorspace transform MaterialX's own color management system
+// would have inserted, because this WASM build does not expose one: neither
+// mx.DefaultColorManagementSystem nor generator.setColorManagementSystem is
+// bound to JS, so a `colorspace` attribute on a filename input generates
+// NOTHING and every sRGB texture is sampled as if it were already linear
+// (measurably too bright and washed out). Verified by generating ESSL for a
+// tagged image and finding zero conversion nodes in the output.
+//
+// The rewrite is the CMS's own: put a cmlib conversion node between the
+// image and its consumers, and drop the attribute so a future build that
+// does bind a CMS cannot apply it twice. Runs on the LIVE document, so the
+// caller MUST call restore() in a finally.
+const applyColorspaceTransforms = (doc, maxDepth) => {
+    mxWarnIfLocked('applyColorspaceTransforms'); // exported doc-mutating helper, see mxWarnIfLocked's header comment
+    const cap = (typeof maxDepth === 'number') ? maxDepth : 10;
+    const restores = [];
+    const converted = new Map();
+    const unsupported = new Set();
+    // cmlib converts INTO lin_rec709 only. A document working in another
+    // space would need the inverse leg too, so leave it alone and say so.
+    const docSpace = mxElAttr(doc, 'colorspace');
+    if (docSpace && docSpace !== 'lin_rec709') {
+        return { restore: () => {}, converted, unsupported: new Set(['(document works in "' + docSpace + '", not lin_rec709)']) };
+    }
+    let serial = 0;
+    const visit = (parent, depth) => {
+        if (!parent || depth > cap) return;
+        const children = vecToArray(mxSafe(() => parent.getChildren(), []));
+        // Snapshot the child list first: the loop adds nodes to this parent.
+        const nodes = children.filter((c) => mxSafe(() => typeof c.getInput === 'function' && typeof c.getCategory === 'function', false));
+        for (const node of nodes) {
+            const fileInput = mxSafe(() => node.getInput('file'), null);
+            if (!fileInput || !mxElHasAttr(fileInput, 'colorspace')) { visit(node, depth + 1); continue; }
+            const cs = mxElAttr(fileInput, 'colorspace');
+            const type = String(mxSafe(() => node.getType(), ''));
+            if (type !== 'color3' && type !== 'color4') continue; // float/vector images carry data, never color
+            const category = COLORSPACE_TO_WORKING_NODE[cs];
+            if (!category) { unsupported.add(cs); continue; }
+            const nodeName = mxSafe(() => node.getName(), null);
+            if (!nodeName) continue;
+            const cmName = '__mtlx_cm_' + (serial++) + '_' + nodeName;
+            const cm = mxSafe(() => parent.addNode(category, cmName, type), null);
+            if (!cm) { unsupported.add(cs); continue; }
+            const cmIn = mxSafe(() => cm.addInput('in', type), null);
+            if (!cmIn || !mxSetAttr(cmIn, 'nodename', nodeName)) {
+                mxSafe(() => parent.removeChild(cmName), null);
+                unsupported.add(cs);
+                continue;
+            }
+            // Every consumer in this scope now reads the converted value.
+            // Done by attribute so multi-output and nodegraph references
+            // keep whatever `output` they already named. A nodegraph's own
+            // <output> element carries nodename directly rather than through
+            // an input, so redirect the element itself as well.
+            const redirect = (el) => {
+                if (mxElAttr(el, 'nodename') !== nodeName) return;
+                if (mxSetAttr(el, 'nodename', cmName)) {
+                    restores.push(() => mxSetAttr(el, 'nodename', nodeName));
+                }
+            };
+            for (const sibling of children) {
+                if (sibling === node || sibling === cm) continue;
+                redirect(sibling);
+                for (const input of vecToArray(mxSafe(() => sibling.getInputs(), []))) redirect(input);
+            }
+            mxRemoveAttr(fileInput, 'colorspace');
+            restores.push(() => mxSetAttr(fileInput, 'colorspace', cs));
+            restores.push(() => mxSafe(() => parent.removeChild(cmName), null));
+            converted.set(cs, (converted.get(cs) || 0) + 1);
+            visit(node, depth + 1);
+        }
+    };
+    visit(doc, 0);
+    const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
+    return { restore, converted, unsupported };
+};
+
 // Doc-level renderable scan: returns [{ name, node }], one entry per
 // renderable surface. Scans by TYPE rather than getMaterialNodes(),
 // which isn't bound in every JS build. Live-doc callers need mxExclusive.
@@ -1034,6 +2126,21 @@ const findFileForRef = (fileMap, ref) => {
     return null;
 };
 
+// Given a resolved file-map hit, prefer a sibling "<stem>.ktx2" in the same
+// directory when one exists (per-UDIM tile too, since the tile code lives in
+// the stem: "wall.1001.png" -> "wall.1001.ktx2"), and never touch the
+// original file. Returns the (possibly substituted) hit.
+const preferKtx2Sibling = (fileMap, hit) => {
+    if (!hit || /\.ktx2$/i.test(hit.key)) return hit;
+    const dot = hit.key.lastIndexOf('.');
+    if (dot < 0) return hit;
+    const ktx2Key = hit.key.slice(0, dot) + '.ktx2';
+    if (Object.prototype.hasOwnProperty.call(fileMap, ktx2Key)) {
+        return { key: ktx2Key, how: hit.how, substituted: true };
+    }
+    return hit;
+};
+
 // Inline <xi:include href="..."/> from the dropped files (MaterialX
 // documents may be split across files; readFromXmlString can't reach
 // our in-memory map). Missing includes are dropped with a warning.
@@ -1133,27 +2240,131 @@ const loadHdrTexture = async (blob) => {
     }
 };
 
-// Parses a dropped .tif/.tiff Blob via UTIF.js into an 8bpc RGBA texture.
-// Baseline decode only (8/16-bit, common compressions); exotic TIFFs fall
-// back to null like the loaders above, keeping the node default color.
-const loadTifTexture = async (blob) => {
-    if (typeof UTIF === 'undefined') {
-        console.warn('mtlx-engine: UTIF unavailable (script blocked/offline); .tif textures keep the node default color.');
+// Shared THREE.KTX2Loader instance (one transcoder worker pool for the
+// session). detectSupport() needs a WebGLRenderer to read the GPU's
+// supported compressed formats; the caller's own view.renderer is reused
+// when available, else a hidden renderer is created once and kept alive
+// for the rest of the session (detectSupport is cheap and idempotent).
+let _ktx2Loader = null;
+let _ktx2HiddenRenderer = null;
+const getKtx2Loader = (view) => {
+    if (!_ktx2Loader) {
+        if (typeof THREE.KTX2Loader === 'undefined') return null;
+        _ktx2Loader = new THREE.KTX2Loader();
+        _ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/', document.baseURI).href);
+    }
+    const renderer = (view && view.renderer) || (_ktx2HiddenRenderer = _ktx2HiddenRenderer || new THREE.WebGLRenderer());
+    _ktx2Loader.detectSupport(renderer);
+    return _ktx2Loader;
+};
+
+// Parses a dropped .ktx2 Blob via THREE.KTX2Loader into a CompressedTexture
+// carrying its full mip chain. flipY stays false and no flip is baked at
+// encode time (scripts/cook-textures.mjs never flips): our uncompressed
+// textures already upload with flipY=false, relying on the MaterialX
+// generator to flip UVs in the shader, so KTX2 data must match — top row
+// first, same as the source image.
+const loadKtx2Texture = async (blob, view, warnPath) => {
+    const loader = getKtx2Loader(view);
+    if (!loader) {
+        console.warn('mtlx-engine: THREE.KTX2Loader unavailable (script blocked/offline); .ktx2 textures keep the node default color.');
         return null;
     }
     try {
         const buf = await blob.arrayBuffer();
-        const ifds = UTIF.decode(buf);
-        if (!ifds || !ifds.length) return null;
-        UTIF.decodeImage(buf, ifds[0]);
-        const rgba = UTIF.toRGBA8(ifds[0]);
-        const tex = new THREE.DataTexture(new Uint8Array(rgba), ifds[0].width, ifds[0].height, THREE.RGBAFormat, THREE.UnsignedByteType);
-        tex.minFilter = tex.magFilter = THREE.LinearFilter;
+        const tex = await new Promise((resolve, reject) => {
+            loader.parse(buf, resolve, reject);
+        });
+        // Block-compressed WebGL formats reject a base level whose width or
+        // height isn't a multiple of 4 (GL_INVALID_OPERATION), which then
+        // samples solid black; fall back to the original source instead.
+        const w = tex && tex.image ? tex.image.width : 0;
+        const h = tex && tex.image ? tex.image.height : 0;
+        const blockCompressed = !!(tex && tex.isCompressedTexture);
+        if (blockCompressed && (w % 4 !== 0 || h % 4 !== 0)) {
+            tex.dispose && tex.dispose();
+            mtlxWarn(`mtlx-engine: KTX2 texture ${warnPath || ''} has ${w}x${h}, not a multiple of 4; ignoring the .ktx2 sibling`);
+            const err = new Error('ktx2 base level not a multiple of 4');
+            err.ktx2InvalidBaseLevel = true;
+            throw err;
+        }
         return tex;
     } catch (e) {
-        console.warn('mtlx-engine: failed to parse dropped .tif texture, keeping the node default color:', e);
+        if (e && e.ktx2InvalidBaseLevel) throw e;
+        console.warn('mtlx-engine: failed to parse dropped .ktx2 texture, keeping the node default color:', e);
         return null;
     }
+};
+
+// Caps a KTX2 CompressedTexture's mip chain to a tier by dropping its
+// largest levels (never resampling GPU block data): mipmaps[] is ordered
+// largest-first, so this keeps the smallest-side-<=maxSize suffix and
+// updates image.width/height to the new top level. Returns the summed byte
+// length of the kept levels, for the scene's texture-budget accounting.
+const capKtx2MipLevels = (tex, maxSize) => {
+    if (!tex || !tex.mipmaps || !tex.mipmaps.length) return tex && tex.image ? (tex.image.width || 0) * (tex.image.height || 0) : 0;
+    if (!(maxSize > 0)) return tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0);
+    let keepFrom = 0;
+    while (keepFrom < tex.mipmaps.length - 1 && Math.max(tex.mipmaps[keepFrom].width, tex.mipmaps[keepFrom].height) > maxSize) keepFrom += 1;
+    if (keepFrom > 0) {
+        tex.mipmaps = tex.mipmaps.slice(keepFrom);
+        tex.image.width = tex.mipmaps[0].width;
+        tex.image.height = tex.mipmaps[0].height;
+        tex.needsUpdate = true;
+    }
+    return tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0);
+};
+
+// Compressions UTIF.js actually decodes (see vendor/utif/UTIF.js decode._decompress).
+// 32946 (old Deflate) is not in that list but is the same zlib stream as 8,
+// so it is remapped below before decodeImage runs.
+const UTIF_SUPPORTED_COMPRESSION = new Set([1, 3, 4, 5, 6, 7, 8, 32767, 32773]);
+
+// Parses a dropped .tif/.tiff Blob via UTIF.js into an 8bpc RGBA texture.
+// Baseline decode only (8/16-bit, common compressions); exotic TIFFs throw
+// so callers can warn instead of silently keeping an all-zero texture.
+const loadTifTexture = async (blob, path) => {
+    if (typeof UTIF === 'undefined') {
+        console.warn('mtlx-engine: UTIF unavailable (script blocked/offline); .tif textures keep the node default color.');
+        return null;
+    }
+    const label = path || '(unknown)';
+    const buf = await blob.arrayBuffer();
+    const ifds = UTIF.decode(buf);
+    if (!ifds || !ifds.length) return null;
+    const ifd = ifds[0];
+    const compression = ifd.t259 && ifd.t259[0];
+    if (compression === 32946) ifd.t259[0] = 8; // old Deflate: same zlib stream, UTIF applies the predictor itself
+    UTIF.decodeImage(buf, ifd);
+    const rgba = UTIF.toRGBA8(ifd);
+    if (!UTIF_SUPPORTED_COMPRESSION.has(compression) && compression !== 32946) {
+        throw new Error('TIF decode unsupported (compression ' + compression + ') for ' + label);
+    }
+    let allZero = true;
+    for (let i = 0; i < rgba.length - 2 && allZero; i += 97) {
+        if (rgba[i] !== 0 || rgba[i + 1] !== 0 || rgba[i + 2] !== 0) allZero = false;
+    }
+    if (allZero) throw new Error('TIF decode unsupported (compression ' + compression + ') for ' + label);
+    const tex = new THREE.DataTexture(new Uint8Array(rgba), ifd.width, ifd.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    return tex;
+};
+
+// Loads the original (non-.ktx2) source for a resolved hit, used when a
+// .ktx2 sibling is rejected (e.g. an invalid base level) after having
+// already been preferred over this file.
+const loadTextureForHit = async (hit, blob, view) => {
+    const ext = (hit.key.split('.').pop() || '').toLowerCase();
+    if (ext === 'exr') return loadExrTexture(blob);
+    if (ext === 'hdr') return loadHdrTexture(blob);
+    if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob, hit.key);
+    if (view && view.maxTextureSize && typeof createImageBitmap === 'function') {
+        return loadBoundedBitmapTexture(blob, Number(view.maxTextureSize));
+    }
+    return new Promise((resolve) => {
+        const url = URL.createObjectURL(blob);
+        new THREE.TextureLoader().load(url, (tex) => { URL.revokeObjectURL(url); resolve(tex); }, undefined, () => { URL.revokeObjectURL(url); resolve(null); });
+    });
 };
 
 // Scene snapshots can contain many UDIM tiles.  When a caller supplies a
@@ -1217,6 +2428,13 @@ const readImageDimensions = async (blob) => {
                 offset += 2 + segLen;
             }
             return null;
+        }
+        // KTX2: 12-byte identifier, then a little-endian header:
+        // vkFormat(4), typeSize(4), pixelWidth(4), pixelHeight(4), ...
+        const KTX2_IDENTIFIER = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];
+        if (buf.length >= 44 && KTX2_IDENTIFIER.every((b, i) => buf[i] === b)) {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            return { width: dv.getUint32(20, true), height: dv.getUint32(24, true) };
         }
         // TIFF: byte-order mark, then a 4-byte IFD offset, then the IFD
         // entry count and entries; tags 256 (width) and 257 (height) can be
@@ -1388,6 +2606,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     const pending = [];
     const cache = view.textureCache || TEXTURE_CACHE;
     const isAlive = () => typeof view.isAlive !== 'function' || view.isAlive();
+    let ktx2Substituted = 0;
     for (const u of view.introspected) {
         if (u.type !== 'filename') continue;
         let ref = '';
@@ -1396,8 +2615,11 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             else if (u.data != null) ref = String(u.data);
         } catch (e) { ref = ''; }
         if (!ref) continue; // no file reference recorded
-        const hit = findFileForRef(fileMap, ref);
+        let hit = findFileForRef(fileMap, ref);
         if (!hit) { missing.push(ref); continue; }
+        const originalHit = hit;
+        hit = preferKtx2Sibling(fileMap, hit);
+        if (hit.substituted) ktx2Substituted += 1;
         const blob = fileMap[hit.key];
         const cacheKey = textureCacheKey(blob, hit.key);
         const cached = cache.get(cacheKey);
@@ -1408,8 +2630,26 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             }
         } else {
             const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
-            if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
-                const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob);
+            if (ext === 'ktx2') {
+                const bindTex = (tex) => {
+                    if (!tex) return;
+                    configureLoadedTexture(tex);
+                    if (!isAlive()) { tex.dispose && tex.dispose(); return; }
+                    cache.set(cacheKey, tex);
+                    if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
+                    if (onBound) onBound();
+                };
+                const pendingLoad = loadKtx2Texture(blob, view, hit.key).then(bindTex, (error) => {
+                    if (error && error.ktx2InvalidBaseLevel && originalHit.key !== hit.key) {
+                        const notice = `KTX2 texture ${hit.key} is not a multiple of 4; falling back to ${originalHit.key}`;
+                        if (view.notices) view.notices.push(notice);
+                        return loadTextureForHit(originalHit, fileMap[originalHit.key], view).then(bindTex, (e2) => ({ error: e2 }));
+                    }
+                    return { error };
+                });
+                pending.push(pendingLoad);
+            } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
+                const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
                 const pendingLoad = parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
                     configureLoadedTexture(tex);
@@ -1417,7 +2657,11 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     cache.set(cacheKey, tex);
                     if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
                     if (onBound) onBound();
-                }, (error) => ({ error }));
+                }, (error) => {
+                    console.warn('mtlx-engine: texture decode failed for ' + hit.key + ', keeping the node default color:', error);
+                    missing.push(ref);
+                    return { error };
+                });
                 pending.push(pendingLoad);
             } else if (view.maxTextureSize) {
                 const startBoundedLoad = () => {
@@ -1456,7 +2700,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         }
         bound.push(ref + '  →  ' + hit.key);
     }
-    return { bound, missing, pending };
+    if (ktx2Substituted > 0) console.info('bindDroppedTextures: ' + ktx2Substituted + ' texture(s) loaded from .ktx2 sibling(s)');
+    return { bound, missing, pending, ktx2Substituted };
 };
 
 // Extracts a plain JS array from a real array or an embind vector-like
@@ -1643,10 +2888,12 @@ const rebindFilenameDefault = (uniforms, defaultUniformName, type, value) => {
 };
 
 // Configure a user-loaded texture the way the generated shaders expect
-// to sample a `filename` input: repeat wrapping, no flipY.
+// to sample a `filename` input: repeat wrapping, no flipY, anisotropic
+// filtering (three clamps to the device max at upload).
 const configureLoadedTexture = (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.flipY = false;
+    t.anisotropy = 8;
     t.needsUpdate = true;
     return t;
 };
@@ -1926,10 +3173,59 @@ const setGlobalGeom = (value) => {
 
 // ---- Global display transform selection (shared across every tool) ----
 // 'srgb' (default) matches the C++ MaterialXView (no tone mapping). 'aces'
-// adds ACES filmic before that curve (this app's original look).
-// 'lin_rec709' is raw linear: no OETF, no tone map. See ACES_SRGB_GLSL for the math.
+// adds ACES filmic before that curve (this app's original look). 'neutral' is
+// Khronos PBR Neutral, which keeps hue and saturation where ACES skews them.
+// 'lin_rec709' is raw linear: no OETF, no tone map, no clamp. See ACES_SRGB_GLSL.
 const DISPLAY_TRANSFORM_KEY = 'mtlx_display_transform';
-const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'lin_rec709'];
+const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'neutral', 'lin_rec709'];
+
+// Camera exposure in stops, shared by every view. Unlike the transform this is
+// a plain uniform (u_displayExposure), so a change costs one uniform write per
+// material instead of regenerating every shader.
+// Pushes the current transform and exposure onto every live view. Both are
+// uniforms now, so this replaces the full material regeneration a transform
+// change used to cost, and it reaches the docs node previews too: they are
+// LIVE_VIEWS members but have no display listener of their own.
+const broadcastDisplaySettings = () => {
+    LIVE_VIEWS.forEach((v) => {
+        try { v.refreshDisplaySettings && v.refreshDisplaySettings(); } catch (e) { /* view mid-teardown */ }
+    });
+};
+
+const DISPLAY_EXPOSURE_KEY = 'mtlx_display_exposure';
+let MTLX_DISPLAY_EXPOSURE = null;
+
+const initDisplayExposure = () => {
+    let stored = null;
+    try { stored = localStorage.getItem(DISPLAY_EXPOSURE_KEY); } catch (e) { /* privacy mode */ }
+    const ev = Number(stored);
+    MTLX_DISPLAY_EXPOSURE = (stored != null && stored !== '' && Number.isFinite(ev))
+        ? Math.max(-8, Math.min(8, ev)) : 0;
+};
+
+const getDisplayExposure = () => {
+    if (MTLX_DISPLAY_EXPOSURE === null) initDisplayExposure();
+    return MTLX_DISPLAY_EXPOSURE;
+};
+
+// Linear scale for the uniform. Every seeding site goes through this so the
+// stops-to-linear conversion cannot drift between them.
+const displayExposureScale = () => Math.pow(2, getDisplayExposure());
+
+const setDisplayExposure = (ev) => {
+    if (MTLX_DISPLAY_EXPOSURE === null) initDisplayExposure();
+    const next = Math.max(-8, Math.min(8, Number(ev) || 0));
+    if (next === MTLX_DISPLAY_EXPOSURE) return;
+    MTLX_DISPLAY_EXPOSURE = next;
+    if (window.self === window.top) {
+        try { localStorage.setItem(DISPLAY_EXPOSURE_KEY, String(next)); } catch (e) { /* privacy mode */ }
+    }
+    // Broadcast rather than rely on per-app listeners: every render view is a
+    // LIVE_VIEWS member, including the docs node previews, which have no
+    // display listener of their own and would otherwise drift out of sync.
+    broadcastDisplaySettings();
+    window.dispatchEvent(new CustomEvent('mtlx-display-exposure', { detail: { value: next } }));
+};
 
 let MTLX_DISPLAY_TRANSFORM = null;
 
@@ -1940,14 +3236,18 @@ const initDisplayTransform = () => {
     MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'srgb';
 };
 
+// Exposed so a view that keeps its own transform (the Scene) can validate a
+// persisted value against the same list the shared picker uses.
+const getDisplayTransformValues = () => DISPLAY_TRANSFORM_VALUES.slice();
+
 const getDisplayTransform = () => {
     if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
     return MTLX_DISPLAY_TRANSFORM;
 };
 
 // Persists only from the top-realm page (same embed guard as setGlobalGeom).
-// encodeDisplay bakes the mode into shader source, so every live view must
-// fully regenerate off this event, not just refresh a uniform.
+// The mode is a uniform in generated shaders, so every live view can refresh
+// it without regenerating material programs.
 const setDisplayTransform = (value) => {
     if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
     if (!DISPLAY_TRANSFORM_VALUES.includes(value) || value === MTLX_DISPLAY_TRANSFORM) return;
@@ -1955,6 +3255,7 @@ const setDisplayTransform = (value) => {
     if (window.self === window.top) {
         try { localStorage.setItem(DISPLAY_TRANSFORM_KEY, value); } catch (e) { /* privacy mode */ }
     }
+    broadcastDisplaySettings();
     window.dispatchEvent(new CustomEvent('mtlx-display-transform', { detail: { value } }));
 };
 
@@ -3187,32 +4488,68 @@ const keyLightRotationMatrix = (rad) => new THREE.Matrix4().makeRotationY(-rad);
 // Rig lights (fixed) + the active env's extracted key light (rotates
 // live), padded to a FIXED length (rig.length + 1) for u_lightData,
 // the array length must never change after a program's first bind.
-const currentLights = (rigLights, keyLight, rotRad) => {
-    const out = (rigLights || []).map((l) => ({
+// One LightData entry. Every field the merged struct declares must be
+// present on every entry: three reads each declared member by name, so a
+// missing one is a bind error rather than a default.
+const makeLightEntry = (over) => Object.assign({
+    type: 0,
+    position: new THREE.Vector3(),
+    direction: new THREE.Vector3(0, -1, 0),
+    color: new THREE.Vector3(),
+    intensity: 0,
+    decay_rate: 2,
+    inner_angle: 0,
+    outer_angle: 0,
+    sourceKind: 0,
+}, over || {});
+// Slot layout is fixed for the life of a program: [rig..., key, stage...].
+// The key light keeps index rigCount so updateKeyLightUniformEntry can keep
+// mutating it in place, and the stage lights occupy the reserved tail.
+// envScale is u_envLightIntensity. The key light is energy SPLIT OUT of the
+// environment map (extractKeyLight replaces the sun cluster with the local
+// mean), so it has to carry the same gain as the map it came from; without it
+// the sun and the sky drift apart by exactly the dome's intensity whenever
+// that is not 1, which reads as one blown highlight over a correct scene.
+const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale) => {
+    const rig = rigLights || [];
+    const stage = (stageLights || []).slice(0, STAGE_LIGHT_SLOTS);
+    const out = rig.map((l) => makeLightEntry({
         type: l.type, direction: l.direction.clone(), color: l.color.clone(), intensity: l.intensity,
     }));
     if (keyLight) {
-        out.push({
-            type: 1,
+        out.push(makeLightEntry({
+            type: LIGHT_TYPE_DIRECTIONAL,
             direction: keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad || 0)),
             color: new THREE.Vector3(keyLight.color[0], keyLight.color[1], keyLight.color[2]),
-            intensity: keyLight.intensity,
-        });
+            intensity: keyLight.intensity * (Number.isFinite(envScale) ? envScale : 1),
+        }));
     } else {
-        out.push({ type: 1, direction: new THREE.Vector3(0, -1, 0), color: new THREE.Vector3(0, 0, 0), intensity: 0 });
+        out.push(makeLightEntry({ type: LIGHT_TYPE_DIRECTIONAL }));
     }
+    for (const l of stage) out.push(makeLightEntry(l));
+    // The array length must equal MAX_LIGHT_SOURCES exactly; three walks
+    // every declared index and an absent element throws.
+    while (out.length < rig.length + 1 + STAGE_LIGHT_SLOTS) out.push(makeLightEntry());
     return out;
+};
+// Slots actually evaluated. Stage lights sit past the key slot, so reaching
+// them means counting it too; an unused key slot is inert (intensity 0).
+const activeLightCount = (rigLights, keyLight, stageLights) => {
+    const rigCount = (rigLights || []).length;
+    const stageCount = Math.min((stageLights || []).length, STAGE_LIGHT_SLOTS);
+    if (stageCount) return rigCount + 1 + stageCount;
+    return rigCount + (keyLight ? 1 : 0);
 };
 // Live-updates ONLY the key-light slot (last entry) of an already-bound
 // u_lightData array in place, mutates values, never replaces the
 // array/uniform object (three r128 caches the struct-array layout).
-const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad) => {
+const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad, envScale) => {
     const entry = uniforms && uniforms.u_lightData && uniforms.u_lightData.value && uniforms.u_lightData.value[rigCount];
     if (!entry) return;
     if (keyLight) {
         entry.direction.copy(keyLight.direction).applyMatrix4(keyLightRotationMatrix(rotRad || 0));
         entry.color.set(keyLight.color[0], keyLight.color[1], keyLight.color[2]);
-        entry.intensity = keyLight.intensity;
+        entry.intensity = keyLight.intensity * (Number.isFinite(envScale) ? envScale : 1);
     } else {
         entry.direction.set(0, -1, 0);
         entry.color.set(0, 0, 0);
@@ -3223,6 +4560,236 @@ const updateKeyLightUniformEntry = (uniforms, rigCount, keyLight, rotRad) => {
 // Builds the full { radiance, irradiance, mips, background,
 // prefilteredIrr, keyLight, softKeyDir } shape from a raw
 // parseEnvBuffer() result, shared by getEnvironment() and loadEnvironmentFromFile.
+// GGX-prefiltered radiance chain, MaterialXView's specular environment path.
+// Each mip of the result is the environment convolved with the GGX lobe for
+// the roughness that mx_latlong_alpha_to_lod maps to that level, so the
+// shader's single textureLod replaces FIS's 16-sample estimate. The math is
+// a straight port of libraries/pbrlib/genglsl/lib/mx_generate_prefilter_env.glsl
+// and its helpers, kept function-for-function so the two cannot drift.
+const PREFILTER_SAMPLES = 1024;
+const PREFILTER_GLSL = [
+    'precision highp float;',
+    'const float M_PI = 3.1415926535897932;',
+    'const float M_PI_INV = 0.31830988618379067;',
+    'const float M_FLOAT_EPS = 1e-8;',
+    'uniform sampler2D uSource;',
+    'uniform float uMip;',
+    'uniform float uMaxMip;',
+    'uniform vec2 uTargetSize;',
+    'out vec4 fragColor;',
+    'float mx_square(float x) { return x * x; }',
+    // Return the alpha associated with the given mip level in a prefiltered environment.
+    'float mx_latlong_lod_to_alpha(float lod) {',
+    '    float lodBias = lod / uMaxMip;',
+    '    return (lodBias < 0.5) ? mx_square(lodBias) : 2.0 * (lodBias - 0.375);',
+    '}',
+    'vec3 mx_latlong_map_projection_inverse(vec2 uv) {',
+    '    float latitude = (uv.y - 0.5) * M_PI;',
+    '    float longitude = (uv.x - 0.5) * M_PI * 2.0;',
+    '    float x = -cos(latitude) * sin(longitude);',
+    '    float y = -sin(latitude);',
+    '    float z = cos(latitude) * cos(longitude);',
+    '    return vec3(x, y, z);',
+    '}',
+    'vec2 mx_latlong_projection(vec3 dir) {',
+    '    float latitude = -asin(clamp(dir.y, -1.0, 1.0)) * M_PI_INV + 0.5;',
+    '    float longitude = atan(dir.x, -dir.z) * M_PI_INV * 0.5 + 0.5;',
+    '    return vec2(longitude, latitude);',
+    '}',
+    'vec3 mx_latlong_map_lookup(vec3 dir, float lod) {',
+    '    return textureLod(uSource, mx_latlong_projection(normalize(dir)), lod).rgb;',
+    '}',
+    'float mx_latlong_compute_lod(vec3 dir, float pdf, float maxMipLevel, int envSamples) {',
+    '    const float MIP_LEVEL_OFFSET = 1.5;',
+    '    float effectiveMaxMipLevel = maxMipLevel - MIP_LEVEL_OFFSET;',
+    '    float distortion = sqrt(1.0 - mx_square(dir.y));',
+    '    return max(effectiveMaxMipLevel - 0.5 * log2(float(envSamples) * pdf * distortion), 0.0);',
+    '}',
+    'mat3 mx_orthonormal_basis(vec3 N) {',
+    '    float sgn = (N.z < 0.0) ? -1.0 : 1.0;',
+    '    float a = -1.0 / (sgn + N.z);',
+    '    float b = N.x * N.y * a;',
+    '    vec3 X = vec3(1.0 + sgn * N.x * N.x * a, sgn * b, -sgn * N.x);',
+    '    vec3 Y = vec3(b, sgn + N.y * N.y * a, -N.y);',
+    '    return mat3(X, Y, N);',
+    '}',
+    'float mx_golden_ratio_sequence(int i) {',
+    '    const float GOLDEN_RATIO = 1.6180339887498948;',
+    '    return fract((float(i) + 1.0) * GOLDEN_RATIO);',
+    '}',
+    'vec2 mx_spherical_fibonacci(int i, int numSamples) {',
+    '    return vec2((float(i) + 0.5) / float(numSamples), mx_golden_ratio_sequence(i));',
+    '}',
+    'float mx_ggx_NDF(vec3 H, vec2 alpha) {',
+    '    vec2 He = H.xy / alpha;',
+    '    float denom = dot(He, He) + mx_square(H.z);',
+    '    return 1.0 / (M_PI * alpha.x * alpha.y * mx_square(denom));',
+    '}',
+    'vec3 mx_ggx_importance_sample_VNDF(vec2 Xi, vec3 V, vec2 alpha) {',
+    '    V = normalize(vec3(V.xy * alpha, V.z));',
+    '    float phi = 2.0 * M_PI * Xi.x;',
+    '    float z = (1.0 - Xi.y) * (1.0 + V.z) - V.z;',
+    '    float sinTheta = sqrt(clamp(1.0 - z * z, 0.0, 1.0));',
+    '    vec3 c = vec3(sinTheta * cos(phi), sinTheta * sin(phi), z);',
+    '    vec3 H = c + V;',
+    '    return normalize(vec3(H.xy * alpha, max(H.z, 0.0)));',
+    '}',
+    'float mx_ggx_VNDF_reflection_PDF(vec3 H, vec2 alpha, float G1V, float NdotV) {',
+    '    return mx_ggx_NDF(H, alpha) * G1V / (4.0 * NdotV);',
+    '}',
+    'float mx_ggx_smith_G1(float cosTheta, float alpha) {',
+    '    float cosTheta2 = mx_square(cosTheta);',
+    '    float tanTheta2 = (1.0 - cosTheta2) / cosTheta2;',
+    '    return 2.0 / (1.0 + sqrt(1.0 + mx_square(alpha) * tanTheta2));',
+    '}',
+    'float mx_ggx_smith_G2(float NdotL, float NdotV, float alpha) {',
+    '    float alpha2 = mx_square(alpha);',
+    '    float lambdaL = sqrt(alpha2 + (1.0 - alpha2) * mx_square(NdotL));',
+    '    float lambdaV = sqrt(alpha2 + (1.0 - alpha2) * mx_square(NdotV));',
+    '    return 2.0 * NdotL * NdotV / (lambdaL * NdotV + lambdaV * NdotL);',
+    '}',
+    'void main() {',
+    '    vec2 uv = gl_FragCoord.xy / uTargetSize;',
+    // +0.5 in longitude, because mx_latlong_map_projection_inverse is NOT
+    // the inverse of mx_latlong_projection: measured, the two disagree by
+    // exactly half the map. Writing texel uv as the value for the
+    // un-corrected direction leaves the whole prefiltered chain rotated
+    // 180 degrees against the lookup that reads it back.
+    '    vec3 worldN = mx_latlong_map_projection_inverse(vec2(uv.x + 0.5, uv.y));',
+    '    float alpha = mx_latlong_lod_to_alpha(uMip);',
+    // A mirror lobe has no width to integrate; sampling it would just add
+    // noise, so level 0 is the source unchanged.
+    '    if (alpha <= 0.0) { fragColor = vec4(mx_latlong_map_lookup(worldN, 0.0), 1.0); return; }',
+    '    vec3 V = vec3(0.0, 0.0, 1.0);',
+    '    float NdotV = 1.0;',
+    '    mat3 tangentToWorld = mx_orthonormal_basis(worldN);',
+    '    float G1V = mx_ggx_smith_G1(NdotV, alpha);',
+    '    vec3 radiance = vec3(0.0);',
+    '    float weight = 0.0;',
+    '    const int envRadianceSamples = ' + PREFILTER_SAMPLES + ';',
+    '    for (int i = 0; i < envRadianceSamples; i++) {',
+    '        vec2 Xi = mx_spherical_fibonacci(i, envRadianceSamples);',
+    '        vec3 H = mx_ggx_importance_sample_VNDF(Xi, V, vec2(alpha));',
+    '        vec3 L = -V + 2.0 * H.z * H;',
+    '        float NdotL = clamp(L.z, M_FLOAT_EPS, 1.0);',
+    '        float G = mx_ggx_smith_G2(NdotL, NdotV, alpha);',
+    '        vec3 Lw = tangentToWorld * L;',
+    '        float pdf = mx_ggx_VNDF_reflection_PDF(H, vec2(alpha), G1V, NdotV);',
+    '        float lod = mx_latlong_compute_lod(Lw, pdf, uMaxMip, envRadianceSamples);',
+    '        radiance += G * mx_latlong_map_lookup(Lw, lod);',
+    '        weight += G;',
+    '    }',
+    '    fragColor = vec4(radiance / max(weight, M_FLOAT_EPS), 1.0);',
+    '}',
+].join('\n');
+
+// Builds env.radiancePrefiltered once per environment, on the first view
+// that has a renderer. three r128 ignores the mip level for a 2D render
+// target (setRenderTarget's framebufferTexture2D call is cube-only), so each
+// level is rendered into its own target, read back, and assembled into a
+// DataTexture whose `mipmaps` array three uploads level by level.
+// Fail-soft: any problem leaves the flag set and the FIS chain in place, so
+// shading still works, just noisier.
+const ensurePrefilteredEnv = (renderer, env) => {
+    if (!env || !env.radiance || env.prefilterTried) return env;
+    env.prefilterTried = true;
+    if (getSpecularEnvMethod() !== 'prefilter') return env;
+    if (!renderer || !renderer.capabilities || !renderer.capabilities.isWebGL2) return env;
+    // Float targets are the only type readRenderTargetPixels can be relied
+    // on to return here; without them the chain cannot be read back.
+    if (!renderer.extensions.get('EXT_color_buffer_float')) {
+        mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the FIS specular environment.');
+        return env;
+    }
+    const src = env.radiance;
+    const w = src.image && src.image.width, h = src.image && src.image.height;
+    if (!w || !h) return env;
+    const levels = env.mips || (Math.trunc(Math.log2(Math.max(w, h))) + 1);
+    const t0 = performance.now();
+    const previousTarget = renderer.getRenderTarget();
+    const material = new THREE.RawShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+        fragmentShader: PREFILTER_GLSL,
+        uniforms: {
+            uSource: { value: src },
+            uMip: { value: 0 },
+            uMaxMip: { value: Math.max(1, levels - 1) },
+            uTargetSize: { value: new THREE.Vector2(w, h) },
+        },
+        depthTest: false, depthWrite: false,
+    });
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const mipmaps = [];
+    let failed = false;
+    try {
+        for (let level = 0; level < levels; level++) {
+            const lw = Math.max(1, w >> level), lh = Math.max(1, h >> level);
+            const target = new THREE.WebGLRenderTarget(lw, lh, {
+                minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat, type: THREE.FloatType,
+                depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
+            });
+            material.uniforms.uMip.value = level;
+            material.uniforms.uTargetSize.value.set(lw, lh);
+            renderer.setRenderTarget(target);
+            renderer.render(scene, camera);
+            const pixels = new Float32Array(lw * lh * 4);
+            renderer.readRenderTargetPixels(target, 0, 0, lw, lh, pixels);
+            target.dispose();
+            // Half float keeps the chain linear-filterable in core WebGL2
+            // (full float filtering needs OES_texture_float_linear) and
+            // halves the upload, at a precision the source already has.
+            const half = new Uint16Array(lw * lh * 4);
+            for (let i = 0; i < half.length; i++) half[i] = floatToHalf(pixels[i]);
+            mipmaps.push({ data: half, width: lw, height: lh });
+        }
+    } catch (error) {
+        failed = true;
+        mtlxWarn('mtlx-engine: GGX environment prefilter failed, keeping the FIS chain: ' + (error && error.message || error));
+    }
+    renderer.setRenderTarget(previousTarget);
+    material.dispose();
+    scene.children[0].geometry.dispose();
+    if (failed || !mipmaps.length) return env;
+    const base = mipmaps[0];
+    const tex = new THREE.DataTexture(base.data, base.width, base.height, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    // Always false, never copied from the source: the chain was written in
+    // framebuffer space, where row 0 is v = 0, and readRenderTargetPixels
+    // hands the rows back in that same order.
+    tex.flipY = false;
+    tex.encoding = THREE.LinearEncoding;
+    tex.anisotropy = 8;
+    // Levels are supplied, not derived: three uploads texture.mipmaps for a
+    // DataTexture and turns generateMipmaps off itself when it does.
+    tex.mipmaps = mipmaps;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    env.radiancePrefiltered = tex;
+    if (window.MTLX_PERF_LOG) {
+        console.log('[mtlx-perf] env prefilter: ' + (performance.now() - t0).toFixed(1)
+            + 'ms (' + levels + ' levels, ' + w + 'x' + h + ')');
+    }
+    return env;
+};
+
+// The radiance sampler the SHADING path binds. The backdrop, the PMREM
+// probe and the key-light extraction all keep using env.radiance: only the
+// specular lookup wants the prefiltered chain, and only when the shader was
+// generated for it.
+const envRadianceForShading = (env) => {
+    if (!env) return null;
+    if (getSpecularEnvMethod() === 'prefilter' && env.radiancePrefiltered) return env.radiancePrefiltered;
+    return env.radiance;
+};
+
 const buildEnvFromParsedTexture = (raw) => {
     // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
     // background are built below, so it disappears from all three,
@@ -3263,31 +4830,61 @@ const getEnvironment = () => {
     return envPromise;
 };
 
+// Builds an environment from raw bytes into the same shape getEnvironment()
+// returns. `label` only names the source in error messages; `remember` caches
+// the pristine bytes for the key-light toggle and belongs to the session-wide
+// override alone, so a stage's own dome light passes false.
+const loadEnvironmentFromBuffer = async (buf, ext, label, remember = true) => {
+    const lower = String(ext || '').toLowerCase();
+    if (lower !== '.hdr' && lower !== '.exr') {
+        throw new Error('Unsupported environment file "' + label + '", expected .hdr or .exr.');
+    }
+    // Loader-presence checks run BEFORE parseEnvBuffer purely so the
+    // dialog can report which specific script is missing, parseEnvBuffer
+    // itself just returns null on this, with no message.
+    if (lower === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+        throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');
+    }
+    if (lower === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+        throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');
+    }
+    const raw = parseEnvBuffer(buf, lower);
+    if (!raw || !raw.image || !raw.image.data) {
+        throw new Error('Failed to parse the environment image "' + label + '".');
+    }
+    if (remember) overrideEnvSource = { buf, ext: lower };
+    return buildEnvFromParsedTexture(raw);
+};
+
+// Constant-colour environment in the same shape, for a USD dome light that
+// carries a colour but no texture. Small on purpose: every texel is equal,
+// so resolution buys nothing and the mip chain still builds normally.
+const FLAT_ENV_W = 32;
+const FLAT_ENV_H = 16;
+const makeFlatEnvironment = (rgb) => {
+    const [r, g, b] = Array.isArray(rgb) && rgb.length >= 3 ? rgb : [1, 1, 1];
+    const data = new Uint16Array(FLAT_ENV_W * FLAT_ENV_H * 4);
+    const half = [floatToHalf(r), floatToHalf(g), floatToHalf(b), floatToHalf(1)];
+    for (let i = 0; i < data.length; i += 4) {
+        data[i] = half[0]; data[i + 1] = half[1]; data[i + 2] = half[2]; data[i + 3] = half[3];
+    }
+    const tex = new THREE.DataTexture(data, FLAT_ENV_W, FLAT_ENV_H, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.flipY = false;
+    return buildEnvFromParsedTexture(tex);
+};
+
 // Loads a user-dropped environment file into the same shape
 // getEnvironment() returns, reusing its parse/build helpers. Unlike
 // getEnvironment(), throws on failure instead of a silent fallback.
 const loadEnvironmentFromFile = async (file) => {
     const name = ((file && file.name) || '').toLowerCase();
     const ext = name.slice(name.lastIndexOf('.'));
+    // Reject by extension before reading the bytes: an unsupported drop
+    // should not pull a large file into memory first.
     if (ext !== '.hdr' && ext !== '.exr') {
         throw new Error('Unsupported environment file "' + (file && file.name) + '", expected .hdr or .exr.');
     }
-    // Loader-presence checks run BEFORE parseEnvBuffer purely so the
-    // dialog can report which specific script is missing, parseEnvBuffer
-    // itself just returns null on this, with no message.
-    if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
-        throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');
-    }
-    if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
-        throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');
-    }
-    const buf = await file.arrayBuffer();
-    const raw = parseEnvBuffer(buf, ext);
-    if (!raw || !raw.image || !raw.image.data) {
-        throw new Error('Failed to parse the environment image "' + (file && file.name) + '".');
-    }
-    overrideEnvSource = { buf, ext }; // pristine bytes, for the key-light toggle rebuild
-    return buildEnvFromParsedTexture(raw);
+    return loadEnvironmentFromBuffer(await file.arrayBuffer(), ext, (file && file.name) || '', true);
 };
 
 // Set/clear the session-wide environment override. null clears it
@@ -3664,7 +5261,7 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false }) => {
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -3689,9 +5286,16 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // example the supplied ceramic/Lion graphs). Preview and scene renders
     // need ordinary throughput propagation semantics.
     try { genContext.getOptions().premultipliedBsdfAdd = false; } catch (e) { /* option absent in older bindings */ }
-    // Generated shaders use the generator's default FIS specular-
-    // environment method. hwSpecularEnvironmentMethod is NOT settable
-    // in this build, the embind setter rejects it. Don't retry.
+    // Specular environment method. The setter takes the EMBIND ENUM VALUE,
+    // not an integer: assigning 0/1/2 is silently ignored, which is what
+    // made this look unsettable before. Verified by generating both ways
+    // and checking for mx_latlong_alpha_to_lod in the output.
+    try {
+        const methods = mx.HwSpecularEnvironmentMethod;
+        const wanted = getSpecularEnvMethod() === 'fis'
+            ? methods.SPECULAR_ENVIRONMENT_FIS : methods.SPECULAR_ENVIRONMENT_PREFILTER;
+        if (wanted) genContext.getOptions().hwSpecularEnvironmentMethod = wanted;
+    } catch (e) { /* enum absent in older bindings, keep the generator default */ }
 
     // Bail before the ~expensive shader-generation call if this
     // build was superseded (mounted flipped while awaiting above),
@@ -3702,7 +5306,13 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // document (and any export of it) never actually changes.
     const colorspaceDoc = mxSafe(() => renderable.getDocument(), null) || documentArg;
     let colorspaceAliasResult = null;
-    if (colorspaceDoc) colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+    let colorspaceTransformResult = null;
+    if (colorspaceDoc) {
+        colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+        // Must follow the aliases: an authored "srgb_tx" only becomes a
+        // name cmlib knows once applyColorspaceAliases has normalized it.
+        colorspaceTransformResult = applyColorspaceTransforms(colorspaceDoc);
+    }
     // Catches a MaterialX type mismatch (no implicit coercion) BEFORE
     // generation, which otherwise fails deep inside an opaque nodegraph
     // call with a GLSL line number instead of naming the real culprit.
@@ -3727,6 +5337,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
                 + (detail ? `. ${detail}` : ''));
         }
     } finally {
+        // Reverse order: the transforms were layered on top of the aliases.
+        if (colorspaceTransformResult) colorspaceTransformResult.restore();
         if (colorspaceAliasResult) colorspaceAliasResult.restore();
     }
     if (window.MTLX_PERF_LOG) {
@@ -3758,7 +5370,16 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
                 + (to === '(removed)' ? 'no conversion' : to));
         }
     }
+    if (colorspaceTransformResult) {
+        for (const [cs, count] of colorspaceTransformResult.converted) {
+            notices.push(`Colorspace "${cs}": ${count} texture(s) converted to lin_rec709 in the shader`);
+        }
+        for (const cs of colorspaceTransformResult.unsupported) {
+            notices.push(`Colorspace "${cs}" has no conversion available; those textures are sampled unconverted`);
+        }
+    }
     fs = patchUnlitLightingRefs(fs);
+    fs = patchScenePhysicalLightFalloff(fs, sceneRgbt);
     const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
     const outVar = outDeclMatch ? outDeclMatch[1] : null;
     const outAssignments = outVar
@@ -3777,13 +5398,24 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     }
     // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
     fs = patchTransmissionAlpha(fs);
+    let payloadSupported = false;
+    if (sceneRgbt) {
+        fs = patchRgbtPayload(fs);
+        payloadSupported = fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */') !== -1;
+    }
+    fs = patchShadowBounds(fs);
+    fs = patchShadowLightScope(fs);
+    fs = patchLightSourceKindStruct(fs);
+    fs = patchAreaLightSourceCosine(fs);
+    fs = patchAmbientOcclusion(fs);
+    fs = patchTransmissionThickness(fs);
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
     // injectPeelDiscard's header comment above for why this keeps
     // toggling the setting a pure uniform flip (no regen/recompile) and
     // is a byte-for-byte no-op whenever u_peelMode is left at its default
     // 0 (the normal, non-peeling path).
-    fs = injectPeelDiscard(fs);
+    fs = injectPeelDiscard(fs, payloadSupported);
 
     // Uniform introspection, still fully inside the mxExclusive lock:
     // plainizeMxUniformData converts every vector/matrix/color `data`
@@ -3795,13 +5427,18 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         if (st) introspected = introspected.concat(collectMxUniforms(st));
     }
     introspected = introspected.map(plainizeMxUniformData);
+    // uv_scale/uv_offset are ALWAYS emitted as uniforms (never inline
+    // vec2 literals), so applyHeightToNormalTexel's identity check reads
+    // their MaterialX-introspected default value here, once introspected
+    // exists, instead of pattern-matching the (nonexistent) literal text.
+    fs = applyHeightToNormalTexel(fs, notices, introspected);
 
     // Last reference to mxShader, free it here, still inside the lock.
     // Guarded: a BindingError here must never fail an otherwise-successful
     // generation. Loop-local `st` handles are left for FinalizationRegistry.
     try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices };
+    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported };
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
@@ -3813,9 +5450,9 @@ const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSou
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
 // instances for each object that uses that source.
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
-    const srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg });
+    const srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt });
     if (!srcs) return null;
     const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
     return {
@@ -3824,6 +5461,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         // Program identity excludes uniforms and object transforms. Source
         // text is already fully adapted by generatePreviewSources.
         programKey: srcs.vs + '\\n/* scene-fs */\\n' + srcs.fs,
+        sceneRgbt,
+        payloadSupported: !!srcs.payloadSupported,
         label,
     };
 };
@@ -3831,7 +5470,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRotationRad = 0, envExposure = 1 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowSlotCaster = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -3843,11 +5482,53 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRota
         u_peelPrevDepth: { value: getDummyTex() },
         u_opaqueDepth: { value: getDummyTexWhite() },
         u_peelLinear: { value: 0 },
+        // Injected by encodeDisplay, so these are never in MaterialX's own
+        // introspection and cannot be gated on has() like the rest. The
+        // transform defaults to the caller's, letting the Scene run a filmic
+        // curve while the Material Viewer stays on plain sRGB for parity.
+        u_displayExposure: { value: displayExposureScale() },
+        u_displayTransform: { value: displayTransformId(displayTransform || getDisplayTransform()) },
+        // Shadow atlas. Seeded unconditionally for the same sampler-unit
+        // reason as the sky volume below, and defaulted to "no caster on any
+        // slot", which makes the whole lookup an exact no-op.
+        u_shadowAtlas: { value: shadowAtlas || getDummyTexWhite() },
+        u_shadowMatrices: { value: shadowMatrices && shadowMatrices.length === SHADOW_CASTER_SLOTS
+            ? shadowMatrices : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Matrix4()) },
+        u_shadowTiles: { value: shadowTiles && shadowTiles.length === SHADOW_CASTER_SLOTS
+            ? shadowTiles : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
+        u_shadowDepthPlanes: { value: shadowDepthPlanes && shadowDepthPlanes.length === SHADOW_CASTER_SLOTS
+            ? shadowDepthPlanes : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
+        u_shadowDepthRanges: { value: shadowDepthRanges && shadowDepthRanges.length === SHADOW_CASTER_SLOTS
+            ? shadowDepthRanges : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector2(0, 1)) },
+        u_shadowSourceRadii: { value: shadowSourceRadii && shadowSourceRadii.length === SHADOW_CASTER_SLOTS
+            ? shadowSourceRadii : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4()) },
+        u_shadowSlotCaster: { value: shadowSlotCaster && shadowSlotCaster.length === SHADOW_LIGHT_SLOTS_MAX
+            ? shadowSlotCaster : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+        // Baked sky visibility. Seeded unconditionally, NOT through has():
+        // parseUniforms' regex has no room for a precision qualifier, so
+        // `uniform highp sampler3D` is invisible to it just as
+        // `uniform highp sampler2D u_peelPrevDepth` is. An unseeded sampler
+        // sits on texture unit 0 next to a sampler2D, and ANGLE then rejects
+        // the entire draw with "Two textures of different types use the same
+        // sampler location", so the scene renders nothing at all.
+        // A white 1x1x1 volume at strength 0 is an exact no-op.
+        u_skyVisMap: { value: skyVisMap || getDummyTex3DWhite() },
+        u_skyVisMin: { value: skyVisMin ? skyVisMin.clone() : new THREE.Vector3() },
+        u_skyVisSize: { value: skyVisSize ? skyVisSize.clone() : new THREE.Vector3(1, 1, 1) },
+        u_skyVisCell: { value: skyVisCell || 0 },
+        u_skyVisStrength: { value: skyVisMap ? skyVisStrength : 0 },
     };
+    if (compiled.payloadSupported) {
+        // Scene RGB-T is opt-in at compile time and remains inactive until
+        // the compositor sets these selectors.
+        uniforms.u_peelRgbt = { value: 0 };
+        uniforms.u_peelRgbtPass = { value: 0 };
+        uniforms.u_peelRgbtLayer = { value: 0 };
+    }
     applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
     const declared = new Set((compiled.declared || []).map((u) => u.name));
     const has = (name) => declared.has(name);
-    const radiance = (env && env.radiance) || getDummyTex();
+    const radiance = envRadianceForShading(env) || getDummyTex();
     const irradiance = (env && env.irradiance) || radiance;
     const mips = env && env.mips != null ? env.mips : 1;
     if (has('u_time')) uniforms.u_time = { value: MTLX_CLOCK.time };
@@ -3861,13 +5542,41 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], envRota
         if (/irradiance|diffuse/i.test(u.name)) uniforms[u.name] = { value: irradiance };
         else if (/radiance|specular|prefilter/i.test(u.name)) uniforms[u.name] = { value: radiance };
     }
-    if (has('u_envMatrix')) uniforms.u_envMatrix = { value: new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
+    // envTilt carries a dome light's non-vertical orientation. The rotation
+    // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
+    // and re-applied here: with the slider at the dome's own yaw this
+    // reproduces the authored orientation exactly.
+    if (has('u_envMatrix')) {
+        const m = new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad);
+        uniforms.u_envMatrix = { value: envTilt ? m.multiply(envTilt) : m };
+    }
     if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
     if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
     if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure };
-    if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = { value: false };
-    if (has('u_lightData')) uniforms.u_lightData = { value: currentLights(lightData, env && env.keyLight, envRotationRad) };
-    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: (lightData || []).length + (env && env.keyLight ? 1 : 0) };
+    // White moments read as fully lit, so materials are unaffected until a
+    // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
+    // matrix here is a raw world-to-light-clip transform.
+    // White map at strength 0 is an exact no-op, so a view with no AO pass
+    // is byte-identical to one generated before AO existed.
+    if (has('u_ssaoMap')) uniforms.u_ssaoMap = { value: ssaoMap || getDummyTexWhite() };
+    if (has('u_ssaoTexel')) uniforms.u_ssaoTexel = { value: ssaoTexel ? ssaoTexel.clone() : new THREE.Vector2() };
+    if (has('u_ssaoStrength')) uniforms.u_ssaoStrength = { value: ssaoMap ? ssaoStrength : 0 };
+    // Zero scale means zero path length, which is clear glass: the safe
+    // reading when no back-face pass has run.
+    if (has('u_thicknessMap')) uniforms.u_thicknessMap = { value: thicknessMap || getDummyTex() };
+    if (has('u_thicknessTexel')) uniforms.u_thicknessTexel = { value: thicknessTexel ? thicknessTexel.clone() : new THREE.Vector2() };
+    if (has('u_thicknessScale')) uniforms.u_thicknessScale = { value: thicknessMap ? thicknessScale : 0 };
+    // Squares the tint for a closed solid, where the ray crosses the surface
+    // twice. MaterialXView sets this from the geometry; a USD stage's
+    // transmissive props are solids, so this follows the peel state.
+    if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = { value: !!refractionTwoSided };
+    if (has('u_shadowMap')) uniforms.u_shadowMap = { value: shadowMap || getDummyTexWhite() };
+    if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = { value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix() };
+    if (has('u_lightData')) {
+        const entries = currentLights(lightData, env && env.keyLight, envRotationRad, stageLights, envExposure);
+        uniforms.u_lightData = { value: entries };
+    }
+    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights) };
     return uniforms;
 };
 
@@ -4474,9 +6183,11 @@ const createUsdSceneStudioLight = (scale = 1) => {
     light.shadow.camera.near = (STUDIO_LIGHT_DISTANCE - 4) * scale;
     light.shadow.camera.far = (STUDIO_LIGHT_DISTANCE + STUDIO_WALL_R + 2) * scale;
     light.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE, STUDIO_SHADOW_MAP_SIZE);
-    light.shadow.radius = 12;
+    // Stage meshes rest on the floor, so the contact shadow must start at
+    // the base: a smaller blur and normal bias than the shaderball rig.
+    light.shadow.radius = 6;
     light.shadow.bias = -0.0005;
-    light.shadow.normalBias = 0.02 * scale;
+    light.shadow.normalBias = 0.004 * scale;
     return { light, target };
 };
 // Mirrors placeStudioLight (js/mtlx-engine.js:4657-4678) but relative to
@@ -4535,7 +6246,440 @@ const applyPeelMaterialMode = (material, active) => {
     if (changed) material.needsUpdate = true;
 };
 
-// createPeelPipeline(renderer, { getDisplayTransform }): reusable depth-
+// Scene-only RGB-transmission compositor.  Three r128 has no public
+// WebGLMultipleRenderTargets, so C and T are rendered into separate targets
+// and accumulated with fullscreen passes.  This factory is deliberately
+// separate from the legacy scalar peel pipeline: callers opt in only after
+// compiling a shader with the u_peelRgbtPass output contract.  A shader that
+// does not expose that uniform is left untouched by this pipeline and should
+// use createPeelPipeline instead.
+const createRgbtPeelPipeline = (renderer, {
+    getDisplayTransform: getDisplayTransformOpt,
+    getDisplayExposure: getDisplayExposureOpt,
+    layers = PEEL_LAYERS,
+    opaqueOutput = false,
+} = {}) => {
+    const getDT = getDisplayTransformOpt || getDisplayTransform;
+    const getExposure = getDisplayExposureOpt || displayExposureScale;
+    const halfOk = !!renderer.extensions.get('EXT_color_buffer_float');
+    let resources = null;
+    // A grouped USD mesh can contain an authored opaque submaterial beside a
+    // transmissive RGB-T one. The opaque subgroup is captured once in
+    // opaqueRT and discarded in every C/T/tail geometry pass; it cannot be
+    // treated as a missing payload for the complete mesh.
+    let opaqueDiscardMaterial = null;
+
+    const disposeTarget = (rt) => {
+        if (!rt) return;
+        if (rt.depthTexture) rt.depthTexture.dispose();
+        rt.dispose();
+    };
+    const free = () => {
+        if (!resources) return;
+        [resources.opaque, resources.layerC0, resources.layerC1, resources.layerT,
+            resources.tail, resources.c0, resources.c1,
+            resources.t0, resources.t1].forEach(disposeTarget);
+        if (resources.quad && resources.quad.geometry) resources.quad.geometry.dispose();
+        [resources.initMat, resources.updateCMat, resources.updateTMat,
+            resources.tailFoldMat, resources.tailTMat, resources.finalMat].forEach((m) => { if (m) m.dispose(); });
+        if (opaqueDiscardMaterial) { opaqueDiscardMaterial.dispose(); opaqueDiscardMaterial = null; }
+        resources = null;
+    };
+    const target = (w, h, depth = false) => {
+        const rt = new THREE.WebGLRenderTarget(w, h, {
+            minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter,
+            format: THREE.RGBAFormat,
+            type: THREE.HalfFloatType,
+            depthBuffer: depth,
+            stencilBuffer: false,
+        });
+        if (depth) {
+            rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
+            rt.depthTexture.minFilter = THREE.NearestFilter;
+            rt.depthTexture.magFilter = THREE.NearestFilter;
+        }
+        return rt;
+    };
+    const alloc = (w, h) => {
+        free();
+        const opaque = target(w, h, true);
+        // C depth must ping pong with the color target. Reusing one target
+        // would make the next peel's previous-depth sampler read the same
+        // texture currently being cleared/rendered.
+        const layerC0 = target(w, h, true);
+        const layerC1 = target(w, h, true);
+        const layerT = target(w, h, true);
+        const tail = target(w, h, false);
+        const c0 = target(w, h), c1 = target(w, h);
+        const t0 = target(w, h), t1 = target(w, h);
+        const quadScene = new THREE.Scene();
+        const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+        quadScene.add(quad);
+        const quadVertex =
+            'in vec3 position;\n' +
+            'in vec2 uv;\n' +
+            'out vec2 vUv;\n' +
+            'void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}\n';
+        const initMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o; uniform vec4 u_value; void main(){o=u_value;}\n',
+            uniforms: { u_value: { value: new THREE.Vector4(0, 0, 0, 1) } },
+            depthTest: false, depthWrite: false,
+        });
+        const updateCMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader:
+                'precision highp float; in vec2 vUv; out vec4 o;\n' +
+                'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_layer;\n' +
+                'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),l=texture(u_layer,vUv);o=vec4(c.rgb+t.rgb*l.rgb,1.0);}\n',
+            uniforms: { u_c: { value: null }, u_t: { value: null }, u_layer: { value: null } },
+            depthTest: false, depthWrite: false,
+        });
+        const updateTMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader:
+                'precision highp float; in vec2 vUv; out vec4 o;\n' +
+                'uniform sampler2D u_t; uniform sampler2D u_layer;\n' +
+                'void main(){vec3 t=texture(u_t,vUv).rgb*texture(u_layer,vUv).rgb;o=vec4(t,1.0);}\n',
+            uniforms: { u_t: { value: null }, u_layer: { value: null } },
+            depthTest: false, depthWrite: false,
+        });
+        // The tail target uses alpha as scalar residual transmission.  Its
+        // geometry pass supplies C in RGB and 1-mean(T) in alpha; the blend
+        // factors retain every deeper fragment in front-to-back order.
+        const tailFoldMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader:
+                'precision highp float; in vec2 vUv; out vec4 o;\n' +
+                'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_tail;\n' +
+                'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),q=texture(u_tail,vUv);o=vec4(c.rgb+t.rgb*q.rgb,t.a);}\n',
+            uniforms: { u_c: { value: null }, u_t: { value: null }, u_tail: { value: null } },
+            depthTest: false, depthWrite: false,
+        });
+        const tailTMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader:
+                'precision highp float; in vec2 vUv; out vec4 o;\n' +
+                'uniform sampler2D u_t; uniform sampler2D u_tail;\n' +
+                'void main(){vec3 t=texture(u_t,vUv).rgb*texture(u_tail,vUv).aaa;o=vec4(t,1.0);}\n',
+            uniforms: { u_t: { value: null }, u_tail: { value: null } },
+            depthTest: false, depthWrite: false,
+        });
+        const finalMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader:
+                'precision highp float; in vec2 vUv; out vec4 o;\n' +
+                'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' +
+                'uniform int u_displayTransform; uniform float u_displayExposure;\n' +
+                'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' +
+                'vec3 lin=c.rgb+t.rgb*b.rgb;\n' +
+                DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encoded', 'u_displayTransform', 'u_displayExposure') +
+                'float transA=1.0-min(t.r,min(t.g,t.b));\n' +
+                'float a=' + (opaqueOutput ? '1.0' : 'b.a+(1.0-b.a)*transA') + ';o=vec4(encoded,a);}\n',
+            uniforms: {
+                u_c: { value: null }, u_t: { value: null }, u_opaque: { value: null },
+                u_displayTransform: { value: displayTransformId(getDT()) },
+                u_displayExposure: { value: getExposure() },
+            },
+            transparent: !opaqueOutput,
+            blending: THREE.NoBlending,
+            depthTest: false, depthWrite: false,
+        });
+        resources = { w, h, opaque, layerC0, layerC1, layerT, tail, c0, c1, t0, t1,
+            quadScene, quadCam, quad, initMat, updateCMat, updateTMat,
+            tailFoldMat, tailTMat, finalMat };
+        quad.material = initMat;
+        renderer.compile(quadScene, quadCam);
+        quad.material = updateCMat;
+        renderer.compile(quadScene, quadCam);
+        quad.material = updateTMat;
+        renderer.compile(quadScene, quadCam);
+        quad.material = tailFoldMat;
+        renderer.compile(quadScene, quadCam);
+        quad.material = tailTMat;
+        renderer.compile(quadScene, quadCam);
+        quad.material = finalMat;
+        renderer.compile(quadScene, quadCam);
+    };
+    const renderQuad = (material, targetRT) => {
+        resources.quad.material = material;
+        renderer.setRenderTarget(targetRT);
+        renderer.render(resources.quadScene, resources.quadCam);
+    };
+    const render = (scene, camera, transparentMeshes, opts = {}) => {
+        const unsupported = (reason) => {
+            if (opts.onUnsupported) opts.onUnsupported(reason);
+            // Direct users of this low-level factory get a visible normal
+            // render. createPeelPipeline's Scene wrapper passes fallback:false
+            // and routes the same frame through its scalar legacy pipeline.
+            if (opts.fallback !== false) renderer.render(scene, camera);
+            return false;
+        };
+        if (!halfOk) {
+            return unsupported('RGBT requires EXT_color_buffer_float');
+        }
+        const candidates = (transparentMeshes || []).filter((m) => m && m.material);
+        const materialList = [];
+        const materialSet = new Set();
+        candidates.forEach((m) => {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            mats.forEach((mat) => { if (mat && !materialSet.has(mat)) { materialSet.add(mat); materialList.push(mat); } });
+        });
+        const meshes = candidates.filter((m) => {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            return mats.some((mat) => {
+                if (!mat || !mat.uniforms || !mat.uniforms.u_peelMode) return false;
+                // Scene materials carry a source-qualified peel verdict. A
+                // low-level caller without that metadata retains the legacy
+                // uniform-presence contract for backwards compatibility.
+                const data = mat.userData;
+                return data && Object.prototype.hasOwnProperty.call(data, 'mtlxScenePeel')
+                    ? !!data.mtlxScenePeel : true;
+            });
+        });
+        // Scene materials carry an explicit source-qualified peel verdict;
+        // low-level callers without metadata retain the uniform contract.
+        // Opaque submaterials stay in the C pass and are swapped to a discard
+        // material for T/tail below.
+        const payloadMaterials = materialList.filter((mat) => {
+            if (!mat || !mat.uniforms || !mat.uniforms.u_peelMode) return false;
+            const data = mat.userData;
+            return data && Object.prototype.hasOwnProperty.call(data, 'mtlxScenePeel')
+                ? !!data.mtlxScenePeel : true;
+        });
+        const missingPayload = payloadMaterials.filter((mat) => !mat.uniforms.u_peelRgbtPass || !mat.uniforms.u_peelRgbt);
+        if (missingPayload.length) {
+            return unsupported('RGBT shader payload is unavailable; using legacy renderer');
+        }
+        if (!meshes.length) { renderer.render(scene, camera); return true; }
+        const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+        if (!resources || resources.w !== size.x || resources.h !== size.y) alloc(size.x, size.y);
+        const oldTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
+        const oldViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
+        const oldScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
+        const oldScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
+        const oldAutoClear = renderer.autoClear;
+        const oldClearColor = renderer.getClearColor(new THREE.Color());
+        const oldClearAlpha = renderer.getClearAlpha();
+        const oldShadowUpdate = renderer.shadowMap.autoUpdate;
+        const materialState = new Map();
+        const visibilityState = new Map();
+        const linearUniforms = new Map();
+        const meshMaterials = new Map();
+        const meshMaterialIdentity = new Map();
+        meshes.forEach((mesh) => {
+            meshMaterials.set(mesh, Array.isArray(mesh.material) ? mesh.material.slice() : [mesh.material]);
+            meshMaterialIdentity.set(mesh, mesh.material);
+        });
+        const ensureOpaqueDiscardMaterial = () => {
+            if (opaqueDiscardMaterial) return opaqueDiscardMaterial;
+            opaqueDiscardMaterial = new THREE.RawShaderMaterial({
+                glslVersion: THREE.GLSL3,
+                vertexShader: 'in vec3 position; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix; void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+                fragmentShader: 'precision highp float; out vec4 outColor; void main(){discard;}',
+                depthTest: false, depthWrite: false, colorWrite: false,
+            });
+            return opaqueDiscardMaterial;
+        };
+        const setOpaqueSubmaterials = (discard) => meshMaterials.forEach((original, mesh) => {
+            // Opaque submaterials were already captured by opaqueRT.  They
+            // must be discarded for every C/T/tail geometry pass, including a
+            // single opaque material on a mesh that shares the candidate list.
+            const next = discard
+                ? original.map((mat) => payloadMaterials.includes(mat) ? mat : ensureOpaqueDiscardMaterial())
+                : original;
+            mesh.material = Array.isArray(mesh.material) ? next : next[0];
+        });
+        const setPayloadSubmaterials = (discard) => meshMaterials.forEach((original, mesh) => {
+            const next = discard
+                ? original.map((mat) => payloadMaterials.includes(mat) ? ensureOpaqueDiscardMaterial() : mat)
+                : original;
+            mesh.material = Array.isArray(mesh.material) ? next : next[0];
+        });
+        scene.traverse((object) => {
+            const materials = object && object.material
+                ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+            materials.forEach((mat) => {
+                const u = mat && mat.uniforms && mat.uniforms.u_peelLinear;
+                if (!u || linearUniforms.has(u)) return;
+                linearUniforms.set(u, u.value);
+                u.value = 1;
+            });
+        });
+        const rememberMaterial = (mat) => {
+            if (!mat || materialState.has(mat)) return;
+            materialState.set(mat, {
+                blending: mat.blending, blendEquation: mat.blendEquation,
+                blendEquationAlpha: mat.blendEquationAlpha, blendSrc: mat.blendSrc,
+                blendDst: mat.blendDst, blendSrcAlpha: mat.blendSrcAlpha,
+                blendDstAlpha: mat.blendDstAlpha, depthTest: mat.depthTest,
+                depthWrite: mat.depthWrite,
+                uniformValues: mat.uniforms ? new Map(Object.keys(mat.uniforms).map((k) => [k, mat.uniforms[k].value])) : null,
+            });
+        };
+        const rememberVisible = (obj) => { if (obj && !visibilityState.has(obj)) visibilityState.set(obj, obj.visible); };
+        const setPass = (pass) => payloadMaterials.forEach((mat) => {
+            rememberMaterial(mat);
+            const mu = mat.uniforms;
+            if (!mu) return;
+            if (mu.u_peelRgbt) mu.u_peelRgbt.value = 1;
+            if (mu.u_peelRgbtPass) mu.u_peelRgbtPass.value = pass;
+            if (mu.u_peelMode) mu.u_peelMode.value = pass === 2 ? 2 : 1;
+            // Transmission is independent of direct analytic lights. Avoid
+            // evaluating the full BRDF and shadow lookups during the RGB-T
+            // T-only pass, while restoring the authored count for C/tail.
+            if (mu.u_numActiveLightSources) {
+                const saved = materialState.get(mat)?.uniformValues?.get('u_numActiveLightSources');
+                mu.u_numActiveLightSources.value = pass === 1 ? 0
+                    : (saved == null ? mu.u_numActiveLightSources.value : saved);
+            }
+        });
+        const hideOtherMeshes = () => scene.traverse((o) => {
+            if (o.isMesh && !meshes.includes(o) && o.visible) { rememberVisible(o); o.visible = false; }
+        });
+        const showOthers = () => visibilityState.forEach((v, o) => { o.visible = v; });
+        renderer.autoClear = false;
+        renderer.shadowMap.autoUpdate = false;
+        try {
+            if (opts.setSceneLinear) opts.setSceneLinear(true);
+            // Opaque pass is stored in linear half float, then transformed once
+            // by finalMat. Transparent geometry stays hidden here.
+            meshes.forEach((m) => { rememberVisible(m); });
+            // Candidate meshes can carry opaque material groups. Capture those
+            // into opaqueRT while suppressing the RGB-T participants.
+            setPayloadSubmaterials(true);
+            renderer.setRenderTarget(resources.opaque);
+            renderer.setClearColor(oldClearColor, 0);
+            renderer.clear(true, true, true);
+            renderer.render(scene, camera);
+            setPayloadSubmaterials(false);
+            hideOtherMeshes();
+            // C starts at zero; T starts at one.  C/T are kept in distinct
+            // targets so no blend equation can accidentally premultiply C.
+            renderQuad(resources.initMat, resources.c0);
+            resources.initMat.uniforms.u_value.value.set(1, 1, 1, 1);
+            renderQuad(resources.initMat, resources.t0);
+            resources.initMat.uniforms.u_value.value.set(0, 0, 0, 1);
+            let cOld = resources.c0, cNew = resources.c1;
+            let tOld = resources.t0, tNew = resources.t1;
+            let prevDepth = null;
+            for (let i = 0; i < Math.max(0, layers | 0); i++) {
+                const cLayer = (i % 2 === 0) ? resources.layerC0 : resources.layerC1;
+                const tLayer = resources.layerT;
+            payloadMaterials.forEach((mat) => {
+                rememberMaterial(mat);
+                const mu = mat.uniforms;
+                if (!mu) return;
+                if (mu.u_peelHasPrev) mu.u_peelHasPrev.value = prevDepth ? 1 : 0;
+                if (mu.u_peelPrevDepth) mu.u_peelPrevDepth.value = prevDepth || getDummyTex();
+                if (mu.u_opaqueDepth) mu.u_opaqueDepth.value = resources.opaque.depthTexture;
+                if (mu.u_peelRgbtLayer) mu.u_peelRgbtLayer.value = i;
+                });
+            setPass(0);
+            setOpaqueSubmaterials(true);
+            renderer.setRenderTarget(cLayer);
+                renderer.setClearColor(0, 0);
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+            setPass(1);
+            setOpaqueSubmaterials(true);
+            renderer.setRenderTarget(tLayer);
+                // T is a multiplicative field: an empty layer is white.
+                renderer.setClearColor(0xffffff, 1);
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+                resources.updateCMat.uniforms.u_c.value = cOld.texture;
+                resources.updateCMat.uniforms.u_t.value = tOld.texture;
+                resources.updateCMat.uniforms.u_layer.value = cLayer.texture;
+                renderQuad(resources.updateCMat, cNew);
+                resources.updateTMat.uniforms.u_t.value = tOld.texture;
+                resources.updateTMat.uniforms.u_layer.value = tLayer.texture;
+                renderQuad(resources.updateTMat, tNew);
+                [cOld, cNew] = [cNew, cOld];
+                [tOld, tNew] = [tNew, tOld];
+                prevDepth = cLayer.depthTexture;
+            }
+            // All remaining fragments go through the scalar tail.  This is a
+            // bounded RGB-T approximation for deeper colored layers, but it
+            // preserves their full geometry and emissive C contribution.
+            setPass(2);
+            setOpaqueSubmaterials(true);
+            payloadMaterials.forEach((mat) => {
+                rememberMaterial(mat);
+                mat.blending = THREE.CustomBlending;
+                mat.blendEquation = THREE.AddEquation;
+                mat.blendEquationAlpha = THREE.AddEquation;
+                mat.blendSrc = THREE.DstAlphaFactor;
+                mat.blendDst = THREE.OneFactor;
+                mat.blendSrcAlpha = THREE.ZeroFactor;
+                mat.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
+                mat.depthTest = false;
+                mat.depthWrite = false;
+            });
+            payloadMaterials.forEach((mat) => {
+                const mu = mat.uniforms;
+                if (!mu) return;
+                if (mu.u_peelHasPrev) mu.u_peelHasPrev.value = prevDepth ? 1 : 0;
+                if (mu.u_peelPrevDepth) mu.u_peelPrevDepth.value = prevDepth || getDummyTex();
+                if (mu.u_peelRgbtLayer) mu.u_peelRgbtLayer.value = Math.max(0, layers | 0);
+            });
+            renderer.setRenderTarget(resources.tail);
+            renderer.setClearColor(0, 1);
+            renderer.clear(true, false, false);
+            renderer.render(scene, camera);
+            resources.tailFoldMat.uniforms.u_c.value = cOld.texture;
+            resources.tailFoldMat.uniforms.u_t.value = tOld.texture;
+            resources.tailFoldMat.uniforms.u_tail.value = resources.tail.texture;
+            renderQuad(resources.tailFoldMat, cNew);
+            // tailFold writes only C; preserve T by multiplying it with the
+            // scalar residual alpha (never the tail RGB) in a second pass.
+            resources.tailTMat.uniforms.u_t.value = tOld.texture;
+            resources.tailTMat.uniforms.u_tail.value = resources.tail.texture;
+            renderQuad(resources.tailTMat, tNew);
+            cOld = cNew; tOld = tNew;
+            showOthers();
+            renderer.setRenderTarget(null);
+            resources.finalMat.uniforms.u_c.value = cOld.texture;
+            resources.finalMat.uniforms.u_t.value = tOld.texture;
+            resources.finalMat.uniforms.u_opaque.value = resources.opaque.texture;
+            resources.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
+            resources.finalMat.uniforms.u_displayExposure.value = getExposure();
+            renderQuad(resources.finalMat, null);
+            return true;
+        } finally {
+            showOthers();
+            meshMaterials.forEach((_original, mesh) => { mesh.material = meshMaterialIdentity.get(mesh); });
+            materialState.forEach((state, mat) => {
+                ['blending', 'blendEquation', 'blendEquationAlpha', 'blendSrc',
+                    'blendDst', 'blendSrcAlpha', 'blendDstAlpha', 'depthTest',
+                    'depthWrite'].forEach((key) => { mat[key] = state[key]; });
+                if (state.uniformValues && mat.uniforms) state.uniformValues.forEach((value, key) => {
+                    if (mat.uniforms[key]) mat.uniforms[key].value = value;
+                });
+            });
+            renderer.setRenderTarget(oldTarget);
+            if (renderer.setViewport && oldViewport) renderer.setViewport(oldViewport);
+            if (renderer.setScissor && oldScissor) renderer.setScissor(oldScissor);
+            if (renderer.setScissorTest) renderer.setScissorTest(oldScissorTest);
+            renderer.autoClear = oldAutoClear;
+            renderer.setClearColor(oldClearColor, oldClearAlpha);
+            renderer.shadowMap.autoUpdate = oldShadowUpdate;
+            linearUniforms.forEach((value, uniform) => { uniform.value = value; });
+            if (opts.setSceneLinear) opts.setSceneLinear(false);
+        }
+    };
+    return { render, supported: halfOk, dispose: free };
+};
+
+// createPeelPipeline(renderer, { getDisplayTransform, getDisplayExposure }): reusable depth-
 // peel order-independent-transparency graph, extracted from
 // createMtlxRenderView's original allocPeel/renderFrame so the USD Scene
 // (js/usd-scene-renderer.js) can peel its own mesh set with the exact
@@ -4548,8 +6692,46 @@ const applyPeelMaterialMode = (material, active) => {
 // peelLinearOk (mirrors the Viewer's own setSceneLinear/sceneLinearOn
 // bookkeeping, which callers that manage that transition themselves,
 // like the Viewer, should NOT also pass here).
-const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransformOpt, linearComposite } = {}) => {
+const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransformOpt, getDisplayExposure: getDisplayExposureOpt, linearComposite, opaqueOutput, layers, sceneRgbt = false } = {}) => {
+    // The RGB-T graph is explicitly Scene opt-in.  Viewer callers and legacy
+    // Scene callers retain the six-pass scalar implementation below until
+    // their generated materials expose the matching shader payload.
+    if (sceneRgbt) {
+        const rgbt = createRgbtPeelPipeline(renderer, {
+        getDisplayTransform: getDisplayTransformOpt,
+        getDisplayExposure: getDisplayExposureOpt,
+        opaqueOutput,
+        layers,
+        });
+        const legacy = createPeelPipeline(renderer, {
+            getDisplayTransform: getDisplayTransformOpt,
+            getDisplayExposure: getDisplayExposureOpt,
+            linearComposite,
+            opaqueOutput,
+        });
+        return {
+            supported: rgbt.supported,
+            peelLinearOk: rgbt.supported,
+            render: (scene, camera, transparentMeshes, opts = {}) => {
+                let reason = '';
+                const ok = rgbt.render(scene, camera, transparentMeshes, Object.assign({}, opts, {
+                    fallback: false,
+                    onUnsupported: (r) => {
+                        reason = r;
+                        if (opts.onUnsupported) opts.onUnsupported(r);
+                    },
+                }));
+                if (!ok) return legacy.render(scene, camera, transparentMeshes, Object.assign({}, opts, {
+                    onUnsupported: (r) => { if (opts.onUnsupported) opts.onUnsupported(reason || r); },
+                }));
+                return ok;
+            },
+            setMeshMode: applyPeelMaterialMode,
+            dispose: () => { rgbt.dispose(); legacy.dispose(); },
+        };
+    }
     const getDT = getDisplayTransformOpt || getDisplayTransform;
+    const getExposure = getDisplayExposureOpt || displayExposureScale;
     // Hoisted once: gates half-float peel/accum storage, the merged
     // linear-opaque pass, and finalMat's shader choice (see allocPeel).
     // linearComposite === false forces the RGBA8 display-space path
@@ -4579,9 +6761,7 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
     // size (w, h). See the original createMtlxRenderView allocPeel
     // comment (still in git history) for the full opaqueRT/peelA/peelB/
     // accumRT/blend-factor derivation; unchanged here.
-    const allocPeel = (w, h) => {
-        freePeel();
-        const mkColorDepthTarget = (half) => {
+    const mkColorDepthTarget = (w, h, half) => {
             const rt = new THREE.WebGLRenderTarget(w, h, Object.assign({
                 minFilter: THREE.NearestFilter,
                 magFilter: THREE.NearestFilter,
@@ -4593,9 +6773,11 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             rt.depthTexture.magFilter = THREE.NearestFilter;
             return rt;
         };
-        const opaqueRT = mkColorDepthTarget(peelLinearOk);
-        const peelA = mkColorDepthTarget(peelLinearOk);
-        const peelB = mkColorDepthTarget(peelLinearOk);
+    const allocPeel = (w, h) => {
+        freePeel();
+        const opaqueRT = mkColorDepthTarget(w, h, peelLinearOk);
+        const peelA = mkColorDepthTarget(w, h, peelLinearOk);
+        const peelB = mkColorDepthTarget(w, h, peelLinearOk);
         const accumRT = new THREE.WebGLRenderTarget(w, h, Object.assign({
             minFilter: THREE.NearestFilter,
             magFilter: THREE.NearestFilter,
@@ -4638,10 +6820,11 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
         });
 
         // finalMat: composites accum over whatever is already on screen.
-        // When peelLinearOk, also folds in opaqueRT and applies the
-        // display transform exactly once (see ACES_SRGB_GLSL); otherwise
-        // accum is already display-encoded, plain passthrough blend.
-        const displayMode = getDT();
+        // When peelLinearOk, also folds in opaqueRT and applies the display
+        // transform exactly once (see DISPLAY_TRANSFORM_SWITCH_GLSL);
+        // otherwise accum is already display-encoded, plain passthrough
+        // blend. Transform and exposure are uniforms so live settings do not
+        // rebuild this quad program.
         const finalMat = new THREE.RawShaderMaterial(Object.assign({
             glslVersion: THREE.GLSL3,
             vertexShader:
@@ -4655,11 +6838,13 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
                   'out vec4 o;\n' +
                   'uniform sampler2D tAccum;\n' +
                   'uniform sampler2D tOpaque;\n' +
+                  'uniform int u_displayTransform;\n' +
+                  'uniform float u_displayExposure;\n' +
                   'void main(){\n' +
                   '    vec4 a = texture(tAccum, vUv);\n' +
                   '    vec4 op = texture(tOpaque, vUv);\n' +
                   '    vec3 lin = a.rgb + a.a * op.rgb;\n' +
-                  ACES_SRGB_GLSL('lin', 'encv', displayMode) +
+                  '    ' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encv', 'u_displayTransform', 'u_displayExposure').trimStart() +
                   '    float outA = (1.0 - a.a) + a.a * op.a;\n' +
                   '    o = vec4(encv, outA);\n' +
                   '}\n'
@@ -4669,7 +6854,9 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
                   'uniform sampler2D tAccum;\n' +
                   'void main(){ vec4 a = texture(tAccum, vUv); o = vec4(a.rgb, a.a); }\n',
             uniforms: peelLinearOk
-                ? { tAccum: { value: null }, tOpaque: { value: null } }
+                ? { tAccum: { value: null }, tOpaque: { value: null },
+                    u_displayTransform: { value: displayTransformId(getDT()) },
+                    u_displayExposure: { value: getExposure() } }
                 : { tAccum: { value: null } },
             depthTest: false,
             depthWrite: false,
@@ -4683,8 +6870,13 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             blendSrc: THREE.OneFactor,
             blendDst: THREE.SrcAlphaFactor,
             blendEquationAlpha: THREE.AddEquation,
-            blendSrcAlpha: THREE.OneMinusSrcAlphaFactor,
-            blendDstAlpha: THREE.SrcAlphaFactor,
+            // opaqueOutput keeps the destination alpha untouched. The default
+            // alpha blend drives it toward 0 wherever peeled geometry lands,
+            // which on an alpha:true canvas shows the page through the object
+            // and saves a screenshot with black holes. Embeds still want the
+            // transparent behaviour, so the Scene opts in and they do not.
+            blendSrcAlpha: opaqueOutput ? THREE.ZeroFactor : THREE.OneMinusSrcAlphaFactor,
+            blendDstAlpha: opaqueOutput ? THREE.OneFactor : THREE.SrcAlphaFactor,
         }));
 
         peel = { w, h, opaqueRT, peelA, peelB, accumRT, quadScene, quadCam, quadMesh, underMat, finalMat };
@@ -4723,6 +6915,22 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
         renderer.shadowMap.needsUpdate = true;
         renderer.autoClear = false;
         const hidden = [];
+        // u_peelLinear is an ACTIVE-pass flag, not a capability flag. Keep
+        // ordinary renders display encoded even on devices that support float
+        // targets, and restore every material's prior value on all exits.
+        const linearUniforms = new Map();
+        if (peelLinearOk) {
+            scene.traverse((object) => {
+                const materials = object && object.material
+                    ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+                materials.forEach((material) => {
+                    const uniform = material && material.uniforms && material.uniforms.u_peelLinear;
+                    if (!uniform || linearUniforms.has(uniform)) return;
+                    linearUniforms.set(uniform, uniform.value);
+                    uniform.value = 1;
+                });
+            });
+        }
 
         try {
             const savedVis = meshes.map((m) => m.visible);
@@ -4786,18 +6994,24 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             // captured directly into accumRT via the shader's own mode-2
             // premultiply epilogue, each mesh's blend state temporarily
             // switched to underMat's exact under-blend factors.
-            const saved = meshes.map((m) => {
+            // Keyed by MATERIAL, not by mesh: a USD stage binds one compiled
+            // material to many prims, so saving per mesh would capture the
+            // already-mutated state on the second mesh and leave the material
+            // stuck in tail-pass blending (depthTest off) forever after.
+            const saved = new Map();
+            for (const m of meshes) {
                 const mat = m.material;
+                if (saved.has(mat)) continue;
                 const mu = mat.uniforms;
                 mu.u_peelMode.value = 2;
                 mu.u_peelHasPrev.value = 1;
                 mu.u_peelPrevDepth.value = prev ? prev.depthTexture : getDummyTex();
-                const s = {
+                saved.set(mat, {
                     blending: mat.blending, blendEquation: mat.blendEquation,
                     blendEquationAlpha: mat.blendEquationAlpha, blendSrc: mat.blendSrc,
                     blendDst: mat.blendDst, blendSrcAlpha: mat.blendSrcAlpha,
                     blendDstAlpha: mat.blendDstAlpha, depthTest: mat.depthTest,
-                };
+                });
                 mat.blending = THREE.CustomBlending;
                 mat.blendEquation = THREE.AddEquation;
                 mat.blendEquationAlpha = THREE.AddEquation;
@@ -4808,13 +7022,12 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
                 // accumRT has no depth attachment (depthBuffer:false
                 // above), disabled explicitly anyway for defensiveness.
                 mat.depthTest = false;
-                return s;
-            });
+            }
             renderer.setRenderTarget(peel.accumRT);
             renderer.render(scene, camera);
-            meshes.forEach((m, i) => {
-                Object.assign(m.material, saved[i]);
-                m.material.uniforms.u_peelMode.value = 0;
+            saved.forEach((state, mat) => {
+                Object.assign(mat, state);
+                mat.uniforms.u_peelMode.value = 0;
             });
 
             hidden.forEach((o) => { o.visible = true; });
@@ -4824,7 +7037,11 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             renderer.setRenderTarget(null);
             peel.quadMesh.material = peel.finalMat;
             peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
-            if (peelLinearOk) peel.finalMat.uniforms.tOpaque.value = peel.opaqueRT.texture;
+            if (peelLinearOk) {
+                peel.finalMat.uniforms.tOpaque.value = peel.opaqueRT.texture;
+                peel.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
+                peel.finalMat.uniforms.u_displayExposure.value = getExposure();
+            }
             renderer.render(peel.quadScene, peel.quadCam);
         } finally {
             // restore GL state even if a pass above threw
@@ -4835,6 +7052,7 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             meshes.forEach((m) => {
                 if (m.material.uniforms && m.material.uniforms.u_peelMode) m.material.uniforms.u_peelMode.value = 0;
             });
+            linearUniforms.forEach((value, uniform) => { uniform.value = value; });
             if (hidden.length) { hidden.forEach((o) => { o.visible = true; }); hidden.length = 0; }
         }
     };
@@ -5004,6 +7222,7 @@ const createMtlxRenderView = async ({
         if (!env) return;
         try { if (env.radiance) env.radiance.dispose(); } catch (e) { /* already disposed/invalid */ }
         try { if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.radiancePrefiltered) env.radiancePrefiltered.dispose(); } catch (e) { /* ditto */ }
         try { if (env.background) env.background.dispose(); } catch (e) { /* ditto */ }
     };
     // No-OrbitControls fallback only (script blocked): mirrors the
@@ -5160,9 +7379,14 @@ const createMtlxRenderView = async ({
                 // its transform in); set here for the ordinary three materials
                 // in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
                 const __displayMode = getDisplayTransform();
+                // CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
+                // so these materials run the SAME curve and exposure as the
+                // MaterialX surface instead of only agreeing in 'aces'.
+                const __customTone = applyThreeToneMappingChunk(__displayMode);
                 if ('outputEncoding' in renderer) renderer.outputEncoding = __displayMode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-                renderer.toneMapping = __displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
-                renderer.toneMappingExposure = 1.0;
+                renderer.toneMapping = __customTone ? THREE.CustomToneMapping
+                    : (__displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
+                renderer.toneMappingExposure = displayExposureScale();
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] WebGLRenderer init: '
                         + (performance.now() - __rendererPerfStart).toFixed(1) + 'ms');
@@ -5459,7 +7683,7 @@ const createMtlxRenderView = async ({
                     const radianceSrc = env ? env.radiance : makeEnvTexture(256, 128, false);
                     if (needsLighting) {
                         if (env) {
-                            envRadiance = env.radiance; envIrradiance = env.irradiance; envMips = env.mips;
+                            envRadiance = envRadianceForShading(env); envIrradiance = env.irradiance; envMips = env.mips;
                             envBgTexture = env.background;
                             envHasFile = true;
                             envPrefilteredIrr = !!env.prefilteredIrr;
@@ -5813,10 +8037,39 @@ const createMtlxRenderView = async ({
                         u_peelHasPrev: { value: 0 },
                         u_peelPrevDepth: { value: getDummyTex() },
                         u_opaqueDepth: { value: getDummyTexWhite() },
-                        // Lets encodeDisplay's epilogue defer to finalMat
-                        // when linear peel compositing is available (see
-                        // the hoisted peelLinearOk const, above allocPeel).
-                        u_peelLinear: { value: peelLinearOk ? 1 : 0 },
+                        // hwShadowMap is on for every generated shader, so the
+                        // Viewer must bind white moments (fully lit) or its
+                        // materials would sample nothing and render black.
+                        u_shadowMap: { value: getDummyTexWhite() },
+                        u_shadowMatrix: { value: shadowOffMatrix() },
+                        // encodeDisplay defers to finalMat only while the
+                        // peel pipeline draws a linear intermediate target.
+                        // Ordinary opaque frames must remain display encoded.
+                        u_peelLinear: { value: 0 },
+                        // Injected by encodeDisplay, so MaterialX never
+                        // introspects it and the defaults pass below cannot
+                        // supply it.
+                        u_displayExposure: { value: displayExposureScale() },
+                        u_displayTransform: { value: displayTransformId(getDisplayTransform()) },
+                        // No stage caster in the Viewer, so no slot is shadowed;
+                        // the white dummy moments map above says the same thing.
+                        // No stage caster in the Viewer: an all -1 slot map
+                        // makes the atlas lookup an exact no-op.
+                        u_shadowAtlas: { value: getDummyTexWhite() },
+                        u_shadowMatrices: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Matrix4()) },
+                        u_shadowTiles: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
+                        u_shadowDepthPlanes: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
+                        u_shadowDepthRanges: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector2(0, 1)) },
+                        u_shadowSourceRadii: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4()) },
+                        u_shadowSlotCaster: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+                        // Same sampler-unit hazard as the Scene: see
+                        // createMtlxSceneUniforms. No stage volume here, so
+                        // the white 1x1x1 dummy at strength 0 is the value.
+                        u_skyVisMap: { value: getDummyTex3DWhite() },
+                        u_skyVisMin: { value: new THREE.Vector3() },
+                        u_skyVisSize: { value: new THREE.Vector3(1, 1, 1) },
+                        u_skyVisCell: { value: 0 },
+                        u_skyVisStrength: { value: 0 },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
@@ -5889,9 +8142,12 @@ const createMtlxRenderView = async ({
                         // length (rigCount+1, see getMxEnv's
                         // hwMaxActiveLightSources) so later updates can
                         // mutate values in place without a rebuild.
-                        const nLights = rigCount + (envKeyLight ? 1 : 0);
+                        const nLights = activeLightCount(lightData, envKeyLight, null);
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
-                        if (has('u_lightData')) newUniforms.u_lightData = { value: currentLights(lightData, envKeyLight, envRotationRad) };
+                        if (has('u_lightData')) {
+                            const entries = currentLights(lightData, envKeyLight, envRotationRad);
+                            newUniforms.u_lightData = { value: entries };
+                        }
                         if (DEBUG_SHADERS) {
                             console.log('env bound → radiance:', radSampler && radSampler.name,
                                         '| irradiance:', irrSampler && irrSampler.name,
@@ -6211,7 +8467,7 @@ const createMtlxRenderView = async ({
                 envRotationRad = rad;
                 // The extracted key light tracks the (clamped) sun's
                 // position as the env rotates, rig lights don't.
-                updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, rad);
+                updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, rad, envExposure);
                 // Studio spotlight follows the SAME rotated direction, so
                 // the shadow agrees with the highlight; shadow.autoUpdate
                 // defaults to true, so the shadow map redraws on its own.
@@ -6261,18 +8517,40 @@ const createMtlxRenderView = async ({
                 const peelOn = viewIsTransparent && FORCE_TRANSPARENCY;
                 if (!peelOn && peelPipeline) peelPipeline.dispose();
             },
+            // Camera exposure is a uniform (see ACES_SRGB_GLSL), so this costs
+            // one write instead of the full regeneration a transform change
+            // needs. Broadcast by setDisplayExposure through LIVE_VIEWS, which
+            // is what keeps the docs node previews in sync too.
+            refreshDisplaySettings: () => {
+                const scale = displayExposureScale();
+                const id = displayTransformId(getDisplayTransform());
+                const push = (u) => {
+                    if (!u) return;
+                    if (u.u_displayExposure) u.u_displayExposure.value = scale;
+                    if (u.u_displayTransform) u.u_displayTransform.value = id;
+                };
+                push(uniforms);
+                sceneOwnedMaterials.forEach((m) => push(m.uniforms));
+                if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
+                applyThreeToneMappingChunk(getDisplayTransform());
+                scene.traverse((obj) => {
+                    if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
+                });
+                renderFrame();
+            },
             // Live-swaps the environment without a shader rebuild, used
             // by the Environment dialog's Import/Reset. Also regenerates
             // scene-mode's PMREM. No-op on views with no lighting/env.
             setEnvironment: (env) => {
                 if (!env) return;
-                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = env.radiance;
+                ensurePrefilteredEnv(renderer, env);
+                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = envRadianceForShading(env);
                 if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = env.irradiance;
                 if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
                 // Persist onto the SHELL env state too, not just the
                 // current material's uniforms, otherwise a future swap
                 // silently reverts to the stale env.
-                envRadiance = env.radiance;
+                envRadiance = envRadianceForShading(env);
                 envIrradiance = env.irradiance;
                 envMips = env.mips;
                 envBgTexture = env.background;
@@ -6280,7 +8558,7 @@ const createMtlxRenderView = async ({
                 // bound uniform entry in place, honoring current rotation.
                 envKeyLight = env.keyLight || null;
                 envSoftKeyDir = env.softKeyDir || null;
-                updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, envRotationRad);
+                updateKeyLightUniformEntry(uniforms, rigCount, envKeyLight, envRotationRad, envExposure);
                 // Same refresh for the shadow: without this the studio light
                 // would keep aiming along the PREVIOUS env's key light until
                 // the next rotation change.
@@ -6720,15 +8998,17 @@ Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
     MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
+    getHeightToNormalTexel, setHeightToNormalTexel,
     parseUniforms, parseVertexInputs, stripVersion, encodeDisplay,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
-    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, resolveIncludes, readMtlxText,
+    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, preferKtx2Sibling, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
-    loadExrTexture, loadHdrTexture, loadTifTexture,
+    loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
+    loadBoundedBitmapTexture,
     readImageDimensions, boundDecodedTexture,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,
@@ -6738,12 +9018,18 @@ Object.assign(window, {
     getCustomPreviewGeom, clearCustomPreviewGeom,
     getGlobalGeom, setGlobalGeom,
     getDisplayTransform, setDisplayTransform,
+    getDisplayExposure, setDisplayExposure, displayExposureScale, applyThreeToneMappingChunk,
+    getDisplayTransformValues, displayTransformId,
     COLOR_VIEWABLE, resolveNodeKind,
     makeEnvTexture, getEnvironment, COLORSPACES,
-    loadEnvironmentFromFile, setEnvOverride, getEnvOverride,
+    loadEnvironmentFromFile, loadEnvironmentFromBuffer, makeFlatEnvironment,
+    setEnvOverride, getEnvOverride,
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
-    createPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
+    ensurePrefilteredEnv, getSpecularEnvMethod,
+    getDummyTexWhite, getDummyTex3DWhite,
+    SHADOW_CASTER_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
+    createPeelPipeline, createRgbtPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
