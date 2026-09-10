@@ -69,6 +69,31 @@ const storedSceneSkyVisStrength = () => {
     } catch (e) { return 1; }
 };
 
+// Bloom. Small bright emitters read as flat specks without it: measured on the
+// Playground, a string bulb emits (3.24, 1.12, 0) linear and renders to exactly
+// the right colour, but it covers one or two pixels, so nothing about it says
+// "light source". Bloom is what makes an emitter look like it emits.
+const SCENE_BLOOM_KEY = 'mtlx_scene_bloom';
+const SCENE_BLOOM_STRENGTH_KEY = 'mtlx_scene_bloom_strength';
+const storedSceneBloom = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_BLOOM_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneBloomStrength = () => {
+    if (window.top !== window) return SCENE_BLOOM_DEFAULT_STRENGTH;
+    try {
+        const raw = localStorage.getItem(SCENE_BLOOM_STRENGTH_KEY);
+        if (raw == null || raw === '') return SCENE_BLOOM_DEFAULT_STRENGTH;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : SCENE_BLOOM_DEFAULT_STRENGTH;
+    } catch (e) { return SCENE_BLOOM_DEFAULT_STRENGTH; }
+};
+// Threshold sits just above display white, so only genuinely over-range
+// values bloom and ordinary lit surfaces never do.
+const SCENE_BLOOM_THRESHOLD = 1;
+const SCENE_BLOOM_KNEE = 0.5;
+const SCENE_BLOOM_DEFAULT_STRENGTH = 0.35;
+
 // Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
 const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
@@ -510,7 +535,7 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
 // mx_shadow_occlusion() against a variance (moments) map, so we render our own
 // vec2(z, z*z) rather than reuse three's VSM target, whose packing is not
 // guaranteed to match and would misread rather than error.
-const SHADOW_MAP_SIZE = 2048;
+const SHADOW_MAP_SIZE = 4096;
 // Variance shadow maps are meant to be blurred: filtering the moments is what
 // turns the hard per-texel test into a soft edge. Without it an orthographic
 // frustum covering a whole room stair-steps every silhouette.
@@ -706,6 +731,29 @@ const createThicknessMaterial = () => new THREE.RawShaderMaterial({
 // tiles inside a single map. Must match the engine's SHADOW_CASTER_SLOTS.
 const SHADOW_CASTERS = 4;
 const SHADOW_ATLAS_COLS = 2;
+// One caster's tile, 2048 square out of a 4096 atlas.
+//
+// 2048 was tried first and is not enough. A local light inside a room needs a
+// frustum wide enough to enclose the whole stage (155 to 174 degrees), because
+// geometry outside it is unshadowed rather than merely soft. Measured on the
+// Playground, the stage projects to roughly 8000 texels of span from the desk
+// lamp; a 1024 tile drops thin geometry such as the aeroplane wings entirely.
+//
+// The cost is real and deliberate: 4096 square RGBA float is 256 MB of render
+// target against 64 MB at 2048. The alternative is what the old code did,
+// which was to fit the map to whatever the camera was looking at, and that is
+// exactly the bug this round removes.
+const shadowTileSize = () => SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+// Widest frustum a local caster may use. A source inside the stage would need
+// a hemisphere or more to enclose every receiver, and one perspective map
+// cannot do that at any resolution: measured on a room stage, enclosing the
+// full bounds drove three of four casters to 155-174 degrees, where a tile
+// has so few texels per steradian that small blockers stop registering and
+// shadow edges bleed into neighbouring geometry.
+// Past this angle the cone is aimed at the stage centre and geometry outside
+// it is simply not in that light's map. That is a real limit of one frustum
+// per light; covering it properly needs a cube map per local light.
+const SHADOW_MAX_LOCAL_FOV = 175;
 const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: [
@@ -1124,6 +1172,8 @@ const createMtlxSceneView = async ({
     let skyVisCell = 0;
     let skyVisEnabled = storedSceneSkyVis();
     let skyVisStrength = storedSceneSkyVisStrength();
+    let bloomEnabled = storedSceneBloom();
+    let bloomStrength = storedSceneBloomStrength();
     let skyVisInfo = null;
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let shadowsEnabled = storedSceneShadows();
@@ -1985,51 +2035,38 @@ const createMtlxSceneView = async ({
         // change; a settled frame does not redraw the atlas.
         // Fits lateral extents to the active view, preserving useful atlas
         // texel coverage for small props while retaining full caster depth.
-        const fitShadowToView = (shadowCamera, box, radius) => {
+        // Fits the orthographic caster to the whole stage in light space.
+        //
+        // This used to fit to the orbit target, sized to the visible disc at
+        // that distance. That made SHADING A FUNCTION OF THE CAMERA: geometry
+        // outside the fitted tile reads fully lit, so zooming or orbiting
+        // changed which surfaces were shadowed and the image visibly relit
+        // itself as the user moved. A light does not know where the camera
+        // is, so nothing here may read one.
+        //
+        // Fitting to the stage costs texel density, which is why the view fit
+        // existed. Two things pay that back: the atlas tile is now twice the
+        // linear resolution where the GPU allows it, and the depth metric is
+        // linear, so a full-stage depth range no longer collapses the way the
+        // old normalised moments did.
+        const fitShadowToStage = (shadowCamera, box, radius) => {
             const toLight = new THREE.Matrix4().copy(shadowCamera.matrixWorld).invert();
-            // The stage in light space: sets the depth range, and clamps the
-            // fit so it can never cover empty space.
+            // The stage in light space: sets both the lateral extents and the
+            // depth range, and is entirely camera independent.
             const stageBox = new THREE.Box3().copy(box).applyMatrix4(toLight);
-            // Fit around what the camera is looking at, sized to what it can
-            // see at that distance.
-            //
-            // Two things that do NOT work, both measured: fitting to the
-            // camera frustum's corners (a close-up still has a distant far
-            // plane, so its corners span the whole room), and fitting to the
-            // bounds of the meshes in frustum (the floor is one mesh, so any
-            // view containing a sliver of it pulls the fit out to the full
-            // stage). Fitting to the orbit target sidesteps both, and it is
-            // what the viewer actually cares about seeing shadows on.
-            const rawTarget = (controls && controls.target)
-                ? controls.target.clone() : box.getCenter(new THREE.Vector3());
-            // Authored focus targets can lie outside the stage (they are
-            // useful for depth of field). Shadow frusta need an actual
-            // receiver anchor, so clamp only that aim point to stage bounds.
-            const target = box.clampPoint(rawTarget, new THREE.Vector3());
-            const distance = Math.max(1e-6, camera.position.distanceTo(target));
-            const halfHeight = distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-            const halfWidth = halfHeight * Math.max(1e-6, camera.aspect);
-            // Radius of the visible disc at the target's depth, padded by 40
-            // percent so the shader's edge fade (the last 4 percent of the
-            // map) lands outside the visible region rather than washing
-            // shadows out along the screen border. Never larger than the
-            // stage, and never so small that a stray orbit target degenerates.
-            const fit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.4));
-            const centreL = target.clone().applyMatrix4(toLight);
-            let left = Math.max(centreL.x - fit, stageBox.min.x);
-            let right = Math.min(centreL.x + fit, stageBox.max.x);
-            let bottom = Math.max(centreL.y - fit, stageBox.min.y);
-            let top = Math.min(centreL.y + fit, stageBox.max.y);
-            if (!(right > left) || !(top > bottom)) { // target off the stage
-                left = stageBox.min.x; right = stageBox.max.x;
-                bottom = stageBox.min.y; top = stageBox.max.y;
-            }
-            // Snap to whole texels, or the frustum slides continuously as the
-            // camera orbits and every shadow edge crawls.
-            // Each caster occupies one atlas tile, so snapping against the
-            // full atlas dimension would use half-sized texels and still let
-            // the projected edge crawl inside a tile.
-            const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+            let left = stageBox.min.x;
+            let right = stageBox.max.x;
+            let bottom = stageBox.min.y;
+            let top = stageBox.max.y;
+            // A degenerate stage still needs a usable frustum.
+            const span = Math.max(radius * 1e-3, Number.EPSILON * 1024);
+            if (!(right > left)) { left -= span; right += span; }
+            if (!(top > bottom)) { bottom -= span; top += span; }
+            // Snap to whole texels, or the frustum slides continuously and
+            // every shadow edge crawls. Each caster occupies one atlas tile,
+            // so snapping against the full atlas dimension would use
+            // half-sized texels and still let the edge crawl inside a tile.
+            const tileSize = shadowTileSize();
             const texelX = (right - left) / tileSize;
             const texelY = (top - bottom) / tileSize;
             if (texelX > 0 && texelY > 0) {
@@ -2044,9 +2081,8 @@ const createMtlxSceneView = async ({
             shadowCamera.top = top;
             // Directional shadows retain the complete light-space depth of
             // the stage. A caster may sit anywhere along a parallel ray, so
-            // clipping this axis to the active target silently removes valid
-            // blockers. Linear depth moments preserve useful separation over
-            // this full range.
+            // clipping this axis silently removes valid blockers. Linear
+            // depth moments preserve useful separation over this full range.
             const zMin = stageBox.min.z;
             const zMax = stageBox.max.z;
             const depthSpan = Math.max(0, zMax - zMin);
@@ -2083,66 +2119,78 @@ const createMtlxSceneView = async ({
         // front of it. The receiver fit below keeps the perspective depth
         // interval fully encloses the stage depth while the lateral fit keeps
         // the map useful for the visible image.
+        // One caster's camera. Every input is world space: the light, the
+        // stage bounds, and nothing else. Reading the view camera here is what
+        // made shading change as the user orbited, so it is deliberately not
+        // in scope for this function.
+        //
+        // The old "aim at the orbit target" was a fix for a real bug: aiming
+        // a local light at the stage bounding-box centre pointed a desk lamp
+        // at the CEILING, because a room's box centre is up near it. That bug
+        // only existed because the frustum was tight, fitted to a small
+        // receiver patch. A frustum that encloses the whole stage cannot miss
+        // the receivers, so the aim direction stops mattering and the stage
+        // centre becomes a correct anchor again.
+        const stageEnclosingFov = (shadowCamera, box) => {
+            // Half-angle that just contains every stage corner, measured in
+            // the caster's own oriented space.
+            let tan = 0;
+            let maxDepth = 0;
+            for (const x of [box.min.x, box.max.x]) {
+                for (const y of [box.min.y, box.max.y]) {
+                    for (const z of [box.min.z, box.max.z]) {
+                        const p = new THREE.Vector3(x, y, z).applyMatrix4(shadowCamera.matrixWorldInverse);
+                        const depth = -p.z;
+                        maxDepth = Math.max(maxDepth, depth);
+                        if (depth > 1e-9) tan = Math.max(tan, Math.abs(p.x) / depth, Math.abs(p.y) / depth);
+                    }
+                }
+            }
+            return { tan, maxDepth };
+        };
         const buildCasterCamera = (rec, box, center, radius) => {
             const source = rec.source;
             let shadowCamera;
             const position = source.position || null;
+            // Anchor for every caster: the stage centre. Camera independent.
+            const aim = box.clampPoint(center.clone(), new THREE.Vector3());
             if (!rec.directional && position) {
-                const rawAim = (controls && controls.target) ? controls.target.clone() : center.clone();
-                const aim = box.clampPoint(rawAim, new THREE.Vector3());
                 const distance = position.distanceTo(aim);
-                // Fit the receiver patch to the active view. Keep the full
-                // patch even when it surrounds the emitter: clipping it at a
-                // source distance would drop valid receivers and blockers.
-                // The perspective FOV is allowed to widen for near sources;
-                // the linear depth metric used by the shadow lookup keeps a
-                // broad local-light interval numerically usable.
-                const viewDistance = Math.max(1e-6, camera.position.distanceTo(aim));
-                const halfHeight = viewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-                const halfWidth = halfHeight * Math.max(1e-6, camera.aspect);
-                const viewFit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.4));
-                const receiverRadius = viewFit;
                 const safeDistance = Math.max(distance, radius * 0.001);
-                const lookTarget = aim;
+                const lookTarget = aim.clone();
                 if (distance < 1e-6) lookTarget.add(new THREE.Vector3(0, 0, -safeDistance));
-                const halfAngle = Math.atan(receiverRadius / safeDistance);
-                const fov = Math.min(175, Math.max(20, 2 * halfAngle * 180 / Math.PI * 1.1));
                 // Include every front-facing stage caster. A receiver may be
                 // near the source, so near is a small scale-relative epsilon;
                 // using the receiver interval here clipped legitimate blockers
-                // before they reached the receiver. Far is tightened to the
-                // stage bounds after the camera is oriented below.
+                // before they reached the receiver.
                 const depthEpsilon = Math.max(radius * 1e-5, Number.EPSILON * 1024);
                 const near = depthEpsilon;
                 const farFallback = near + depthEpsilon;
-                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, farFallback);
+                shadowCamera = new THREE.PerspectiveCamera(90, 1, near, farFallback);
                 shadowCamera.position.copy(position);
                 shadowCamera.lookAt(lookTarget);
                 shadowCamera.updateMatrixWorld(true);
-                const stageBox = new THREE.Box3().copy(box);
-                const corners = [];
-                for (const x of [stageBox.min.x, stageBox.max.x]) {
-                    for (const y of [stageBox.min.y, stageBox.max.y]) {
-                        for (const z of [stageBox.min.z, stageBox.max.z]) {
-                            corners.push(new THREE.Vector3(x, y, z).applyMatrix4(shadowCamera.matrixWorldInverse));
-                        }
-                    }
-                }
-                const maxDepth = corners.reduce((m, p) => Math.max(m, -p.z), 0);
+                // Enclose every stage corner. Narrower frusta were tried and
+                // measured worse: a bounding-sphere angle, and fixed caps at
+                // 120 and 70 degrees. All of them under-cover a room lit from
+                // inside it. Measured on the Playground at a 70 degree cap the
+                // stage needed 8012, 11242 and 39196 texels of span against a
+                // tile that holds 2048, so most of the room simply fell
+                // outside its own shadow map and cast nothing.
+                //
+                // Coverage has to win: geometry outside the frustum is not
+                // merely soft, it is unshadowed. The resulting angle is wide
+                // (155 to 174 degrees on a room), which is why the tile is
+                // sized for it rather than the other way round.
+                const { tan, maxDepth } = stageEnclosingFov(shadowCamera, box);
+                const fov = Math.min(SHADOW_MAX_LOCAL_FOV, Math.max(20, 2 * Math.atan(Math.max(tan, 1e-6)) * 180 / Math.PI * 1.05));
+                shadowCamera.fov = fov;
                 shadowCamera.far = Math.max(farFallback, maxDepth + depthEpsilon);
                 shadowCamera.updateProjectionMatrix();
+                shadowCamera.updateMatrixWorld(true);
                 shadowCamera.userData.shadowAim = aim.toArray();
                 return shadowCamera;
             }
-            // Aim at what the camera is looking at, NOT at the stage centre.
-            // A room's bounding box centre is up near the ceiling, so a desk
-            // lamp sitting below it produced a direction pointing UP and cast
-            // its shadows at the ceiling: measured, the lamp's own tile stored
-            // geometry 68 units nearer the light than the desk it was supposed
-            // to be shadowing. The shadow map covers the viewed region, so the
-            // caster has to be aimed at that region too.
-            const rawAim = (controls && controls.target) ? controls.target.clone() : center.clone();
-            const aim = box.clampPoint(rawAim, new THREE.Vector3());
             const dir = rec.directional && source.direction ? source.direction.clone()
                 : position ? aim.clone().sub(position)
                 : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
@@ -2152,7 +2200,7 @@ const createMtlxSceneView = async ({
             shadowCamera.position.copy(aim).addScaledVector(dir, -radius * 2);
             shadowCamera.lookAt(aim);
             shadowCamera.updateMatrixWorld(true);
-            fitShadowToView(shadowCamera, box, radius);
+            fitShadowToStage(shadowCamera, box, radius);
             shadowCamera.updateMatrixWorld(true);
             shadowCamera.updateProjectionMatrix();
             shadowCamera.userData.shadowAim = aim.toArray();
@@ -2180,13 +2228,15 @@ const createMtlxSceneView = async ({
             const center = box.getCenter(new THREE.Vector3());
             const radius = Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
             // Caster selection is a bounded budget, so estimate contribution
-            // at the active receiver target rather than at the stage center.
-            // The source cosine prevents an upward-facing area emitter from
-            // displacing a downward-facing light that actually reaches the
-            // visible tabletop. This changes ranking only; all selected maps
-            // still use the complete stage bounds.
-            const rawReceiverTarget = controls && controls.target ? controls.target.clone() : center.clone();
-            const receiverTarget = box.clampPoint(rawReceiverTarget, new THREE.Vector3());
+            // at a receiver anchor. That anchor is the STAGE CENTRE, never the
+            // orbit target: ranking at the orbit target let a pan reorder the
+            // sort, and with a small budget a light that was casting could be
+            // dropped outright, so its slot went to -1 and whole objects
+            // brightened discontinuously as the user moved. The source cosine
+            // prevents an upward-facing area emitter from displacing a
+            // downward-facing light that actually reaches the receivers. This
+            // changes ranking only; all selected maps use the full stage.
+            const receiverTarget = box.clampPoint(center.clone(), new THREE.Vector3());
             const stageLights = activeStageLights() || [];
 
             // Fold a split area emitter back together before ranking, or a lamp
@@ -2271,9 +2321,13 @@ const createMtlxSceneView = async ({
             // Each caster is a full geometry pass, redrawn whenever the camera
             // moves, so a heavy stage gets fewer of them. Ranked by irradiance
             // first, so the ones dropped are always the least significant.
-            let meshCount = 0;
-            sceneRoot.traverse((o) => { if (o.isMesh) meshCount++; });
-            const casterBudget = meshCount > 1200 ? 1 : meshCount > 500 ? 2 : SHADOW_CASTERS;
+            // Every caster, always. The mesh-count throttle that used to sit
+            // here existed because the atlas was rebuilt on every camera move,
+            // so a heavy stage paid for four depth passes per frame. The
+            // shadow inputs are world space now, so the atlas is rebuilt only
+            // when the lights, the geometry or the environment change, and the
+            // cost is paid once instead of continuously.
+            const casterBudget = SHADOW_CASTERS;
             const ranked = [...emitters.values()]
                 .sort((a, b) => b.score - a.score)
                 .slice(0, casterBudget);
@@ -2933,6 +2987,9 @@ const createMtlxSceneView = async ({
             getDisplayExposure: () => (window.displayExposureScale ? window.displayExposureScale() : 1),
             linearComposite: true, sceneRgbt: true,
             opaqueOutput: true,
+            getBloom: () => (bloomEnabled
+                ? { strength: bloomStrength, threshold: SCENE_BLOOM_THRESHOLD, knee: SCENE_BLOOM_KNEE }
+                : null),
         }) : null;
         if (THREE.OrbitControls) {
             controls = new THREE.OrbitControls(camera, canvas);
@@ -3467,7 +3524,7 @@ const createMtlxSceneView = async ({
             // rebuild once at the transition even if the camera is stationary.
             if (shadowsEnabled && shadowForceState !== forceOn) {
                 shadowForceState = forceOn;
-                updateShadowMap();
+                invalidateShadows();
                 applyShadowMatrix();
             }
             const list = forceOn ? collectTransparentMeshes() : [];
@@ -3515,29 +3572,25 @@ const createMtlxSceneView = async ({
                 renderer.render(scene, camera);
             }
         };
-        // The shadow frustum is fitted to the camera, so it goes stale the
-        // moment the camera moves. Compared against the last fit rather than
-        // redrawn every frame: an orbit that has come to rest costs nothing.
-        let shadowCameraKey = '';
+        // The atlas depends on the lights, the geometry and the environment,
+        // and on NOTHING about the camera. It used to be keyed on the camera
+        // pose because the frustum was fitted to the view; that is what made
+        // the image relight itself as the user orbited or zoomed. With the fit
+        // in world space the atlas is rebuilt only when something it actually
+        // depends on changes, which also takes four depth passes off every
+        // frame the camera is moving.
         let shadowForceState = null;
-        const shadowViewChanged = () => {
-            const e = camera.matrixWorld.elements;
-            const key = camera.position.toArray().concat([e[8], e[9], e[10], camera.fov, camera.aspect])
-                .map((n) => (Math.round(n * 1000) / 1000)).join(',');
-            if (key === shadowCameraKey) return false;
-            shadowCameraKey = key;
-            return true;
-        };
-        // Keep every render entry point honest. Previously only the RAF loop
-        // refreshed camera-dependent shadows, so renderNow()/snapshot() after
-        // an authored-camera or capture-size change could present a stale
-        // atlas. The render loop and synchronous capture paths share this
-        // gate through renderFrame().
+        let shadowNeedsRebuild = true;
+        const invalidateShadows = () => { shadowNeedsRebuild = true; };
+        // Keep every render entry point honest: the render loop and the
+        // synchronous capture paths share this gate through renderFrame(), so
+        // renderNow()/snapshot() can never present an atlas that was never
+        // built.
         const ensureShadowCurrent = () => {
-            if (shadowsEnabled && shadowViewChanged()) {
-                updateShadowMap();
-                applyShadowMatrix();
-            }
+            if (!shadowsEnabled || !shadowNeedsRebuild) return;
+            shadowNeedsRebuild = false;
+            updateShadowMap();
+            applyShadowMatrix();
         };
         sceneTransparencyRefresh = () => {
             if (stopped) return;
@@ -3570,14 +3623,14 @@ const createMtlxSceneView = async ({
             env = next;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(next);
             applyMaterialEnvironment();
-            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            if (shadowsEnabled) invalidateShadows();
             return true;
         };
         const setEnvRotation = (radians) => {
             envRotationRad = Number(radians) || 0;
             if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad);
             applyMaterialEnvironment();
-            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            if (shadowsEnabled) invalidateShadows();
             return envRotationRad;
         };
         // Stage lights are live: both controls only re-push uniforms, no
@@ -3585,7 +3638,7 @@ const createMtlxSceneView = async ({
         const setShadowsEnabled = (on) => {
             shadowsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
-            updateShadowMap();
+            invalidateShadows();
             applyShadowMatrix();
             applyMaterialEnvironment();
             return shadowsEnabled;
@@ -3634,6 +3687,26 @@ const createMtlxSceneView = async ({
             ready: !!skyVisTexture,
             info: skyVisInfo ? Object.assign({}, skyVisInfo) : null,
         });
+        // Bloom needs no material or shadow rebuild: it is a composite-stage
+        // pass, so a toggle is one redraw.
+        const setBloomEnabled = (on) => {
+            bloomEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_BLOOM_KEY, bloomEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            renderFrame();
+            return bloomEnabled;
+        };
+        const setBloomStrength = (value) => {
+            bloomStrength = Math.max(0, Math.min(2, Number(value) || 0));
+            try { if (window.top === window) localStorage.setItem(SCENE_BLOOM_STRENGTH_KEY, String(bloomStrength)); } catch (e) { /* privacy mode */ }
+            renderFrame();
+            return bloomStrength;
+        };
+        const getBloomState = () => ({
+            enabled: bloomEnabled,
+            strength: bloomStrength,
+            // Bloom lives in the RGB-T composite, so it needs that path active.
+            available: !!peelPipeline && sceneTransparencyEnabled(),
+        });
         const setAmbientOcclusionEnabled = (on) => {
             aoEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -3653,13 +3726,13 @@ const createMtlxSceneView = async ({
             // The active stage-light set also determines caster ranking and
             // slot ownership. Rebuild immediately so toggling the rig cannot
             // leave an atlas tile shadowing a light that is no longer active.
-            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            if (shadowsEnabled) invalidateShadows();
             applyMaterialEnvironment();
             return stageLightsEnabled;
         };
         const setStageLightsEv = (value) => {
             stageLightsEv = Math.max(-8, Math.min(8, Number(value) || 0));
-            if (shadowsEnabled) updateShadowMap();
+            invalidateShadows();
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_EV_KEY, String(stageLightsEv)); } catch (e) { /* privacy mode */ }
             applyMaterialEnvironment();
             return stageLightsEv;
@@ -3673,7 +3746,7 @@ const createMtlxSceneView = async ({
             envExposure = Math.max(0, Number(value) || 0);
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
             applyMaterialEnvironment();
-            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            if (shadowsEnabled) invalidateShadows();
             return envExposure;
         };
         // Changes the ordinary-texture resolution cap, persists it (top
@@ -3744,6 +3817,7 @@ const createMtlxSceneView = async ({
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
             getSceneDisplayTransform, setSceneDisplayTransform,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
+            setBloomEnabled, setBloomStrength, getBloomState,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
             // resolution cap (512/1024/2048, persisted under
