@@ -21,6 +21,10 @@ const MTLX_DEFAULT_VERSION = '1.39.5';
 const LIGHT_TYPE_DIRECTIONAL = 1;
 const LIGHT_TYPE_POINT = 2;
 const LIGHT_TYPE_SPOT = 3;
+// Per-light source shape, kept separate from MaterialX's light type because
+// an area emitter is represented by several point/spot samples. The shader
+// uses this to apply the source-side cosine to only those samples.
+const LIGHT_SOURCE_KIND_AREA = 1;
 // Slots reserved for lights imported from a USD stage. This lands in the
 // generated GLSL as part of MAX_LIGHT_SOURCES, so it is decided once before
 // the first shader is generated and can never grow at runtime. Unused slots
@@ -941,6 +945,17 @@ const patchUnlitLightingRefs = src => {
   return src;
 };
 
+// The shared MaterialX light library keeps a +1 scene-unit offset in point
+// and spot attenuation for the ordinary Material Viewer. Scene imports first
+// convert authored coordinates to metres, so that offset becomes an
+// arbitrary one-metre term and breaks inverse-square scale covariance. Scene
+// compilation opts into the physical form while the ordinary preview path
+// remains byte-for-byte compatible with the library output.
+const patchScenePhysicalLightFalloff = (src, sceneRgbt = false) => {
+  if (!sceneRgbt) return src;
+  return src.replace(/pow\s*\(\s*distance\s*\+\s*1\.0\s*,\s*light\.decay_rate\s*\+\s*M_FLOAT_EPS\s*\)/g, 'pow(max(distance, M_FLOAT_EPS), light.decay_rate)');
+};
+
 // Shared display-transform GLSL body (`inVar`/`outVar`: vec3 in/out).
 // `mode` (see getDisplayTransform()) picks the curve: 'aces' (three r128's Hill
 // fit), 'neutral' (Khronos PBR Neutral), 'srgb' (OETF alone, MaterialXView
@@ -1031,7 +1046,8 @@ const applyThreeToneMappingChunk = mode => {
 // Injects the current display transform (getDisplayTransform(), see
 // ACES_SRGB_GLSL) before main()'s closing brace: RawShaderMaterial bypasses
 // renderer.toneMapping, so this is what keeps it matching the rest of the
-// scene. Gated at runtime (see the `if` below): linear peel/tail passes defer to finalMat's single composite-time pass instead, so it isn't applied twice.
+// scene. Linear peel and opaque passes defer to finalMat's single
+// composite-time pass instead, so the transform is never applied twice.
 const encodeDisplay = src => {
   // Both anchors are load-bearing: a silent skip here used to ship
   // raw-linear output straight to the display with no error anywhere.
@@ -1050,7 +1066,7 @@ const encodeDisplay = src => {
   }
   const idx = out.lastIndexOf('}');
   if (idx === -1) throw new Error('encodeDisplay: could not locate a closing "}" (expected main()\'s closing brace) in generated fragment shader, MaterialX output format may have changed');
-  const inject = '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' + '    if (u_peelLinear == 0 || u_peelMode == 0) {\n' + DISPLAY_TRANSFORM_SWITCH_GLSL(v + '.rgb', '_enc', 'u_displayTransform', 'u_displayExposure') + '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' + '    }\n';
+  const inject = '\n    // Injected by previewer: display transform (see encodeDisplay()\'s header comment), then sRGB.\n' + '    if (u_peelLinear == 0) {\n' + DISPLAY_TRANSFORM_SWITCH_GLSL(v + '.rgb', '_enc', 'u_displayTransform', 'u_displayExposure') + '        ' + v + ' = vec4(_enc, ' + v + '.a);\n' + '    }\n';
   return out.slice(0, idx) + inject + out.slice(idx);
 };
 
@@ -1132,22 +1148,47 @@ const patchShadowLightScope = fs => {
   // MaterialX's own single-map call is dropped: it computes the shadow once,
   // before the loop, which is what limited it to light slot 0.
   let out = fs.replace(call, 'occlusion = 1.0;');
-  out = out.replace(site, site + '\n            {' + '\n                int mx_caster = u_shadowSlotCaster[activeLightIndex];' + '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld);' + '\n            }');
+  // A material's light loop evaluates the same world-space point once per
+  // analytic sample. Area emitters split across several slots therefore
+  // used to execute the identical 19-tap search/filter for every sample.
+  // Keep visibility local to this fragment evaluation and fill lazily by
+  // caster index; the sentinel is reset for every invocation of main().
+  const lightLoop = '        // Light loop\n';
+  const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_CASTER_SLOTS + '];\n' + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_CASTER_SLOTS + '; ++mx_shadowIndex) {\n' + '            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n' + '        }\n\n';
+  if (out.indexOf(lightLoop) !== -1 && out.indexOf('mx_shadowVisibility[') === -1) {
+    out = out.replace(lightLoop, cacheDecl + lightLoop);
+  }
+  const shadowPerCaster = out.indexOf('mx_shadowVisibility[') !== -1 ? '\n                if (mx_caster < 0) {' + '\n                    occlusion = 1.0;' + '\n                } else if (mx_shadowVisibility[mx_caster] < -0.5) {' + '\n                    mx_shadowVisibility[mx_caster] = mx_shadow_atlas(mx_caster, positionWorld);' + '\n                    occlusion = mx_shadowVisibility[mx_caster];' + '\n                } else {' + '\n                    occlusion = mx_shadowVisibility[mx_caster];' + '\n                }' : '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld);';
+  out = out.replace(site, site + '\n            {' + '\n                int mx_caster = u_shadowSlotCaster[activeLightIndex];' + shadowPerCaster + '\n            }');
   if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
   const decl = ['uniform sampler2D u_shadowAtlas;', 'uniform mat4 u_shadowMatrices[' + SHADOW_CASTER_SLOTS + '];',
   // xy = tile origin in atlas UV, zw = tile size.
   'uniform vec4 u_shadowTiles[' + SHADOW_CASTER_SLOTS + '];',
+  // Normalized positive light-view Z plane for linear moments.
+  'uniform vec4 u_shadowDepthPlanes[' + SHADOW_CASTER_SLOTS + '];',
+  // x = near, y = far - near, in the same world units used by the
+  // authored emitter radius. Kept separate because the normalized
+  // plane alone cannot recover its near offset.
+  'uniform vec2 u_shadowDepthRanges[' + SHADOW_CASTER_SLOTS + '];',
+  // x/y = authored source radius in world units; z/w = explicit
+  // perspective projection scale. Directional casters use all zeroes.
+  'uniform vec4 u_shadowSourceRadii[' + SHADOW_CASTER_SLOTS + '];',
   // Per light slot: which caster shadows it, or -1 for none.
-  'uniform int u_shadowSlotCaster[' + SHADOW_LIGHT_SLOTS_MAX + '];', 'float mx_shadow_atlas(int caster, vec3 P) {', '    if (caster < 0) return 1.0;', '    vec4 c4 = u_shadowMatrices[caster] * vec4(P, 1.0);', '    if (c4.w <= 0.0) return 1.0;', '    vec3 sc = c4.xyz / c4.w;', '    sc = sc * 0.5 + 0.5;', '    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return 1.0;', '    vec4 tile = u_shadowTiles[caster];', '    vec2 moments = texture(u_shadowAtlas, tile.xy + sc.xy * tile.zw).xy;',
-  // Chebyshev, with a much lower variance floor than the library's 1e-5:
-  // the renderer now fits the depth range to the geometry that actually
-  // overlaps the frustum, so differences are no longer squeezed into a
-  // couple of percent and the floor can stop swallowing them.
-  '    float p = (sc.z <= moments.x) ? 1.0 : 0.0;', '    float variance = max(moments.y - moments.x * moments.x, 2e-7);', '    float d = sc.z - moments.x;', '    float lit = max(p, variance / (variance + d * d));',
-  // Light bleed reduction. Chebyshev is only an upper bound, so a partly
-  // occluded texel reports far more light than it receives; rescaling the
-  // tail is what makes a shadow read as a shadow instead of a grey wash.
-  '    lit = smoothstep(0.3, 1.0, lit);',
+  'uniform int u_shadowSlotCaster[' + SHADOW_LIGHT_SLOTS_MAX + '];', 'float mx_shadow_vsm(vec2 moments, float receiverDepth) {', '    float p = (receiverDepth <= moments.x) ? 1.0 : 0.0;', '    float variance = max(moments.y - moments.x * moments.x, 2e-7);', '    float d = receiverDepth - moments.x;', '    float lit = max(p, variance / (variance + d * d));', '    return smoothstep(0.3, 1.0, lit);', '}', 'float mx_shadow_atlas(int caster, vec3 P) {', '    if (caster < 0) return 1.0;', '    vec4 c4 = u_shadowMatrices[caster] * vec4(P, 1.0);', '    if (c4.w <= 0.0) return 1.0;', '    vec3 sc = c4.xyz / c4.w;', '    sc = sc * 0.5 + 0.5;', '    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return 1.0;', '    vec4 tile = u_shadowTiles[caster];', '    vec2 atlasTexel = 1.0 / vec2(textureSize(u_shadowAtlas, 0));', '    vec2 tileTexel = atlasTexel / max(tile.zw, vec2(1e-6));', '    vec2 centerUv = tile.xy + sc.xy * tile.zw;', '    vec2 moments = texture(u_shadowAtlas, centerUv).xy;',
+  // Projected XY still comes from the real light camera, but moments
+  // use a linear light-view depth plane supplied by the renderer.
+  '    float receiverDepth = dot(vec4(P, 1.0), u_shadowDepthPlanes[caster]);', '    vec2 depthRange = u_shadowDepthRanges[caster];', '    float nearDepth = depthRange.x;', '    float depthSpan = max(depthRange.y, 1e-9);', '    float receiverZ = nearDepth + depthSpan * receiverDepth;', '    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',
+  // A source with zero extent is a point/directional caster: retain the
+  // centre lookup and avoid nine redundant filtered samples. For area
+  // sources, search from the physical emitter footprint at the receiver
+  // plane, independent of the centre texel's current blocker estimate.
+  '    float lit = mx_shadow_vsm(moments, receiverDepth);', '    if (sourceRadius.x <= 0.0 && sourceRadius.y <= 0.0) {', '        vec2 e0 = min(sc.xy, vec2(1.0) - sc.xy);', '        return mix(1.0, lit, smoothstep(0.0, 0.04, min(e0.x, e0.y)));', '    }', '    vec2 projectionScale = u_shadowSourceRadii[caster].zw;', '    vec2 searchRadius = sourceRadius * projectionScale * 0.5 / max(nearDepth, 1e-9)', '        * max(receiverZ - nearDepth, 0.0) / max(receiverZ, 1e-6);', '    searchRadius = min(searchRadius, vec2(2.0) * tileTexel);',
+  // Estimate a blocker over a source-size footprint. The search and
+  // filter stay inside this caster tile, so atlas slots cannot bleed.
+  '    float blockerSum = 0.0;', '    float blockerCount = 0.0;', '    for (int oy = -1; oy <= 1; oy++) {', '        for (int ox = -1; ox <= 1; ox++) {', '            vec2 local = clamp(sc.xy + vec2(float(ox), float(oy)) * searchRadius, tileTexel * 0.5, vec2(1.0) - tileTexel * 0.5);', '            vec2 sm = texture(u_shadowAtlas, tile.xy + local * tile.zw).xy;', '            if (sm.x < receiverDepth) { blockerSum += sm.x; blockerCount += 1.0; }', '        }', '    }', '    float blockerDepth = blockerCount > 0.0 ? blockerSum / blockerCount : moments.x;', '    float blockerZ = nearDepth + depthSpan * blockerDepth;', '    vec2 filterRadius = sourceRadius * projectionScale * 0.5', '        * max(receiverZ - blockerZ, 0.0) / max(blockerZ, 1e-6)', '        / max(receiverZ, 1e-6);', '    filterRadius = min(filterRadius, vec2(2.0) * tileTexel);', '    float filtered = 0.0;', '    for (int oy = -1; oy <= 1; oy++) {', '        for (int ox = -1; ox <= 1; ox++) {', '            vec2 local = clamp(sc.xy + vec2(float(ox), float(oy)) * filterRadius, tileTexel * 0.5, vec2(1.0) - tileTexel * 0.5);', '            vec2 sm = texture(u_shadowAtlas, tile.xy + local * tile.zw).xy;',
+  // Apply VSM bleed reduction per tap before averaging; reducing only
+  // after the average turns a partially visible area source nearly black.
+  '            filtered += mx_shadow_vsm(sm, receiverDepth);', '        }', '    }', '    lit = filtered / 9.0;',
   // One 2D map cannot cover a light inside the room, so the frustum ends
   // somewhere; fade the last few percent instead of drawing a hard line.
   '    vec2 e = min(sc.xy, vec2(1.0) - sc.xy);', '    return mix(1.0, lit, smoothstep(0.0, 0.04, min(e.x, e.y)));', '}', ''].join('\n');
@@ -1159,6 +1200,32 @@ const patchShadowLightScope = fs => {
   const at = firstFn !== -1 ? firstFn : out.indexOf('void main');
   if (at === -1) return fs;
   return out.slice(0, at) + decl + out.slice(at);
+};
+
+// Adds the source shape to MaterialX's generated LightData struct. Area lights
+// are represented by point/spot quadrature samples, so the native light type
+// cannot identify their planar source geometry. Keeping the marker in the
+// struct means every existing light-data refresh carries it with the sample.
+const patchLightSourceKindStruct = fs => {
+  const match = fs.match(/struct\s+LightData\s*\{[\s\S]*?\n\};/);
+  if (!match || /\bsourceKind\b/.test(match[0])) return fs;
+  const struct = match[0].replace(/\n\};$/, '\n    int sourceKind;\n};');
+  return fs.slice(0, match.index) + struct + fs.slice(match.index + match[0].length);
+};
+
+// Applies finite planar emitter geometry to the point/spot quadrature used
+// for USD rect and disk lights. MaterialX's point and spot implementations
+// describe an isotropic source, while a rect or disk emits only from its
+// front hemisphere. The source normal is already present in LightData's
+// `direction` member; L is the normalized surface-to-source direction after
+// sampleLightSource(), so dot(direction, -L) is the source-side cosine at the
+// current shaded point. The injected sourceKind member avoids overloading the
+// MaterialX light type, which still selects point versus spot attenuation.
+const patchAreaLightSourceCosine = fs => {
+  const site = 'L = lightShader.direction;';
+  if (fs.indexOf(site) === -1 || fs.indexOf('u_lightData') === -1 || fs.indexOf('sourceKind') === -1) return fs;
+  let out = fs.replace(site, site + '\n            if (u_lightData[activeLightIndex].sourceKind == ' + LIGHT_SOURCE_KIND_AREA + ') {' + '\n                lightShader.intensity *= max(dot(u_lightData[activeLightIndex].direction, -L), 0.0);' + '\n            }');
+  return out;
 };
 
 // Feeds a screen-space ambient occlusion factor into the slot MaterialX
@@ -1185,7 +1252,7 @@ const patchAmbientOcclusion = fs => {
   // Sky visibility needs the world position; without that varying only the
   // screen space term is available and the volume lookup is skipped.
   const hasWorldPos = /\bin\s+vec3\s+positionWorld\s*;/.test(fs) && /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
-  out = fs.replace(anchor, hasWorldPos ? '$1occlusion = mx_ssao_occlusion() * mx_sky_visibility();' : '$1occlusion = mx_ssao_occlusion();');
+  const out = fs.replace(anchor, hasWorldPos ? '$1occlusion = mx_ssao_occlusion() * mx_sky_visibility();' : '$1occlusion = mx_ssao_occlusion();');
   const skyDecls = !hasWorldPos ? [] : [
   // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
   // MaterialX's IBL has no visibility term at all, so an interior lit by
@@ -1196,7 +1263,23 @@ const patchAmbientOcclusion = fs => {
   'uniform highp sampler3D u_skyVisMap;', 'uniform vec3 u_skyVisMin;', 'uniform vec3 u_skyVisSize;',
   // Sampled one cell along the normal, into the free space the surface
   // faces, rather than at the surface itself where the cell is half solid.
-  'uniform float u_skyVisCell;', 'uniform float u_skyVisStrength;', 'float mx_sky_visibility() {', '    if (u_skyVisStrength <= 0.0) return 1.0;', '    vec3 uvw = (positionWorld + normalize(normalWorld) * u_skyVisCell - u_skyVisMin) / max(u_skyVisSize, vec3(1e-6));', '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 1.0;', '    float vis = texture(u_skyVisMap, uvw).r;', '    return mix(1.0, clamp(vis, 0.0, 1.0), clamp(u_skyVisStrength, 0.0, 1.0));', '}'];
+  'uniform float u_skyVisCell;', 'uniform float u_skyVisStrength;', 'float mx_sky_visibility() {', '    if (u_skyVisStrength <= 0.0) return 1.0;',
+  // MaterialX's generated closures face-forward their shading normal,
+  // but normalWorld is the geometric varying and remains unchanged on
+  // a DoubleSide back face. Keep the voxel offset and directional
+  // moment evaluation on that same front-facing geometric hemisphere.
+  '    vec3 skyNormal = normalize(normalWorld);', '    if (!gl_FrontFacing) skyNormal = -skyNormal;',
+  // A surface on the stage boundary can sit on the near face of its
+  // occupied voxel. One cell lands on the far boundary and trilinear
+  // sampling clamps back into that same occupied slice. Move to the
+  // first air-cell centre (one full cell plus half-cell margin) so a
+  // planar receiver never self-occludes its own sky sample.
+  '    vec3 uvw = (positionWorld + skyNormal * (1.5 * u_skyVisCell) - u_skyVisMin) / max(u_skyVisSize, vec3(1e-6));', '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 1.0;',
+  // The bake stores the sky visibility function's first order moments:
+  // R = <V>, GBA = signed UNORM encoding of d = 2<V omega>.
+  // Decode the centered GBA channels before evaluating the diffuse
+  // directional response for this surface normal.
+  '    vec4 moments = texture(u_skyVisMap, uvw);', '    float visibilityMean = moments.r;', '    vec3 visibilityDirection = (moments.gba * 255.0 - vec3(128.0)) / 127.0;', '    float vis = clamp(visibilityMean + dot(visibilityDirection, skyNormal), 0.0, 1.0);', '    return mix(1.0, vis, clamp(u_skyVisStrength, 0.0, 1.0));', '}'];
   const decls = ['uniform sampler2D u_ssaoMap;', 'uniform vec2 u_ssaoTexel;', 'uniform float u_ssaoStrength;', 'float mx_ssao_occlusion() {', '    float ao = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).r;', '    return mix(1.0, clamp(ao, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0));', '}'].concat(skyDecls).concat(['']).join('\n');
   // Must land before the FIRST function definition, not before main():
   // the generator emits the ambient-occlusion slot inside a surface
@@ -1231,9 +1314,10 @@ const patchTransmissionThickness = fs => {
   if (!hasVars) return fs;
   let out = fs.replace(anchor, 'vdf.throughput = exp(-absorption * mx_transmission_path_length());');
   const decls = ['uniform sampler2D u_thicknessMap;', 'uniform vec2 u_thicknessTexel;',
-  // Scene units to the units transmission_depth is authored in. USD
-  // stages are commonly centimetres while depths are written in metres,
-  // so this is metersPerUnit rather than a fudge factor.
+  // The renderer's sceneRoot has converted positions to metres. The
+  // compiler has no UnitSystem, so raw transmission_depth remains in
+  // source scene units and the renderer converts this measured path
+  // back before applying Beer-Lambert.
   'uniform float u_thicknessScale;', 'float mx_transmission_path_length() {', '    float back = texture(u_thicknessMap, gl_FragCoord.xy * u_thicknessTexel).r;', '    if (back <= 0.0) return 0.0; // nothing behind: treat as clear, never as opaque', '    float front = distance(positionWorld, u_viewPosition);', '    return max(back - front, 0.0) * u_thicknessScale;', '}', ''].join('\n');
   const fnIdx = out.indexOf('void mx_anisotropic_vdf');
   if (fnIdx === -1) return fs;
@@ -1277,6 +1361,106 @@ const patchTransmissionAlpha = fs => {
   return out;
 };
 
+// Enables the Scene RGB-T payload on generated MaterialX shaders. The
+// terminal viewing response is the closure's layered result; moving it to
+// surfaceshader.transparency lets the existing opacity block apply coverage
+// exactly once while keeping reflected/emissive C additive. The old scalar
+// transmission patch is intentionally bypassed for this mode.
+const patchRgbtPayload = fs => {
+  const original = fs;
+  let supported = true;
+  let out = fs;
+  const transFnIdx = out.indexOf('vec3 mx_surface_transmission');
+  if (transFnIdx !== -1) {
+    const bodyIdx = out.indexOf('{', transFnIdx);
+    if (bodyIdx === -1) supported = false;else if (out.indexOf('u_peelRgbt', transFnIdx) === -1) {
+      out = out.slice(0, bodyIdx + 1) + '\n    if (u_peelRgbt != 0) return tint;\n' + out.slice(bodyIdx + 1);
+    }
+  }
+  // Restrict the replacement to the generated viewing-transmission section
+  // so an unrelated color accumulation elsewhere cannot be redirected.
+  let cursor = 0;
+  let sectionCount = 0;
+  let routedCount = 0;
+  const sectionAnchor = '// Calculate the BSDF transmission for viewing direction';
+  const opacityAnchor = '// Compute and apply surface opacity';
+  while (true) {
+    const begin = out.indexOf(sectionAnchor, cursor);
+    if (begin === -1) break;
+    sectionCount++;
+    const end = out.indexOf(opacityAnchor, begin);
+    if (end === -1) {
+      supported = false;
+      break;
+    }
+    const section = out.slice(begin, end);
+    // A generated viewing-transmission section has one terminal closure
+    // accumulation.  Picking the last match used to make a mixed graph
+    // look supported while silently routing an earlier closure (or a
+    // helper's unrelated accumulation) to T.  Require the contract to be
+    // unambiguous and fail the whole payload atomically when it is not.
+    const matches = [...section.matchAll(/(\w+)\.color\s*\+=\s*(\w+)\.response\s*;/g)];
+    if (matches.length !== 1) {
+      supported = false;
+      break;
+    }
+    const match = matches[0];
+    const terminal = match[0];
+    const lhs = match[1];
+    const rhs = match[2];
+    const routed = 'if (u_peelRgbt != 0) ' + lhs + '.transparency = clamp(' + rhs + '.response, vec3(0.0), vec3(1.0));\n' + '    else ' + terminal;
+    const at = begin + match.index;
+    out = out.slice(0, at) + routed + out.slice(at + terminal.length);
+    cursor = at + routed.length;
+    routedCount++;
+  }
+  if (!sectionCount || routedCount !== sectionCount) {
+    mtlxWarn('mtlx-engine: RGB-T payload section anchors changed; using Scene legacy peel.');
+    supported = false;
+  }
+  // The generated output is coverage-premultiplied C and transparency T.
+  // Pass 1 replaces RGB with T for the explicit transmission target; pass
+  // 0/2 retain C and the unmodified scalar coverage alpha for tail blending.
+  const output = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
+  if (output) {
+    const v = output[1];
+    // encodeDisplay() has already appended a second assignment to the
+    // output variable.  Select the one that carries the generated surface
+    // color and require exactly one such assignment, so an unfamiliar or
+    // mixed graph cannot accidentally receive a partial payload patch.
+    const assignments = [...out.matchAll(new RegExp('(' + v + '\\s*=\\s*vec4\\([^;]+\\);)', 'g'))].filter(m => /vec4\(\s*\w+\.color\s*,/.test(m[0]));
+    const om = assignments.length === 1 ? assignments[0] : null;
+    if (!om) supported = false;
+    if (om && out.indexOf('u_peelRgbtPass', om.index) === -1) {
+      const surfaceMatch = om[0].match(/vec4\(\s*(\w+)\.color\s*,/);
+      if (!surfaceMatch) supported = false;
+      const surfaceVar = surfaceMatch ? surfaceMatch[1] : '';
+      const injectAt = om.index + om[0].length;
+      out = out.slice(0, injectAt) + '\n    if (u_peelRgbt != 0 && u_peelRgbtPass == 1) ' + v + ' = vec4(' + surfaceVar + '.transparency, 1.0);' + out.slice(injectAt);
+    }
+    // Clear transmissive emission has outAlpha=0 but still contributes C;
+    // only legacy mode uses the generator's alpha threshold discard.
+    // MaterialX emits this threshold in both compact and braced forms;
+    // clear transmission has outAlpha=0 and must remain a valid RGB-T C
+    // payload in either form.  Keep the threshold discard on legacy peel
+    // only, preserving the generated block's semantics exactly.
+    out = out.replace(/if\s*\(\s*outAlpha\s*<\s*u_alphaThreshold\s*\)\s*(?:\{\s*discard\s*;\s*\}|discard\s*;)/, 'if (u_peelRgbt == 0 && outAlpha < u_alphaThreshold) { discard; }');
+  } else supported = false;
+  if (!supported) return original;
+  // Declarations must precede every generated function: transmission
+  // helpers are commonly emitted before main().
+  const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+  const decl = 'uniform int u_peelRgbt;\nuniform int u_peelRgbtPass;\nuniform int u_peelRgbtLayer;\n/* MX_RGBT_PAYLOAD_SUPPORTED */\n';
+  if (firstFn === -1) return original;
+  if (out.indexOf('uniform int u_peelRgbt;') === -1) {
+    out = out.slice(0, firstFn) + decl + out.slice(firstFn);
+  }
+  // patchTransmissionAlpha runs first to preserve the complete legacy
+  // source; its scalar floor is disabled only while RGB-T is active.
+  out = out.replace(/if\s*\(\s*u_peelMode\s*!=\s*0\s*\)\s*\{/g, 'if (u_peelMode != 0 && u_peelRgbt == 0) {');
+  return out;
+};
+
 // injectPeelDiscard(src), bakes the depth-peel OIT machinery into
 // EVERY generated fragment shader unconditionally, gated behind a
 // runtime uniform (u_peelMode, default 0 = no-op) so toggling Force
@@ -1290,7 +1474,7 @@ const patchTransmissionAlpha = fs => {
 // a premultiply epilogue (see below) so its output can under-blend
 // into accumRT. Fail-loud (throws) if main() can't be found, same
 // contract as encodeDisplay() above.
-const injectPeelDiscard = src => {
+const injectPeelDiscard = (src, sceneRgbt = false) => {
   // Skip decls patchTransmissionAlpha may have already inserted.
   const declIfAbsent = line => src.indexOf(line) === -1 ? line + '\n' : '';
   const decls = declIfAbsent('uniform int u_peelMode;') + declIfAbsent('uniform int u_peelHasPrev;') + declIfAbsent('uniform highp sampler2D u_peelPrevDepth;') + declIfAbsent('uniform highp sampler2D u_opaqueDepth;') + declIfAbsent('uniform int u_peelLinear;');
@@ -1310,7 +1494,7 @@ const injectPeelDiscard = src => {
   if (outMatch) {
     const v = outMatch[1];
     const closeIdx = out.lastIndexOf('}');
-    const premult = '\n    if (u_peelMode == 2) { ' + v + '.rgb *= ' + v + '.a; }\n';
+    const premult = '\n    if (u_peelMode == 2 && ' + (sceneRgbt ? 'u_peelRgbt == 0' : 'true') + ') { ' + v + '.rgb *= ' + v + '.a; }\n';
     out = out.slice(0, closeIdx) + premult + out.slice(closeIdx);
   } else {
     mtlxWarn('mtlx-engine: injectPeelDiscard could not locate the fragment output variable, tail-pass premultiply skipped.');
@@ -3293,8 +3477,8 @@ const getDisplayTransform = () => {
 };
 
 // Persists only from the top-realm page (same embed guard as setGlobalGeom).
-// encodeDisplay bakes the mode into shader source, so every live view must
-// fully regenerate off this event, not just refresh a uniform.
+// The mode is a uniform in generated shaders, so every live view can refresh
+// it without regenerating material programs.
 const setDisplayTransform = value => {
   if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
   if (!DISPLAY_TRANSFORM_VALUES.includes(value) || value === MTLX_DISPLAY_TRANSFORM) return;
@@ -4726,7 +4910,8 @@ const makeLightEntry = over => Object.assign({
   intensity: 0,
   decay_rate: 2,
   inner_angle: 0,
-  outer_angle: 0
+  outer_angle: 0,
+  sourceKind: 0
 }, over || {});
 // Slot layout is fixed for the life of a program: [rig..., key, stage...].
 // The key light keeps index rigCount so updateKeyLightUniformEntry can keep
@@ -5519,7 +5704,8 @@ const generatePreviewSourcesUnlocked = ({
   renderable,
   label,
   isMounted = () => true,
-  document: documentArg = null
+  document: documentArg = null,
+  sceneRgbt = false
 }) => {
   // OFFICIAL PARITY: per-material generation options on SHARED
   // module-scope genContext. hwTransparency is reset FIRST,
@@ -5640,6 +5826,7 @@ const generatePreviewSourcesUnlocked = ({
     }
   }
   fs = patchUnlitLightingRefs(fs);
+  fs = patchScenePhysicalLightFalloff(fs, sceneRgbt);
   const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
   const outVar = outDeclMatch ? outDeclMatch[1] : null;
   const outAssignments = outVar ? fs.match(new RegExp('\\b' + outVar + '\\s*=[^;]*;', 'g')) : null;
@@ -5656,8 +5843,15 @@ const generatePreviewSourcesUnlocked = ({
   }
   // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
   fs = patchTransmissionAlpha(fs);
+  let payloadSupported = false;
+  if (sceneRgbt) {
+    fs = patchRgbtPayload(fs);
+    payloadSupported = fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */') !== -1;
+  }
   fs = patchShadowBounds(fs);
   fs = patchShadowLightScope(fs);
+  fs = patchLightSourceKindStruct(fs);
+  fs = patchAreaLightSourceCosine(fs);
   fs = patchAmbientOcclusion(fs);
   fs = patchTransmissionThickness(fs);
   // Depth-peel machinery: baked into every fragment shader
@@ -5666,7 +5860,7 @@ const generatePreviewSourcesUnlocked = ({
   // toggling the setting a pure uniform flip (no regen/recompile) and
   // is a byte-for-byte no-op whenever u_peelMode is left at its default
   // 0 (the normal, non-peeling path).
-  fs = injectPeelDiscard(fs);
+  fs = injectPeelDiscard(fs, payloadSupported);
 
   // Uniform introspection, still fully inside the mxExclusive lock:
   // plainizeMxUniformData converts every vector/matrix/color `data`
@@ -5699,7 +5893,8 @@ const generatePreviewSourcesUnlocked = ({
     transparent,
     vertexInputs,
     geomprops,
-    notices
+    notices,
+    payloadSupported
   };
 };
 
@@ -5719,7 +5914,8 @@ const compileMtlxSceneMaterial = async ({
   renderable,
   label = 'material',
   isMounted = () => true,
-  document: documentArg = null
+  document: documentArg = null,
+  sceneRgbt = false
 }) => {
   if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
   const srcs = await generatePreviewSources({
@@ -5729,7 +5925,8 @@ const compileMtlxSceneMaterial = async ({
     renderable,
     label,
     isMounted,
-    document: documentArg
+    document: documentArg,
+    sceneRgbt
   });
   if (!srcs) return null;
   const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
@@ -5739,6 +5936,8 @@ const compileMtlxSceneMaterial = async ({
     // Program identity excludes uniforms and object transforms. Source
     // text is already fully adapted by generatePreviewSources.
     programKey: srcs.vs + '\\n/* scene-fs */\\n' + srcs.fs,
+    sceneRgbt,
+    payloadSupported: !!srcs.payloadSupported,
     label
   };
 };
@@ -5767,6 +5966,9 @@ const createMtlxSceneUniforms = ({
   shadowAtlas = null,
   shadowMatrices = null,
   shadowTiles = null,
+  shadowDepthPlanes = null,
+  shadowDepthRanges = null,
+  shadowSourceRadii = null,
   shadowSlotCaster = null,
   skyVisMap = null,
   skyVisMin = null,
@@ -5829,6 +6031,21 @@ const createMtlxSceneUniforms = ({
         length: SHADOW_CASTER_SLOTS
       }, () => new THREE.Vector4(0, 0, 1, 1))
     },
+    u_shadowDepthPlanes: {
+      value: shadowDepthPlanes && shadowDepthPlanes.length === SHADOW_CASTER_SLOTS ? shadowDepthPlanes : Array.from({
+        length: SHADOW_CASTER_SLOTS
+      }, () => new THREE.Vector4(0, 0, 0, 1))
+    },
+    u_shadowDepthRanges: {
+      value: shadowDepthRanges && shadowDepthRanges.length === SHADOW_CASTER_SLOTS ? shadowDepthRanges : Array.from({
+        length: SHADOW_CASTER_SLOTS
+      }, () => new THREE.Vector2(0, 1))
+    },
+    u_shadowSourceRadii: {
+      value: shadowSourceRadii && shadowSourceRadii.length === SHADOW_CASTER_SLOTS ? shadowSourceRadii : Array.from({
+        length: SHADOW_CASTER_SLOTS
+      }, () => new THREE.Vector4())
+    },
     u_shadowSlotCaster: {
       value: shadowSlotCaster && shadowSlotCaster.length === SHADOW_LIGHT_SLOTS_MAX ? shadowSlotCaster : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)
     },
@@ -5856,6 +6073,19 @@ const createMtlxSceneUniforms = ({
       value: skyVisMap ? skyVisStrength : 0
     }
   };
+  if (compiled.payloadSupported) {
+    // Scene RGB-T is opt-in at compile time and remains inactive until
+    // the compositor sets these selectors.
+    uniforms.u_peelRgbt = {
+      value: 0
+    };
+    uniforms.u_peelRgbtPass = {
+      value: 0
+    };
+    uniforms.u_peelRgbtLayer = {
+      value: 0
+    };
+  }
   applyIntrospectedUniformDefaults(uniforms, compiled.introspected || []);
   const declared = new Set((compiled.declared || []).map(u => u.name));
   const has = name => declared.has(name);
@@ -5940,9 +6170,12 @@ const createMtlxSceneUniforms = ({
   if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = {
     value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix()
   };
-  if (has('u_lightData')) uniforms.u_lightData = {
-    value: currentLights(lightData, env && env.keyLight, envRotationRad, stageLights, envExposure)
-  };
+  if (has('u_lightData')) {
+    const entries = currentLights(lightData, env && env.keyLight, envRotationRad, stageLights, envExposure);
+    uniforms.u_lightData = {
+      value: entries
+    };
+  }
   if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = {
     value: activeLightCount(lightData, env && env.keyLight, stageLights)
   };
@@ -6731,7 +6964,520 @@ const applyPeelMaterialMode = (material, active) => {
   if (changed) material.needsUpdate = true;
 };
 
-// createPeelPipeline(renderer, { getDisplayTransform }): reusable depth-
+// Scene-only RGB-transmission compositor.  Three r128 has no public
+// WebGLMultipleRenderTargets, so C and T are rendered into separate targets
+// and accumulated with fullscreen passes.  This factory is deliberately
+// separate from the legacy scalar peel pipeline: callers opt in only after
+// compiling a shader with the u_peelRgbtPass output contract.  A shader that
+// does not expose that uniform is left untouched by this pipeline and should
+// use createPeelPipeline instead.
+const createRgbtPeelPipeline = (renderer, {
+  getDisplayTransform: getDisplayTransformOpt,
+  getDisplayExposure: getDisplayExposureOpt,
+  layers = PEEL_LAYERS,
+  opaqueOutput = false
+} = {}) => {
+  const getDT = getDisplayTransformOpt || getDisplayTransform;
+  const getExposure = getDisplayExposureOpt || displayExposureScale;
+  const halfOk = !!renderer.extensions.get('EXT_color_buffer_float');
+  let resources = null;
+  // A grouped USD mesh can contain an authored opaque submaterial beside a
+  // transmissive RGB-T one. The opaque subgroup is captured once in
+  // opaqueRT and discarded in every C/T/tail geometry pass; it cannot be
+  // treated as a missing payload for the complete mesh.
+  let opaqueDiscardMaterial = null;
+  const disposeTarget = rt => {
+    if (!rt) return;
+    if (rt.depthTexture) rt.depthTexture.dispose();
+    rt.dispose();
+  };
+  const free = () => {
+    if (!resources) return;
+    [resources.opaque, resources.layerC0, resources.layerC1, resources.layerT, resources.tail, resources.c0, resources.c1, resources.t0, resources.t1].forEach(disposeTarget);
+    if (resources.quad && resources.quad.geometry) resources.quad.geometry.dispose();
+    [resources.initMat, resources.updateCMat, resources.updateTMat, resources.tailFoldMat, resources.tailTMat, resources.finalMat].forEach(m => {
+      if (m) m.dispose();
+    });
+    if (opaqueDiscardMaterial) {
+      opaqueDiscardMaterial.dispose();
+      opaqueDiscardMaterial = null;
+    }
+    resources = null;
+  };
+  const target = (w, h, depth = false) => {
+    const rt = new THREE.WebGLRenderTarget(w, h, {
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      format: THREE.RGBAFormat,
+      type: THREE.HalfFloatType,
+      depthBuffer: depth,
+      stencilBuffer: false
+    });
+    if (depth) {
+      rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
+      rt.depthTexture.minFilter = THREE.NearestFilter;
+      rt.depthTexture.magFilter = THREE.NearestFilter;
+    }
+    return rt;
+  };
+  const alloc = (w, h) => {
+    free();
+    const opaque = target(w, h, true);
+    // C depth must ping pong with the color target. Reusing one target
+    // would make the next peel's previous-depth sampler read the same
+    // texture currently being cleared/rendered.
+    const layerC0 = target(w, h, true);
+    const layerC1 = target(w, h, true);
+    const layerT = target(w, h, true);
+    const tail = target(w, h, false);
+    const c0 = target(w, h),
+      c1 = target(w, h);
+    const t0 = target(w, h),
+      t1 = target(w, h);
+    const quadScene = new THREE.Scene();
+    const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+    quadScene.add(quad);
+    const quadVertex = 'in vec3 position;\n' + 'in vec2 uv;\n' + 'out vec2 vUv;\n' + 'void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}\n';
+    const initMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o; uniform vec4 u_value; void main(){o=u_value;}\n',
+      uniforms: {
+        u_value: {
+          value: new THREE.Vector4(0, 0, 0, 1)
+        }
+      },
+      depthTest: false,
+      depthWrite: false
+    });
+    const updateCMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_layer;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),l=texture(u_layer,vUv);o=vec4(c.rgb+t.rgb*l.rgb,1.0);}\n',
+      uniforms: {
+        u_c: {
+          value: null
+        },
+        u_t: {
+          value: null
+        },
+        u_layer: {
+          value: null
+        }
+      },
+      depthTest: false,
+      depthWrite: false
+    });
+    const updateTMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_t; uniform sampler2D u_layer;\n' + 'void main(){vec3 t=texture(u_t,vUv).rgb*texture(u_layer,vUv).rgb;o=vec4(t,1.0);}\n',
+      uniforms: {
+        u_t: {
+          value: null
+        },
+        u_layer: {
+          value: null
+        }
+      },
+      depthTest: false,
+      depthWrite: false
+    });
+    // The tail target uses alpha as scalar residual transmission.  Its
+    // geometry pass supplies C in RGB and 1-mean(T) in alpha; the blend
+    // factors retain every deeper fragment in front-to-back order.
+    const tailFoldMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_tail;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),q=texture(u_tail,vUv);o=vec4(c.rgb+t.rgb*q.rgb,t.a);}\n',
+      uniforms: {
+        u_c: {
+          value: null
+        },
+        u_t: {
+          value: null
+        },
+        u_tail: {
+          value: null
+        }
+      },
+      depthTest: false,
+      depthWrite: false
+    });
+    const tailTMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_t; uniform sampler2D u_tail;\n' + 'void main(){vec3 t=texture(u_t,vUv).rgb*texture(u_tail,vUv).aaa;o=vec4(t,1.0);}\n',
+      uniforms: {
+        u_t: {
+          value: null
+        },
+        u_tail: {
+          value: null
+        }
+      },
+      depthTest: false,
+      depthWrite: false
+    });
+    const finalMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' + 'uniform int u_displayTransform; uniform float u_displayExposure;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' + 'vec3 lin=c.rgb+t.rgb*b.rgb;\n' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encoded', 'u_displayTransform', 'u_displayExposure') + 'float transA=1.0-min(t.r,min(t.g,t.b));\n' + 'float a=' + (opaqueOutput ? '1.0' : 'b.a+(1.0-b.a)*transA') + ';o=vec4(encoded,a);}\n',
+      uniforms: {
+        u_c: {
+          value: null
+        },
+        u_t: {
+          value: null
+        },
+        u_opaque: {
+          value: null
+        },
+        u_displayTransform: {
+          value: displayTransformId(getDT())
+        },
+        u_displayExposure: {
+          value: getExposure()
+        }
+      },
+      transparent: !opaqueOutput,
+      blending: THREE.NoBlending,
+      depthTest: false,
+      depthWrite: false
+    });
+    resources = {
+      w,
+      h,
+      opaque,
+      layerC0,
+      layerC1,
+      layerT,
+      tail,
+      c0,
+      c1,
+      t0,
+      t1,
+      quadScene,
+      quadCam,
+      quad,
+      initMat,
+      updateCMat,
+      updateTMat,
+      tailFoldMat,
+      tailTMat,
+      finalMat
+    };
+    quad.material = initMat;
+    renderer.compile(quadScene, quadCam);
+    quad.material = updateCMat;
+    renderer.compile(quadScene, quadCam);
+    quad.material = updateTMat;
+    renderer.compile(quadScene, quadCam);
+    quad.material = tailFoldMat;
+    renderer.compile(quadScene, quadCam);
+    quad.material = tailTMat;
+    renderer.compile(quadScene, quadCam);
+    quad.material = finalMat;
+    renderer.compile(quadScene, quadCam);
+  };
+  const renderQuad = (material, targetRT) => {
+    resources.quad.material = material;
+    renderer.setRenderTarget(targetRT);
+    renderer.render(resources.quadScene, resources.quadCam);
+  };
+  const render = (scene, camera, transparentMeshes, opts = {}) => {
+    const unsupported = reason => {
+      if (opts.onUnsupported) opts.onUnsupported(reason);
+      // Direct users of this low-level factory get a visible normal
+      // render. createPeelPipeline's Scene wrapper passes fallback:false
+      // and routes the same frame through its scalar legacy pipeline.
+      if (opts.fallback !== false) renderer.render(scene, camera);
+      return false;
+    };
+    if (!halfOk) {
+      return unsupported('RGBT requires EXT_color_buffer_float');
+    }
+    const candidates = (transparentMeshes || []).filter(m => m && m.material);
+    const materialList = [];
+    const materialSet = new Set();
+    candidates.forEach(m => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      mats.forEach(mat => {
+        if (mat && !materialSet.has(mat)) {
+          materialSet.add(mat);
+          materialList.push(mat);
+        }
+      });
+    });
+    const meshes = candidates.filter(m => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return mats.some(mat => {
+        if (!mat || !mat.uniforms || !mat.uniforms.u_peelMode) return false;
+        // Scene materials carry a source-qualified peel verdict. A
+        // low-level caller without that metadata retains the legacy
+        // uniform-presence contract for backwards compatibility.
+        const data = mat.userData;
+        return data && Object.prototype.hasOwnProperty.call(data, 'mtlxScenePeel') ? !!data.mtlxScenePeel : true;
+      });
+    });
+    // Scene materials carry an explicit source-qualified peel verdict;
+    // low-level callers without metadata retain the uniform contract.
+    // Opaque submaterials stay in the C pass and are swapped to a discard
+    // material for T/tail below.
+    const payloadMaterials = materialList.filter(mat => {
+      if (!mat || !mat.uniforms || !mat.uniforms.u_peelMode) return false;
+      const data = mat.userData;
+      return data && Object.prototype.hasOwnProperty.call(data, 'mtlxScenePeel') ? !!data.mtlxScenePeel : true;
+    });
+    const missingPayload = payloadMaterials.filter(mat => !mat.uniforms.u_peelRgbtPass || !mat.uniforms.u_peelRgbt);
+    if (missingPayload.length) {
+      return unsupported('RGBT shader payload is unavailable; using legacy renderer');
+    }
+    if (!meshes.length) {
+      renderer.render(scene, camera);
+      return true;
+    }
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    if (!resources || resources.w !== size.x || resources.h !== size.y) alloc(size.x, size.y);
+    const oldTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
+    const oldViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
+    const oldScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
+    const oldScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
+    const oldAutoClear = renderer.autoClear;
+    const oldClearColor = renderer.getClearColor(new THREE.Color());
+    const oldClearAlpha = renderer.getClearAlpha();
+    const oldShadowUpdate = renderer.shadowMap.autoUpdate;
+    const materialState = new Map();
+    const visibilityState = new Map();
+    const linearUniforms = new Map();
+    const meshMaterials = new Map();
+    const meshMaterialIdentity = new Map();
+    meshes.forEach(mesh => {
+      meshMaterials.set(mesh, Array.isArray(mesh.material) ? mesh.material.slice() : [mesh.material]);
+      meshMaterialIdentity.set(mesh, mesh.material);
+    });
+    const ensureOpaqueDiscardMaterial = () => {
+      if (opaqueDiscardMaterial) return opaqueDiscardMaterial;
+      opaqueDiscardMaterial = new THREE.RawShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        vertexShader: 'in vec3 position; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix; void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+        fragmentShader: 'precision highp float; out vec4 outColor; void main(){discard;}',
+        depthTest: false,
+        depthWrite: false,
+        colorWrite: false
+      });
+      return opaqueDiscardMaterial;
+    };
+    const setOpaqueSubmaterials = discard => meshMaterials.forEach((original, mesh) => {
+      // Opaque submaterials were already captured by opaqueRT.  They
+      // must be discarded for every C/T/tail geometry pass, including a
+      // single opaque material on a mesh that shares the candidate list.
+      const next = discard ? original.map(mat => payloadMaterials.includes(mat) ? mat : ensureOpaqueDiscardMaterial()) : original;
+      mesh.material = Array.isArray(mesh.material) ? next : next[0];
+    });
+    const setPayloadSubmaterials = discard => meshMaterials.forEach((original, mesh) => {
+      const next = discard ? original.map(mat => payloadMaterials.includes(mat) ? ensureOpaqueDiscardMaterial() : mat) : original;
+      mesh.material = Array.isArray(mesh.material) ? next : next[0];
+    });
+    scene.traverse(object => {
+      const materials = object && object.material ? Array.isArray(object.material) ? object.material : [object.material] : [];
+      materials.forEach(mat => {
+        const u = mat && mat.uniforms && mat.uniforms.u_peelLinear;
+        if (!u || linearUniforms.has(u)) return;
+        linearUniforms.set(u, u.value);
+        u.value = 1;
+      });
+    });
+    const rememberMaterial = mat => {
+      if (!mat || materialState.has(mat)) return;
+      materialState.set(mat, {
+        blending: mat.blending,
+        blendEquation: mat.blendEquation,
+        blendEquationAlpha: mat.blendEquationAlpha,
+        blendSrc: mat.blendSrc,
+        blendDst: mat.blendDst,
+        blendSrcAlpha: mat.blendSrcAlpha,
+        blendDstAlpha: mat.blendDstAlpha,
+        depthTest: mat.depthTest,
+        depthWrite: mat.depthWrite,
+        uniformValues: mat.uniforms ? new Map(Object.keys(mat.uniforms).map(k => [k, mat.uniforms[k].value])) : null
+      });
+    };
+    const rememberVisible = obj => {
+      if (obj && !visibilityState.has(obj)) visibilityState.set(obj, obj.visible);
+    };
+    const setPass = pass => payloadMaterials.forEach(mat => {
+      rememberMaterial(mat);
+      const mu = mat.uniforms;
+      if (!mu) return;
+      if (mu.u_peelRgbt) mu.u_peelRgbt.value = 1;
+      if (mu.u_peelRgbtPass) mu.u_peelRgbtPass.value = pass;
+      if (mu.u_peelMode) mu.u_peelMode.value = pass === 2 ? 2 : 1;
+      // Transmission is independent of direct analytic lights. Avoid
+      // evaluating the full BRDF and shadow lookups during the RGB-T
+      // T-only pass, while restoring the authored count for C/tail.
+      if (mu.u_numActiveLightSources) {
+        const saved = materialState.get(mat)?.uniformValues?.get('u_numActiveLightSources');
+        mu.u_numActiveLightSources.value = pass === 1 ? 0 : saved == null ? mu.u_numActiveLightSources.value : saved;
+      }
+    });
+    const hideOtherMeshes = () => scene.traverse(o => {
+      if (o.isMesh && !meshes.includes(o) && o.visible) {
+        rememberVisible(o);
+        o.visible = false;
+      }
+    });
+    const showOthers = () => visibilityState.forEach((v, o) => {
+      o.visible = v;
+    });
+    renderer.autoClear = false;
+    renderer.shadowMap.autoUpdate = false;
+    try {
+      if (opts.setSceneLinear) opts.setSceneLinear(true);
+      // Opaque pass is stored in linear half float, then transformed once
+      // by finalMat. Transparent geometry stays hidden here.
+      meshes.forEach(m => {
+        rememberVisible(m);
+      });
+      // Candidate meshes can carry opaque material groups. Capture those
+      // into opaqueRT while suppressing the RGB-T participants.
+      setPayloadSubmaterials(true);
+      renderer.setRenderTarget(resources.opaque);
+      renderer.setClearColor(oldClearColor, 0);
+      renderer.clear(true, true, true);
+      renderer.render(scene, camera);
+      setPayloadSubmaterials(false);
+      hideOtherMeshes();
+      // C starts at zero; T starts at one.  C/T are kept in distinct
+      // targets so no blend equation can accidentally premultiply C.
+      renderQuad(resources.initMat, resources.c0);
+      resources.initMat.uniforms.u_value.value.set(1, 1, 1, 1);
+      renderQuad(resources.initMat, resources.t0);
+      resources.initMat.uniforms.u_value.value.set(0, 0, 0, 1);
+      let cOld = resources.c0,
+        cNew = resources.c1;
+      let tOld = resources.t0,
+        tNew = resources.t1;
+      let prevDepth = null;
+      for (let i = 0; i < Math.max(0, layers | 0); i++) {
+        const cLayer = i % 2 === 0 ? resources.layerC0 : resources.layerC1;
+        const tLayer = resources.layerT;
+        payloadMaterials.forEach(mat => {
+          rememberMaterial(mat);
+          const mu = mat.uniforms;
+          if (!mu) return;
+          if (mu.u_peelHasPrev) mu.u_peelHasPrev.value = prevDepth ? 1 : 0;
+          if (mu.u_peelPrevDepth) mu.u_peelPrevDepth.value = prevDepth || getDummyTex();
+          if (mu.u_opaqueDepth) mu.u_opaqueDepth.value = resources.opaque.depthTexture;
+          if (mu.u_peelRgbtLayer) mu.u_peelRgbtLayer.value = i;
+        });
+        setPass(0);
+        setOpaqueSubmaterials(true);
+        renderer.setRenderTarget(cLayer);
+        renderer.setClearColor(0, 0);
+        renderer.clear(true, true, true);
+        renderer.render(scene, camera);
+        setPass(1);
+        setOpaqueSubmaterials(true);
+        renderer.setRenderTarget(tLayer);
+        // T is a multiplicative field: an empty layer is white.
+        renderer.setClearColor(0xffffff, 1);
+        renderer.clear(true, true, true);
+        renderer.render(scene, camera);
+        resources.updateCMat.uniforms.u_c.value = cOld.texture;
+        resources.updateCMat.uniforms.u_t.value = tOld.texture;
+        resources.updateCMat.uniforms.u_layer.value = cLayer.texture;
+        renderQuad(resources.updateCMat, cNew);
+        resources.updateTMat.uniforms.u_t.value = tOld.texture;
+        resources.updateTMat.uniforms.u_layer.value = tLayer.texture;
+        renderQuad(resources.updateTMat, tNew);
+        [cOld, cNew] = [cNew, cOld];
+        [tOld, tNew] = [tNew, tOld];
+        prevDepth = cLayer.depthTexture;
+      }
+      // All remaining fragments go through the scalar tail.  This is a
+      // bounded RGB-T approximation for deeper colored layers, but it
+      // preserves their full geometry and emissive C contribution.
+      setPass(2);
+      setOpaqueSubmaterials(true);
+      payloadMaterials.forEach(mat => {
+        rememberMaterial(mat);
+        mat.blending = THREE.CustomBlending;
+        mat.blendEquation = THREE.AddEquation;
+        mat.blendEquationAlpha = THREE.AddEquation;
+        mat.blendSrc = THREE.DstAlphaFactor;
+        mat.blendDst = THREE.OneFactor;
+        mat.blendSrcAlpha = THREE.ZeroFactor;
+        mat.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
+        mat.depthTest = false;
+        mat.depthWrite = false;
+      });
+      payloadMaterials.forEach(mat => {
+        const mu = mat.uniforms;
+        if (!mu) return;
+        if (mu.u_peelHasPrev) mu.u_peelHasPrev.value = prevDepth ? 1 : 0;
+        if (mu.u_peelPrevDepth) mu.u_peelPrevDepth.value = prevDepth || getDummyTex();
+        if (mu.u_peelRgbtLayer) mu.u_peelRgbtLayer.value = Math.max(0, layers | 0);
+      });
+      renderer.setRenderTarget(resources.tail);
+      renderer.setClearColor(0, 1);
+      renderer.clear(true, false, false);
+      renderer.render(scene, camera);
+      resources.tailFoldMat.uniforms.u_c.value = cOld.texture;
+      resources.tailFoldMat.uniforms.u_t.value = tOld.texture;
+      resources.tailFoldMat.uniforms.u_tail.value = resources.tail.texture;
+      renderQuad(resources.tailFoldMat, cNew);
+      // tailFold writes only C; preserve T by multiplying it with the
+      // scalar residual alpha (never the tail RGB) in a second pass.
+      resources.tailTMat.uniforms.u_t.value = tOld.texture;
+      resources.tailTMat.uniforms.u_tail.value = resources.tail.texture;
+      renderQuad(resources.tailTMat, tNew);
+      cOld = cNew;
+      tOld = tNew;
+      showOthers();
+      renderer.setRenderTarget(null);
+      resources.finalMat.uniforms.u_c.value = cOld.texture;
+      resources.finalMat.uniforms.u_t.value = tOld.texture;
+      resources.finalMat.uniforms.u_opaque.value = resources.opaque.texture;
+      resources.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
+      resources.finalMat.uniforms.u_displayExposure.value = getExposure();
+      renderQuad(resources.finalMat, null);
+      return true;
+    } finally {
+      showOthers();
+      meshMaterials.forEach((_original, mesh) => {
+        mesh.material = meshMaterialIdentity.get(mesh);
+      });
+      materialState.forEach((state, mat) => {
+        ['blending', 'blendEquation', 'blendEquationAlpha', 'blendSrc', 'blendDst', 'blendSrcAlpha', 'blendDstAlpha', 'depthTest', 'depthWrite'].forEach(key => {
+          mat[key] = state[key];
+        });
+        if (state.uniformValues && mat.uniforms) state.uniformValues.forEach((value, key) => {
+          if (mat.uniforms[key]) mat.uniforms[key].value = value;
+        });
+      });
+      renderer.setRenderTarget(oldTarget);
+      if (renderer.setViewport && oldViewport) renderer.setViewport(oldViewport);
+      if (renderer.setScissor && oldScissor) renderer.setScissor(oldScissor);
+      if (renderer.setScissorTest) renderer.setScissorTest(oldScissorTest);
+      renderer.autoClear = oldAutoClear;
+      renderer.setClearColor(oldClearColor, oldClearAlpha);
+      renderer.shadowMap.autoUpdate = oldShadowUpdate;
+      linearUniforms.forEach((value, uniform) => {
+        uniform.value = value;
+      });
+      if (opts.setSceneLinear) opts.setSceneLinear(false);
+    }
+  };
+  return {
+    render,
+    supported: halfOk,
+    dispose: free
+  };
+};
+
+// createPeelPipeline(renderer, { getDisplayTransform, getDisplayExposure }): reusable depth-
 // peel order-independent-transparency graph, extracted from
 // createMtlxRenderView's original allocPeel/renderFrame so the USD Scene
 // (js/usd-scene-renderer.js) can peel its own mesh set with the exact
@@ -6746,10 +7492,56 @@ const applyPeelMaterialMode = (material, active) => {
 // like the Viewer, should NOT also pass here).
 const createPeelPipeline = (renderer, {
   getDisplayTransform: getDisplayTransformOpt,
+  getDisplayExposure: getDisplayExposureOpt,
   linearComposite,
-  opaqueOutput
+  opaqueOutput,
+  layers,
+  sceneRgbt = false
 } = {}) => {
+  // The RGB-T graph is explicitly Scene opt-in.  Viewer callers and legacy
+  // Scene callers retain the six-pass scalar implementation below until
+  // their generated materials expose the matching shader payload.
+  if (sceneRgbt) {
+    const rgbt = createRgbtPeelPipeline(renderer, {
+      getDisplayTransform: getDisplayTransformOpt,
+      getDisplayExposure: getDisplayExposureOpt,
+      opaqueOutput,
+      layers
+    });
+    const legacy = createPeelPipeline(renderer, {
+      getDisplayTransform: getDisplayTransformOpt,
+      getDisplayExposure: getDisplayExposureOpt,
+      linearComposite,
+      opaqueOutput
+    });
+    return {
+      supported: rgbt.supported,
+      peelLinearOk: rgbt.supported,
+      render: (scene, camera, transparentMeshes, opts = {}) => {
+        let reason = '';
+        const ok = rgbt.render(scene, camera, transparentMeshes, Object.assign({}, opts, {
+          fallback: false,
+          onUnsupported: r => {
+            reason = r;
+            if (opts.onUnsupported) opts.onUnsupported(r);
+          }
+        }));
+        if (!ok) return legacy.render(scene, camera, transparentMeshes, Object.assign({}, opts, {
+          onUnsupported: r => {
+            if (opts.onUnsupported) opts.onUnsupported(reason || r);
+          }
+        }));
+        return ok;
+      },
+      setMeshMode: applyPeelMaterialMode,
+      dispose: () => {
+        rgbt.dispose();
+        legacy.dispose();
+      }
+    };
+  }
   const getDT = getDisplayTransformOpt || getDisplayTransform;
+  const getExposure = getDisplayExposureOpt || displayExposureScale;
   // Hoisted once: gates half-float peel/accum storage, the merged
   // linear-opaque pass, and finalMat's shader choice (see allocPeel).
   // linearComposite === false forces the RGBA8 display-space path
@@ -6779,25 +7571,25 @@ const createPeelPipeline = (renderer, {
   // size (w, h). See the original createMtlxRenderView allocPeel
   // comment (still in git history) for the full opaqueRT/peelA/peelB/
   // accumRT/blend-factor derivation; unchanged here.
+  const mkColorDepthTarget = (w, h, half) => {
+    const rt = new THREE.WebGLRenderTarget(w, h, Object.assign({
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: true,
+      stencilBuffer: false
+    }, half ? {
+      type: THREE.HalfFloatType
+    } : {}));
+    rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
+    rt.depthTexture.minFilter = THREE.NearestFilter;
+    rt.depthTexture.magFilter = THREE.NearestFilter;
+    return rt;
+  };
   const allocPeel = (w, h) => {
     freePeel();
-    const mkColorDepthTarget = half => {
-      const rt = new THREE.WebGLRenderTarget(w, h, Object.assign({
-        minFilter: THREE.NearestFilter,
-        magFilter: THREE.NearestFilter,
-        depthBuffer: true,
-        stencilBuffer: false
-      }, half ? {
-        type: THREE.HalfFloatType
-      } : {}));
-      rt.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
-      rt.depthTexture.minFilter = THREE.NearestFilter;
-      rt.depthTexture.magFilter = THREE.NearestFilter;
-      return rt;
-    };
-    const opaqueRT = mkColorDepthTarget(peelLinearOk);
-    const peelA = mkColorDepthTarget(peelLinearOk);
-    const peelB = mkColorDepthTarget(peelLinearOk);
+    const opaqueRT = mkColorDepthTarget(w, h, peelLinearOk);
+    const peelA = mkColorDepthTarget(w, h, peelLinearOk);
+    const peelB = mkColorDepthTarget(w, h, peelLinearOk);
     const accumRT = new THREE.WebGLRenderTarget(w, h, Object.assign({
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
@@ -6836,20 +7628,27 @@ const createPeelPipeline = (renderer, {
     });
 
     // finalMat: composites accum over whatever is already on screen.
-    // When peelLinearOk, also folds in opaqueRT and applies the
-    // display transform exactly once (see ACES_SRGB_GLSL); otherwise
-    // accum is already display-encoded, plain passthrough blend.
-    const displayMode = getDT();
+    // When peelLinearOk, also folds in opaqueRT and applies the display
+    // transform exactly once (see DISPLAY_TRANSFORM_SWITCH_GLSL);
+    // otherwise accum is already display-encoded, plain passthrough
+    // blend. Transform and exposure are uniforms so live settings do not
+    // rebuild this quad program.
     const finalMat = new THREE.RawShaderMaterial(Object.assign({
       glslVersion: THREE.GLSL3,
       vertexShader: 'in vec3 position;\n' + 'in vec2 uv;\n' + 'out vec2 vUv;\n' + 'void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }\n',
-      fragmentShader: peelLinearOk ? 'precision highp float;\n' + 'in vec2 vUv;\n' + 'out vec4 o;\n' + 'uniform sampler2D tAccum;\n' + 'uniform sampler2D tOpaque;\n' + 'void main(){\n' + '    vec4 a = texture(tAccum, vUv);\n' + '    vec4 op = texture(tOpaque, vUv);\n' + '    vec3 lin = a.rgb + a.a * op.rgb;\n' + ACES_SRGB_GLSL('lin', 'encv', displayMode) + '    float outA = (1.0 - a.a) + a.a * op.a;\n' + '    o = vec4(encv, outA);\n' + '}\n' : 'precision highp float;\n' + 'in vec2 vUv;\n' + 'out vec4 o;\n' + 'uniform sampler2D tAccum;\n' + 'void main(){ vec4 a = texture(tAccum, vUv); o = vec4(a.rgb, a.a); }\n',
+      fragmentShader: peelLinearOk ? 'precision highp float;\n' + 'in vec2 vUv;\n' + 'out vec4 o;\n' + 'uniform sampler2D tAccum;\n' + 'uniform sampler2D tOpaque;\n' + 'uniform int u_displayTransform;\n' + 'uniform float u_displayExposure;\n' + 'void main(){\n' + '    vec4 a = texture(tAccum, vUv);\n' + '    vec4 op = texture(tOpaque, vUv);\n' + '    vec3 lin = a.rgb + a.a * op.rgb;\n' + '    ' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encv', 'u_displayTransform', 'u_displayExposure').trimStart() + '    float outA = (1.0 - a.a) + a.a * op.a;\n' + '    o = vec4(encv, outA);\n' + '}\n' : 'precision highp float;\n' + 'in vec2 vUv;\n' + 'out vec4 o;\n' + 'uniform sampler2D tAccum;\n' + 'void main(){ vec4 a = texture(tAccum, vUv); o = vec4(a.rgb, a.a); }\n',
       uniforms: peelLinearOk ? {
         tAccum: {
           value: null
         },
         tOpaque: {
           value: null
+        },
+        u_displayTransform: {
+          value: displayTransformId(getDT())
+        },
+        u_displayExposure: {
+          value: getExposure()
         }
       } : {
         tAccum: {
@@ -6925,6 +7724,21 @@ const createPeelPipeline = (renderer, {
     renderer.shadowMap.needsUpdate = true;
     renderer.autoClear = false;
     const hidden = [];
+    // u_peelLinear is an ACTIVE-pass flag, not a capability flag. Keep
+    // ordinary renders display encoded even on devices that support float
+    // targets, and restore every material's prior value on all exits.
+    const linearUniforms = new Map();
+    if (peelLinearOk) {
+      scene.traverse(object => {
+        const materials = object && object.material ? Array.isArray(object.material) ? object.material : [object.material] : [];
+        materials.forEach(material => {
+          const uniform = material && material.uniforms && material.uniforms.u_peelLinear;
+          if (!uniform || linearUniforms.has(uniform)) return;
+          linearUniforms.set(uniform, uniform.value);
+          uniform.value = 1;
+        });
+      });
+    }
     try {
       const savedVis = meshes.map(m => m.visible);
       meshes.forEach(m => {
@@ -7043,7 +7857,11 @@ const createPeelPipeline = (renderer, {
       renderer.setRenderTarget(null);
       peel.quadMesh.material = peel.finalMat;
       peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
-      if (peelLinearOk) peel.finalMat.uniforms.tOpaque.value = peel.opaqueRT.texture;
+      if (peelLinearOk) {
+        peel.finalMat.uniforms.tOpaque.value = peel.opaqueRT.texture;
+        peel.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
+        peel.finalMat.uniforms.u_displayExposure.value = getExposure();
+      }
       renderer.render(peel.quadScene, peel.quadCam);
     } finally {
       // restore GL state even if a pass above threw
@@ -7053,6 +7871,9 @@ const createPeelPipeline = (renderer, {
       renderer.shadowMap.autoUpdate = prevShadowAutoUpdate;
       meshes.forEach(m => {
         if (m.material.uniforms && m.material.uniforms.u_peelMode) m.material.uniforms.u_peelMode.value = 0;
+      });
+      linearUniforms.forEach((value, uniform) => {
+        uniform.value = value;
       });
       if (hidden.length) {
         hidden.forEach(o => {
@@ -8179,11 +9000,11 @@ const createMtlxRenderView = async ({
         u_shadowMatrix: {
           value: shadowOffMatrix()
         },
-        // Lets encodeDisplay's epilogue defer to finalMat
-        // when linear peel compositing is available (see
-        // the hoisted peelLinearOk const, above allocPeel).
+        // encodeDisplay defers to finalMat only while the
+        // peel pipeline draws a linear intermediate target.
+        // Ordinary opaque frames must remain display encoded.
         u_peelLinear: {
-          value: peelLinearOk ? 1 : 0
+          value: 0
         },
         // Injected by encodeDisplay, so MaterialX never
         // introspects it and the defaults pass below cannot
@@ -8210,6 +9031,21 @@ const createMtlxRenderView = async ({
           value: Array.from({
             length: SHADOW_CASTER_SLOTS
           }, () => new THREE.Vector4(0, 0, 1, 1))
+        },
+        u_shadowDepthPlanes: {
+          value: Array.from({
+            length: SHADOW_CASTER_SLOTS
+          }, () => new THREE.Vector4(0, 0, 0, 1))
+        },
+        u_shadowDepthRanges: {
+          value: Array.from({
+            length: SHADOW_CASTER_SLOTS
+          }, () => new THREE.Vector2(0, 1))
+        },
+        u_shadowSourceRadii: {
+          value: Array.from({
+            length: SHADOW_CASTER_SLOTS
+          }, () => new THREE.Vector4())
         },
         u_shadowSlotCaster: {
           value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)
@@ -8323,9 +9159,12 @@ const createMtlxRenderView = async ({
         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = {
           value: nLights
         };
-        if (has('u_lightData')) newUniforms.u_lightData = {
-          value: currentLights(lightData, envKeyLight, envRotationRad)
-        };
+        if (has('u_lightData')) {
+          const entries = currentLights(lightData, envKeyLight, envRotationRad);
+          newUniforms.u_lightData = {
+            value: entries
+          };
+        }
         if (DEBUG_SHADERS) {
           console.log('env bound → radiance:', radSampler && radSampler.name, '| irradiance:', irrSampler && irrSampler.name, envHasFile ? envPrefilteredIrr ? '(radiance + prefiltered irradiance files)' : '(radiance file; irradiance SH-synthesized)' : '(synthesized)', '| direct lights:', nLights, '(rig ' + rigCount + ' + key ' + (envKeyLight ? 1 : 0) + ')');
           const envUnbound = declared.filter(u => /sampler/i.test(u.type) && /env/i.test(u.name) && !newUniforms[u.name]);
@@ -9332,6 +10171,7 @@ Object.assign(window, {
   SHADOW_CASTER_SLOTS,
   SHADOW_LIGHT_SLOTS_MAX,
   createPeelPipeline,
+  createRgbtPeelPipeline,
   applyPeelMaterialMode,
   registerLiveView,
   unregisterLiveView,
