@@ -166,21 +166,31 @@
         stageMeshes(stage).forEach((mesh) => (Array.isArray(mesh && mesh.warnings) ? mesh.warnings : []).forEach((w) => out.push(String(w && (w.message || w.text || w) || 'Material warning'))));
         return out;
     };
-    const warningRecord = (value) => {
+    // Only wording that states an actual failure. Merely mentioning a layer
+    // or a reference is not evidence that anything went missing: USD logs
+    // plenty of informational composition chatter, and relabelling that as a
+    // missing layer invented a load failure that never happened.
+    const LAYER_FAILURE_RE = /(fail(?:ed|ure)? to (?:open|read|load|resolve)|could not (?:open|read|load|resolve|find)|cannot (?:open|read|load|resolve|find)|unable to (?:open|read|load|resolve|find)|does not exist|no such file|not found|unresolved)/i;
+    const warningRecord = (value, supplied) => {
         const raw = String(value || 'Scene warning');
         // Native USD can repeat the same failed asset once per composed prim.
         // Collapse that noisy form to a useful path while retaining the raw
         // diagnostic below a disclosure for debugging.
         const pathMatch = /(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.(?:usd|usda|usdc|usdz)\b/i.exec(raw);
-        if (pathMatch && /(?:open|read|reference|layer)/i.test(raw)) {
+        if (pathMatch && LAYER_FAILURE_RE.test(raw)) {
             const path = pathMatch[0].replace(/\\/g, '/');
-            return { key: 'missing-layer:' + path.toLowerCase(), label: 'Missing referenced layer: ' + path, raw };
+            // The user handed us this file, so whatever the message says, the
+            // layer is not missing. Keep the raw text rather than asserting a
+            // failure the loaded stage contradicts.
+            if (!(supplied && supplied.has(path.toLowerCase()))) {
+                return { key: 'missing-layer:' + path.toLowerCase(), label: 'Missing referenced layer: ' + path, raw };
+            }
         }
         return { key: raw, label: raw, raw };
     };
-    const warningRecords = (values) => {
+    const warningRecords = (values, supplied) => {
         const seen = new Set();
-        return values.map(warningRecord).filter((record) => {
+        return values.map((value) => warningRecord(value, supplied)).filter((record) => {
             if (seen.has(record.key)) return false;
             seen.add(record.key);
             return true;
@@ -512,7 +522,12 @@
         const meshes = stageMeshes(stage);
         const cameras = Array.isArray(stage && stage.cameras) ? stage.cameras : [];
         const materials = stageMaterials(stage);
-        const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
+        // Paths the user actually supplied, so a diagnostic naming one of
+        // them is never reported as a missing layer.
+        const suppliedPaths = new Set((Array.isArray(files) ? files : [])
+            .map((entry) => String((entry && entry.path) || '').replace(/\\/g, '/').toLowerCase())
+            .filter(Boolean));
+        const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []), suppliedPaths);
         const warnings = warningDetails.map((record) => record.label);
         // Diagnostics carry no severity of their own, so classify by wording:
         // anything that stopped working is an error, anything that merely

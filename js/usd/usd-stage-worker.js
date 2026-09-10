@@ -9,10 +9,18 @@
 const RUNTIME_DIR = new URL("../../vendor/usd-webview-bindings/", import.meta.url);
 let runtimePromise;
 let activeStage;
-const nativeWarnings = [];
+// Native diagnostics for the request being served. Module scope because the
+// console hook outlives any one call, but it MUST be cleared per request:
+// leaving it to accumulate reported one stage's diagnostics against the next.
+let nativeWarnings = [];
+// Set while a throwaway internal stage is composing (the PointInstancer
+// normal probe). Its diagnostics describe a synthetic layer the user never
+// supplied, so they must never surface as diagnostics about their scene.
+let suppressNativeWarnings = 0;
+const resetNativeWarnings = () => { nativeWarnings = []; suppressNativeWarnings = 0; };
 const originalConsoleError = console.error.bind(console);
 console.error = (...args) => {
-  nativeWarnings.push(args.map(value => String(value)).join(" "));
+  if (!suppressNativeWarnings) nativeWarnings.push(args.map(value => String(value)).join(" "));
   originalConsoleError(...args);
 };
 
@@ -890,6 +898,12 @@ function collectLights(api, root, graph, warn) {
       height: numberOf("inputs:height", null),
       length: numberOf("inputs:length", null),
       angle: numberOf("inputs:angle", null),
+      // UsdLux colour temperature. Only applied when enableColorTemperature
+      // is authored true; the Kelvin value alone means nothing without it,
+      // and its 6500 K default would otherwise tint every neutral light.
+      colorTemperature: numberOf("inputs:colorTemperature", null),
+      enableColorTemperature: valueOf("inputs:enableColorTemperature") === "1"
+        || valueOf("inputs:enableColorTemperature") === "true",
       normalize: valueOf("inputs:normalize") === "1" || valueOf("inputs:normalize") === "true",
       treatAsPoint: valueOf("treatAsPoint") === "1" || valueOf("treatAsPoint") === "true",
       // UsdLuxShapingAPI: how a real spot light is authored.
@@ -1268,6 +1282,9 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
     probeLines.push(`def "${name}" ( references = @${root}@<${probe.target}> ) {}`);
   }
   const probePath = `__usd_instance_normals_${Date.now()}.usda`;
+  // The probe layer is synthetic and lives at the VFS root, so its own
+  // composition diagnostics describe a file the user never supplied.
+  suppressNativeWarnings++;
   try {
     api.createDataFile(probePath, new TextEncoder().encode(probeLines.join("\n")));
     const probeSummary = api.openStage(probePath, true);
@@ -1321,6 +1338,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   } catch (error) {
     warnings.push(`PointInstancer normal recovery failed: ${error?.message ?? error}`);
   } finally {
+    suppressNativeWarnings = Math.max(0, suppressNativeWarnings - 1);
     if (api.deleteStageDriver) {
       try { api.deleteStageDriver(probePath); } catch {}
     }
@@ -1383,6 +1401,9 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
 }
 
 async function load(request) {
+  // Per request. Diagnostics from an earlier stage must not be reported
+  // against this one.
+  resetNativeWarnings();
   const api = await runtime();
   const fileTotal = (request.files ?? []).filter(file => file?.path).length;
   postMessage({ id: request.id, type: "progress", value: { phase: "worker", done: 0, total: fileTotal, fraction: 0.05, message: "Preparing input files" } });
@@ -1420,18 +1441,41 @@ async function load(request) {
         try {
           const textLayer = new TextDecoder().decode(data);
           usdaTexts.push(textLayer);
-          // The native bridge currently exposes the fallback value for an
-          // input but not its composed shader connection. The renderer keeps
-          // source MaterialX connections intact; make authored USD connections
-          // visible as an explicit limitation instead of
-          // guessing at layer strength or rewiring the graph from text.
+          // The native bridge exposes an input's fallback VALUE but not its
+          // composed shader CONNECTION. When a USD layer rewires an input to
+          // another node we cannot follow it, and both alternatives are worse
+          // than saying so: applying the sibling literal would silently swap a
+          // texture-driven input for a constant, and rebuilding the graph from
+          // layer text would mean guessing at layer strength. Keep the wiring
+          // the .mtlx already has, and name exactly what was skipped so the
+          // effect is checkable rather than mysterious.
+          const rewires = new Map();
+          const REWIRE_RE = /\binputs:([A-Za-z_][\w]*)\.connect\s*=\s*<([^>]+)>/;
           for (const line of textLayer.split(/\r?\n/)) {
-            if (/\binputs:[A-Za-z_][\w]*\.connect\s*=/.test(line)) {
-              scanWarnings.push(
-                "USD shader connections are not exposed by the MaterialX importer; source graph connections are preserved and authored rewires are not resolved (" + file.path + ")"
-              );
-              break;
-            }
+            const match = REWIRE_RE.exec(line);
+            if (!match) continue;
+            const input = match[1];
+            const target = match[2];
+            const cut = target.lastIndexOf("/");
+            const owner = cut > 0 ? target.slice(0, cut) : "";
+            const node = cut >= 0 ? target.slice(cut + 1) : target;
+            const key = owner + "|" + input;
+            if (!rewires.has(key)) rewires.set(key, { input, owner, node });
+          }
+          if (rewires.size) {
+            const items = Array.from(rewires.values());
+            const shown = items.slice(0, 4).map(entry => (entry.owner
+              ? '"' + entry.input + '" on ' + entry.owner + ' (wanted ' + entry.node + ')'
+              : '"' + entry.input + '" (wanted ' + entry.node + ')'));
+            const extra = items.length - shown.length;
+            scanWarnings.push(
+              "Kept the MaterialX wiring for " + shown.join(", ")
+              + (extra > 0 ? " and " + extra + " more" : "")
+              + ". This USD layer rewires " + (items.length === 1 ? "that input" : "those inputs")
+              + " to a different node, and composed USD shader connections are not visible"
+              + " to the MaterialX importer, so the rewire is not applied ("
+              + file.path + ")"
+            );
           }
         } catch { /* skip */ }
       } else if (isTextLayer) {

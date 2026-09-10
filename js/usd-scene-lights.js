@@ -104,11 +104,68 @@
         return true;
     }
 
+    // UsdLux colorTemperature, in Kelvin, as a linear Rec.709 multiplier
+    // normalised so 6500 K is exactly white. Without this every warm light in
+    // a stage renders neutral: bulbs are almost always authored as a white
+    // inputs:color plus a temperature, so ignoring the temperature throws away
+    // the only colour they carry.
+    //
+    // Krystek's cubic approximation of the Planckian locus in CIE 1960 uv,
+    // valid over 1000 to 15000 K, then uv to xy to linear Rec.709. Chosen over
+    // a piecewise curve fit because it is a closed form with a stated domain.
+    function planckianLinearRgb(kelvin) {
+        var t = Math.max(1000, Math.min(15000, kelvin));
+        var t2 = t * t;
+        var u = (0.860117757 + 1.54118254e-4 * t + 1.28641212e-7 * t2)
+            / (1 + 8.42420235e-4 * t + 7.08145163e-7 * t2);
+        var v = (0.317398726 + 4.22806245e-5 * t + 4.20481691e-8 * t2)
+            / (1 - 2.89741816e-5 * t + 1.61456053e-7 * t2);
+        var d = 2 * u - 8 * v + 4;
+        if (!(Math.abs(d) > 1e-9)) return [1, 1, 1];
+        var x = 3 * u / d;
+        var y = 2 * v / d;
+        if (!(y > 1e-9)) return [1, 1, 1];
+        // xyY at Y = 1 to XYZ, then XYZ to linear Rec.709.
+        var X = x / y;
+        var Z = (1 - x - y) / y;
+        var r = 3.2404542 * X - 1.5371385 - 0.4985314 * Z;
+        var g = -0.9692660 * X + 1.8760108 + 0.0415560 * Z;
+        var b = 0.0556434 * X - 0.2040259 + 1.0572252 * Z;
+        return [Math.max(0, r), Math.max(0, g), Math.max(0, b)];
+    }
+    // Cached so the reference is computed once, not per light.
+    var LOCUS_D65 = null;
+    // The tint actually applied. Divided through by the locus value at 6500 K
+    // so the UsdLux default temperature is an exact no-op: the raw locus is
+    // (1, 0.942, 0.992) there, which would tint every neutral light slightly
+    // magenta the moment enableColorTemperature was switched on.
+    function kelvinTint(kelvin) {
+        if (!LOCUS_D65) LOCUS_D65 = planckianLinearRgb(6500);
+        var c = planckianLinearRgb(kelvin);
+        var out = [
+            LOCUS_D65[0] > 1e-9 ? c[0] / LOCUS_D65[0] : 1,
+            LOCUS_D65[1] > 1e-9 ? c[1] / LOCUS_D65[1] : 1,
+            LOCUS_D65[2] > 1e-9 ? c[2] / LOCUS_D65[2] : 1,
+        ];
+        var peak = Math.max(out[0], out[1], out[2]);
+        if (!(peak > 1e-9)) return [1, 1, 1];
+        return [out[0] / peak, out[1] / peak, out[2] / peak];
+    }
+
     // Radiance carried into LightData.color, with intensity folded in so the
     // shader's own colour * intensity product lands on the right value.
     function radianceOf(record, scale, warn, metersPerUnit) {
         var color = Array.isArray(record.color) && record.color.length >= 3
             ? record.color : [1, 1, 1];
+        // UsdLux multiplies inputs:color by the temperature tint, and only
+        // when enableColorTemperature is set. The 6500 K default is a neutral
+        // no-op by construction, so an authored-but-disabled value changes
+        // nothing.
+        if (record.enableColorTemperature) {
+            var kelvin = num(record.colorTemperature, 6500);
+            var tint = kelvinTint(kelvin);
+            color = [color[0] * tint[0], color[1] * tint[1], color[2] * tint[2]];
+        }
         var scalar = num(record.intensity, 1) * Math.pow(2, num(record.exposure, 0));
         // A point stand-in carries radiant intensity, which is radiance times
         // area. A uniformly radiating sphere has an additional 1/4 factor
