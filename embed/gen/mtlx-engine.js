@@ -6975,10 +6975,23 @@ const createRgbtPeelPipeline = (renderer, {
   getDisplayTransform: getDisplayTransformOpt,
   getDisplayExposure: getDisplayExposureOpt,
   layers = PEEL_LAYERS,
-  opaqueOutput = false
+  opaqueOutput = false,
+  getBloom
 } = {}) => {
   const getDT = getDisplayTransformOpt || getDisplayTransform;
   const getExposure = getDisplayExposureOpt || displayExposureScale;
+  // Bloom is opt-in per caller. The Material Viewer passes nothing, so
+  // strength stays 0, the extract and blur passes are skipped entirely and
+  // finalMat adds a black texture: its output is unchanged.
+  const bloomSettings = () => {
+    const raw = typeof getBloom === 'function' ? getBloom() : null;
+    const strength = raw ? Math.max(0, Number(raw.strength) || 0) : 0;
+    return {
+      strength,
+      threshold: raw && Number.isFinite(Number(raw.threshold)) ? Math.max(0, Number(raw.threshold)) : 1,
+      knee: raw && Number.isFinite(Number(raw.knee)) ? Math.max(1e-4, Number(raw.knee)) : 0.5
+    };
+  };
   const halfOk = !!renderer.extensions.get('EXT_color_buffer_float');
   let resources = null;
   // A grouped USD mesh can contain an authored opaque submaterial beside a
@@ -6993,11 +7006,12 @@ const createRgbtPeelPipeline = (renderer, {
   };
   const free = () => {
     if (!resources) return;
-    [resources.opaque, resources.layerC0, resources.layerC1, resources.layerT, resources.tail, resources.c0, resources.c1, resources.t0, resources.t1].forEach(disposeTarget);
+    [resources.opaque, resources.layerC0, resources.layerC1, resources.layerT, resources.tail, resources.c0, resources.c1, resources.t0, resources.t1, resources.bloomA, resources.bloomB].forEach(disposeTarget);
     if (resources.quad && resources.quad.geometry) resources.quad.geometry.dispose();
-    [resources.initMat, resources.updateCMat, resources.updateTMat, resources.tailFoldMat, resources.tailTMat, resources.finalMat].forEach(m => {
+    [resources.initMat, resources.updateCMat, resources.updateTMat, resources.tailFoldMat, resources.tailTMat, resources.finalMat, resources.bloomExtractMat, resources.bloomBlurMat].forEach(m => {
       if (m) m.dispose();
     });
+    if (resources.bloomBlack) resources.bloomBlack.dispose();
     if (opaqueDiscardMaterial) {
       opaqueDiscardMaterial.dispose();
       opaqueDiscardMaterial = null;
@@ -7120,10 +7134,28 @@ const createRgbtPeelPipeline = (renderer, {
       depthTest: false,
       depthWrite: false
     });
-    const finalMat = new THREE.RawShaderMaterial({
+    // Bloom runs on the LINEAR composite, before the display transform.
+    // Blooming display-encoded pixels would treat a 1.0 white wall and a
+    // 3.24 emitter identically, which is backwards: the point is that
+    // small bright emitters bleed and matte surfaces do not.
+    const bloomW = Math.max(1, Math.floor(w / 2));
+    const bloomH = Math.max(1, Math.floor(h / 2));
+    const bloomA = target(bloomW, bloomH);
+    const bloomB = target(bloomW, bloomH);
+    [bloomA, bloomB].forEach(rt => {
+      rt.texture.minFilter = THREE.LinearFilter;
+      rt.texture.magFilter = THREE.LinearFilter;
+    });
+    // Bound when bloom is off, so finalMat adds exactly zero and the
+    // Material Viewer's output is untouched.
+    const bloomBlack = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    bloomBlack.needsUpdate = true;
+    // The same linear combine finalMat performs, then a soft-knee bright
+    // pass so a highlight ramps in instead of switching on at threshold.
+    const bloomExtractMat = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: quadVertex,
-      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' + 'uniform int u_displayTransform; uniform float u_displayExposure;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' + 'vec3 lin=c.rgb+t.rgb*b.rgb;\n' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encoded', 'u_displayTransform', 'u_displayExposure') + 'float transA=1.0-min(t.r,min(t.g,t.b));\n' + 'float a=' + (opaqueOutput ? '1.0' : 'b.a+(1.0-b.a)*transA') + ';o=vec4(encoded,a);}\n',
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' + 'uniform float u_threshold; uniform float u_knee;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' + 'vec3 lin=c.rgb+t.rgb*b.rgb;\n' + 'float lum=dot(lin,vec3(0.2126,0.7152,0.0722));\n' + 'float soft=clamp((lum-u_threshold+u_knee)/(2.0*u_knee),0.0,1.0);\n' + 'float weight=max(soft*soft*u_knee,max(lum-u_threshold,0.0));\n' + 'o=vec4(lin*(lum>1e-6?weight/lum:0.0),1.0);}\n',
       uniforms: {
         u_c: {
           value: null
@@ -7133,6 +7165,54 @@ const createRgbtPeelPipeline = (renderer, {
         },
         u_opaque: {
           value: null
+        },
+        u_threshold: {
+          value: 1
+        },
+        u_knee: {
+          value: 0.5
+        }
+      },
+      blending: THREE.NoBlending,
+      depthTest: false,
+      depthWrite: false
+    });
+    // Separable gaussian, nine taps, run horizontally then vertically.
+    const bloomBlurMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_src; uniform vec2 u_step;\n' + 'void main(){\n' + 'float wts[5];wts[0]=0.227027;wts[1]=0.194594;wts[2]=0.121621;wts[3]=0.054054;wts[4]=0.016216;\n' + 'vec3 sum=texture(u_src,vUv).rgb*wts[0];\n' + 'for(int i=1;i<5;i++){vec2 d=u_step*float(i);\n' + 'sum+=texture(u_src,vUv+d).rgb*wts[i];sum+=texture(u_src,vUv-d).rgb*wts[i];}\n' + 'o=vec4(sum,1.0);}\n',
+      uniforms: {
+        u_src: {
+          value: null
+        },
+        u_step: {
+          value: new THREE.Vector2()
+        }
+      },
+      blending: THREE.NoBlending,
+      depthTest: false,
+      depthWrite: false
+    });
+    const finalMat = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader: quadVertex,
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' + 'uniform int u_displayTransform; uniform float u_displayExposure;\n' + 'uniform sampler2D u_bloom; uniform float u_bloomStrength;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' + 'vec3 lin=c.rgb+t.rgb*b.rgb;\n' + 'lin+=texture(u_bloom,vUv).rgb*u_bloomStrength;\n' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encoded', 'u_displayTransform', 'u_displayExposure') + 'float transA=1.0-min(t.r,min(t.g,t.b));\n' + 'float a=' + (opaqueOutput ? '1.0' : 'b.a+(1.0-b.a)*transA') + ';o=vec4(encoded,a);}\n',
+      uniforms: {
+        u_c: {
+          value: null
+        },
+        u_t: {
+          value: null
+        },
+        u_opaque: {
+          value: null
+        },
+        u_bloom: {
+          value: bloomBlack
+        },
+        u_bloomStrength: {
+          value: 0
         },
         u_displayTransform: {
           value: displayTransformId(getDT())
@@ -7166,7 +7246,14 @@ const createRgbtPeelPipeline = (renderer, {
       updateTMat,
       tailFoldMat,
       tailTMat,
-      finalMat
+      finalMat,
+      bloomA,
+      bloomB,
+      bloomExtractMat,
+      bloomBlurMat,
+      bloomW,
+      bloomH,
+      bloomBlack
     };
     quad.material = initMat;
     renderer.compile(quadScene, quadCam);
@@ -7436,6 +7523,34 @@ const createRgbtPeelPipeline = (renderer, {
       cOld = cNew;
       tOld = tNew;
       showOthers();
+      // Bloom: bright-pass the linear composite at half resolution, blur
+      // it separably, and hand it to finalMat. Skipped entirely when the
+      // caller does not ask for it, so the cost is zero and the composite
+      // is bit-identical to the no-bloom path.
+      const bloom = bloomSettings();
+      if (bloom.strength > 0) {
+        resources.bloomExtractMat.uniforms.u_c.value = cOld.texture;
+        resources.bloomExtractMat.uniforms.u_t.value = tOld.texture;
+        resources.bloomExtractMat.uniforms.u_opaque.value = resources.opaque.texture;
+        resources.bloomExtractMat.uniforms.u_threshold.value = bloom.threshold;
+        resources.bloomExtractMat.uniforms.u_knee.value = bloom.knee;
+        renderQuad(resources.bloomExtractMat, resources.bloomA);
+        // Two ping-pong passes widen the kernel without a mip chain.
+        for (let pass = 0; pass < 2; pass++) {
+          const spread = 1 + pass * 2;
+          resources.bloomBlurMat.uniforms.u_src.value = resources.bloomA.texture;
+          resources.bloomBlurMat.uniforms.u_step.value.set(spread / resources.bloomW, 0);
+          renderQuad(resources.bloomBlurMat, resources.bloomB);
+          resources.bloomBlurMat.uniforms.u_src.value = resources.bloomB.texture;
+          resources.bloomBlurMat.uniforms.u_step.value.set(0, spread / resources.bloomH);
+          renderQuad(resources.bloomBlurMat, resources.bloomA);
+        }
+        resources.finalMat.uniforms.u_bloom.value = resources.bloomA.texture;
+        resources.finalMat.uniforms.u_bloomStrength.value = bloom.strength;
+      } else {
+        resources.finalMat.uniforms.u_bloom.value = resources.bloomBlack;
+        resources.finalMat.uniforms.u_bloomStrength.value = 0;
+      }
       renderer.setRenderTarget(null);
       resources.finalMat.uniforms.u_c.value = cOld.texture;
       resources.finalMat.uniforms.u_t.value = tOld.texture;
@@ -7496,7 +7611,8 @@ const createPeelPipeline = (renderer, {
   linearComposite,
   opaqueOutput,
   layers,
-  sceneRgbt = false
+  sceneRgbt = false,
+  getBloom
 } = {}) => {
   // The RGB-T graph is explicitly Scene opt-in.  Viewer callers and legacy
   // Scene callers retain the six-pass scalar implementation below until
@@ -7506,7 +7622,8 @@ const createPeelPipeline = (renderer, {
       getDisplayTransform: getDisplayTransformOpt,
       getDisplayExposure: getDisplayExposureOpt,
       opaqueOutput,
-      layers
+      layers,
+      getBloom
     });
     const legacy = createPeelPipeline(renderer, {
       getDisplayTransform: getDisplayTransformOpt,
