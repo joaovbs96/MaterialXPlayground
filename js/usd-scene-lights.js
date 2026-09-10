@@ -17,6 +17,7 @@
     var LIGHT_TYPE_DIRECTIONAL = 1;
     var LIGHT_TYPE_POINT = 2;
     var LIGHT_TYPE_SPOT = 3;
+    var LIGHT_SOURCE_KIND_AREA = 1;
 
     var DEG = Math.PI / 180;
 
@@ -65,7 +66,11 @@
         var kind = String(record.type || '').toLowerCase();
         if (kind === 'spherelight') {
             var r = num(record.radius, 0.5) * ((scale.x + scale.y + scale.z) / 3);
-            return 4 * Math.PI * r * r;
+            // A uniformly radiating sphere has total power 4*pi^2*r^2*L,
+            // while the equivalent isotropic point carries power/(4*pi) =
+            // pi*r^2*L. The point-light stand-in therefore needs one quarter
+            // of the sphere surface area as its radiant intensity.
+            return Math.PI * r * r;
         }
         if (kind === 'disklight') {
             var rd = num(record.radius, 0.5) * ((scale.x + scale.y) / 2);
@@ -81,18 +86,63 @@
         return 1;
     }
 
+    function validAreaDimensions(record, kind, warn) {
+        var fields = kind === 'rectlight' ? ['width', 'height']
+            : kind === 'disklight' ? ['radius']
+                : kind === 'spherelight' ? ['radius']
+                    : kind === 'cylinderlight' ? ['radius', 'length'] : [];
+        for (var i = 0; i < fields.length; i++) {
+            var key = fields[i];
+            var raw = record[key];
+            if (raw === null || raw === undefined || raw === '') continue;
+            var value = Number(raw);
+            if (!Number.isFinite(value) || value < 0) {
+                warn('Light ' + record.primPath + ' has invalid ' + key + ' for ' + record.type + '; light skipped');
+                return false;
+            }
+        }
+        return true;
+    }
+
     // Radiance carried into LightData.color, with intensity folded in so the
     // shader's own colour * intensity product lands on the right value.
-    function radianceOf(record, scale, warn) {
+    function radianceOf(record, scale, warn, metersPerUnit) {
         var color = Array.isArray(record.color) && record.color.length >= 3
             ? record.color : [1, 1, 1];
         var scalar = num(record.intensity, 1) * Math.pow(2, num(record.exposure, 0));
         // A point stand-in carries radiant intensity, which is radiance times
-        // area. With normalize the authored value is already power-like, so
-        // the area cancels; without it the area has to be multiplied back in.
-        if (!record.normalize) {
-            var area = emitterArea(record, scale);
-            if (area > 1e-9) scalar *= area;
+        // area. A uniformly radiating sphere has an additional 1/4 factor
+        // when normalize is authored: its projected area is pi*r*r while its
+        // surface area is 4*pi*r*r. Other normalized area lights keep the
+        // authored power-like intensity; without normalize the area has to
+        // be multiplied back in.
+        var kind = String(record.type || '').toLowerCase();
+        var hasArea = kind === 'spherelight' || kind === 'disklight'
+            || kind === 'rectlight' || kind === 'cylinderlight';
+        var area = null;
+        if (hasArea) {
+            if (!validAreaDimensions(record, kind, warn)) return null;
+            area = emitterArea(record, scale);
+            if (!(Number.isFinite(area) && area >= 0)) {
+                warn('Light ' + record.primPath + ' has invalid emitter area; light skipped');
+                return null;
+            }
+            // A zero-area unnormalized emitter carries no power. Normalized
+            // lights retain their authored point-limit intensity as area
+            // tends to zero (including a zero-radius sphere treated as point).
+            if (area === 0 && !record.normalize) scalar = 0;
+            else if (kind === 'spherelight' && record.normalize) scalar *= 0.25;
+            else if (!record.normalize) scalar *= area;
+        }
+        // The renderer scales stage coordinates into metres. Preserve the
+        // authored inverse-square irradiance by scaling finite point-like
+        // intensity by metersPerUnit squared. Unnormalized area lights have
+        // already received this factor through their physical emitter area;
+        // directional lights have no distance attenuation.
+        var stageScale = num(metersPerUnit, 1);
+        if (stageScale > 0 && kind !== 'distantlight'
+            && (!hasArea || record.normalize)) {
+            scalar *= stageScale * stageScale;
         }
         if (num(record.diffuse, 1) !== 1 || num(record.specular, 1) !== 1) {
             warn('Light ' + record.primPath + ' sets diffuse/specular multipliers, which are not applied');
@@ -227,6 +277,7 @@
         var rootMatrix = opts.rootMatrix || null;
         var warn = typeof opts.warn === 'function' ? opts.warn : function () {};
         var limit = Number.isFinite(opts.limit) ? opts.limit : 16;
+        var metersPerUnit = num(opts.metersPerUnit, 1);
         var list = Array.isArray(lights) ? lights : [];
         var prepared = [];
 
@@ -237,8 +288,8 @@
             if (kind === 'domelight') continue; // handled as the environment
             var pose = poseOf(record, rootMatrix);
             var scale = scaleOf(pose.matrix);
-            var rad = radianceOf(record, scale, warn);
-            if (!(rad.intensity > 0)) continue;
+            var rad = radianceOf(record, scale, warn, metersPerUnit);
+            if (!rad || !(rad.intensity > 0)) continue;
 
             var entry = {
                 primPath: record.primPath,
@@ -247,6 +298,11 @@
                 position: pose.position,
                 direction: pose.direction,
                 decay_rate: 2,
+                // Rects and disks are planar emitters. Their point/spot
+                // samples receive a per-fragment source cosine in the
+                // generated shader. Cylinders are left as point samples until
+                // their varying curved normals can be represented faithfully.
+                sourceKind: (kind === 'rectlight' || kind === 'disklight') ? LIGHT_SOURCE_KIND_AREA : 0,
             };
 
             if (kind === 'distantlight') {
@@ -299,6 +355,10 @@
                     position: item.entry.position.clone(),
                     direction: item.entry.direction.clone(),
                     type: item.entry.type,
+                    sourceKind: item.entry.sourceKind,
+                    // Preserve authored source size for shadow penumbra
+                    // estimation even when the area light fits one sample.
+                    extent: item.extent,
                 };
                 out.push(item.entry);
                 if (item.extent > 0) {
@@ -319,6 +379,8 @@
                 position: item.entry.position.clone(),
                 direction: item.entry.direction.clone(),
                 type: item.entry.type,
+                sourceKind: item.entry.sourceKind,
+                extent: item.extent,
             };
             for (var sIdx = 0; sIdx < samples.length; sIdx++) {
                 var local = samples[sIdx].clone().applyMatrix4(item.matrix);

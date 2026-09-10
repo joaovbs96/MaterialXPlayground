@@ -259,24 +259,27 @@
         const [skyVisOn, setSkyVisOn] = React.useState(true);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
         const [transparentPrims, setTransparentPrims] = React.useState([]);
-        // Local mirror of the engine's persisted Force Transparency flag
-        // (js/mtlx-engine.js), resynced on 'mtlx-settings-changed' so a
-        // toggle from the Viewer or Compare tab reflects here too.
-        const [forceTransparency, setForceTransparencyState] = React.useState(
-            () => !!(window.getForceTransparency && window.getForceTransparency())
+        // Scene owns its transparency preference. It intentionally does not
+        // mirror the shared Viewer Force Transparency setting: Scene defaults
+        // to authored transmission/opacity and has its own explicit opt-out.
+        const [sceneTransparency, setSceneTransparencyState] = React.useState(
+            () => (typeof window.getUsdSceneTransparency === 'function' ? !!window.getUsdSceneTransparency() : true)
         );
         React.useEffect(() => {
-            const onSettingsChanged = (e) => {
-                if (!e.detail || e.detail.key !== 'forceTransparency') return;
-                setForceTransparencyState(!!e.detail.value);
-                // The peel set only exists while the flag is on, so refresh the
-                // sidebar list from the handle instead of leaving it stale.
+            const onSceneTransparencyChanged = (e) => {
+                const detail = e && e.detail;
+                const value = detail && detail.value != null ? detail.value : detail && detail.enabled;
+                if (value == null) return;
+                const enabled = !!value;
+                setSceneTransparencyState(enabled);
+                // The transparent-prims list only exists while Scene
+                // transparency is enabled, so refresh it from the live handle.
                 const fn = handleRef.current && handleRef.current.getTransparentPrims;
-                if (!e.detail.value) setTransparentPrims([]);
+                if (!enabled) setTransparentPrims([]);
                 else if (typeof fn === 'function') { try { setTransparentPrims(fn()); } catch (err) { /* not rendered yet */ } }
             };
-            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
-            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            window.addEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
+            return () => window.removeEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
         }, []);
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
@@ -459,7 +462,9 @@
                         setAoOn(ao.enabled);
                         setAoStrength(ao.strength);
                     }
-                    if (nextHandle.getTransparentPrims && window.getForceTransparency && window.getForceTransparency()) {
+                    const transparencyEnabled = typeof window.getUsdSceneTransparency === 'function'
+                        ? !!window.getUsdSceneTransparency() : sceneTransparency;
+                    if (nextHandle.getTransparentPrims && transparencyEnabled) {
                         try { setTransparentPrims(nextHandle.getTransparentPrims()); } catch (e) { /* pre-render */ }
                     }
                     if (nextHandle.getStageLights) {
@@ -935,22 +940,22 @@
                     </div>
                     <label
                         className="flex items-center justify-between cursor-pointer"
-                        title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
+                        title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
                     >
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                            Force Transparency
+                            Transparency
                             <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
                         </span>
                         <Toggle
-                            checked={forceTransparency}
+                            checked={sceneTransparency}
                             onChange={(next) => {
-                                setForceTransparencyState(next);
-                                window.setForceTransparency && window.setForceTransparency(next);
+                                setSceneTransparencyState(next);
+                                window.setUsdSceneTransparency && window.setUsdSceneTransparency(next);
                             }}
                         />
                     </label>
                     <div className="mt-1 text-[11px] text-gray-400">
-                        Render opacity/transmission with real alpha blending in the Scene. When off, transparent materials render opaque. Applies immediately.
+                        Render opacity/transmission authored by scene materials. When off, transparent materials render opaque. Applies immediately.
                     </div>
                     {stageLightInfo.count > 0 ? (
                         <React.Fragment>
@@ -1098,7 +1103,7 @@
                                         id="transparent"
                                         icon="color-filter"
                                         tone="text-sky-300/90"
-                                        label="Force Transparency"
+                                        label="Transparency"
                                         lines={transparentPrims.map((entry) => entry.primPath + ' [' + entry.materialPath + ']')}
                                     >
                                         {transparentPrims.map((entry, i) => (

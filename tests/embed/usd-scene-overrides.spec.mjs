@@ -1,8 +1,8 @@
 // tests/embed/usd-scene-overrides.spec.mjs: USD `over` blocks on a
 // referenced MaterialX material (usd-stage-worker.js collectMaterialOverrides,
 // js/usd-scene-renderer.js applyUsdOverrides) must be applied onto the
-// resolved document before generation: a scalar override wins over the
-// file's own value, an asset override swaps the bound texture, an override
+// resolved document before generation: an unconnected scalar override wins
+// over the file's own value, an asset override swaps the bound texture, an override
 // on a node named only in the .mtlx (never a `def` in any usda) is found
 // and applied via the document-text scan, and an override naming a node
 // that does not exist anywhere produces exactly one warning.
@@ -95,7 +95,7 @@ test('@scene USD overrides on a referenced MaterialX material apply a scalar ove
   expect(midMean).toBeTruthy();
   expect(rightMean).toBeTruthy();
 
-  // Left quad: the file's constant blue is overridden to red.
+  // Left quad: the file's blue literal is overridden to red.
   expect(leftMean.r).toBeGreaterThan(150);
   expect(leftMean.g).toBeLessThan(60);
   expect(leftMean.b).toBeLessThan(60);

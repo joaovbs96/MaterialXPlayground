@@ -76,6 +76,157 @@ function normalizePath(path) {
   return parts.join("/");
 }
 
+// OpenStage's public summary currently exposes upAxis but omits the resolved
+// metersPerUnit metadata.  Recover only the root USDA header here. Stage
+// metadata lives in the root layer's header; values inside customLayerData,
+// sublayers, prims or quoted comments must not be mistaken for stage units.
+// Binary roots are deliberately left to the native API (or the USD default)
+// because this worker cannot parse a crate layer. Keep this bounded: large
+// ASCII geometry files must not be decoded into a second whole-file string.
+const USD_HEADER_SCAN_BYTES = 1024 * 1024;
+
+function parseRootUsdMetrics(data) {
+  if (data == null) return { ascii: false, metersPerUnit: null, upAxis: null };
+  let bytes;
+  try {
+    if (data instanceof Uint8Array) bytes = data;
+    else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+    else bytes = arrayCopy(data, Uint8Array);
+  } catch { bytes = null; }
+  if (!bytes || bytes.length < 5) return { ascii: false, metersPerUnit: null, upAxis: null };
+  let offset = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  const magic = String.fromCharCode(...bytes.slice(offset, offset + 5));
+  if (magic !== "#usda") return { ascii: false, metersPerUnit: null, upAxis: null };
+  const scanTruncated = bytes.length - offset > USD_HEADER_SCAN_BYTES;
+  let source;
+  try {
+    // Decode from after the optional BOM. TextDecoder normally removes a BOM,
+    // but using an offset also keeps source indices aligned in every browser.
+    source = new TextDecoder().decode(bytes.slice(offset, offset + USD_HEADER_SCAN_BYTES));
+  } catch {
+    return { ascii: true, metersPerUnit: null, upAxis: null, truncated: scanTruncated };
+  }
+
+  // The root layer metadata parenthesis must be the first non-comment token
+  // after the #usda version line. A later '(' can belong to a prim field and
+  // must never be treated as stage metadata.
+  let i = source.indexOf("\n");
+  if (i < 0) return { ascii: true, metersPerUnit: null, upAxis: null, truncated: scanTruncated, headerFound: false };
+  i++;
+  const skipSpaceAndCommentsAt = (at) => {
+    let cursor = at;
+    for (;;) {
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor++;
+      if (source[cursor] !== '#') return cursor;
+      while (cursor < source.length && source[cursor] !== '\n' && source[cursor] !== '\r') cursor++;
+    }
+  };
+  const open = skipSpaceAndCommentsAt(i);
+  if (source[open] !== '(') {
+    // Seeing a non-'(' token immediately after the version line proves that
+    // this layer has no root metadata block, even when geometry continues
+    // beyond the bounded prefix.
+    return { ascii: true, metersPerUnit: null, upAxis: null, truncated: false, headerFound: false };
+  }
+
+  let metersPerUnit = null;
+  let upAxis = null;
+  let depthParen = 1;
+  let depthBracket = 0;
+  let depthBrace = 0;
+  let quote = null;
+  let escaped = false;
+  let comment = false;
+  const isIdentStart = c => /[A-Za-z_]/.test(c);
+  const isIdent = c => /[A-Za-z0-9_:]/.test(c);
+  const skipSpaceAndComments = (at) => {
+    let cursor = at;
+    for (;;) {
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor++;
+      if (source[cursor] !== '#') return cursor;
+      while (cursor < source.length && source[cursor] !== '\n' && source[cursor] !== '\r') cursor++;
+    }
+  };
+  let closed = false;
+  for (i = open + 1; i < source.length && depthParen > 0; i++) {
+    const c = source[i];
+    if (comment) { if (c === "\n" || c === "\r") comment = false; continue; }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (quote === 'tripleSingle' && source.startsWith("'''", i)) { quote = null; i += 2; }
+      else if (quote === 'triple' && source.startsWith('"""', i)) { quote = null; i += 2; }
+      else if (quote === 'single' && c === "'") quote = null;
+      else if (quote === 'double' && c === '"') quote = null;
+      continue;
+    }
+    if (c === '#') { comment = true; continue; }
+    if (source.startsWith("'''", i)) { quote = 'tripleSingle'; i += 2; continue; }
+    if (source.startsWith('"""', i)) { quote = 'triple'; i += 2; continue; }
+    if (c === "'") { quote = 'single'; continue; }
+    if (c === '"') { quote = 'double'; continue; }
+    // Asset paths are delimited by @ and may contain parentheses or quotes.
+    if (c === '@') {
+      const close = source.indexOf('@', i + 1);
+      if (close < 0) break;
+      i = close;
+      continue;
+    }
+    if (c === '(') { depthParen++; continue; }
+    if (c === ')') { depthParen--; if (depthParen === 0) closed = true; continue; }
+    if (c === '[') { depthBracket++; continue; }
+    if (c === ']') { depthBracket = Math.max(0, depthBracket - 1); continue; }
+    if (c === '{') { depthBrace++; continue; }
+    if (c === '}') { depthBrace = Math.max(0, depthBrace - 1); continue; }
+    if (depthParen !== 1 || depthBracket !== 0 || depthBrace !== 0 || !isIdentStart(c)) continue;
+    let end = i + 1;
+    while (end < source.length && isIdent(source[end])) end++;
+    const key = source.slice(i, end);
+    const equals = skipSpaceAndComments(end);
+    if (source[equals] !== '=') { i = end - 1; continue; }
+    const valueStart = skipSpaceAndComments(equals + 1);
+    if (key === 'metersPerUnit' && metersPerUnit === null) {
+      const match = source.slice(valueStart).match(/^[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?/);
+      const value = match ? Number(match[0]) : NaN;
+      if (Number.isFinite(value) && value > 0) metersPerUnit = value;
+    } else if (key === 'upAxis' && upAxis === null && (source[valueStart] === '"' || source[valueStart] === "'")) {
+      const delimiter = source[valueStart];
+      const triple = source.startsWith(delimiter.repeat(3), valueStart);
+      const start = valueStart + (triple ? 3 : 1);
+      const closeToken = delimiter.repeat(triple ? 3 : 1);
+      const close = source.indexOf(closeToken, start);
+      const value = close >= 0 ? source.slice(start, close).toUpperCase() : '';
+      if (value === 'Y' || value === 'Z') upAxis = value;
+    }
+    i = end - 1;
+  }
+  return { ascii: true, metersPerUnit, upAxis, truncated: scanTruncated && !closed, headerFound: closed };
+}
+
+function resolveStageMetrics(summary, rootMetrics) {
+  const nativeMeters = Number(summary?.metersPerUnit);
+  const nativeUp = text(summary?.upAxis)?.toUpperCase();
+  const metersPerUnit = Number.isFinite(nativeMeters) && nativeMeters > 0
+    ? nativeMeters
+    : Number.isFinite(rootMetrics?.metersPerUnit) && rootMetrics.metersPerUnit > 0
+      ? rootMetrics.metersPerUnit : 0.01; // USD's documented default
+  const headerUp = rootMetrics?.upAxis === 'Y' || rootMetrics?.upAxis === 'Z' ? rootMetrics.upAxis : null;
+  const upAxis = nativeUp === 'Y' || nativeUp === 'Z' ? nativeUp : (headerUp || 'Y');
+  const warnings = [];
+  if (!(Number.isFinite(nativeMeters) && nativeMeters > 0)) {
+    if (rootMetrics?.ascii && Number.isFinite(rootMetrics.metersPerUnit)) {
+      warnings.push(`[info] Native USD summary omitted metersPerUnit; using root USDA header value ${rootMetrics.metersPerUnit}`);
+    } else if (!rootMetrics?.ascii) {
+      warnings.push('[info] Native USD summary omitted metersPerUnit for a binary root; using USD default 0.01 (authored binary metadata unavailable)');
+    }
+  }
+  if (!(nativeUp === 'Y' || nativeUp === 'Z')) {
+    if (headerUp) warnings.push(`[info] Native USD summary omitted upAxis; using root USDA header value ${headerUp}`);
+    else if (!rootMetrics?.ascii) warnings.push('[info] Native USD summary omitted upAxis for a binary root; using USD default Y (authored binary metadata unavailable)');
+  }
+  return { metersPerUnit, upAxis, warnings };
+}
+
 function copyTexture(texture, assets) {
   if (!texture) return undefined;
   const data = arrayCopy(texture.data, Uint8Array);
@@ -1177,7 +1328,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   return warnings;
 }
 
-function copyStageResult(summary, draw, payloads, cameras, lights) {
+function copyStageResult(summary, draw, payloads, cameras, lights, metrics = null) {
   const assets = new Map();
   const materials = new Map();
   for (const entry of arrayItems(payloads)) {
@@ -1218,8 +1369,8 @@ function copyStageResult(summary, draw, payloads, cameras, lights) {
   const warnings = Array.from(new Set(nativeWarnings));
   return {
     rootPath: summary?.rootFile ?? "",
-    upAxis: summary?.upAxis,
-    metersPerUnit: summary?.metersPerUnit,
+    upAxis: metrics?.upAxis ?? summary?.upAxis,
+    metersPerUnit: metrics?.metersPerUnit ?? summary?.metersPerUnit,
     summary: summary ?? null,
     meshes,
     materials: materialList,
@@ -1244,6 +1395,8 @@ async function load(request) {
   const usdaTexts = [];
   const OVERRIDE_SCAN_MAX_BYTES = 32 * 1024 * 1024;
   const scanWarnings = [];
+  const requestedRootPath = normalizePath(request.rootPath);
+  let rootMetrics = null;
   // Uploaded .mtlx file text, keyed by normalized path, so a material whose
   // native materialX.data payload is unavailable can still fall back to its
   // sourceAsset's own uploaded bytes when enumerating override candidates.
@@ -1257,13 +1410,30 @@ async function load(request) {
       ? new Uint8Array(source)
       : arrayCopy(source, Uint8Array);
     if (!data) continue;
+    if (normalizePath(file.path) === requestedRootPath) rootMetrics = parseRootUsdMetrics(data);
     // Only text layers (#usda magic) under the cap are scanned; a binary
     // crate (PXR-USDC) decoded as a string can exceed V8's limit and kill
     // the tab before the stage loads (1.86 GB Lion crate, 2026-09-08).
     if (/\.usda?$/i.test(String(file.path))) {
       const isTextLayer = data.length >= 6 && data[0] === 0x23 && data[1] === 0x75 && data[2] === 0x73 && data[3] === 0x64 && data[4] === 0x61;
       if (isTextLayer && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
-        try { usdaTexts.push(new TextDecoder().decode(data)); } catch { /* skip */ }
+        try {
+          const textLayer = new TextDecoder().decode(data);
+          usdaTexts.push(textLayer);
+          // The native bridge currently exposes the fallback value for an
+          // input but not its composed shader connection. The renderer keeps
+          // source MaterialX connections intact; make authored USD connections
+          // visible as an explicit limitation instead of
+          // guessing at layer strength or rewiring the graph from text.
+          for (const line of textLayer.split(/\r?\n/)) {
+            if (/\binputs:[A-Za-z_][\w]*\.connect\s*=/.test(line)) {
+              scanWarnings.push(
+                "USD shader connections are not exposed by the MaterialX importer; source graph connections are preserved and authored rewires are not resolved (" + file.path + ")"
+              );
+              break;
+            }
+          }
+        } catch { /* skip */ }
       } else if (isTextLayer) {
         scanWarnings.push(`Override scan skipped for ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
       }
@@ -1286,6 +1456,7 @@ async function load(request) {
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing stage" } });
   const summary = api.openStage(root, true);
   if (summary?.error) throw new Error(summary.error);
+  const stageMetrics = resolveStageMetrics(summary, rootMetrics);
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
   if (!api.createStageDriver(root)) throw new Error("OpenUSD stage driver could not be created");
   // A full draw can itself grow the native heap while it is constructing
@@ -1431,7 +1602,8 @@ async function load(request) {
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
   const lightWarnings = [];
   const lights = collectLights(api, root, graph, message => lightWarnings.push(message));
-  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights);
+  const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
+  result.warnings.push(...stageMetrics.warnings);
   for (const material of result.materials) {
     const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
     const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path);
