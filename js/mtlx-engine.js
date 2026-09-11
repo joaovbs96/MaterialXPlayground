@@ -1110,13 +1110,20 @@ const patchShadowBounds = (fs) => {
 // Number of independent shadow casters packed into the atlas, and the light
 // slots the per-light lookup can address. Both are compile-time array sizes,
 // so they are fixed here and must match the renderer's own constants.
-const SHADOW_CASTER_SLOTS = 4;
+const SHADOW_CASTER_SLOTS = 8;
 const SHADOW_LIGHT_SLOTS_MAX = 32;
 
 const patchShadowLightScope = (fs) => {
     const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
     const site = 'L = lightShader.direction;';
     if (fs.indexOf(call) === -1 || fs.indexOf(site) === -1) return fs;
+    // The geometric normal, when the surface exposes one. Used to push the
+    // receiver test point off the shaded surface before the shadow lookup
+    // (see mx_shadow_atlas), which is what removes self-shadow acne without
+    // a large constant bias. Absent it, the lookup falls back to testing at
+    // the surface itself, matching the previous behaviour exactly.
+    const hasNormal = /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
+    const shadowNormalExpr = hasNormal ? 'normalize(normalWorld)' : 'vec3(0.0)';
     // MaterialX's own single-map call is dropped: it computes the shadow once,
     // before the loop, which is what limited it to light slot 0.
     let out = fs.replace(call, 'occlusion = 1.0;');
@@ -1129,7 +1136,8 @@ const patchShadowLightScope = (fs) => {
     const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_CASTER_SLOTS + '];\n'
         + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_CASTER_SLOTS + '; ++mx_shadowIndex) {\n'
         + '            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'
-        + '        }\n\n';
+        + '        }\n'
+        + '        vec3 mx_shadowNormal = ' + shadowNormalExpr + ';\n\n';
     if (out.indexOf(lightLoop) !== -1 && out.indexOf('mx_shadowVisibility[') === -1) {
         out = out.replace(lightLoop, cacheDecl + lightLoop);
     }
@@ -1137,12 +1145,12 @@ const patchShadowLightScope = (fs) => {
         ? '\n                if (mx_caster < 0) {'
         + '\n                    occlusion = 1.0;'
         + '\n                } else if (mx_shadowVisibility[mx_caster] < -0.5) {'
-        + '\n                    mx_shadowVisibility[mx_caster] = mx_shadow_atlas(mx_caster, positionWorld);'
+        + '\n                    mx_shadowVisibility[mx_caster] = mx_shadow_atlas(mx_caster, positionWorld, mx_shadowNormal);'
         + '\n                    occlusion = mx_shadowVisibility[mx_caster];'
         + '\n                } else {'
         + '\n                    occlusion = mx_shadowVisibility[mx_caster];'
         + '\n                }'
-        : '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld);';
+        : '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld, ' + shadowNormalExpr + ');';
     out = out.replace(site, site
         + '\n            {'
         + '\n                int mx_caster = u_shadowSlotCaster[activeLightIndex];'
@@ -1163,6 +1171,11 @@ const patchShadowLightScope = (fs) => {
         // x/y = authored source radius in world units; z/w = explicit
         // perspective projection scale. Directional casters use all zeroes.
         'uniform vec4 u_shadowSourceRadii[' + SHADOW_CASTER_SLOTS + '];',
+        // World-space size of one atlas texel at the caster's near plane
+        // (perspective) or across the whole frustum (orthographic). Used
+        // only to push the receiver test point off the surface before the
+        // lookup; zero disables the offset for that slot.
+        'uniform float u_shadowTexelWorldSize[' + SHADOW_CASTER_SLOTS + '];',
         // Per light slot: which caster shadows it, or -1 for none.
         'uniform int u_shadowSlotCaster[' + SHADOW_LIGHT_SLOTS_MAX + '];',
         'float mx_shadow_vsm(vec2 moments, float receiverDepth) {',
@@ -1172,9 +1185,47 @@ const patchShadowLightScope = (fs) => {
         '    float lit = max(p, variance / (variance + d * d));',
         '    return smoothstep(0.3, 1.0, lit);',
         '}',
-        'float mx_shadow_atlas(int caster, vec3 P) {',
+        'float mx_shadow_atlas(int caster, vec3 P, vec3 Ng) {',
         '    if (caster < 0) return 1.0;',
-        '    vec4 c4 = u_shadowMatrices[caster] * vec4(P, 1.0);',
+        '    vec4 depthPlane = u_shadowDepthPlanes[caster];',
+        '    vec2 depthRange = u_shadowDepthRanges[caster];',
+        '    float nearDepth = depthRange.x;',
+        '    float depthSpan = max(depthRange.y, 1e-9);',
+        '    vec2 projectionScale = u_shadowSourceRadii[caster].zw;',
+        '    bool perspective = projectionScale.x > 0.0 || projectionScale.y > 0.0;',
+        // Normal-offset receiver bias: move the test point about 1.5 caster
+        // texels off the surface along its own normal, scaled by distance
+        // for a perspective source so the offset tracks the texel footprint
+        // rather than a fixed world size. This is what removes the rect and
+        // distant light self-shadow acne/moire found in the M0 quality pass,
+        // without the light-leak a large constant depth bias would add.
+        // u_shadowTexelWorldSize carries world size PER UNIT of light-to-
+        // receiver distance for a perspective caster (so it is multiplied by
+        // the actual distance below), or the constant absolute texel size
+        // for an orthographic one. It must NOT be anchored to the caster
+        // camera near plane: that is an artificial epsilon unrelated to
+        // scene scale, and dividing by it here previously produced an
+        // offset many orders of magnitude too large.
+        '    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',
+        // Offset an orthographic (directional) caster, or a perspective AREA
+        // source (never a point/spot one). A point light's centre lookup is
+        // a single hard tap: measured on a thin box blocker, even a small
+        // normal-offset moved that tap across the blocker's silhouette texel
+        // and leaked light through a valid shadow. An area source's nine-tap
+        // filtered average is far less sensitive to that one-texel boundary
+        // crossing, which is what lets it use the same offset to remove the
+        // rect-light moire the M0 quality pass measured (13.7 percent of lit
+        // pixels below 0.9 visibility) without losing contact darkening.
+        '    bool offsetEligible = !perspective || sourceRadius.x > 0.0 || sourceRadius.y > 0.0;',
+        '    float texelWorld = u_shadowTexelWorldSize[caster];',
+        '    vec3 offsetP = P;',
+        '    if (texelWorld > 0.0 && offsetEligible) {',
+        '        float rawDepth = dot(vec4(P, 1.0), depthPlane);',
+        '        float rawZ = max(nearDepth + depthSpan * rawDepth, 0.0);',
+        '        float scale = perspective ? rawZ : 1.0;',
+        '        offsetP = P + Ng * (texelWorld * scale * 0.25);',
+        '    }',
+        '    vec4 c4 = u_shadowMatrices[caster] * vec4(offsetP, 1.0);',
         '    if (c4.w <= 0.0) return 1.0;',
         '    vec3 sc = c4.xyz / c4.w;',
         '    sc = sc * 0.5 + 0.5;',
@@ -1186,12 +1237,8 @@ const patchShadowLightScope = (fs) => {
         '    vec2 moments = texture(u_shadowAtlas, centerUv).xy;',
         // Projected XY still comes from the real light camera, but moments
         // use a linear light-view depth plane supplied by the renderer.
-        '    float receiverDepth = dot(vec4(P, 1.0), u_shadowDepthPlanes[caster]);',
-        '    vec2 depthRange = u_shadowDepthRanges[caster];',
-        '    float nearDepth = depthRange.x;',
-        '    float depthSpan = max(depthRange.y, 1e-9);',
+        '    float receiverDepth = dot(vec4(offsetP, 1.0), depthPlane);',
         '    float receiverZ = nearDepth + depthSpan * receiverDepth;',
-        '    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',
         // A source with zero extent is a point/directional caster: retain the
         // centre lookup and avoid nine redundant filtered samples. For area
         // sources, search from the physical emitter footprint at the receiver
@@ -1201,7 +1248,6 @@ const patchShadowLightScope = (fs) => {
         '        vec2 e0 = min(sc.xy, vec2(1.0) - sc.xy);',
         '        return mix(1.0, lit, smoothstep(0.0, 0.04, min(e0.x, e0.y)));',
         '    }',
-        '    vec2 projectionScale = u_shadowSourceRadii[caster].zw;',
         '    vec2 searchRadius = sourceRadius * projectionScale * 0.5 / max(nearDepth, 1e-9)',
         '        * max(receiverZ - nearDepth, 0.0) / max(receiverZ, 1e-6);',
         '    searchRadius = min(searchRadius, vec2(2.0) * tileTexel);',
@@ -5470,7 +5516,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowSlotCaster = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowSlotCaster = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5502,6 +5548,8 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
             ? shadowDepthRanges : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector2(0, 1)) },
         u_shadowSourceRadii: { value: shadowSourceRadii && shadowSourceRadii.length === SHADOW_CASTER_SLOTS
             ? shadowSourceRadii : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4()) },
+        u_shadowTexelWorldSize: { value: shadowTexelSizes && shadowTexelSizes.length === SHADOW_CASTER_SLOTS
+            ? shadowTexelSizes : new Array(SHADOW_CASTER_SLOTS).fill(0) },
         u_shadowSlotCaster: { value: shadowSlotCaster && shadowSlotCaster.length === SHADOW_LIGHT_SLOTS_MAX
             ? shadowSlotCaster : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
         // Baked sky visibility. Seeded unconditionally, NOT through has():
@@ -8073,6 +8121,7 @@ const createMtlxRenderView = async ({
                         u_shadowDepthPlanes: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
                         u_shadowDepthRanges: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector2(0, 1)) },
                         u_shadowSourceRadii: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4()) },
+                        u_shadowTexelWorldSize: { value: new Array(SHADOW_CASTER_SLOTS).fill(0) },
                         u_shadowSlotCaster: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
                         // Same sampler-unit hazard as the Scene: see
                         // createMtlxSceneUniforms. No stage volume here, so

@@ -104,11 +104,34 @@
         return true;
     }
 
+    // UsdLuxLightAPI colorTemperature: a standard Planckian-locus fit (the
+    // widely used Tanner Helland approximation), converted to linear
+    // Rec.709 and normalized to unit luminance so it only tints the
+    // authored color rather than adding its own brightness.
+    function blackbodyColor(kelvin) {
+        var temp = Math.min(40000, Math.max(1000, Number(kelvin) || 6500)) / 100;
+        var r = temp <= 66 ? 255 : 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+        var g = temp <= 66
+            ? 99.4708025861 * Math.log(temp) - 161.1195681661
+            : 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+        var b = temp >= 66 ? 255 : (temp <= 19 ? 0 : 138.5177312231 * Math.log(temp - 10) - 305.0447927307);
+        var unit = function (v) { return Math.min(255, Math.max(0, v)) / 255; };
+        var toLinear = function (c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+        var lin = [toLinear(unit(r)), toLinear(unit(g)), toLinear(unit(b))];
+        var luminance = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+        if (!(luminance > 1e-6)) return [1, 1, 1];
+        return [lin[0] / luminance, lin[1] / luminance, lin[2] / luminance];
+    }
+
     // Radiance carried into LightData.color, with intensity folded in so the
     // shader's own colour * intensity product lands on the right value.
     function radianceOf(record, scale, warn, metersPerUnit) {
         var color = Array.isArray(record.color) && record.color.length >= 3
             ? record.color : [1, 1, 1];
+        if (record.enableColorTemperature) {
+            var bb = blackbodyColor(record.colorTemperature);
+            color = [color[0] * bb[0], color[1] * bb[1], color[2] * bb[2]];
+        }
         var scalar = num(record.intensity, 1) * Math.pow(2, num(record.exposure, 0));
         // A point stand-in carries radiant intensity, which is radiance times
         // area. A uniformly radiating sphere has an additional 1/4 factor

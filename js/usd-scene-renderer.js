@@ -510,7 +510,15 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
 // mx_shadow_occlusion() against a variance (moments) map, so we render our own
 // vec2(z, z*z) rather than reuse three's VSM target, whose packing is not
 // guaranteed to match and would misread rather than error.
-const SHADOW_MAP_SIZE = 2048;
+// 8 casters at 1024px tiles, laid out 4 x 2 so no tile drops below the
+// minimum useful resolution found during the M0 quality pass. RGBA16F at
+// 4096x2048 is 64MB; RGBA32F (used when float-linear filtering is missing)
+// is 128MB.
+const SHADOW_TILE_SIZE = 1024;
+const SHADOW_ATLAS_COLS = 4;
+const SHADOW_ATLAS_ROWS = 2;
+const SHADOW_ATLAS_WIDTH = SHADOW_TILE_SIZE * SHADOW_ATLAS_COLS;
+const SHADOW_ATLAS_HEIGHT = SHADOW_TILE_SIZE * SHADOW_ATLAS_ROWS;
 // Variance shadow maps are meant to be blurred: filtering the moments is what
 // turns the hard per-texel test into a soft edge. Without it an orthographic
 // frustum covering a whole room stair-steps every silhouette.
@@ -704,8 +712,7 @@ const createThicknessMaterial = () => new THREE.RawShaderMaterial({
 // Independent shadow casters packed into one atlas. GLSL ES 3.0 only allows a
 // constant index into a sampler array, so a per-light lookup has to address
 // tiles inside a single map. Must match the engine's SHADOW_CASTER_SLOTS.
-const SHADOW_CASTERS = 4;
-const SHADOW_ATLAS_COLS = 2;
+const SHADOW_CASTERS = 8;
 const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: [
@@ -1114,6 +1121,14 @@ const createMtlxSceneView = async ({
         return new THREE.Vector4(radius, radius,
             scale && Number.isFinite(scale[0]) ? Math.abs(scale[0]) : 0,
             scale && Number.isFinite(scale[1]) ? Math.abs(scale[1]) : 0);
+    });
+    // World-space size of one atlas texel, at the near plane for a
+    // perspective caster or across the whole frustum for an orthographic
+    // one. Feeds the shader's normal-offset receiver bias (mx_shadow_atlas).
+    const shadowCasterTexelSizes = () => Array.from({ length: SHADOW_CASTERS }, (_, i) => {
+        const caster = shadowCasters[i];
+        const size = caster && Number(caster.texelWorldSize);
+        return Number.isFinite(size) ? Math.max(0, size) : 0;
     });
     let shadowCasterLabel = null;
     // Baked coarse sky visibility (js/usd-scene-skyvis.js). Built once per
@@ -1583,7 +1598,7 @@ const createMtlxSceneView = async ({
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
-            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowSlotCaster,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowSlotCaster,
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             envTilt,
             thicknessScale, refractionTwoSided: true,
@@ -2029,9 +2044,8 @@ const createMtlxSceneView = async ({
             // Each caster occupies one atlas tile, so snapping against the
             // full atlas dimension would use half-sized texels and still let
             // the projected edge crawl inside a tile.
-            const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
-            const texelX = (right - left) / tileSize;
-            const texelY = (top - bottom) / tileSize;
+            const texelX = (right - left) / SHADOW_TILE_SIZE;
+            const texelY = (top - bottom) / SHADOW_TILE_SIZE;
             if (texelX > 0 && texelY > 0) {
                 left = Math.floor(left / texelX) * texelX;
                 right = Math.ceil(right / texelX) * texelX;
@@ -2065,7 +2079,7 @@ const createMtlxSceneView = async ({
             const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
                 && !!renderer.extensions.get('EXT_color_buffer_float');
             const floatLinear = !floatOk || !!renderer.extensions.get('OES_texture_float_linear');
-            shadowTarget = new THREE.WebGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, {
+            shadowTarget = new THREE.WebGLRenderTarget(SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT, {
                 minFilter: floatLinear ? THREE.LinearFilter : THREE.NearestFilter,
                 magFilter: floatLinear ? THREE.LinearFilter : THREE.NearestFilter,
                 format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
@@ -2168,6 +2182,43 @@ const createMtlxSceneView = async ({
         // light, which is invisible no matter how correct the binding is. The
         // rig has two window lights and two lamp emitters, and shadows only
         // read once most of the illumination casts.
+        // A bounded set of world-space points drawn from visible mesh surfaces
+        // inside the camera frustum. Scoring casters against many points of
+        // what the camera actually sees, instead of one aim point, is what
+        // lets a large area light that lights most of the visible geometry
+        // outrank a small distant one that only grazes the orbit target.
+        const SHADOW_RECEIVER_SAMPLES = 2000;
+        const gatherReceiverSamples = () => {
+            const points = [];
+            if (!sceneRoot) return points;
+            const frustum = new THREE.Frustum().setFromProjectionMatrix(
+                new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+            const meshes = [];
+            let totalVerts = 0;
+            sceneRoot.traverse((o) => {
+                if (!o.isMesh || !o.visible) return;
+                const pos = o.geometry && o.geometry.attributes && o.geometry.attributes.position;
+                if (!pos || !pos.count) return;
+                meshes.push(o);
+                totalVerts += pos.count;
+            });
+            if (!meshes.length || !totalVerts) return points;
+            const v = new THREE.Vector3();
+            for (const mesh of meshes) {
+                if (points.length >= SHADOW_RECEIVER_SAMPLES) break;
+                const pos = mesh.geometry.attributes.position;
+                // Proportional share of the budget, stride-sampled rather than
+                // scanned fully so a dense mesh cannot dominate the walk cost.
+                const share = Math.max(1, Math.round(SHADOW_RECEIVER_SAMPLES * (pos.count / totalVerts)));
+                const stride = Math.max(1, Math.floor(pos.count / share));
+                mesh.updateWorldMatrix(true, false);
+                for (let i = 0; i < pos.count && points.length < SHADOW_RECEIVER_SAMPLES; i += stride) {
+                    v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+                    if (frustum.containsPoint(v)) points.push(v.clone());
+                }
+            }
+            return points;
+        };
         const updateShadowMap = () => {
             if (!shadowsEnabled || !sceneRoot) {
                 shadowCasters = [];
@@ -2188,6 +2239,14 @@ const createMtlxSceneView = async ({
             const rawReceiverTarget = controls && controls.target ? controls.target.clone() : center.clone();
             const receiverTarget = box.clampPoint(rawReceiverTarget, new THREE.Vector3());
             const stageLights = activeStageLights() || [];
+            // A bounded sample of what the camera can actually see. Local
+            // lights are ranked by irradiance averaged over these points, not
+            // a single aim point, so a large source that lights most of the
+            // frame cannot be displaced by one that merely grazes the orbit
+            // target. Directional terms have no falloff to sample against,
+            // so they keep a single evaluation (below).
+            const receiverSamples = gatherReceiverSamples();
+            const samplePoints = receiverSamples.length ? receiverSamples : [receiverTarget];
 
             // Fold a split area emitter back together before ranking, or a lamp
             // cut into four would rank as a quarter of itself. Slot layout is
@@ -2195,52 +2254,56 @@ const createMtlxSceneView = async ({
             // stage index needs the rig and key offset to address u_lightData.
             const slotOffset = ((mxEnv && mxEnv.lightData) ? mxEnv.lightData.length : 0) + 1;
             const emitters = new Map();
+            const toPoint = new THREE.Vector3();
             for (let i = 0; i < stageLights.length; i++) {
                 const light = stageLights[i];
                 if (light.type !== 1 && light.type !== 2 && light.type !== 3) continue;
                 const source = light.emitter || light;
                 const key = source.primPath || ('slot' + i);
+                const directional = light.type === 1;
+                const position = source.position || light.position || center;
+                // Only planar rect/disk sources have a meaningful authored
+                // normal. Point/sphere/cylinder samples carry a direction for
+                // shading but must not be culled by it.
+                const planarSource = Number(light.sourceKind ?? source.sourceKind) === 1;
+                const sourceDir = planarSource && source.direction ? source.direction.clone().normalize() : null;
+                const lightEnergy = Math.max(0, Number(light.intensity) || 0);
+                const lightColor = light.color || source.color;
+                const luminance = lightColor
+                    ? (0.2126 * Number(lightColor.r ?? lightColor[0] ?? 1)
+                        + 0.7152 * Number(lightColor.g ?? lightColor[1] ?? 1)
+                        + 0.0722 * Number(lightColor.b ?? lightColor[2] ?? 1)) : 1;
+                let contribution;
+                if (directional) {
+                    // No inverse-square falloff and no meaningful per-point
+                    // receiver dependence: one evaluation at the active
+                    // target already captures the authored energy that
+                    // reaches the visible stage.
+                    toPoint.copy(receiverTarget).sub(position);
+                    const d2 = toPoint.lengthSq();
+                    const cosine = sourceDir && d2 > 1e-12
+                        ? Math.max(0, sourceDir.dot(toPoint) / Math.sqrt(d2)) : 1;
+                    contribution = lightEnergy * Math.max(0, luminance) * cosine;
+                } else {
+                    // Local sources: irradiance averaged over the receiver
+                    // sample set, so ranking reflects what is actually lit on
+                    // screen rather than distance to one aim point.
+                    let sum = 0;
+                    for (const p of samplePoints) {
+                        toPoint.copy(p).sub(position);
+                        const d2 = Math.max(1e-6, toPoint.lengthSq());
+                        const cosine = sourceDir ? Math.max(0, sourceDir.dot(toPoint) / Math.sqrt(d2)) : 1;
+                        sum += cosine / d2;
+                    }
+                    contribution = lightEnergy * Math.max(0, luminance) * (sum / samplePoints.length);
+                }
                 let rec = emitters.get(key);
                 if (!rec) {
-                    const position = source.position || light.position || center;
-                    const toReceiver = receiverTarget.clone().sub(position);
-                    // Only planar rect/disk sources have a meaningful
-                    // authored normal. Point/sphere/cylinder samples carry a
-                    // direction for shading but must not be culled by it.
-                    const planarSource = Number(light.sourceKind ?? source.sourceKind) === 1;
-                    const sourceCosine = planarSource && source.direction && toReceiver.lengthSq() > 1e-12
-                        ? Math.max(0, source.direction.clone().normalize().dot(toReceiver.normalize())) : 1;
-                    const receiverDistance = Math.max(1e-6, position.distanceTo(receiverTarget));
-                    const lightEnergy = Math.max(0, Number(light.intensity) || 0);
-                    const lightColor = light.color || source.color;
-                    const luminance = lightColor
-                        ? (0.2126 * Number(lightColor.r ?? lightColor[0] ?? 1)
-                            + 0.7152 * Number(lightColor.g ?? lightColor[1] ?? 1)
-                            + 0.0722 * Number(lightColor.b ?? lightColor[2] ?? 1)) : 1;
-                    const sourceEnergy = lightEnergy * Math.max(0, luminance) * sourceCosine;
-                    rec = {
-                        key, source, slots: [],
-                        directional: light.type === 1,
-                        energy: sourceEnergy,
-                        cosine: sourceCosine,
-                        // Irradiance HERE, not authored intensity: the
-                        // Playground's window lights are the most intense in
-                        // the rig but sit hundreds of units outside the room.
-                        // Directional lights have no inverse-square falloff;
-                        // their score still reflects authored energy and the
-                        // fraction that reaches the active receiver.
-                        score: light.type === 1 ? sourceEnergy : sourceEnergy / (receiverDistance * receiverDistance),
-                    };
+                    rec = { key, source, slots: [], directional, energy: contribution, score: contribution };
                     emitters.set(key, rec);
                 } else {
-                    const lightEnergy = Math.max(0, Number(light.intensity) || 0);
-                    const lightColor = light.color || source.color;
-                    const luminance = lightColor
-                        ? (0.2126 * Number(lightColor.r ?? lightColor[0] ?? 1)
-                            + 0.7152 * Number(lightColor.g ?? lightColor[1] ?? 1)
-                            + 0.0722 * Number(lightColor.b ?? lightColor[2] ?? 1)) : 1;
-                    rec.energy += lightEnergy * Math.max(0, luminance) * rec.cosine;
-                    rec.score = rec.directional ? rec.energy : rec.energy / Math.max(1e-6, source.position.distanceTo(receiverTarget) ** 2);
+                    rec.energy += contribution;
+                    rec.score = rec.energy;
                 }
                 rec.slots.push(i);
             }
@@ -2268,15 +2331,11 @@ const createMtlxSceneView = async ({
                     });
                 }
             }
-            // Each caster is a full geometry pass, redrawn whenever the camera
-            // moves, so a heavy stage gets fewer of them. Ranked by irradiance
-            // first, so the ones dropped are always the least significant.
-            let meshCount = 0;
-            sceneRoot.traverse((o) => { if (o.isMesh) meshCount++; });
-            const casterBudget = meshCount > 1200 ? 1 : meshCount > 500 ? 2 : SHADOW_CASTERS;
+            // Ranked by irradiance so the ones dropped from the fixed budget
+            // are always the least significant.
             const ranked = [...emitters.values()]
                 .sort((a, b) => b.score - a.score)
-                .slice(0, casterBudget);
+                .slice(0, SHADOW_CASTERS);
 
             // A stage with no analytic lights is lit by the environment alone,
             // and the key light extracted from it sits in the reserved slot
@@ -2334,7 +2393,7 @@ const createMtlxSceneView = async ({
             const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
             const previousClearAlpha = renderer.getClearAlpha();
             const previousOverrideMaterial = scene.overrideMaterial;
-            const tile = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+            const tile = SHADOW_TILE_SIZE;
             const built = [];
             try {
             // Tiling goes on the TARGET, not the renderer: setRenderTarget
@@ -2343,7 +2402,7 @@ const createMtlxSceneView = async ({
             // render() rebinds. Setting it renderer-side left every tile
             // holding a crop of one full-size render, which showed up as half
             // the atlas being empty.
-            shadowTarget.viewport.set(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+            shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
             shadowTarget.scissorTest = false;
             renderer.setRenderTarget(shadowTarget);
             renderer.setClearColor(0xffffff, 1); // white moments read as fully lit
@@ -2392,6 +2451,23 @@ const createMtlxSceneView = async ({
                         - Math.min(...projectedCorners.map((p) => p[1]))) * 0.5 * tile).toFixed(2)),
                 } : null;
                 const sourceExtent = Number(rec.source && rec.source.extent);
+                // World-space texel footprint, used only for the shader's
+                // normal-offset bias. Perspective: world size PER UNIT of
+                // light-to-receiver distance, from the projection matrix's
+                // own scale (proj[0] == 1 / tan(halfFov) for the square
+                // per-tile viewport used here); the shader multiplies this by
+                // the receiver's actual distance. Deliberately NOT anchored
+                // to the camera's near plane, which is an artificial epsilon
+                // (buildCasterCamera) with no relation to scene scale: an
+                // earlier version divided by it and produced an offset many
+                // orders of magnitude too large, which read as shadows barely
+                // darkening the receiver at all. Orthographic: the fitted
+                // frustum divided by the tile, constant with depth since
+                // parallel rays never diverge.
+                const texelWorldSize = shadowCamera.isPerspectiveCamera
+                    ? (shadowCamera.projectionMatrix.elements[0] > 1e-9
+                        ? 2 / (shadowCamera.projectionMatrix.elements[0] * SHADOW_TILE_SIZE) : 0)
+                    : (((shadowCamera.right - shadowCamera.left) + (shadowCamera.top - shadowCamera.bottom)) * 0.5) / SHADOW_TILE_SIZE;
                 built.push({
                     rec,
                     projection: shadowCamera.isPerspectiveCamera ? 'perspective' : 'orthographic',
@@ -2402,6 +2478,7 @@ const createMtlxSceneView = async ({
                     aim: shadowCamera.userData && shadowCamera.userData.shadowAim ? shadowCamera.userData.shadowAim.slice() : null,
                     sourceExtent: Number.isFinite(sourceExtent) ? sourceExtent : 0,
                     sourceRadius: Number.isFinite(sourceExtent) ? sourceExtent * 0.5 : 0,
+                    texelWorldSize: Number.isFinite(texelWorldSize) ? texelWorldSize : 0,
                     projectionScale: shadowCamera.isPerspectiveCamera
                         ? [shadowCamera.projectionMatrix.elements[0], shadowCamera.projectionMatrix.elements[5]] : null,
                     receiverDepth: Number.isFinite(-receiverView.z) ? -receiverView.z : null,
@@ -2415,10 +2492,10 @@ const createMtlxSceneView = async ({
                     // Inset by half a texel so trilinear taps cannot reach into
                     // the neighbouring tile along a shared edge.
                     tileRect: new THREE.Vector4(
-                        (px + 0.5) / SHADOW_MAP_SIZE,
-                        (py + 0.5) / SHADOW_MAP_SIZE,
-                        (tile - 1) / SHADOW_MAP_SIZE,
-                        (tile - 1) / SHADOW_MAP_SIZE
+                        (px + 0.5) / SHADOW_ATLAS_WIDTH,
+                        (py + 0.5) / SHADOW_ATLAS_HEIGHT,
+                        (tile - 1) / SHADOW_ATLAS_WIDTH,
+                        (tile - 1) / SHADOW_ATLAS_HEIGHT
                     ),
                 });
             }
@@ -2430,7 +2507,7 @@ const createMtlxSceneView = async ({
             shadowDepthMaterial.uniformsNeedUpdate = true;
             // Leave the target as a plain full-size one, or the next pass that
             // binds it inherits the last tile.
-            shadowTarget.viewport.set(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+            shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
             shadowTarget.scissorTest = false;
             renderer.setRenderTarget(previousTarget);
             renderer.setViewport(previousViewport);
@@ -2800,6 +2877,10 @@ const createMtlxSceneView = async ({
                     const src = shadowCasterSourceRadii();
                     for (let i = 0; i < src.length; i++) u.u_shadowSourceRadii.value[i].copy(src[i]);
                 }
+                if (u.u_shadowTexelWorldSize) {
+                    const src = shadowCasterTexelSizes();
+                    for (let i = 0; i < src.length; i++) u.u_shadowTexelWorldSize.value[i] = src[i];
+                }
                 if (u.u_shadowSlotCaster) u.u_shadowSlotCaster.value.set(shadowSlotCaster);
             }
         };
@@ -2818,7 +2899,7 @@ const createMtlxSceneView = async ({
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
-            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowSlotCaster,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowSlotCaster,
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
                     envTilt,
                     thicknessScale, refractionTwoSided: true,
@@ -3946,7 +4027,7 @@ const createMtlxSceneView = async ({
             },
             __shadowDebug: () => {
                 if (!shadowTarget) return { ready: false };
-                const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+                const tileSize = SHADOW_TILE_SIZE;
                 const w = 160;
                 const prev = renderer.getRenderTarget();
                 const tiles = [];
@@ -4032,8 +4113,8 @@ const createMtlxSceneView = async ({
                 const inside = sc.x >= 0 && sc.x <= 1 && sc.y >= 0 && sc.y <= 1 && sc.z >= 0 && sc.z <= 1;
                 if (!inside) return { ready: true, inside: false, projected: [sc.x, sc.y, sc.z] };
                 const uv = b.tileRect.clone();
-                const px = Math.max(0, Math.min(SHADOW_MAP_SIZE - 1, Math.floor((uv.x + sc.x * uv.z) * SHADOW_MAP_SIZE)));
-                const py = Math.max(0, Math.min(SHADOW_MAP_SIZE - 1, Math.floor((uv.y + sc.y * uv.w) * SHADOW_MAP_SIZE)));
+                const px = Math.max(0, Math.min(SHADOW_ATLAS_WIDTH - 1, Math.floor((uv.x + sc.x * uv.z) * SHADOW_ATLAS_WIDTH)));
+                const py = Math.max(0, Math.min(SHADOW_ATLAS_HEIGHT - 1, Math.floor((uv.y + sc.y * uv.w) * SHADOW_ATLAS_HEIGHT)));
                 const buf = new Float32Array(4);
                 const prev = renderer.getRenderTarget();
                 try {
@@ -4058,7 +4139,7 @@ const createMtlxSceneView = async ({
                 const c = Math.floor(Number(casterIndex));
                 const b = shadowCasters[c];
                 if (!b || !bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) return { ready: false };
-                const tileSize = SHADOW_MAP_SIZE / SHADOW_ATLAS_COLS;
+                const tileSize = SHADOW_TILE_SIZE;
                 const col = c % SHADOW_ATLAS_COLS;
                 const row = Math.floor(c / SHADOW_ATLAS_COLS);
                 const corners = [];

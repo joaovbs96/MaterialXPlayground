@@ -882,6 +882,11 @@ function collectLights(api, root, graph, warn) {
       diffuse: numberOf("inputs:diffuse", LIGHT_DEFAULTS.diffuse),
       specular: numberOf("inputs:specular", LIGHT_DEFAULTS.specular),
       color: colorNums.length >= 3 ? colorNums.slice(0, 3) : [1, 1, 1],
+      // UsdLuxLightAPI colorTemperature: a Kelvin value multiplied onto
+      // inputs:color when enableColorTemperature is authored true.
+      enableColorTemperature: valueOf("inputs:enableColorTemperature") === "1"
+        || valueOf("inputs:enableColorTemperature") === "true",
+      colorTemperature: numberOf("inputs:colorTemperature", 6500),
       // Emitter shape, used to normalize intensity by area and to pick the
       // MaterialX light type. Absent attributes stay null so the converter
       // can tell "unauthored" from "authored zero".

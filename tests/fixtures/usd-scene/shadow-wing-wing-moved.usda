@@ -1,0 +1,70 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "Scene" {
+    def Scope "Looks" {
+        def Material "ShadowWingMaterial" (
+            references = @shadow-wing-material.mtlx@</MaterialX/Materials/shadow_wing_material>
+        ) {
+        }
+    }
+
+    def Camera "ShadowCam" {
+        double3 xformOp:translate = (0, 10, 2)
+        double3 xformOp:rotateXYZ = (-80, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float focalLength = 30
+        float horizontalAperture = 48
+        float verticalAperture = 36
+        float2 clippingRange = (0.1, 100)
+        float focusDistance = 8.0623
+        token projection = "perspective"
+    }
+
+    def DistantLight "SunLight" {
+        double3 xformOp:translate = (0, 5, 0)
+        double3 xformOp:rotateXYZ = (-30, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float inputs:intensity = 3
+        float inputs:exposure = 0
+        color3f inputs:color = (1, 1, 1)
+        float inputs:angle = 0.53
+    }
+
+    def Mesh "Ground" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-10, 0, -10), (10, 0, -10), (10, 0, 10), (-10, 0, 10)]
+        normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)] ( interpolation = "vertex" )
+        rel material:binding = </Scene/Looks/ShadowWingMaterial>
+    }
+
+    def Mesh "Wing" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 2, 3, 5, 4, 7, 6, 4, 0, 3, 7, 1, 5, 6, 2, 3, 2, 6, 7, 4, 5, 1, 0]
+        point3f[] points = [(0.5, 0.98, -0.6), (4.5, 0.98, -0.6), (4.5, 1.02, -0.6), (0.5, 1.02, -0.6), (0.5, 0.98, 0.6), (4.5, 0.98, 0.6), (4.5, 1.02, 0.6), (0.5, 1.02, 0.6)]
+        normal3f[] normals = [(0, 0, -1), (0, 0, -1), (0, 0, -1), (0, 0, -1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (-1, 0, 0), (-1, 0, 0), (-1, 0, 0), (-1, 0, 0), (1, 0, 0), (1, 0, 0), (1, 0, 0), (1, 0, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0)] ( interpolation = "faceVarying" )
+        rel material:binding = </Scene/Looks/ShadowWingMaterial>
+    }
+
+    def Mesh "Body" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    ) {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 2, 3, 5, 4, 7, 6, 4, 0, 3, 7, 1, 5, 6, 2, 3, 2, 6, 7, 4, 5, 1, 0]
+        point3f[] points = [(2.25, 0, 1.25), (2.75, 0, 1.25), (2.75, 0.5, 1.25), (2.25, 0.5, 1.25), (2.25, 0, 1.75), (2.75, 0, 1.75), (2.75, 0.5, 1.75), (2.25, 0.5, 1.75)]
+        normal3f[] normals = [(0, 0, -1), (0, 0, -1), (0, 0, -1), (0, 0, -1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (-1, 0, 0), (-1, 0, 0), (-1, 0, 0), (-1, 0, 0), (1, 0, 0), (1, 0, 0), (1, 0, 0), (1, 0, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0)] ( interpolation = "faceVarying" )
+        rel material:binding = </Scene/Looks/ShadowWingMaterial>
+    }
+}

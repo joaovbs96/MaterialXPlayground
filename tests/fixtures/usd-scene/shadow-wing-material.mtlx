@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <constant name="shadow_wing_albedo" type="color3">
+    <input name="value" type="color3" value="0.8, 0.8, 0.8" />
+  </constant>
+  <standard_surface name="shadow_wing_surface" type="surfaceshader">
+    <input name="base" type="float" value="1" />
+    <input name="base_color" type="color3" nodename="shadow_wing_albedo" />
+    <input name="specular" type="float" value="0" />
+    <input name="transmission" type="float" value="0" />
+    <input name="emission" type="float" value="0" />
+  </standard_surface>
+  <surfacematerial name="shadow_wing_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="shadow_wing_surface" />
+  </surfacematerial>
+</materialx>

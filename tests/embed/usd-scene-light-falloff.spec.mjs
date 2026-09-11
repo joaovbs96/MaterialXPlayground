@@ -84,7 +84,7 @@ test('@scene point-light falloff is physical for Scene shaders and unchanged for
       const props = renderer.properties.get(material) || {};
       const program = props.currentProgram || props.program;
       const linked = !!(program?.program && gl.getProgramParameter(program.program, gl.LINK_STATUS));
-      const shadowCache = /float\s+mx_shadowVisibility\[4\]/.test(sceneCompiled.fs)
+      const shadowCache = /float\s+mx_shadowVisibility\[8\]/.test(sceneCompiled.fs)
         && /mx_shadowVisibility\[mx_caster\]\s*=\s*mx_shadow_atlas/.test(sceneCompiled.fs);
       return { physical: physicalCount >= 2, physicalCount, sceneLegacyOffset: sceneLegacyCount > 0, sceneLegacyCount, viewerLegacyOffset: viewerLegacyCount > 0, viewerLegacyCount, shadowCache, nearPixel, farPixel,
         ratio: farPixel[0] / Math.max(nearPixel[0], 1e-6), linked, sceneSource: sceneCompiled.fs.slice(sceneCompiled.fs.indexOf('mx_point_light') - 20, sceneCompiled.fs.indexOf('mx_point_light') + 360) };
