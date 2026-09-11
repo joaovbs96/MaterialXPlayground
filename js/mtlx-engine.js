@@ -6646,13 +6646,15 @@ const createRgbtPeelPipeline = (renderer, {
             renderQuad(resources.tailTMat, tNew);
             cOld = cNew; tOld = tNew;
             showOthers();
-            renderer.setRenderTarget(null);
             resources.finalMat.uniforms.u_c.value = cOld.texture;
             resources.finalMat.uniforms.u_t.value = tOld.texture;
             resources.finalMat.uniforms.u_opaque.value = resources.opaque.texture;
             resources.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
             resources.finalMat.uniforms.u_displayExposure.value = getExposure();
-            renderQuad(resources.finalMat, null);
+            // Write into whatever target the caller had bound on entry, not
+            // hardcoded null, so an offscreen frame wrapper (HDR/bloom) still
+            // receives the real image instead of the canvas getting it.
+            renderQuad(resources.finalMat, oldTarget);
             return true;
         } finally {
             showOthers();
@@ -6904,6 +6906,13 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
         const size = renderer.getDrawingBufferSize(new THREE.Vector2());
         if (!peel || peel.w !== size.x || peel.h !== size.y) allocPeel(size.x, size.y);
 
+        // Every pass below that would otherwise hardcode null must land on
+        // this instead, so a caller-bound offscreen target (a future HDR/
+        // bloom wrapper) receives the real image rather than the canvas.
+        const outputTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
+        const outputViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
+        const outputScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
+        const outputScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
         const prevAutoClear = renderer.autoClear;
         const prevClearColor = renderer.getClearColor(new THREE.Color());
         const prevClearAlpha = renderer.getClearAlpha();
@@ -6944,8 +6953,8 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
                 renderer.clear(true, true, true);
                 renderer.render(scene, camera);
             } else {
-                // 1. opaque -> screen (MSAA), transparent meshes hidden.
-                renderer.setRenderTarget(null);
+                // 1. opaque -> caller's target (MSAA), transparent meshes hidden.
+                renderer.setRenderTarget(outputTarget);
                 renderer.setClearColor(prevClearColor, prevClearAlpha);
                 renderer.clear(true, true, true);
                 renderer.render(scene, camera);
@@ -7033,8 +7042,8 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             hidden.forEach((o) => { o.visible = true; });
             hidden.length = 0;
 
-            // 5. composite accum (+opaqueRT, linear mode) onto the canvas.
-            renderer.setRenderTarget(null);
+            // 5. composite accum (+opaqueRT, linear mode) onto the caller's target.
+            renderer.setRenderTarget(outputTarget);
             peel.quadMesh.material = peel.finalMat;
             peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
             if (peelLinearOk) {
@@ -7045,7 +7054,10 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             renderer.render(peel.quadScene, peel.quadCam);
         } finally {
             // restore GL state even if a pass above threw
-            renderer.setRenderTarget(null);
+            renderer.setRenderTarget(outputTarget);
+            if (renderer.setViewport && outputViewport) renderer.setViewport(outputViewport);
+            if (renderer.setScissor && outputScissor) renderer.setScissor(outputScissor);
+            if (renderer.setScissorTest) renderer.setScissorTest(outputScissorTest);
             renderer.autoClear = prevAutoClear;
             renderer.setClearColor(prevClearColor, prevClearAlpha);
             renderer.shadowMap.autoUpdate = prevShadowAutoUpdate;
