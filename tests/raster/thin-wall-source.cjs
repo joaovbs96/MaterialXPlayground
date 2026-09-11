@@ -1,0 +1,17 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const src=fs.readFileSync('js/mtlx-engine.js','utf8');
+const begin=src.indexOf('const patchSceneThinWalledTransmission = ');
+const end=src.indexOf('\n};',begin)+3;
+assert(begin>=0&&end>begin);
+const patch=vm.runInNewContext(src.slice(begin,end)+';patchSceneThinWalledTransmission');
+const body='void NG_open_pbr_surface_surfaceshader(float transmission_depth, vec3 transmission_color, bool geometry_thin_walled, out surfaceshader out1) {\n bool b = geometry_thin_walled;\n}\n';
+assert.strictEqual(patch(body,false,[]),body,'Material Viewer modified');
+const out=patch(body,true,[]);
+assert(out.includes('if (geometry_thin_walled) transmission_depth = 0.0;'));
+assert.strictEqual(patch(out,true,[]),out,'patch is not idempotent');
+assert(!out.includes('uniform bool'),'graph values must remain local function arguments');
+const notices=[];const incompatible=body.replace('bool geometry_thin_walled','int incompatible');
+assert.strictEqual(patch(incompatible,true,notices),incompatible);assert.strictEqual(notices.length,1,'changed contract is not diagnosed');
+assert(src.includes('patchSceneThinWalledTransmission(fs, sceneRgbt, notices)'),'Scene-only call missing');
+console.log('Thin-wall shader scope, idempotence, graph-parameter binding and fallback PASS');

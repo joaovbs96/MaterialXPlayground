@@ -253,6 +253,7 @@
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
+        const [presentation, setPresentation] = React.useState({ enabled: true, bloom: true, strength: 0.25, supported: true });
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
@@ -451,6 +452,7 @@
                     // Mirror those into the card instead of replaying the
                     // card's defaults over them; a user import still wins.
                     if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
+                    if (nextHandle.getPresentation) setPresentation(nextHandle.getPresentation());
                     if (nextHandle.getSceneDisplayTransform) setDisplayTransformState(nextHandle.getSceneDisplayTransform());
                     if (nextHandle.getSkyVisibility) {
                         const sky = nextHandle.getSkyVisibility();
@@ -908,6 +910,24 @@
                     <div className="text-[11px] text-gray-400">
                         Scales the whole image before the display transform, the way a camera would. The Environment card's exposure gains only the image based lighting, so on a stage that also has its own lights it cannot balance the picture on its own.
                     </div>
+                    <label className="flex items-center justify-between gap-2" title="Capture scene-linear HDR before a single display transform. Off uses the previous rendering path.">
+                        <span className="text-xs font-medium text-gray-400">HDR presentation</span>
+                        <Toggle checked={!!presentation.enabled} disabled={!handle || !presentation.supported}
+                            onChange={(enabled) => { if(callHandle('setPresentation', { enabled }))setPresentation(handleRef.current.getPresentation()); }} />
+                    </label>
+                    <label className="flex items-center justify-between gap-2" title="Optical glow from actual HDR highlights. This does not add lighting to nearby geometry.">
+                        <span className="text-xs font-medium text-gray-400">Highlight glow</span>
+                        <Toggle checked={!!presentation.bloom} disabled={!handle || !presentation.enabled || !presentation.supported}
+                            onChange={(bloom) => { if(callHandle('setPresentation', { bloom }))setPresentation(handleRef.current.getPresentation()); }} />
+                    </label>
+                    {presentation.enabled && presentation.bloom && presentation.supported ? (
+                        <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025}
+                            onSlider={(strength) => { if(callHandle('setPresentation', { strength }))setPresentation(handleRef.current.getPresentation()); }}
+                            onNumber={(strength) => { if(callHandle('setPresentation', { strength }))setPresentation(handleRef.current.getPresentation()); }} />
+                    ) : null}
+                    <div className="text-[11px] text-gray-400">
+                        {presentation.supported ? 'Scene-linear HDR preserves luminous highlights. Glow redistributes their brightness before the display transform; it does not replace emissive lighting or change authored colors.' : presentation.reason || 'HDR is unavailable on this device. The existing renderer remains active.'}
+                    </div>
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-400">Texture resolution</span>
                         <MtlxSelect
@@ -1016,7 +1036,7 @@
                                 />
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
-                                Up to four lights cast, packed into one shadow atlas, chosen by the light they actually deliver to the stage. A heavy stage gets fewer casters, since each one is a full geometry pass whenever the camera moves. Shadowed areas also lose the environment light, because MaterialX shares one occlusion value between the two.
+                                Up to eight lights cast, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. More casters increase geometry-pass cost.
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"

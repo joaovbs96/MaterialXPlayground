@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <open_pbr_surface name="solid_thick_surface" type="surfaceshader">
+    <input name="base_weight" type="float" value="0" />
+    <input name="base_color" type="color3" value="0.3, 1.0, 0.1" />
+    <input name="specular_weight" type="float" value="1" />
+    <input name="specular_ior" type="float" value="1.5" />
+    <input name="transmission_weight" type="float" value="1" />
+    <input name="transmission_color" type="color3" value="0.3, 1.0, 0.1" />
+    <input name="transmission_depth" type="float" value="0.5" />
+    <input name="geometry_thin_walled" type="boolean" value="false" />
+  </open_pbr_surface>
+  <surfacematerial name="solid_thick" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="solid_thick_surface" />
+  </surfacematerial>
+</materialx>

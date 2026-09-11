@@ -1031,6 +1031,7 @@ const createMtlxSceneView = async ({
     // cached list of transparent meshes under sceneRoot; the cache is
     // invalidated on every material create/replace and on refreshRenderMode.
     let peelPipeline = null;
+    let presentationPipeline = null;
     const sceneRgbtState = {
         mode: 'inactive', reason: null, payloadMaterials: 0,
         unsupportedLabels: [],
@@ -2270,9 +2271,9 @@ const createMtlxSceneView = async ({
                 const lightEnergy = Math.max(0, Number(light.intensity) || 0);
                 const lightColor = light.color || source.color;
                 const luminance = lightColor
-                    ? (0.2126 * Number(lightColor.r ?? lightColor[0] ?? 1)
-                        + 0.7152 * Number(lightColor.g ?? lightColor[1] ?? 1)
-                        + 0.0722 * Number(lightColor.b ?? lightColor[2] ?? 1)) : 1;
+                    ? (0.2126 * Number(lightColor.r ?? lightColor.x ?? lightColor[0] ?? 1)
+                        + 0.7152 * Number(lightColor.g ?? lightColor.y ?? lightColor[1] ?? 1)
+                        + 0.0722 * Number(lightColor.b ?? lightColor.z ?? lightColor[2] ?? 1)) : 1;
                 let contribution;
                 if (directional) {
                     // No inverse-square falloff and no meaningful per-point
@@ -2965,49 +2966,61 @@ const createMtlxSceneView = async ({
         // are then transformed exactly once by the final composite quad.
         // Viewer parity remains in createMtlxRenderView, which supplies its
         // own transform/exposure callbacks.
+        // A frame-scoped lease, not a global boolean. The outer HDR frame
+        // and nested peel passes may independently acquire/release linear
+        // output without ending each other's transaction.
         let sceneLinearState = null;
-        const setSceneLinear = (on) => {
-            if (!on) {
-                if (!sceneLinearState) return;
-                sceneLinearState.materials.forEach((value, material) => {
-                    material.toneMapped = value.toneMapped;
-                    if (material.uniforms && material.uniforms.uLinearOut) material.uniforms.uLinearOut.value = value.linearOut;
-                    material.needsUpdate = true;
-                });
-                if (sceneLinearState.toneMapping != null) renderer.toneMapping = sceneLinearState.toneMapping;
-                if (sceneLinearState.outputEncoding != null) renderer.outputEncoding = sceneLinearState.outputEncoding;
-                sceneLinearState = null;
-                return;
-            }
-            if (sceneLinearState) return;
-            sceneLinearState = {
-                toneMapping: renderer.toneMapping,
-                outputEncoding: renderer.outputEncoding,
-                materials: new Map(),
-            };
-            scene.traverse((object) => {
-                const list = object && object.material
-                    ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
-                list.forEach((material) => {
-                    if (!material || sceneLinearState.materials.has(material)) return;
-                    const isMaterialX = !!(material.userData && material.userData.mtlxSceneCompiled);
-                    const hasLinearOut = !!(material.uniforms && material.uniforms.uLinearOut);
-                    // Raw MaterialX shaders are switched by u_peelLinear in
-                    // the shared pipeline. Built-ins need tone mapping and
-                    // output encoding disabled while writing the float RT;
-                    // the studio gradient has its own uLinearOut inverse.
-                    if (isMaterialX) return;
-                    sceneLinearState.materials.set(material, {
-                        toneMapped: material.toneMapped,
-                        linearOut: hasLinearOut ? material.uniforms.uLinearOut.value : 0,
+        const beginSceneLinear = (switchMaterialX = true) => {
+            if (sceneLinearState) {
+                sceneLinearState.depth++;
+            } else {
+                sceneLinearState = {
+                    depth: 1, toneMapping: renderer.toneMapping,
+                    outputEncoding: renderer.outputEncoding, materials: new Map(),
+                };
+                scene.traverse((object) => {
+                    const list = object && object.material
+                        ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+                    list.forEach((material) => {
+                        if (!material || sceneLinearState.materials.has(material)) return;
+                        const u = material.uniforms || {};
+                        sceneLinearState.materials.set(material, {
+                            toneMapped: material.toneMapped,
+                            linearOut: u.uLinearOut ? u.uLinearOut.value : undefined,
+                            peelLinear: switchMaterialX && u.u_peelLinear ? u.u_peelLinear.value : undefined,
+                        });
+                        // Raw MaterialX includes opaque/emissive materials,
+                        // not just the transparent set processed by peeling.
+                        if (switchMaterialX && u.u_peelLinear) u.u_peelLinear.value = 1;
+                        if (u.uLinearOut) u.uLinearOut.value = 1;
+                        if (!material.isRawShaderMaterial && material.toneMapped) {
+                            material.toneMapped = false;
+                            material.needsUpdate = true;
+                        }
                     });
-                    material.toneMapped = false;
-                    if (hasLinearOut) material.uniforms.uLinearOut.value = 1;
-                    material.needsUpdate = true;
                 });
-            });
-            renderer.toneMapping = THREE.NoToneMapping;
-            if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.LinearEncoding;
+                renderer.toneMapping = THREE.NoToneMapping;
+                renderer.outputEncoding = THREE.LinearEncoding;
+            }
+            let released = false;
+            return () => {
+                if (released) return;
+                released = true;
+                if (!sceneLinearState || --sceneLinearState.depth > 0) return;
+                const state = sceneLinearState;
+                sceneLinearState = null;
+                state.materials.forEach((value, material) => {
+                    if (material.toneMapped !== value.toneMapped) {
+                        material.toneMapped = value.toneMapped;
+                        material.needsUpdate = true;
+                    }
+                    const u = material.uniforms || {};
+                    if (u.uLinearOut && value.linearOut !== undefined) u.uLinearOut.value = value.linearOut;
+                    if (u.u_peelLinear && value.peelLinear !== undefined) u.u_peelLinear.value = value.peelLinear;
+                });
+                renderer.toneMapping = state.toneMapping;
+                renderer.outputEncoding = state.outputEncoding;
+            };
         };
         peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, {
             getDisplayTransform: () => sceneDisplayTransform,
@@ -3552,6 +3565,7 @@ const createMtlxSceneView = async ({
                 applyShadowMatrix();
             }
             const list = forceOn ? collectTransparentMeshes() : [];
+            const drawSceneColor = (outputLinear) => {
             if (peelPipeline && forceOn && list.length) {
                 const payloadMaterials = [];
                 const unsupportedLabels = [];
@@ -3571,9 +3585,19 @@ const createMtlxSceneView = async ({
                 sceneRgbtState.reason = null;
                 sceneRgbtState.payloadMaterials = payloadMaterials.length;
                 sceneRgbtState.unsupportedLabels = unsupportedLabels.slice(0, 32);
+                let releasePeelLinear = null;
+                const setSceneLinear = (on) => {
+                    // Peeling owns its own MaterialX uniform snapshot; only
+                    // the outer HDR lease may additionally switch those raws.
+                    // RGB-T invokes this callback after setting u_peelLinear.
+                    if (on && !releasePeelLinear) releasePeelLinear = beginSceneLinear(false);
+                    if (!on && releasePeelLinear) {
+                        releasePeelLinear(); releasePeelLinear = null;
+                    }
+                };
                 try {
                     peelPipeline.render(scene, camera, list, {
-                        setSceneLinear,
+                        setSceneLinear, outputLinear,
                         onUnsupported: (reason) => {
                             sceneRgbtState.mode = 'legacy';
                             sceneRgbtState.reason = String(reason || 'RGBT unsupported');
@@ -3594,6 +3618,16 @@ const createMtlxSceneView = async ({
                 sceneRgbtState.payloadMaterials = 0;
                 sceneRgbtState.unsupportedLabels = [];
                 renderer.render(scene, camera);
+            }
+            };
+            if (presentationPipeline) {
+                presentationPipeline.render((linear) => {
+                    const release = linear ? beginSceneLinear() : null;
+                    try { drawSceneColor(linear); }
+                    finally { if (release) release(); }
+                });
+            } else {
+                drawSceneColor(false);
             }
         };
         // The shadow frustum is fitted to the camera, so it goes stale the
@@ -3645,6 +3679,17 @@ const createMtlxSceneView = async ({
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
+        if (window.UsdScenePost) {
+            presentationPipeline = window.UsdScenePost.create(renderer, {
+                getDisplayTransform: () => sceneDisplayTransform,
+                getExposure: () => window.displayExposureScale ? window.displayExposureScale() : 1,
+                onDiagnostic: (message) => {
+                    const warning = '[info] Scene presentation: ' + message;
+                    if (!warnings.includes(warning)) warnings.push(warning);
+                    report({ phase: 'presentation', status: 'info', label: message });
+                },
+            });
+        }
         startLoop();
         const setEnvironment = (next) => {
             if (!next || stopped) return false;
@@ -3851,6 +3896,13 @@ const createMtlxSceneView = async ({
                 ktx2Substituted: textureStats.ktx2Substituted,
             }),
             getSamplerReport: () => samplerReport.slice(),
+            getPresentation: () => presentationPipeline ? presentationPipeline.getSettings() : { enabled: false, supported: false, reason: 'Presentation module not loaded' },
+            setPresentation: (options) => {
+                if (!presentationPipeline) return { enabled: false, supported: false };
+                const settings = presentationPipeline.setSettings(options);
+                renderFrame();
+                return settings;
+            },
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
                 applyStudioPolarClamp();
@@ -3993,6 +4045,7 @@ const createMtlxSceneView = async ({
                     try { t.image && t.image.close && t.image.close(); } catch (e) {}
                 });
                 textureCache.clear();
+                if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (e) {} }
                 if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                 if (window.unregisterLiveView) window.unregisterLiveView(handle);
                 try { renderer.dispose(); } catch (e) {}
@@ -4002,7 +4055,9 @@ const createMtlxSceneView = async ({
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
             __debug: () => ({ renderer, scene, camera, materials: Array.from(materials), thicknessScale, thicknessTarget,
-                sceneRgbt: Object.assign({}, sceneRgbtState) }),
+                sceneRgbt: Object.assign({}, sceneRgbtState),
+                presentation: presentationPipeline ? presentationPipeline.debug() : null,
+                linearScopeActive: !!sceneLinearState }),
             // Reads the moments map back. An all-1.0 map means the depth pass
             // drew nothing, which looks identical to a correctly bound shadow
             // that simply never darkens anything.
@@ -4217,6 +4272,7 @@ const createMtlxSceneView = async ({
         });
         textureCache.clear();
         geometries.forEach((g) => { try { g.dispose(); } catch (err) {} });
+        if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (err) {} }
         if (peelPipeline) { try { peelPipeline.dispose(); } catch (err) {} }
         if (controls) controls.dispose();
         if (environmentBridge && environmentBridge.dispose) environmentBridge.dispose();

@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><base href="../../"><title>MaterialX raster regression harness</title>
+<style>html,body{margin:0;background:#111}#viewport{width:320px;height:200px;position:relative}canvas{width:100%;height:100%;display:block}pre{color:#ddd;white-space:pre-wrap}</style>
+<script src="vendor/react/react.production.min.js"></script>
+<script src="vendor/three/three.min.js"></script>
+<script src="vendor/three/OrbitControls.js"></script>
+<script src="vendor/three/RGBELoader.js"></script>
+<script src="vendor/three/fflate.min.js"></script>
+<script src="js/vendor/EXRLoader.js"></script>
+<script src="js/mtlx-assets.js"></script>
+</head><body><div id="viewport"></div><pre id="status">Loading actual MaterialX renderer...</pre><script>
+(async () => {
+  // Inline the generated engine just as the app shell does, retaining the
+  // document base for its native dynamic import of the bundled MaterialX WASM.
+  for (const url of ['embed/gen/mtlx-engine.js', 'js/usd-scene-lights.js', 'js/usd-scene-post.js', 'js/usd-scene-renderer.js']) {
+    const response=await fetch(url); if(!response.ok) throw new Error(url+': '+response.status);
+    const el=document.createElement('script');el.textContent=';(function(){\n'+await response.text()+'\n})();';document.head.appendChild(el);
+  }
+  window.__rasterReady=true;
+  document.getElementById('status').textContent='Ready. Use RasterHarness from browser DevTools or run_browser.py.';
+})().catch(e=>{window.__bootError=String(e.stack||e);document.getElementById('status').textContent=window.__bootError;});
+</script><script src="tests/raster/harness.js"></script></body></html>

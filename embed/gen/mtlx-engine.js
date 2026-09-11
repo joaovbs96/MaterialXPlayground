@@ -1329,6 +1329,30 @@ const patchAmbientOcclusion = fs => {
   return out.slice(0, at) + decls + out.slice(at);
 };
 
+// Scene-only correction for the generated OpenPBR thin-wall contract.
+// A sheet has no macroscopic interior: its transmission_color is a surface
+// tint regardless of the authored transmission_depth. MaterialX 1.39.5's
+// generated graph only uses geometry_thin_walled for subsurface scattering;
+// its transmission tint and volume branches otherwise still use depth.
+// Change the LOCAL function argument, not a global uniform or source asset.
+// Thus connected inputs, several OpenPBR closures and runtime booleans all
+// keep working. The Material Viewer does not opt in to this scene patch.
+// This does not replace the dielectric BSDF with a full two-interface sheet
+// solver; roughness, Fresnel layering and reflection remain MaterialX's.
+const patchSceneThinWalledTransmission = (fs, enabled, notices) => {
+  if (!enabled || fs.indexOf('/* MX_SCENE_THIN_WALL */') !== -1) return fs;
+  let count = 0;
+  const out = fs.replace(/void\s+NG_open_pbr_surface_surfaceshader\w*\s*\(([^)]*)\)\s*\{/g, (head, args) => {
+    if (!/\bbool\s+geometry_thin_walled\b/.test(args) || !/\bfloat\s+transmission_depth\b/.test(args) || !/\bvec3\s+transmission_color\b/.test(args)) return head;
+    count++;
+    return head + '\n    /* MX_SCENE_THIN_WALL */\n' + '    if (geometry_thin_walled) transmission_depth = 0.0;\n';
+  });
+  if (!count && /void\s+NG_open_pbr_surface_surfaceshader/.test(fs) && notices) {
+    notices.push('Scene thin-wall correction unavailable: the generated OpenPBR function contract changed; keeping MaterialX output');
+  }
+  return out;
+};
+
 // Gives MaterialX's volume absorption the path length it is missing.
 //
 // mx_anisotropic_vdf.glsl computes `vdf.throughput = exp(-absorption)` with
@@ -5863,6 +5887,7 @@ const generatePreviewSourcesUnlocked = ({
   }
   fs = patchUnlitLightingRefs(fs);
   fs = patchScenePhysicalLightFalloff(fs, sceneRgbt);
+  fs = patchSceneThinWalledTransmission(fs, sceneRgbt, notices);
   const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
   const outVar = outDeclMatch ? outDeclMatch[1] : null;
   const outAssignments = outVar ? fs.match(new RegExp('\\b' + outVar + '\\s*=[^;]*;', 'g')) : null;
@@ -7163,7 +7188,7 @@ const createRgbtPeelPipeline = (renderer, {
     const finalMat = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: quadVertex,
-      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' + 'uniform int u_displayTransform; uniform float u_displayExposure;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' + 'vec3 lin=c.rgb+t.rgb*b.rgb;\n' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encoded', 'u_displayTransform', 'u_displayExposure') + 'float transA=1.0-min(t.r,min(t.g,t.b));\n' + 'float a=' + (opaqueOutput ? '1.0' : 'b.a+(1.0-b.a)*transA') + ';o=vec4(encoded,a);}\n',
+      fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o;\n' + 'uniform sampler2D u_c; uniform sampler2D u_t; uniform sampler2D u_opaque;\n' + 'uniform int u_displayTransform; uniform float u_displayExposure; uniform int u_forceOpaque;\n' + 'void main(){vec4 c=texture(u_c,vUv),t=texture(u_t,vUv),b=texture(u_opaque,vUv);\n' + 'vec3 lin=c.rgb+t.rgb*b.rgb;\n' + DISPLAY_TRANSFORM_SWITCH_GLSL('lin', 'encoded', 'u_displayTransform', 'u_displayExposure') + 'float transA=1.0-min(t.r,min(t.g,t.b));\n' + 'float a=u_forceOpaque!=0?1.0:b.a+(1.0-b.a)*transA;o=vec4(encoded,a);}\n',
       uniforms: {
         u_c: {
           value: null
@@ -7173,6 +7198,9 @@ const createRgbtPeelPipeline = (renderer, {
         },
         u_opaque: {
           value: null
+        },
+        u_forceOpaque: {
+          value: opaqueOutput ? 1 : 0
         },
         u_displayTransform: {
           value: displayTransformId(getDT())
@@ -7278,7 +7306,8 @@ const createRgbtPeelPipeline = (renderer, {
       renderer.render(scene, camera);
       return true;
     }
-    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const boundTarget = renderer.getRenderTarget();
+    const size = boundTarget ? new THREE.Vector2(boundTarget.width, boundTarget.height) : renderer.getDrawingBufferSize(new THREE.Vector2());
     if (!resources || resources.w !== size.x || resources.h !== size.y) alloc(size.x, size.y);
     const oldTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
     const oldViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
@@ -7384,7 +7413,7 @@ const createRgbtPeelPipeline = (renderer, {
       // into opaqueRT while suppressing the RGB-T participants.
       setPayloadSubmaterials(true);
       renderer.setRenderTarget(resources.opaque);
-      renderer.setClearColor(oldClearColor, 0);
+      renderer.setClearColor(oldClearColor, opts.outputLinear ? oldClearAlpha : 0);
       renderer.clear(true, true, true);
       renderer.render(scene, camera);
       setPayloadSubmaterials(false);
@@ -7479,8 +7508,11 @@ const createRgbtPeelPipeline = (renderer, {
       resources.finalMat.uniforms.u_c.value = cOld.texture;
       resources.finalMat.uniforms.u_t.value = tOld.texture;
       resources.finalMat.uniforms.u_opaque.value = resources.opaque.texture;
-      resources.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
-      resources.finalMat.uniforms.u_displayExposure.value = getExposure();
+      // An HDR caller owns exposure and display conversion. Mode 2 is
+      // the existing unclamped scene-linear inspection transform.
+      resources.finalMat.uniforms.u_displayTransform.value = opts.outputLinear ? 2 : displayTransformId(getDT());
+      resources.finalMat.uniforms.u_displayExposure.value = opts.outputLinear ? 1 : getExposure();
+      resources.finalMat.uniforms.u_forceOpaque.value = opaqueOutput && !opts.outputLinear ? 1 : 0;
       // Write into whatever target the caller had bound on entry, not
       // hardcoded null, so an offscreen frame wrapper (HDR/bloom) still
       // receives the real image instead of the canvas getting it.
@@ -7753,7 +7785,8 @@ const createPeelPipeline = (renderer, {
       return;
     }
     if (opts.setSceneLinear) opts.setSceneLinear(peelLinearOk);
-    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const boundTarget = renderer.getRenderTarget();
+    const size = boundTarget ? new THREE.Vector2(boundTarget.width, boundTarget.height) : renderer.getDrawingBufferSize(new THREE.Vector2());
     if (!peel || peel.w !== size.x || peel.h !== size.y) allocPeel(size.x, size.y);
 
     // Every pass below that would otherwise hardcode null must land on
@@ -7798,7 +7831,7 @@ const createPeelPipeline = (renderer, {
         // 1+2 merged: opaque -> opaqueRT only (linear HDR color +
         // depth); finalMat composites it onto the screen in step 5.
         renderer.setRenderTarget(peel.opaqueRT);
-        renderer.setClearColor(prevClearColor, 0);
+        renderer.setClearColor(prevClearColor, opts.outputLinear ? prevClearAlpha : 0);
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
       } else {
@@ -7909,8 +7942,8 @@ const createPeelPipeline = (renderer, {
       peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
       if (peelLinearOk) {
         peel.finalMat.uniforms.tOpaque.value = peel.opaqueRT.texture;
-        peel.finalMat.uniforms.u_displayTransform.value = displayTransformId(getDT());
-        peel.finalMat.uniforms.u_displayExposure.value = getExposure();
+        peel.finalMat.uniforms.u_displayTransform.value = opts.outputLinear ? 2 : displayTransformId(getDT());
+        peel.finalMat.uniforms.u_displayExposure.value = opts.outputLinear ? 1 : getExposure();
       }
       renderer.render(peel.quadScene, peel.quadCam);
     } finally {
@@ -10204,6 +10237,7 @@ Object.assign(window, {
   applyThreeToneMappingChunk,
   getDisplayTransformValues,
   displayTransformId,
+  sceneDisplayTransformGLSL: DISPLAY_TRANSFORM_SWITCH_GLSL,
   COLOR_VIEWABLE,
   resolveNodeKind,
   makeEnvTexture,

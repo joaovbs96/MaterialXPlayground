@@ -32,6 +32,8 @@ js/materialx/1.39.4/
 # Playwright output (npm run test:embed).
 test-results/
 playwright-report/
+# Debug renders from the wing-shadow spec and tests/raster (MTLX_RENDER_RESULTS).
+render-results/
 
 # docs/local/: scratch notes and internal write-ups that are for us only
 # and deliberately not published. Anything in here is invisible to git,

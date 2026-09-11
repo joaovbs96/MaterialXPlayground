@@ -29,7 +29,7 @@ function fixtureFile(relativePath) {
 // Outside test-results/ on purpose: a concurrent Playwright run on this
 // machine clears test-results/ at its own startup, deleting sibling debug
 // PNGs mid-run.
-const outDir = 'C:\\Users\\joaov\\AppData\\Local\\Temp\\mxpt-renders\\raster-quality\\wing-gate';
+const outDir = path.resolve(process.env.MTLX_RENDER_RESULTS || 'render-results', 'wing-gate');
 
 // --- World-space geometry, mirrored from the .usda fixtures ---------------
 

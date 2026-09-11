@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <surface_unlit name="backdrop_dark_surface" type="surfaceshader">
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0.05, 0.05, 0.05" />
+  </surface_unlit>
+  <surfacematerial name="backdrop_dark" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="backdrop_dark_surface" />
+  </surfacematerial>
+</materialx>

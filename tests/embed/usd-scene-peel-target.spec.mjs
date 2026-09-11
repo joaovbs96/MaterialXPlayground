@@ -50,7 +50,7 @@ test('@scene peel compositor writes into a caller-bound offscreen target', async
     const buffer = new Uint8Array(w * h * 4);
     renderer.readRenderTargetPixels(offscreen, 0, 0, w, h, buffer);
 
-    let minV = 255, maxV = 0, nonZeroAlpha = 0;
+    let minV = Infinity, maxV = -Infinity, nonZeroAlpha = 0;
     for (let i = 0; i < buffer.length; i += 4) {
       const lum = buffer[i] + buffer[i + 1] + buffer[i + 2];
       minV = Math.min(minV, lum);
