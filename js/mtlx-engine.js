@@ -93,20 +93,44 @@ const getMxEnv = (version) => {
                 const gen = mx.EsslShaderGenerator.create();
                 const genContext = new mx.GenContext(gen);
                 const stdlib = mx.loadStandardLibraries(genContext);
-                // TONE MAPPING: deliberately diverges from the official
-                // viewer (raw linear output here; ACES + sRGB applied by
-                // encodeDisplay() below, gated at runtime so linear
-                // depth-peel passes can defer it, see its header).
-                try { genContext.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
-                // Textures are uploaded flipY=false (V0 = image top row),
-                // so generated shaders must sample file textures at
-                // (u, 1-v) for MaterialX's lower-left UV origin, without
-                // this, every image renders upside down.
-                try { genContext.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
 
-                // Direct light, like the official viewer's registerLights():
-                // binds directional_light (id 1) from any <directional_light>
-                // in environment_map.mtlx via DOMParser; no rig means pure IBL.
+                // ldef/rigLights are filled in once the light rig below has
+                // been fetched and parsed; configureGenContext reads them
+                // by closure, so it must be called AFTER that happens.
+                let ldef = null;
+                const rigLights = [];
+                // Every GenContext option + light binding this build needs,
+                // centralized so a FRESH context (createGenContext below)
+                // gets the exact same setup as this shared one.
+                const configureGenContext = (ctx) => {
+                    // TONE MAPPING: deliberately diverges from the official
+                    // viewer (raw linear output here; ACES + sRGB applied by
+                    // encodeDisplay() below, gated at runtime so linear
+                    // depth-peel passes can defer it, see its header).
+                    try { ctx.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
+                    // Textures are uploaded flipY=false (V0 = image top row),
+                    // so generated shaders must sample file textures at
+                    // (u, 1-v) for MaterialX's lower-left UV origin, without
+                    // this, every image renders upside down.
+                    try { ctx.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
+                    // Direct light, like the official viewer's registerLights():
+                    // binds directional_light (id 1) from any <directional_light>
+                    // in environment_map.mtlx via DOMParser; no rig means pure IBL.
+                    try {
+                        const HwGen = mx.HwShaderGenerator;
+                        if (HwGen && HwGen.bindLightShader && ldef) {
+                            try { HwGen.unbindLightShaders(ctx); } catch (e) { /* fresh ctx */ }
+                            HwGen.bindLightShader(ldef, 1, ctx);
+                            // Capacity must cover the rig PLUS one slot
+                            // reserved for the auto-extracted env key
+                            // light (extractKeyLight), fixed for good,
+                            // since a bound array's length can't change.
+                            const opts = ctx.getOptions();
+                            opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1);
+                        }
+                    } catch (e) { console.warn('direct-light registration unavailable:', e); }
+                };
+
                 return fetch('./environment_map.mtlx')
                     .then((r) => (r.ok ? r.text() : null))
                     .catch(() => null)
@@ -114,14 +138,11 @@ const getMxEnv = (version) => {
                         const lightData = [];
                         try {
                             const HwGen = mx.HwShaderGenerator;
-                            const ldef = stdlib.getNodeDef ? stdlib.getNodeDef('ND_directional_light') : null;
+                            ldef = stdlib.getNodeDef ? stdlib.getNodeDef('ND_directional_light') : null;
                             if (HwGen && HwGen.bindLightShader && ldef) {
-                                try { HwGen.unbindLightShaders(genContext); } catch (e) { /* fresh ctx */ }
-                                HwGen.bindLightShader(ldef, 1, genContext);
                                 // Parses <directional_light> via DOMParser,
                                 // which handles self-closing tags unlike
                                 // regex. Parse failure warns, never throws.
-                                const rigLights = [];
                                 if (rigXml) {
                                     try {
                                         const rigDoc = new DOMParser().parseFromString(rigXml, 'text/xml');
@@ -160,14 +181,6 @@ const getMxEnv = (version) => {
                                         console.warn('direct-light rig: DOMParser failed on environment_map.mtlx, no rig lights loaded.', e);
                                     }
                                 }
-                                // Capacity must cover the rig PLUS one slot
-                                // reserved for the auto-extracted env key
-                                // light (extractKeyLight), fixed for good,
-                                // since a bound array's length can't change.
-                                try {
-                                    const opts = genContext.getOptions();
-                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1);
-                                } catch (e) { /* keep default */ }
                                 // No fallback light: an empty rig leaves
                                 // lightData empty, so u_numActiveLightSources
                                 // is 0 and the light loop is a no-op (pure IBL).
@@ -189,7 +202,19 @@ const getMxEnv = (version) => {
                             console.warn('direct-light registration unavailable:', e);
                             lightData.length = 0;
                         }
-                        return { mx, gen, genContext, stdlib, lightData, version: ver };
+                        // Unconditional: options apply even with no light rig.
+                        configureGenContext(genContext);
+                        return {
+                            mx, gen, genContext, stdlib, lightData, version: ver,
+                            // Compound implementations are cached by NAME
+                            // per context, so a document with its own
+                            // nodedefs needs a FRESH one to avoid stale gen.
+                            createGenContext: () => {
+                                const c = new mx.GenContext(gen);
+                                configureGenContext(c);
+                                return c;
+                            },
+                        };
                     });
             })
             .catch((e) => {

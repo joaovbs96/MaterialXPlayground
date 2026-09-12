@@ -108,7 +108,7 @@
             }
             const ngName = mxElAttr(el, 'nodegraph');
             if (ngName) {
-                const ng = mxSafe(() => doc.getNodeGraph(ngName), null);
+                const ng = docChild(doc, ngName) || mxSafe(() => doc.getNodeGraph(ngName), null);
                 if (!ng) return 'FAIL';
                 const outName = mxElAttr(el, 'output');
                 let outEl = null;
@@ -208,7 +208,17 @@
         const buildPreviewRenderable = (parsed, target) => {
             const doc = parsed.doc;
             const temps = []; // { container, name } in creation order
+            // { el, prev }: a definition-shadowing nodedef= pin to undo,
+            // replayed before temps so document-local __pv_ND/NG names are
+            // never dereferenced by a still-pinned node.
+            const restores = [];
             const cleanup = () => {
+                for (let i = restores.length - 1; i >= 0; i--) {
+                    const r = restores[i];
+                    if (r.prev) mxSetAttr(r.el, 'nodedef', r.prev);
+                    else mxRemoveAttr(r.el, 'nodedef');
+                }
+                restores.length = 0;
                 for (let i = temps.length - 1; i >= 0; i--) {
                     mxSafe(() => { temps[i].container.removeChild(temps[i].name); return true; }, false);
                 }
@@ -407,6 +417,91 @@
                 return wrapAsSurface({ nodename: mxElName(constEl) }, type, name);
             };
 
+            // A definitions entry (parsed.definitions) by the local
+            // functional graph or nodedef name that reaches it.
+            const definitionForGraph = (gName) => (parsed.definitions || []).find((d) => d.graphs.indexOf(gName) !== -1) || null;
+            const definitionByNodedef = (nd) => (parsed.definitions || []).find((d) => d.nodedef === nd) || null;
+
+            // Materializes a definition as transient '__pv_ND'/'__pv_NG'
+            // root copies, so shader gen compiles the DOCUMENT's version,
+            // never the library's. Nodedef pushed FIRST (cleanup is LIFO).
+            const materializeDefinition = (entry) => {
+                const firstGraph = entry.graphs[0] ? docChild(doc, entry.graphs[0]) : null;
+                const defEl = docChild(doc, entry.nodedef)
+                    || (firstGraph ? resolveNodedefFor(doc, firstGraph) : null)
+                    || mxSafe(() => doc.getNodeDef(entry.nodedef), null);
+                if (!defEl) return null;
+                const defOutType = entry.outType === 'multioutput'
+                    ? ((entry.outputs[0] && entry.outputs[0].type) || 'color3')
+                    : (entry.outType || 'color3');
+                const defName = mxSafe(() => doc.createValidChildName('__pv_ND'), '__pv_ND');
+                const copyDef = mxSafe(() => doc.addNodeDef(defName, defOutType, entry.node), null);
+                if (!copyDef) return null;
+                temps.push({ container: doc, name: defName });
+                mxSafe(() => { copyDef.copyContentFrom(defEl); return true; }, false);
+                mxSafe(() => { copyDef.setName(defName); return true; }, false);
+                const graphNames = [];
+                for (const gName of entry.graphs) {
+                    const localGraphEl = docChild(doc, gName);
+                    if (!localGraphEl) continue;
+                    const copyName = mxSafe(() => doc.createValidChildName('__pv_NG'), '__pv_NG');
+                    const copyGraph = mxSafe(() => doc.addNodeGraph(copyName), null);
+                    if (!copyGraph) continue;
+                    temps.push({ container: doc, name: copyName });
+                    mxSafe(() => { copyGraph.copyContentFrom(localGraphEl); return true; }, false);
+                    mxSafe(() => { copyGraph.setName(copyName); return true; }, false);
+                    mxSafe(() => { copyGraph.setNodeDefString(defName); return true; }, false);
+                    graphNames.push(copyName);
+                }
+                return { defName, graphNames, nodeString: entry.node, outType: entry.outType, outputs: entry.outputs };
+            };
+
+            // Preview a definitions entry: instantiate the materialized
+            // copy and wrap it exactly like previewing any other node.
+            const previewDefinition = (entry, outputName, label) => {
+                const m = materializeDefinition(entry);
+                if (!m) return fail('No definition found for "' + label + '".');
+                const pick = (outputName && m.outputs.find((o) => o.name === outputName))
+                    || m.outputs.find((o) => COLOR_VIEWABLE.indexOf(o.type) !== -1)
+                    || m.outputs[0];
+                if (!pick) return fail('No preview for "' + label + '": it has no outputs.');
+                const multi = m.outputs.length > 1;
+                const inst = addTempNode(m.nodeString, '__pv_inst', multi ? 'multioutput' : (pick.type || m.outType));
+                if (!inst) return fail('Could not build the preview graph.');
+                mxSafe(() => { inst.setNodeDefString(m.defName); return true; }, false);
+                return withGeom(
+                    wrapAsSurface({ nodename: mxElName(inst), output: multi ? pick.name : null }, pick.type || m.outType, label),
+                    'shaderball-scene'
+                );
+            };
+
+            // A local nodedef sharing its name with a library one is
+            // invisible to shader gen (by-name lookups favor the library),
+            // so pin every matching root/nodegraph instance to a copy of it.
+            const shadowLocalDefinitions = () => {
+                const defs = parsed.definitions || [];
+                if (!defs.length) return;
+                const instanceGraphs = docChildren(doc).filter((el) => mxElCat(el) === 'nodegraph'
+                    && !(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(el)) !== -1));
+                for (const entry of defs) {
+                    if (!entry.local) continue;
+                    const libDef = mxSafe(() => doc.getNodeDef(entry.nodedef), null);
+                    const shadowed = libDef && !isDocLocal(libDef);
+                    if (!shadowed) continue;
+                    const m = materializeDefinition(entry);
+                    if (!m) continue;
+                    const retarget = (container) => {
+                        for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                            if (mxElCat(n) !== entry.node) continue;
+                            restores.push({ el: n, prev: mxElAttr(n, 'nodedef') });
+                            mxSetAttr(n, 'nodedef', m.defName);
+                        }
+                    };
+                    retarget(doc);
+                    for (const g of instanceGraphs) retarget(g);
+                }
+            };
+
             // Tags a successful ok(...) result with its default preview
             // geometry, read by NodePreview to pick the render-view shell;
             // stale-target/doc-default results are left untagged on purpose
@@ -417,27 +512,79 @@
             if (target && target.id) {
                 const tScope = target.scope || '';
                 const name = target.id.slice(2);
+                const tScopeFunctional = !!(tScope && parsed.functionalGraphs && parsed.functionalGraphs.indexOf(tScope) !== -1);
+                // A root-scope network can reference a node type shadowed
+                // by the library; pin it to a materialized copy first.
+                // Skipped inside a functional scope, which copies its own.
+                if (!tScopeFunctional && (parsed.definitions || []).length) shadowLocalDefinitions();
                 if (target.id.indexOf('g:') === 0) {
-                    const g = mxSafe(() => doc.getNodeGraph(name), null);
-                    if (g) return withGeom(previewNodegraph(g), 'shaderball-scene');
+                    if (parsed.functionalGraphs && parsed.functionalGraphs.indexOf(name) !== -1) {
+                        const entry = definitionForGraph(name);
+                        if (entry) return previewDefinition(entry, null, name);
+                    } else {
+                        const g = docChild(doc, name) || mxSafe(() => doc.getNodeGraph(name), null);
+                        if (g) return withGeom(previewNodegraph(g), 'shaderball-scene');
+                    }
+                } else if (target.id.indexOf('d:') === 0) {
+                    const entry = definitionByNodedef(name);
+                    if (entry) return previewDefinition(entry, null, entry.node);
                 } else if (target.id.indexOf('n:') === 0) {
-                    const container = tScope ? mxSafe(() => doc.getNodeGraph(tScope), null) : doc;
-                    const el = container ? mxSafe(() => container.getNode(name), null) : null;
-                    if (el) return withGeom(previewNode(container, tScope, el),
-                        nodeAndUpstreamAllBuffer2d(el, container, doc) ? 'buffer2d' : 'shaderball-scene');
+                    if (tScopeFunctional) {
+                        const entry = definitionForGraph(tScope);
+                        const m = entry && materializeDefinition(entry);
+                        const copyName = m && m.graphNames[entry.graphs.indexOf(tScope)];
+                        const copyGraph = copyName ? docChild(doc, copyName) : null;
+                        const el = copyGraph ? mxSafe(() => copyGraph.getNode(name), null) : null;
+                        const realGraph = docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null);
+                        if (copyGraph && el) {
+                            const out = nodeOutInfo(el);
+                            if (out.type) {
+                                const oName = mxSafe(() => copyGraph.createValidChildName('__pv_out'), '__pv_out');
+                                const o = mxSafe(() => copyGraph.addOutput(oName, out.type), null);
+                                if (o) {
+                                    temps.push({ container: copyGraph, name: oName });
+                                    mxSafe(() => { o.setAttribute('nodename', name); return true; }, false);
+                                    if (out.name) mxSafe(() => { o.setAttribute('output', out.name); return true; }, false);
+                                    if (isClosureModifier(out.type, signatureInputTypes(doc, el, out.type))) {
+                                        return fail('No preview for "' + name + '": closure-modifier nodes (BSDF/EDF/VDF in and out) can\'t be compiled for preview.');
+                                    }
+                                    return withGeom(
+                                        wrapAsSurface({ nodegraph: copyName, output: oName }, out.type, name),
+                                        (realGraph && nodeAndUpstreamAllBuffer2d(el, realGraph, doc)) ? 'buffer2d' : 'shaderball-scene'
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        const container = tScope ? (docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null)) : doc;
+                        const el = container ? mxSafe(() => container.getNode(name), null) : null;
+                        if (el) return withGeom(previewNode(container, tScope, el),
+                            nodeAndUpstreamAllBuffer2d(el, container, doc) ? 'buffer2d' : 'shaderball-scene');
+                    }
                 } else if (target.id.indexOf('o:') === 0) {
-                    const container = tScope ? mxSafe(() => doc.getNodeGraph(tScope), null) : doc;
-                    const o = container ? mxSafe(() => container.getOutput(name), null) : null;
-                    // Buffer2d default iff the WHOLE upstream closure (the
-                    // node this output taps, and everything feeding it,
-                    // crossing nodegraph boundaries via interface inputs)
-                    // is flat pattern/operator nodes — else the full scene.
-                    if (o) return withGeom(previewOutput(container, tScope, o),
-                        upstreamAllBuffer2d(o, container, doc) ? 'buffer2d' : 'shaderball-scene');
+                    if (tScopeFunctional) {
+                        const entry = definitionForGraph(tScope);
+                        if (entry) return previewDefinition(entry, name, name);
+                    } else {
+                        const container = tScope ? (docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null)) : doc;
+                        const o = container ? mxSafe(() => container.getOutput(name), null) : null;
+                        // Buffer2d default iff the WHOLE upstream closure (the
+                        // node this output taps, and everything feeding it,
+                        // crossing nodegraph boundaries via interface inputs)
+                        // is flat pattern/operator nodes — else the full scene.
+                        if (o) return withGeom(previewOutput(container, tScope, o),
+                            upstreamAllBuffer2d(o, container, doc) ? 'buffer2d' : 'shaderball-scene');
+                    }
                 } else if (target.id.indexOf('i:') === 0) {
                     // Interface inputs only exist inside a nodegraph scope.
-                    const g = tScope ? mxSafe(() => doc.getNodeGraph(tScope), null) : null;
-                    const inp = g ? mxSafe(() => g.getInput(name), null) : null;
+                    const g = tScope ? (docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null)) : null;
+                    let inp = null;
+                    if (tScopeFunctional) {
+                        const def = g ? resolveNodedefFor(doc, g) : null;
+                        inp = def && mxSafe(() => def.getInput(name), null);
+                    } else {
+                        inp = g ? mxSafe(() => g.getInput(name), null) : null;
+                    }
                     // Same rule as 'o:' above; the interface input's own
                     // external wiring (if any) resolves one scope up, in
                     // the doc — see upstreamAllBuffer2d's seedScope contract.
@@ -445,11 +592,13 @@
                         upstreamAllBuffer2d(inp, doc, doc) ? 'buffer2d' : 'shaderball-scene');
                 }
                 // Stale target (new document, renamed scope, ...) → default.
+                cleanup(); // undo any shadow pins from above before recursing
                 return buildPreviewRenderable(parsed, null);
             }
 
             // Document default: the surface shader, else the material
             // itself, else the first node that can be found.
+            if ((parsed.definitions || []).length) shadowLocalDefinitions();
             const r = findDocRenderable(doc);
             if (r) return ok(r, mxElName(r));
             const nodes = vecToArray(mxSafe(() => doc.getNodes(), []))
@@ -457,9 +606,14 @@
             const mat = nodes.find((n) => mxElType(n) === 'material');
             if (mat) return ok(mat, mxElName(mat));
             if (nodes.length) return previewNode(doc, '', nodes[0]);
-            for (const g of vecToArray(mxSafe(() => doc.getNodeGraphs(), []))) {
-                if (mxElAttr(g, 'nodedef')) continue;
-                if (parsed.implGraphNames && parsed.implGraphNames.has(mxElName(g))) continue;
+            // A pure "definition document" (nodedefs/functional graphs
+            // only, no material/shading network) previews its first
+            // surfaceshader-output definition, else its first definition.
+            const defs = parsed.definitions || [];
+            const first = defs.find((d) => d.outType === 'surfaceshader') || defs[0];
+            if (first) return previewDefinition(first, null, first.node);
+            for (const g of docChildren(doc).filter((el) => mxElCat(el) === 'nodegraph')) {
+                if (parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(g)) !== -1) continue;
                 return previewNodegraph(g);
             }
             return fail('Nothing to preview yet \u2014 add a node (Tab) or drop a .mtlx.');
@@ -683,7 +837,13 @@
                 (async () => {
                     setError(null); setNotice(null);
                     try {
-                        const { mx, gen, genContext, lightData } = await getMxEnv();
+                        const env = await getMxEnv();
+                        const { mx, gen, lightData } = env;
+                        // Compound implementations are cached by NAME per
+                        // GenContext, so a document owning its own nodedefs
+                        // needs a FRESH context, never the shared/stale one.
+                        const genContext = (parsed && parsed.hasDefinitions && typeof env.createGenContext === 'function')
+                            ? env.createGenContext() : env.genContext;
                         if (!mounted) return;
                         // Let the graph paint before the heavy synchronous
                         // regen below — without this yield it blocks the frame

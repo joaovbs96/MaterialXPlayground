@@ -325,16 +325,18 @@
         // Small blur/Enter-committing text field for the Interface metadata
         // group (params panel, i: nodes), mirroring ParamRow's textField
         // commit pattern since that pattern isn't exported standalone.
-        function IfaceMetaField({ value, placeholder, onCommit }) {
+        function IfaceMetaField({ value, placeholder, onCommit, readOnly }) {
             const [draft, setDraft] = React.useState(value || '');
             React.useEffect(() => { setDraft(value || ''); }, [value]);
             const commit = () => { if (draft !== (value || '')) onCommit(draft); };
             return (
                 <input
-                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
+                        + (readOnly ? ' opacity-60' : '')}
                     value={draft}
                     placeholder={placeholder}
                     spellCheck={false}
+                    readOnly={!!readOnly}
                     onChange={(e) => setDraft(e.target.value)}
                     onBlur={commit}
                     onKeyDown={(e) => {
@@ -657,7 +659,8 @@
                 // skipped when a pin owns the preview, or the ref is preset.
                 if (next && !pendingScopeSelectRef.current && !pinnedTarget) {
                     const firstOutputName = mxSafe(() => {
-                        const g = parsedRef.current && parsedRef.current.doc.getNodeGraph(next);
+                        const doc = parsedRef.current && parsedRef.current.doc;
+                        const g = doc && (docChild(doc, next) || mxSafe(() => doc.getNodeGraph(next), null));
                         const outs = g ? vecToArray(g.getOutputs()) : [];
                         return outs.length ? mxElName(outs[0]) : null;
                     }, null);
@@ -775,8 +778,10 @@
                 try {
                     const p = await parseMtlxDocument(entry.xml);
                     p.label = parsedRef.current ? parsedRef.current.label : 'document';
-                    const nextScope = (entry.scope && p.nodegraphs && p.nodegraphs.indexOf(entry.scope) === -1)
-                        ? '' : (entry.scope || '');
+                    const scopeValid = !entry.scope
+                        || (p.nodegraphs && p.nodegraphs.indexOf(entry.scope) !== -1)
+                        || (p.functionalGraphs && p.functionalGraphs.indexOf(entry.scope) !== -1);
+                    const nextScope = scopeValid ? (entry.scope || '') : '';
                     // Only for this restore: a genuine document load must still
                     // start fresh, or a same-named node in another file would
                     // silently inherit the previous one's visibility.
@@ -1385,8 +1390,10 @@
                 // Preserve scope when it still resolves in the new doc,
                 // reset to root otherwise (same check as restoreSnapshot) —
                 // avoids landing the user inside a nodegraph that's gone.
-                const nextScope = (scopeRef.current && p.nodegraphs && p.nodegraphs.indexOf(scopeRef.current) === -1)
-                    ? '' : scopeRef.current;
+                const scopeValid = !scopeRef.current
+                    || (p.nodegraphs && p.nodegraphs.indexOf(scopeRef.current) !== -1)
+                    || (p.functionalGraphs && p.functionalGraphs.indexOf(scopeRef.current) !== -1);
+                const nextScope = scopeValid ? scopeRef.current : '';
 
                 // One-shot skip for the [parsed]/[parsed, scope] reset
                 // effects (softReloadSkipRef): an external reload of the
@@ -1796,7 +1803,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         const name = n.id.slice(2);
                         let el = null;
                         if (n.id.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
-                        else if (n.id.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                        else if (n.id.indexOf('g:') === 0) el = docChild(parsed.doc, name) || mxSafe(() => parsed.doc.getNodeGraph(name), null);
                         else if (n.id.indexOf('i:') === 0) el = mxSafe(() => c.getInput(name), null) || mxSafe(() => c.getChild(name), null);
                         else if (n.id.indexOf('o:') === 0) el = mxSafe(() => c.getOutput(name), null) || mxSafe(() => c.getChild(name), null);
                         if (!el) continue;
@@ -2025,7 +2032,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 // pseudo-nodes all become the preview target —
                 // buildPreviewRenderable knows how to tap each kind.
                 if (id && (id.indexOf('n:') === 0 || id.indexOf('g:') === 0
-                        || id.indexOf('i:') === 0 || id.indexOf('o:') === 0)) {
+                        || id.indexOf('i:') === 0 || id.indexOf('o:') === 0 || id.indexOf('d:') === 0)) {
                     setPreviewSel((prev) =>
                         (prev && prev.id === id && prev.scope === scope) ? prev : { scope, id });
                 }
@@ -2051,7 +2058,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 setSelectedEdgeIds((cur) => (cur.length ? [] : cur));
                 setParamsOpen(true);
                 if (node.id.indexOf('n:') === 0 || node.id.indexOf('g:') === 0
-                        || node.id.indexOf('i:') === 0 || node.id.indexOf('o:') === 0) {
+                        || node.id.indexOf('i:') === 0 || node.id.indexOf('o:') === 0 || node.id.indexOf('d:') === 0) {
                     setPreviewSel((prev) =>
                         (prev && prev.id === node.id && prev.scope === scope) ? prev : { scope, id: node.id });
                 }
@@ -2129,6 +2136,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 // in graph/preview.jsx) is in flight — bail and let the
                 // docRev-triggered rebuild/apply pick up this edit instead.
                 if (!view || view.__outdated || !FAST_UNIFORM_TYPES[type]) return false;
+                if (nodeId.indexOf('i:') === 0) {
+                    // A functional scope's interface pin is compiled from a
+                    // transient copy of the nodedef; let docRev rebuild it
+                    // rather than poke a uniform that may not even exist.
+                    const o = ifaceOwner();
+                    if (o && o.functional) return false;
+                }
                 const name = nodeId.slice(2);
                 const path = nodeId.indexOf('i:') === 0
                     ? (scope ? scope + '/' : '') + name
@@ -2211,7 +2225,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const elForFlowId = (container, doc, id) => {
                 const name = id.slice(2);
                 if (id.indexOf('n:') === 0 && container) return mxSafe(() => container.getNode(name), null);
-                if (id.indexOf('g:') === 0) return mxSafe(() => doc.getNodeGraph(name), null);
+                if (id.indexOf('g:') === 0) return docChild(doc, name) || mxSafe(() => doc.getNodeGraph(name), null);
                 return null;
             };
 
@@ -2248,10 +2262,15 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     let wrote = false;
                     let fastType = '';
                     if (nodeId.indexOf('i:') === 0) {
-                        // Interface-input pseudo node: the graph input
-                        // carries the value; mxWriteValue writes the raw
-                        // attribute — setValueString would wrongly retype it.
-                        const target = container ? mxSafe(() => container.getInput(name), null) : null;
+                        // Interface-input pseudo node: the pin owner (nodedef
+                        // when functional, else the graph) carries the value;
+                        // mxWriteValue writes the raw attribute, not setValueString.
+                        const o = ifaceOwner();
+                        if (o && o.functional && !o.local) {
+                            setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                            return;
+                        }
+                        const target = o && o.owner ? mxSafe(() => o.owner.getInput(name), null) : null;
                         wrote = !!target && mxSafe(() => { mxWriteValue(target, newValue, mxElType(target)); return true; }, false);
                         fastType = target ? mxSafe(() => mxElType(target), '') : '';
                     } else {
@@ -2330,7 +2349,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const container = scopeContainer();
                 let target = null;
                 if (nodeId.indexOf('i:') === 0) {
-                    target = container ? mxSafe(() => container.getInput(name), null) : null;
+                    const o = ifaceOwner();
+                    if (o && o.functional && !o.local) {
+                        setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                        return;
+                    }
+                    target = o && o.owner ? mxSafe(() => o.owner.getInput(name), null) : null;
                 } else {
                     const el = elForFlowId(container, parsed.doc, nodeId);
                     // The input must exist to carry the attribute (an empty
@@ -2384,8 +2408,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const applyInterfaceMeta = (nodeId, patch) => {
                 if (!parsed || nodeId.indexOf('i:') !== 0) return;
                 const name = nodeId.slice(2);
-                const container = scopeContainer();
-                const target = container ? mxSafe(() => container.getInput(name), null) : null;
+                const o = ifaceOwner();
+                if (o && o.functional && !o.local) {
+                    setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                    return;
+                }
+                const target = o && o.owner ? mxSafe(() => o.owner.getInput(name), null) : null;
                 if (!target) {
                     console.warn('node-graph: could not apply interface metadata on ' + nodeId);
                     return;
@@ -2732,13 +2760,26 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     }
                 };
                 for (const n of vecToArray(mxSafe(() => parsed.doc.getNodes(), []))) scanNode(n, docPrefix, null);
-                for (const g of vecToArray(mxSafe(() => parsed.doc.getNodeGraphs(), []))) {
-                    if (mxElAttr(g, 'nodedef') || (parsed.implGraphNames && parsed.implGraphNames.has(mxElName(g)))) continue;
+                for (const g of docChildren(parsed.doc).filter((el) => mxElCat(el) === 'nodegraph')) {
                     const prefix = docPrefix + (mxElAttr(g, 'fileprefix') || '');
+                    const isFunctional = !!(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(g)) !== -1);
                     const pinByName = {};
-                    for (const pin of vecToArray(mxSafe(() => g.getInputs(), []))) {
-                        pinByName[mxElName(pin)] = pin;
-                        if (mxElType(pin) === 'filename') note(refOf(pin, prefix));
+                    if (isFunctional) {
+                        // A functional graph's interfacename inputs resolve
+                        // through the NODEDEF's declared inputs, not the
+                        // graph's own (which it may author none of).
+                        const def = resolveNodedefFor(parsed.doc, g);
+                        if (def) {
+                            for (const inp of nodedefPorts(def).inputs) {
+                                const pinEl = mxSafe(() => def.getInput(inp.name), null);
+                                if (pinEl) pinByName[inp.name] = pinEl;
+                            }
+                        }
+                    } else {
+                        for (const pin of vecToArray(mxSafe(() => g.getInputs(), []))) {
+                            pinByName[mxElName(pin)] = pin;
+                            if (mxElType(pin) === 'filename') note(refOf(pin, prefix));
+                        }
                     }
                     for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) scanNode(n, prefix, pinByName);
                 }
@@ -2929,9 +2970,27 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // real doc (docRev bumps the preview) and patches the flow
             // in place, so layout/viewport/positions survive.
 
+            // A document-local nodegraph by name, falling back to the
+            // ambiguous getNodeGraph() only when it isn't doc-local (a
+            // library graph, e.g. before a functional graph is copied in).
+            const graphByName = (name) => !parsed ? null
+                : (docChild(parsed.doc, name) || mxSafe(() => parsed.doc.getNodeGraph(name), null));
+
             // The container the current scope's elements live in.
             const scopeContainer = () => !parsed ? null
-                : (scope ? mxSafe(() => parsed.doc.getNodeGraph(scope), null) : parsed.doc);
+                : (scope ? graphByName(scope) : parsed.doc);
+
+            // The current scope's interface-pin OWNER: the graph itself for
+            // a plain instance nodegraph, or its NODEDEF for a functional
+            // one (whose pins are the nodedef's inputs, not the graph's).
+            const ifaceOwner = () => {
+                if (!parsed || !scope) return null;
+                const g = graphByName(scope);
+                if (!g) return null;
+                const functional = !!(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(scope) !== -1);
+                const def = functional ? resolveNodedefFor(parsed.doc, g) : null;
+                return { graph: g, functional, def, owner: functional ? def : g, local: functional ? isDocLocal(def) : true };
+            };
 
             // The document ELEMENT that carries a connection's attributes
             // — the target <input>, or the <output> itself for output
@@ -2945,7 +3004,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 }
                 let el = null;
                 if (targetId.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
-                else if (targetId.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                else if (targetId.indexOf('g:') === 0) el = graphByName(name);
                 if (!el) return null;
                 const inputName = String(targetHandle || '').replace(/^in:/, '');
                 let inp = mxSafe(() => el.getInput(inputName), null);
@@ -3035,6 +3094,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 if (!c || !c.source || !c.target || !c.targetHandle) return false;
                 if (c.source === c.target) return false;
                 if (c.target.indexOf('i:') === 0) return false;
+                // Definition cards (functional graphs / bare nodedefs) are
+                // read-only signatures, not wireable graph content.
+                const isDefCard = (id) => {
+                    const n = flow.nodes.find((n2) => n2.id === id);
+                    return !!n && (n.data.functional || n.data.kind === 'nodedef');
+                };
+                if (isDefCard(c.source) || isDefCard(c.target)) return false;
                 const ts = flowPortType(c.source, c.sourceHandle, true);
                 const td = flowPortType(c.target, c.targetHandle, false);
                 return !ts || !td || ts === td;
@@ -3210,9 +3276,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // discard it (writeConnSource strips the target); migrate it onto the pin first.
             const migrateLiteralToIfacePin = (point, srcId) => {
                 if (!point || String(srcId).indexOf('i:') !== 0) return null;
-                const c = scopeContainer();
+                const o = ifaceOwner();
+                const owner = o ? o.owner : scopeContainer();
                 const pinName = srcId.slice(2);
-                const pin = c && (mxSafe(() => c.getInput(pinName), null) || mxSafe(() => c.getChild(pinName), null));
+                const pin = owner && (mxSafe(() => owner.getInput(pinName), null) || mxSafe(() => owner.getChild(pinName), null));
                 if (!pin) return null;
                 if (mxElAttr(pin, 'value') || mxElAttr(pin, 'colorspace')) return null;
                 const v = mxElAttr(point, 'value');
@@ -3576,10 +3643,21 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 if (newName === oldName) return true; // nothing to do
 
                 const c = scopeContainer();
+                // 'i:'/'o:' pins inside a functional scope live on the
+                // NODEDEF (or, for 'o:', on both the graph and the nodedef);
+                // refuse the rename outright when that nodedef is library-owned.
+                const o = (kind === 'i:' || kind === 'o:') ? ifaceOwner() : null;
+                if (o && o.functional && !o.local) {
+                    setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                    return false;
+                }
                 let el = null;
                 if (kind === 'n:' && c) el = mxSafe(() => c.getNode(oldName), null) || mxSafe(() => c.getChild(oldName), null);
-                else if (kind === 'g:') el = mxSafe(() => parsed.doc.getNodeGraph(oldName), null) || mxSafe(() => parsed.doc.getChild(oldName), null);
-                else if (kind === 'i:' && c) el = mxSafe(() => c.getInput(oldName), null) || mxSafe(() => c.getChild(oldName), null);
+                else if (kind === 'g:') el = docChild(parsed.doc, oldName) || mxSafe(() => parsed.doc.getNodeGraph(oldName), null) || mxSafe(() => parsed.doc.getChild(oldName), null);
+                else if (kind === 'i:') {
+                    const ownerEl = o ? o.owner : c;
+                    el = ownerEl ? (mxSafe(() => ownerEl.getInput(oldName), null) || mxSafe(() => ownerEl.getChild(oldName), null)) : null;
+                }
                 else if (kind === 'o:' && c) el = mxSafe(() => c.getOutput(oldName), null) || mxSafe(() => c.getChild(oldName), null);
                 if (!el) return false;
 
@@ -3587,6 +3665,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 if (!renamed || mxElName(el) !== newName) {
                     console.warn('node-graph: rename failed for "' + oldName + '" -> "' + newName + '" (' + flowId + ')');
                     return false;
+                }
+                if (kind === 'o:' && o && o.functional && o.local && o.def) {
+                    // Keep the nodedef's declared output name in lockstep
+                    // with the graph's own, since both name the same pin.
+                    mxSafe(() => { const defOut = o.def.getOutput(oldName); if (defOut) defOut.setName(newName); return true; }, false);
                 }
 
                 // Every node input, plus a container's own outputs — the
@@ -3610,11 +3693,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     for (const p of connectables(parsed.doc)) {
                         if (mxElAttr(p, 'nodegraph') === oldName) mxSetAttr(p, 'nodegraph', newName);
                     }
-                    if (parsed.nodegraphs) { // scope dropdown
-                        parsed.nodegraphs = parsed.nodegraphs.map((g) => (g === oldName ? newName : g));
-                    }
+                    refreshDefinitions(parsed); // scope dropdown + definition cards
                     if (scope === oldName) setScope(newName);
-                } else if (kind === 'i:' && c) {
+                } else if (kind === 'i:') {
                     // Interface input referrers live inside the SAME graph.
                     for (const p of connectables(c)) {
                         if (mxElAttr(p, 'interfacename') === oldName) mxSetAttr(p, 'interfacename', newName);
@@ -3708,6 +3789,15 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 // so a restored literal shows instead of the guessed default.
                 const restoredMap = {};
                 if (parsed) {
+                    // 'i:'/'o:' pins inside a functional scope live on the
+                    // NODEDEF; refuse outright when that nodedef is library-
+                    // owned, before severing anything downstream.
+                    const ifaceKind = id.indexOf('i:') === 0 || id.indexOf('o:') === 0;
+                    const o = ifaceKind ? ifaceOwner() : null;
+                    if (o && o.functional && !o.local) {
+                        setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                        return;
+                    }
                     // Sever downstream references FIRST (the elements are
                     // still resolvable while the node exists).
                     for (const e of flow.edges) {
@@ -3729,15 +3819,22 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     } else if (id.indexOf('g:') === 0) {
                         removed = mxSafe(() => { parsed.doc.removeNodeGraph(name); return true; }, false)
                             || mxSafe(() => { parsed.doc.removeChild(name); return true; }, false);
-                        if (removed && parsed.nodegraphs) { // scope dropdown
-                            parsed.nodegraphs = parsed.nodegraphs.filter((g) => g !== name);
-                        }
-                    } else if (id.indexOf('i:') === 0 && c) {
-                        removed = mxSafe(() => { c.removeInput(name); return true; }, false)
-                            || mxSafe(() => { c.removeChild(name); return true; }, false);
+                        if (removed) refreshDefinitions(parsed); // scope dropdown + definition cards
+                    } else if (id.indexOf('d:') === 0) {
+                        removed = mxSafe(() => { parsed.doc.removeChild(name); return true; }, false);
+                        if (removed) refreshDefinitions(parsed);
+                    } else if (id.indexOf('i:') === 0) {
+                        const ownerEl = o ? o.owner : c;
+                        removed = !!ownerEl && (mxSafe(() => { ownerEl.removeInput(name); return true; }, false)
+                            || mxSafe(() => { ownerEl.removeChild(name); return true; }, false));
                     } else if (id.indexOf('o:') === 0 && c) {
                         removed = mxSafe(() => { c.removeOutput(name); return true; }, false)
                             || mxSafe(() => { c.removeChild(name); return true; }, false);
+                        if (removed && o && o.functional && o.local && o.def) {
+                            // Drop the matching declared output on the
+                            // nodedef too, since both name the same pin.
+                            mxSafe(() => { o.def.removeOutput(name); return true; }, false);
+                        }
                     }
                     if (removed) { setDocRev((r) => r + 1); markDirty(); }
                     else console.warn('node-graph: node removed on screen, but the document element could not be removed (' + id + ')');
@@ -3846,7 +3943,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 setAddOpen(false);
                 if (!parsed) return null;
                 const doc = parsed.doc;
-                const container = scope ? mxSafe(() => doc.getNodeGraph(scope), null) : doc;
+                const container = scope ? (docChild(doc, scope) || mxSafe(() => doc.getNodeGraph(scope), null)) : doc;
                 if (!container) { setError('Cannot add a node: scope "' + scope + '" was not found.'); return null; }
                 let def = (entry.defs && entry.defs[0]) || null;
                 let pinNodedef = false;
@@ -3996,7 +4093,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     // node's matching output.
                     const existingName = pending.nodeId.slice(2);
                     const existingEl = pending.nodeId.indexOf('g:') === 0
-                        ? mxSafe(() => doc.getNodeGraph(existingName), null)
+                        ? (docChild(doc, existingName) || mxSafe(() => doc.getNodeGraph(existingName), null))
                         : mxSafe(() => created.container.getNode(existingName), null);
                     if (!existingEl) return;
                     point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
@@ -4063,24 +4160,33 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             // the doc, then appended to the flow IN PLACE like addNodeFromCatalog.
             const addInterfacePin = (kind, rawName, type, meta) => {
                 if (!parsed || !scope) return;
-                const g = scopeContainer();
-                if (!g) { setError('Cannot add an interface pin: scope "' + scope + '" was not found.'); return; }
+                const o = ifaceOwner();
+                if (!o || !o.owner) { setError('Cannot add an interface pin: scope "' + scope + '" was not found.'); return; }
+                if (o.functional && !o.local) {
+                    setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                    return;
+                }
                 if (rawName && rawName.trim() && !isValidMtlxName(rawName.trim())) {
                     setError('"' + rawName + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(rawName.trim()) + '.');
                     return;
                 }
                 const base = (rawName && rawName.trim()) ? rawName.trim() : (kind === 'iface-input' ? 'input1' : 'output1');
                 let name = base;
-                if (typeof g.createValidChildName === 'function') {
-                    name = mxSafe(() => g.createValidChildName(base), base);
+                if (typeof o.owner.createValidChildName === 'function') {
+                    name = mxSafe(() => o.owner.createValidChildName(base), base);
                 } else {
                     let i = 1;
-                    while (mxSafe(() => g.getChild(name), null)) name = base + (++i);
+                    while (mxSafe(() => o.owner.getChild(name), null)) name = base + (++i);
                 }
                 const el = kind === 'iface-input'
-                    ? mxSafe(() => g.addInput(name, type), null)
-                    : mxSafe(() => g.addOutput(name, type), null);
+                    ? mxSafe(() => o.owner.addInput(name, type), null)
+                    : mxSafe(() => o.graph.addOutput(name, type), null);
                 if (!el) { setError('Could not add the interface ' + (kind === 'iface-input' ? 'input' : 'output') + '.'); return; }
+                if (kind === 'iface-output' && o.functional && o.def) {
+                    // The nodedef declares the same output alongside the
+                    // graph's, since both name the same interface pin.
+                    mxSafe(() => { o.def.addOutput(name, type); return true; }, false);
+                }
                 if (mxElType(el) !== type) {
                     mxSafe(() => {
                         if (typeof el.setType === 'function') el.setType(type);
@@ -4115,6 +4221,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                         uimax: (ifaceNumericType(type) && meta && meta.uimax) || '',
                         uisoftmin: '', uisoftmax: '', defColorspace: '',
                         uiadvanced: !!(meta && meta.uiadvanced),
+                        ifaceOwner: o.functional ? 'nodedef' : 'graph', readOnly: false,
                     }
                     : {
                         id, kind: 'output', name, category: 'output', type,
@@ -4157,11 +4264,20 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             const [clipboardFilled, setClipboardFilled] = React.useState(false);
 
             const isCopyableId = (id) => id.indexOf('n:') === 0 || id.indexOf('g:') === 0;
+            // Definition cards (functional graphs / bare nodedefs) aren't
+            // copyable content: they're signatures, not graph nodes.
+            const isCopyableNode = (n) => isCopyableId(n.id) && !n.data.functional && n.data.kind !== 'nodedef';
 
             const copySelection = () => {
                 if (!parsed) return;
-                const ids = flow.nodes.filter((n) => n.selected && isCopyableId(n.id)).map((n) => n.id);
-                if (!ids.length) return;
+                const selected = flow.nodes.filter((n) => n.selected);
+                const ids = selected.filter(isCopyableNode).map((n) => n.id);
+                if (!ids.length) {
+                    if (selected.some((n) => isCopyableId(n.id) && (n.data.functional || n.data.kind === 'nodedef'))) {
+                        setError('Definitions cannot be copied; use New Node Definition instead.');
+                    }
+                    return;
+                }
                 const idSet = new Set(ids);
                 const container = scopeContainer();
                 if (!container) return;
@@ -4170,7 +4286,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 // storedPos() would collapse them all onto { x:0, y:0 }.
                 const flowPosById = {};
                 flow.nodes.forEach((n) => {
-                    if (n.selected && isCopyableId(n.id)) flowPosById[n.id] = n.position;
+                    if (n.selected && isCopyableNode(n)) flowPosById[n.id] = n.position;
                 });
                 const entries = [];
                 for (const id of ids) {
@@ -4179,7 +4295,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                         // Nodegraph instance — g: ids only ever appear at
                         // the doc root (buildScope never emits them for a
                         // nested scope), so the source is looked up on doc.
-                        const gEl = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                        const gEl = docChild(parsed.doc, name) || mxSafe(() => parsed.doc.getNodeGraph(name), null);
                         if (!gEl) continue;
                         const pos = flowPosById[id] || storedPos(gEl) || { x: 0, y: 0 };
                         entries.push({ kind: 'nodegraph', name, pos });
@@ -4239,7 +4355,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                         // Look up the ORIGINAL by the name captured at copy
                         // time — if it's gone/renamed since, skip gracefully
                         // (same handling as a missing source in the node path).
-                        const originalGraph = mxSafe(() => doc.getNodeGraph(entry.name), null);
+                        const originalGraph = docChild(doc, entry.name) || mxSafe(() => doc.getNodeGraph(entry.name), null);
                         if (!originalGraph) continue;
                         let newName = entry.name;
                         if (typeof doc.createValidChildName === 'function') {
@@ -4257,7 +4373,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                             mxSafe(() => { doc.removeNodeGraph(newName); return true; }, false);
                             continue;
                         }
-                        if (parsed.nodegraphs) parsed.nodegraphs.push(newName); // scope dropdown
+                        refreshDefinitions(parsed); // scope dropdown + definitions
                         nameMap[entry.name] = newName;
                         createdGraphs.push({ el: newGraph, entry, newName });
                         continue;
@@ -4397,7 +4513,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     const gName = mxSafe(() => doc.createValidChildName('nodegraph1'), 'nodegraph1');
                     const g = mxSafe(() => doc.addNodeGraph(gName), null);
                     if (!g) { setError('Could not create a nodegraph.'); return; }
-                    if (parsed.nodegraphs) parsed.nodegraphs.push(gName); // scope dropdown
+                    refreshDefinitions(parsed); // scope dropdown + definitions
 
                     // Snapshot every selected node's full description BEFORE
                     // any mutation — collectPorts/storedPos read live
@@ -4585,7 +4701,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     return;
                 }
                 const doc = parsed.doc;
-                const g = mxSafe(() => doc.getNodeGraph(gName), null);
+                const g = docChild(doc, gName) || mxSafe(() => doc.getNodeGraph(gName), null);
                 if (!g) return; // stale target (renamed/removed since) — no-op
                 // Implementation graphs (nodedef= functional definitions,
                 // not a user-made group) are never ungroupable.
@@ -4763,7 +4879,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             // Also recurse into every OTHER nodegraph's
                             // interior — a sibling nodegraph's node can
                             // legally reference this graph too, else it'd dangle after deletion.
-                            for (const sib of vecToArray(mxSafe(() => container.getNodeGraphs(), []))) {
+                            for (const sib of docChildren(container).filter((el) => mxElCat(el) === 'nodegraph')) {
                                 if (mxElName(sib) === gName) continue; // the graph being dissolved itself
                                 for (const n of vecToArray(mxSafe(() => sib.getNodes(), []))) {
                                     out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
@@ -4817,9 +4933,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         // just rewired above (same as encapsulate's step 7).
                         mxSafe(() => { doc.removeNodeGraph(gName); return true; }, false)
                             || mxSafe(() => { doc.removeChild(gName); return true; }, false);
-                        if (parsed.nodegraphs) { // scope dropdown
-                            parsed.nodegraphs = parsed.nodegraphs.filter((n) => n !== gName);
-                        }
+                        refreshDefinitions(parsed); // scope dropdown + definitions
 
                         setDocRev((r) => r + 1);
                         markDirty();
@@ -5021,6 +5135,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             }, []);
 
             const nodegraphs = (parsed && parsed.nodegraphs) || [];
+            const functionalGraphs = (parsed && parsed.functionalGraphs) || [];
+            // Scope dropdown options: instance graphs plus functional
+            // graphs (definitions), labeled so the two read apart.
+            const scopeOptions = nodegraphs.map((n) => ({ value: n, label: n }))
+                .concat(functionalGraphs.map((n) => ({ value: n, label: n + ' (definition)' })));
             // Remounting on this key re-runs fitView for every new graph.
             const graphKey = (parsed ? parsed.label : 'empty') + '\u241F' + scope;
             // Centered hint while nothing is loaded (and nothing loading):
@@ -5397,7 +5516,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     const name = n.id.slice(2);
                     let el = null;
                     if (n.id.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
-                    else if (n.id.indexOf('g:') === 0) el = mxSafe(() => parsed.doc.getNodeGraph(name), null);
+                    else if (n.id.indexOf('g:') === 0) el = docChild(parsed.doc, name) || mxSafe(() => parsed.doc.getNodeGraph(name), null);
                     else if (n.id.indexOf('i:') === 0) el = mxSafe(() => c.getInput(name), null) || mxSafe(() => c.getChild(name), null);
                     else if (n.id.indexOf('o:') === 0) el = mxSafe(() => c.getOutput(name), null) || mxSafe(() => c.getChild(name), null);
                     if (!el) continue;
@@ -5434,7 +5553,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 // stays frozen on it no matter what gets selected next.
                 if (pinnedTarget) return pinnedTarget.scope + '\u241F' + pinnedTarget.id;
                 if (selectedId && (selectedId.indexOf('n:') === 0 || selectedId.indexOf('g:') === 0
-                        || selectedId.indexOf('i:') === 0 || selectedId.indexOf('o:') === 0)) {
+                        || selectedId.indexOf('i:') === 0 || selectedId.indexOf('o:') === 0
+                        || selectedId.indexOf('d:') === 0)) {
                     return scope + '\u241F' + selectedId;
                 }
                 if (previewSel) return previewSel.scope + '\u241F' + previewSel.id;
@@ -5470,7 +5590,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 // Candidate targets: every previewable node in the
                 // CURRENT scope (n:/g:/i:/o:) other than the one the main
                 // build that just settled already warmed.
-                const VALID_PREFIXES = ['n:', 'g:', 'i:', 'o:'];
+                const VALID_PREFIXES = ['n:', 'g:', 'i:', 'o:', 'd:'];
                 const candidateIds = [];
                 const candidateSet = new Set();
                 for (const n of flow.nodes) {
@@ -5554,7 +5674,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     const id = targets[idx];
                     (async () => {
                         try {
-                            const { mx, gen, genContext } = await getMxEnv();
+                            const env = await getMxEnv();
+                            const { mx, gen } = env;
+                            // Compound implementations cache by graph name
+                            // per context, so a document with local
+                            // definitions needs its own fresh context.
+                            const genContext = (parsed && parsed.hasDefinitions && typeof env.createGenContext === 'function')
+                                ? env.createGenContext() : env.genContext;
                             if (token.cancelled) return;
                             await window.prewarmPreviewTarget({
                                 mx, gen, genContext,
@@ -5602,7 +5728,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // A different element is now displayed (or none) — drop any
             // in-progress rename edit rather than let it re-target.
             React.useEffect(() => { setNameEditing(false); }, [displayNode && displayNode.id]);
-            const panelReadOnly = !!displayNode && displayNode.id.indexOf('o:') === 0;
+            const panelReadOnly = !!displayNode && (displayNode.id.indexOf('o:') === 0
+                || !!displayNode.data.readOnly || !!displayNode.data.functional || displayNode.data.kind === 'nodedef');
             const panelInputs = !displayNode ? [] :
                 (displayNode.id.indexOf('i:') === 0
                     ? (ifaceLiteralType(displayNode.data.type)
@@ -5870,7 +5997,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // is enabled here exactly when that button would be offered.
             const canGroupSelection = !!parsed && scope === '' && selectedIds.length > 1;
             const canUngroupSelection = !!parsed && scope === '' && selectedIds.length <= 1
-                && !!displayNode && displayNode.data.kind === 'nodegraph';
+                && !!displayNode && displayNode.data.kind === 'nodegraph' && !displayNode.data.functional;
 
             const editMenuItems = [
                 { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
@@ -5921,9 +6048,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // so the row appears exactly when that badge does.
             const ctxHasDefaults = !!ctxNode
                 && (ctxNode.data.allInputs || []).some((i) => i.authored === false);
-            const canOpenDocs = selectedIds.length <= 1 && !!displayNode
-                && ['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
-                && !!displayNode.data.category;
+            // A definition card (functional graph / bare nodedef) opens docs
+            // too, but only when its category is a real stdlib node: a
+            // custom-only definition has no docs page to show.
+            const canOpenDocs = selectedIds.length <= 1 && !!displayNode && !!displayNode.data.category
+                && (['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
+                    || ((displayNode.data.functional || displayNode.data.kind === 'nodedef')
+                        && (catalog || []).some((c) => c.category === displayNode.data.category)));
             // Every edge the Disconnect row would act on: the clicked one plus
             // whatever else is selected.
             const ctxEdgeIds = ctxMenu && ctxMenu.kind === 'edge'
@@ -6330,10 +6461,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             {/* Scope select: floats at the canvas host's
                                 top-left. Only rendered when there's more
                                 than one entry (root + a nodegraph to pick). */}
-                            {nodegraphs.length > 0 && (
+                            {scopeOptions.length > 0 && (
                                 <MtlxSelect
                                     value={scope}
-                                    options={nodegraphs}
+                                    options={scopeOptions}
                                     emptyOption="(document root)"
                                     onChange={changeScope}
                                     defValue={null}
@@ -6564,9 +6695,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                 : (displayNode ? displayNode.data.name : 'Preview')}
                                         </div>
                                     )}
-                                    {selectedIds.length <= 1 && displayNode
-                                        && ['node', 'shader', 'material'].indexOf(displayNode.data.kind) !== -1
-                                        && displayNode.data.category && (
+                                    {canOpenDocs && (
                                         <button
                                             onClick={openNodeDocs}
                                             title={'Open the documentation for "' + displayNode.data.category + '"'}
@@ -6683,7 +6812,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     // Ungroup (inverse of Ctrl+G) — only for a
                                     // single selected nodegraph at the document
                                     // root, same gate as the keybind.
-                                    displayNode.data.kind === 'nodegraph' && scope === '' && selectedIds.length <= 1 && (
+                                    canUngroupSelection && (
                                         <div key="ungroup" className="py-1.5">
                                             <button
                                                 onClick={() => ungroupNodegraph(displayNode.data.name)}
@@ -6713,6 +6842,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                         <IfaceMetaField
                                                             value={displayNode.data.uiname}
                                                             placeholder="(none)"
+                                                            readOnly={displayNode.data.readOnly}
                                                             onCommit={(v) => applyInterfaceMeta(displayNode.id, { uiname: v })}
                                                         />
                                                     </div>
@@ -6721,6 +6851,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                         <IfaceMetaField
                                                             value={displayNode.data.uifolder}
                                                             placeholder="(none)"
+                                                            readOnly={displayNode.data.readOnly}
                                                             onCommit={(v) => applyInterfaceMeta(displayNode.id, { uifolder: v })}
                                                         />
                                                     </div>
@@ -6730,6 +6861,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                             <IfaceMetaField
                                                                 value={displayNode.data.uimin}
                                                                 placeholder="(none)"
+                                                                readOnly={displayNode.data.readOnly}
                                                                 onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
                                                             />
                                                         </div>
@@ -6740,6 +6872,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                             <IfaceMetaField
                                                                 value={displayNode.data.uimax}
                                                                 placeholder="(none)"
+                                                                readOnly={displayNode.data.readOnly}
                                                                 onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
                                                             />
                                                         </div>
@@ -6749,6 +6882,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                             type="checkbox"
                                                             className="h-3.5 w-3.5 accent-blue-500"
                                                             checked={!!displayNode.data.uiadvanced}
+                                                            disabled={!!displayNode.data.readOnly}
                                                             onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}
                                                         />
                                                         uiadvanced

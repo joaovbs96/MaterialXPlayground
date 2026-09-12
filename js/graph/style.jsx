@@ -87,7 +87,11 @@
             // 1. Structural nodes explicitly pull their assigned TYPE_COLORS
             if (data.kind === 'nodegraph') return typeColor('nodegraph');
             if (data.kind === 'input' || data.kind === 'output') return typeColor(data.type);
-            
+
+            // Definition cards (nodedef-only, or a functional nodegraph)
+            // read as nodegraphs regardless of their resolved output type.
+            if (data.kind === 'nodedef' || data.functional) return typeColor('nodegraph');
+
             // 2. Data nodes pull directly from their output type
             // (color3, float, etc)
             if (data.type) return typeColor(data.type);
