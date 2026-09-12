@@ -160,8 +160,8 @@
             if(rt){
                 const vp=rt.viewport.clone(),sc=rt.scissor.clone(),test=rt.scissorTest;
                 rt.viewport.copy(state.actualViewport);rt.scissor.copy(state.actualScissor);rt.scissorTest=state.actualScissorTest;
-                renderer.setRenderTarget(rt,state.face,state.mip);
-                rt.viewport.copy(vp);rt.scissor.copy(sc);rt.scissorTest=test;
+                try{renderer.setRenderTarget(rt,state.face,state.mip);}
+                finally{rt.viewport.copy(vp);rt.scissor.copy(sc);rt.scissorTest=test;}
             }else renderer.setRenderTarget(null);
         };
         const makeTarget=(w,h,depth=false,samples=0)=>{

@@ -2387,10 +2387,7 @@ const createMtlxSceneView = async ({
                 }
             });
 
-            const previousTarget = renderer.getRenderTarget();
-            const previousViewport = renderer.getViewport(new THREE.Vector4());
-            const previousScissor = renderer.getScissor(new THREE.Vector4());
-            const previousScissorTest = renderer.getScissorTest();
+            const previousDestination = snapshotRendererDestination();
             const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
             const previousClearAlpha = renderer.getClearAlpha();
             const previousOverrideMaterial = scene.overrideMaterial;
@@ -2510,10 +2507,7 @@ const createMtlxSceneView = async ({
             // binds it inherits the last tile.
             shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
             shadowTarget.scissorTest = false;
-            renderer.setRenderTarget(previousTarget);
-            renderer.setViewport(previousViewport);
-            renderer.setScissor(previousScissor);
-            renderer.setScissorTest(previousScissorTest);
+            restoreRendererDestination(previousDestination);
             renderer.setClearColor(previousClearColor, previousClearAlpha);
             hidden.forEach(({ object, visible }) => { object.visible = visible; });
             }
@@ -2593,10 +2587,7 @@ const createMtlxSceneView = async ({
                     coverageHooks.push({ object, previousHook });
                 }
             });
-            const previousTarget = renderer.getRenderTarget();
-            const previousViewport = renderer.getViewport(new THREE.Vector4());
-            const previousScissor = renderer.getScissor(new THREE.Vector4());
-            const previousScissorTest = renderer.getScissorTest();
+            const previousDestination = snapshotRendererDestination();
             const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
             const previousClearAlpha = renderer.getClearAlpha();
             const previousOverrideMaterial = scene.overrideMaterial;
@@ -2611,10 +2602,7 @@ const createMtlxSceneView = async ({
                 coverageHooks.forEach(({ object, previousHook }) => { object.onBeforeRender = previousHook; });
                 aoPrepassMaterial.uniforms.uCoverage.value = 1;
                 hidden.forEach(({ object, visible }) => { object.visible = visible; });
-                renderer.setRenderTarget(previousTarget);
-                renderer.setViewport(previousViewport);
-                renderer.setScissor(previousScissor);
-                renderer.setScissorTest(previousScissorTest);
+                restoreRendererDestination(previousDestination);
                 renderer.setClearColor(previousClearColor, previousClearAlpha);
             }
 
@@ -2652,10 +2640,7 @@ const createMtlxSceneView = async ({
 
             return aoBlurTarget.texture;
             } finally {
-                renderer.setRenderTarget(previousTarget);
-                renderer.setViewport(previousViewport);
-                renderer.setScissor(previousScissor);
-                renderer.setScissorTest(previousScissorTest);
+                restoreRendererDestination(previousDestination);
                 renderer.setClearColor(previousClearColor, previousClearAlpha);
             }
         };
@@ -2712,10 +2697,7 @@ const createMtlxSceneView = async ({
             if (!thicknessCamera) thicknessCamera = camera.clone();
             thicknessCamera.copy(camera);
             thicknessCamera.layers.set(THICKNESS_LAYER);
-            const previousTarget = renderer.getRenderTarget();
-            const previousViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
-            const previousScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
-            const previousScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
+            const previousDestination = snapshotRendererDestination();
             const previousClearColor = renderer.getClearColor(new THREE.Color());
             const previousClearAlpha = renderer.getClearAlpha();
             const previousOverrideMaterial = scene.overrideMaterial;
@@ -2741,10 +2723,7 @@ const createMtlxSceneView = async ({
             } finally {
                 materialState.forEach((original, object) => { object.material = original; });
                 scene.overrideMaterial = previousOverrideMaterial;
-                renderer.setRenderTarget(previousTarget);
-                if (renderer.setViewport && previousViewport) renderer.setViewport(previousViewport);
-                if (renderer.setScissor && previousScissor) renderer.setScissor(previousScissor);
-                if (renderer.setScissorTest) renderer.setScissorTest(previousScissorTest);
+                restoreRendererDestination(previousDestination);
                 renderer.setClearColor(previousClearColor, previousClearAlpha);
             }
         };
@@ -2957,6 +2936,40 @@ const createMtlxSceneView = async ({
         renderer.resetState();
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         renderer.setClearColor(0x111827, 1);
+        const snapshotRendererDestination = () => {
+            const gl = renderer.getContext();
+            return {
+                target: renderer.getRenderTarget(),
+                viewport: renderer.getViewport(new THREE.Vector4()),
+                actualViewport: renderer.getCurrentViewport(new THREE.Vector4()),
+                scissor: renderer.getScissor(new THREE.Vector4()),
+                actualScissor: new THREE.Vector4().fromArray(gl.getParameter(gl.SCISSOR_BOX)),
+                scissorTest: renderer.getScissorTest(),
+                actualScissorTest: gl.isEnabled(gl.SCISSOR_TEST),
+                face: renderer.getActiveCubeFace(),
+                mip: renderer.getActiveMipmapLevel(),
+            };
+        };
+        const restoreRendererDestination = (state) => {
+            renderer.setViewport(state.viewport);
+            renderer.setScissor(state.scissor);
+            renderer.setScissorTest(state.scissorTest);
+            if (!state.target) { renderer.setRenderTarget(null); return; }
+            const target = state.target;
+            const viewport = target.viewport.clone();
+            const scissor = target.scissor.clone();
+            const scissorTest = target.scissorTest;
+            target.viewport.copy(state.actualViewport);
+            target.scissor.copy(state.actualScissor);
+            target.scissorTest = state.actualScissorTest;
+            try {
+                renderer.setRenderTarget(target, state.face, state.mip);
+            } finally {
+                target.viewport.copy(viewport);
+                target.scissor.copy(scissor);
+                target.scissorTest = scissorTest;
+            }
+        };
         // Same fallback as updateRendererDisplayTransform: without it a missing
         // getDisplayTransform left outputEncoding at Linear while the shaders
         // still emitted sRGB, so objects and backdrop disagreed.

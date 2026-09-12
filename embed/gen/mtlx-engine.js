@@ -7029,6 +7029,47 @@ const applyPeelMaterialMode = (material, active) => {
   if (changed) material.needsUpdate = true;
 };
 
+// Three keeps a target's configured rectangle separate from the active GL
+// rectangle. A peel frame temporarily binds several internal targets, so its
+// caller destination must include both rectangles and the cube face/mip.
+const snapshotRenderDestination = renderer => {
+  const gl = renderer.getContext();
+  return {
+    target: renderer.getRenderTarget(),
+    viewport: renderer.getViewport(new THREE.Vector4()),
+    actualViewport: renderer.getCurrentViewport ? renderer.getCurrentViewport(new THREE.Vector4()) : renderer.getViewport(new THREE.Vector4()),
+    scissor: renderer.getScissor(new THREE.Vector4()),
+    actualScissor: new THREE.Vector4().fromArray(gl.getParameter(gl.SCISSOR_BOX)),
+    scissorTest: renderer.getScissorTest(),
+    actualScissorTest: gl.isEnabled(gl.SCISSOR_TEST),
+    face: renderer.getActiveCubeFace ? renderer.getActiveCubeFace() : 0,
+    mip: renderer.getActiveMipmapLevel ? renderer.getActiveMipmapLevel() : 0
+  };
+};
+const restoreRenderDestination = (renderer, state) => {
+  renderer.setViewport(state.viewport);
+  renderer.setScissor(state.scissor);
+  renderer.setScissorTest(state.scissorTest);
+  if (!state.target) {
+    renderer.setRenderTarget(null);
+    return;
+  }
+  const target = state.target;
+  const viewport = target.viewport.clone();
+  const scissor = target.scissor.clone();
+  const scissorTest = target.scissorTest;
+  target.viewport.copy(state.actualViewport);
+  target.scissor.copy(state.actualScissor);
+  target.scissorTest = state.actualScissorTest;
+  try {
+    renderer.setRenderTarget(target, state.face, state.mip);
+  } finally {
+    target.viewport.copy(viewport);
+    target.scissor.copy(scissor);
+    target.scissorTest = scissorTest;
+  }
+};
+
 // Scene-only RGB-transmission compositor.  Three r128 has no public
 // WebGLMultipleRenderTargets, so C and T are rendered into separate targets
 // and accumulated with fullscreen passes.  This factory is deliberately
@@ -7249,9 +7290,9 @@ const createRgbtPeelPipeline = (renderer, {
     quad.material = finalMat;
     renderer.compile(quadScene, quadCam);
   };
-  const renderQuad = (material, targetRT) => {
+  const renderQuad = (material, targetRT, face = 0, mip = 0) => {
     resources.quad.material = material;
-    renderer.setRenderTarget(targetRT);
+    renderer.setRenderTarget(targetRT, face, mip);
     renderer.render(resources.quadScene, resources.quadCam);
   };
   const render = (scene, camera, transparentMeshes, opts = {}) => {
@@ -7309,10 +7350,7 @@ const createRgbtPeelPipeline = (renderer, {
     const boundTarget = renderer.getRenderTarget();
     const size = boundTarget ? new THREE.Vector2(boundTarget.width, boundTarget.height) : renderer.getDrawingBufferSize(new THREE.Vector2());
     if (!resources || resources.w !== size.x || resources.h !== size.y) alloc(size.x, size.y);
-    const oldTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
-    const oldViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
-    const oldScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
-    const oldScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
+    const destination = snapshotRenderDestination(renderer);
     const oldAutoClear = renderer.autoClear;
     const oldClearColor = renderer.getClearColor(new THREE.Color());
     const oldClearAlpha = renderer.getClearAlpha();
@@ -7516,7 +7554,9 @@ const createRgbtPeelPipeline = (renderer, {
       // Write into whatever target the caller had bound on entry, not
       // hardcoded null, so an offscreen frame wrapper (HDR/bloom) still
       // receives the real image instead of the canvas getting it.
-      renderQuad(resources.finalMat, oldTarget);
+      restoreRenderDestination(renderer, destination);
+      resources.quad.material = resources.finalMat;
+      renderer.render(resources.quadScene, resources.quadCam);
       return true;
     } finally {
       showOthers();
@@ -7531,10 +7571,7 @@ const createRgbtPeelPipeline = (renderer, {
           if (mat.uniforms[key]) mat.uniforms[key].value = value;
         });
       });
-      renderer.setRenderTarget(oldTarget);
-      if (renderer.setViewport && oldViewport) renderer.setViewport(oldViewport);
-      if (renderer.setScissor && oldScissor) renderer.setScissor(oldScissor);
-      if (renderer.setScissorTest) renderer.setScissorTest(oldScissorTest);
+      restoreRenderDestination(renderer, destination);
       renderer.autoClear = oldAutoClear;
       renderer.setClearColor(oldClearColor, oldClearAlpha);
       renderer.shadowMap.autoUpdate = oldShadowUpdate;
@@ -7792,10 +7829,7 @@ const createPeelPipeline = (renderer, {
     // Every pass below that would otherwise hardcode null must land on
     // this instead, so a caller-bound offscreen target (a future HDR/
     // bloom wrapper) receives the real image rather than the canvas.
-    const outputTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
-    const outputViewport = renderer.getViewport ? renderer.getViewport(new THREE.Vector4()) : null;
-    const outputScissor = renderer.getScissor ? renderer.getScissor(new THREE.Vector4()) : null;
-    const outputScissorTest = renderer.getScissorTest ? renderer.getScissorTest() : false;
+    const outputDestination = snapshotRenderDestination(renderer);
     const prevAutoClear = renderer.autoClear;
     const prevClearColor = renderer.getClearColor(new THREE.Color());
     const prevClearAlpha = renderer.getClearAlpha();
@@ -7836,7 +7870,7 @@ const createPeelPipeline = (renderer, {
         renderer.render(scene, camera);
       } else {
         // 1. opaque -> caller's target (MSAA), transparent meshes hidden.
-        renderer.setRenderTarget(outputTarget);
+        restoreRenderDestination(renderer, outputDestination);
         renderer.setClearColor(prevClearColor, prevClearAlpha);
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
@@ -7937,7 +7971,7 @@ const createPeelPipeline = (renderer, {
       hidden.length = 0;
 
       // 5. composite accum (+opaqueRT, linear mode) onto the caller's target.
-      renderer.setRenderTarget(outputTarget);
+      restoreRenderDestination(renderer, outputDestination);
       peel.quadMesh.material = peel.finalMat;
       peel.finalMat.uniforms.tAccum.value = peel.accumRT.texture;
       if (peelLinearOk) {
@@ -7948,10 +7982,7 @@ const createPeelPipeline = (renderer, {
       renderer.render(peel.quadScene, peel.quadCam);
     } finally {
       // restore GL state even if a pass above threw
-      renderer.setRenderTarget(outputTarget);
-      if (renderer.setViewport && outputViewport) renderer.setViewport(outputViewport);
-      if (renderer.setScissor && outputScissor) renderer.setScissor(outputScissor);
-      if (renderer.setScissorTest) renderer.setScissorTest(outputScissorTest);
+      restoreRenderDestination(renderer, outputDestination);
       renderer.autoClear = prevAutoClear;
       renderer.setClearColor(prevClearColor, prevClearAlpha);
       renderer.shadowMap.autoUpdate = prevShadowAutoUpdate;

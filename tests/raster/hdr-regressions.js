@@ -26,6 +26,16 @@
         for(const m of d.materials)if(m.uniforms?.u_peelLinear)assert(m.uniforms.u_peelLinear.value===0,'u_peelLinear leaked');
         return true;
     }
+    function destinationState(r){
+        const gl=r.getContext();return {ratio:r.getPixelRatio(),target:r.getRenderTarget(),face:r.getActiveCubeFace(),mip:r.getActiveMipmapLevel(),viewport:r.getViewport(new THREE.Vector4()),actualViewport:r.getCurrentViewport(new THREE.Vector4()),scissor:r.getScissor(new THREE.Vector4()),actualScissor:new THREE.Vector4().fromArray(gl.getParameter(gl.SCISSOR_BOX)),test:r.getScissorTest(),actualTest:gl.isEnabled(gl.SCISSOR_TEST)};
+    }
+    function restoreDestination(r,state){
+        r.setPixelRatio(state.ratio);r.setViewport(state.viewport);r.setScissor(state.scissor);r.setScissorTest(state.test);
+        if(!state.target){r.setRenderTarget(null);return;}
+        const target=state.target,vp=target.viewport.clone(),sc=target.scissor.clone(),test=target.scissorTest;
+        target.viewport.copy(state.actualViewport);target.scissor.copy(state.actualScissor);target.scissorTest=state.actualTest;
+        try{r.setRenderTarget(target,state.face,state.mip);}finally{target.viewport.copy(vp);target.scissor.copy(sc);target.scissorTest=test;}
+    }
     function emission(){
         const handle=root.__fixture.handle,r=handle.renderer;
         const original=handle.getPresentation(),initialMode=handle.getSceneDisplayTransform();
@@ -87,19 +97,21 @@
     function renderContract(){
         const handle=root.__fixture.handle,r=handle.renderer,gl=r.getContext();
         const original=handle.getPresentation();const report={};
-        handle.setPresentation({enabled:true,bloom:true,persist:false});
-        const saved={ratio:r.getPixelRatio(),target:r.getRenderTarget(),viewport:r.getViewport(new THREE.Vector4()),scissor:r.getScissor(new THREE.Vector4()),test:r.getScissorTest()};
+        report.samples={};for(const samples of [0,4]){handle.setPresentation({enabled:true,bloom:true,antialias:true,samples,persist:false});report.samples[samples]={settings:handle.getPresentation(),pixels:metrics(pixels(handle))};assert(report.samples[samples].pixels.max>0.01,'HDR sample mode rendered blank');stateCheck(handle);}
+        const saved=destinationState(r);
         // Exercise a high-DPI, non-canvas destination with custom viewport.
         r.setPixelRatio(2);const rt=new THREE.WebGLRenderTarget(240,160,{type:THREE.FloatType});
         rt.viewport.set(8,6,224,148);rt.scissor.set(12,10,216,140);rt.scissorTest=true;
         try{
+            const probeMesh=handle.__debug().scene.children.find(o=>o.isMesh)||(()=>{let hit;handle.__debug().scene.traverse(o=>{if(!hit&&o.isMesh&&o.visible)hit=o;});return hit;})();const probeHook=probeMesh.onBeforeRender;let nestedLinear=false;probeMesh.onBeforeRender=function(...args){if(probeHook)probeHook.apply(this,args);const material=args[4];if(material?.uniforms?.u_peelLinear){assert(r.outputEncoding===THREE.LinearEncoding&&material.uniforms.u_peelLinear.value===1,'nested HDR/peel color draw is not linear');nestedLinear=true;}};
             r.setRenderTarget(rt);const before={viewport:Array.from(gl.getParameter(gl.VIEWPORT)),scissor:Array.from(gl.getParameter(gl.SCISSOR_BOX)),test:gl.isEnabled(gl.SCISSOR_TEST)};
-            handle.renderNow();const after={viewport:Array.from(gl.getParameter(gl.VIEWPORT)),scissor:Array.from(gl.getParameter(gl.SCISSOR_BOX)),test:gl.isEnabled(gl.SCISSOR_TEST)};
-            report.targetState={before,after,sameTarget:r.getRenderTarget()===rt};
+            try{handle.renderNow();}finally{probeMesh.onBeforeRender=probeHook;}const after={viewport:Array.from(gl.getParameter(gl.VIEWPORT)),scissor:Array.from(gl.getParameter(gl.SCISSOR_BOX)),test:gl.isEnabled(gl.SCISSOR_TEST)};
+            report.targetState={before,after,sameTarget:r.getRenderTarget()===rt,nestedLinear};
             assert(report.targetState.sameTarget&&JSON.stringify(before)===JSON.stringify(after),'custom target viewport/scissor leaked');
+            if(['rgbt','legacy'].includes(handle.__debug().sceneRgbt.mode))assert(nestedLinear,'nested HDR/peel color callback did not run');
             report.targetSize=handle.__debug().presentation.size;assert(report.targetSize[0]===240&&report.targetSize[1]===160,'HDR ignored target size');
         }finally{
-            r.setRenderTarget(saved.target);rt.dispose();r.setPixelRatio(saved.ratio);r.setViewport(saved.viewport);r.setScissor(saved.scissor);r.setScissorTest(saved.test);
+            restoreDestination(r,saved);rt.dispose();
         }
         // Throw from the actual geometry callback and verify all frame-scoped
         // switches/targets are restored, then prove the next frame renders.
@@ -109,12 +121,50 @@
         try{handle.renderNow();}catch(e){caught=String(e).includes('intentional HDR');}finally{mesh.onBeforeRender=old;}
         assert(caught,'injected draw exception did not run');assert(r.getRenderTarget()===oldTarget,'target leaked after exception');stateCheck(handle);
         report.recovered=metrics(pixels(handle));assert(report.recovered.max>0.01,'next frame failed after exception');
+        // RGB-T and its scalar fallback may render directly to a caller cube
+        // target. Its configured rectangle deliberately differs from the
+        // active rectangle, and no setter follows the target bind.
+        if(['rgbt','legacy'].includes(handle.__debug().sceneRgbt.mode)){
+            const cube=new THREE.WebGLCubeRenderTarget(128,{type:THREE.FloatType,format:THREE.RGBAFormat,depthBuffer:false});
+            const restore=destinationState(r),presentation=handle.getPresentation();
+            const current=()=>({target:r.getRenderTarget()===cube,face:r.getActiveCubeFace(),mip:r.getActiveMipmapLevel(),viewport:Array.from(gl.getParameter(gl.VIEWPORT)),scissor:Array.from(gl.getParameter(gl.SCISSOR_BOX)),test:gl.isEnabled(gl.SCISSOR_TEST)});
+            const configured=()=>({viewport:cube.viewport.toArray(),scissor:cube.scissor.toArray(),test:cube.scissorTest});
+            const complete=(label)=>{const status=gl.checkFramebufferStatus(gl.FRAMEBUFFER),error=gl.getError();assert(status===gl.FRAMEBUFFER_COMPLETE&&error===0,label+' framebuffer is incomplete (status '+status+', GL '+error+')');return {status,error};};
+            const read=(side,mip)=>{const p=new Float32Array(side*side*4);r.setRenderTarget(cube,3,mip);const fbo=complete('cube mip');gl.readPixels(0,0,side,side,gl.RGBA,gl.FLOAT,p);let lo=Infinity,hi=-Infinity;for(let i=0;i<p.length;i+=4){const v=p[i]+p[i+1]+p[i+2];lo=Math.min(lo,v);hi=Math.max(hi,v);}assert(gl.getError()===0&&hi>lo,'requested cube face has no spatial output');return {lo,hi,fbo};};
+            const bind=(mip,active,stored)=>{cube.viewport.fromArray(active.viewport);cube.scissor.fromArray(active.scissor);cube.scissorTest=active.test;r.setRenderTarget(cube,3,mip);cube.viewport.fromArray(stored.viewport);cube.scissor.fromArray(stored.scissor);cube.scissorTest=stored.test;const before=current(),config=configured(),fbo=complete('cube face');return {before,config,fbo};};
+            try{
+                handle.setPresentation({enabled:false,persist:false});r.setRenderTarget(null);r.setViewport(2,3,117,113);r.setScissor(4,5,109,103);r.setScissorTest(false);
+                const level0=bind(0,{viewport:[9,7,101,99],scissor:[13,11,89,87],test:true},{viewport:[3,2,111,109],scissor:[5,4,97,93],test:false});handle.renderNow();report.cube={before:level0.before,after:current(),configured:configured(),fbo:level0.fbo,content:read(128,0)};assert(JSON.stringify(level0.before)===JSON.stringify(report.cube.after)&&JSON.stringify(level0.config)===JSON.stringify(report.cube.configured),'cube destination state leaked');
+                cube.texture.minFilter=THREE.LinearMipmapLinearFilter;cube.texture.generateMipmaps=true;r.setRenderTarget(cube,3,0);handle.renderNow();
+                const level1=bind(1,{viewport:[7,5,49,47],scissor:[9,7,43,39],test:true},{viewport:[2,1,54,52],scissor:[4,3,48,45],test:false});handle.renderNow();report.cube.mip1={before:level1.before,after:current(),configured:configured(),fbo:level1.fbo,content:read(64,1)};assert(JSON.stringify(level1.before)===JSON.stringify(report.cube.mip1.after)&&JSON.stringify(level1.config)===JSON.stringify(report.cube.mip1.configured),'cube mip destination state leaked');
+                const mesh=handle.__debug().scene.children.find(o=>o.isMesh)||(()=>{let hit;handle.__debug().scene.traverse(o=>{if(!hit&&o.isMesh&&o.visible)hit=o;});return hit;})();const hook=mesh.onBeforeRender;mesh.onBeforeRender=()=>{throw new Error('intentional cube transaction test');};cube.viewport.fromArray(level1.before.viewport);cube.scissor.fromArray(level1.before.scissor);cube.scissorTest=level1.before.test;r.setRenderTarget(cube,3,1);cube.viewport.fromArray(level1.config.viewport);cube.scissor.fromArray(level1.config.scissor);cube.scissorTest=level1.config.test;let failed=false;try{handle.renderNow();}catch(e){failed=String(e).includes('intentional cube');}finally{mesh.onBeforeRender=hook;}assert(failed&&JSON.stringify(level1.before)===JSON.stringify(current())&&JSON.stringify(level1.config)===JSON.stringify(configured()),'cube destination leaked after exception');stateCheck(handle);
+            }finally{restoreDestination(r,restore);handle.setPresentation({...presentation,persist:false});cube.dispose();}
+        }
         handle.setPresentation({...original,persist:false});report.glError=gl.getError();assert(report.glError===0,'contract check GL error');return report;
+    }
+    function lifecycle(){
+        const handle=root.__fixture.handle,r=handle.renderer,gl=r.getContext();
+        const saved=destinationState(r),css=r.getSize(new THREE.Vector2()),drawing=r.getDrawingBufferSize(new THREE.Vector2()),presentation=handle.getPresentation();
+        const report={before:{css:css.toArray(),dpr:saved.ratio,drawing:drawing.toArray()}};
+        const width=257,height=149,dpr=1.5,target=new THREE.WebGLRenderTarget(173,107,{type:THREE.FloatType,format:THREE.RGBAFormat,minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter});
+        try{
+            handle.setPresentation({enabled:true,bloom:false,antialias:false,samples:0,persist:false});assert(handle.getPresentation().supported,'HDR presentation unavailable for lifecycle check');
+            r.setPixelRatio(dpr);r.setSize(width,height,false);const resized=r.getDrawingBufferSize(new THREE.Vector2());
+            assert(resized.x===Math.floor(width*dpr)&&resized.y===Math.floor(height*dpr),'renderer.setSize did not apply requested DPR dimensions');
+            handle.renderNow();const hdr=handle.__debug().presentation?.size;assert(hdr&&hdr[0]===resized.x&&hdr[1]===resized.y,'HDR targets did not resize with drawing buffer');
+            const frame=()=>{const buf=new Float32Array(target.width*target.height*4);r.setRenderTarget(target);handle.renderNow();assert(r.getRenderTarget()===target,'caller target was lost after resize');r.readRenderTargetPixels(target,0,0,target.width,target.height,buf);assert(gl.getError()===0,'GL error during resized caller readback');let lo=Infinity,hi=-Infinity,finite=true;for(let i=0;i<buf.length;i+=4)for(let c=0;c<3;c++){const v=buf[i+c];finite&&=Number.isFinite(v);lo=Math.min(lo,v);hi=Math.max(hi,v);}const value={...metrics(buf),range:hi-lo,finite};assert(value.finite&&value.max>0.01&&value.nonZero>0&&value.range>1e-5,'resized caller frame is blank or spatially uniform');return value;};
+            report.resize={css:[width,height],dpr,drawing:resized.toArray(),hdr};report.frames=[frame(),frame()];stateCheck(handle);
+        }finally{
+            r.setPixelRatio(saved.ratio);r.setSize(css.x,css.y,false);restoreDestination(r,saved);handle.setPresentation({...presentation,persist:false});target.dispose();
+        }
+        const restored=r.getDrawingBufferSize(new THREE.Vector2());report.restored={css:r.getSize(new THREE.Vector2()).toArray(),dpr:r.getPixelRatio(),drawing:restored.toArray(),target:r.getRenderTarget()===saved.target};
+        assert(report.restored.dpr===saved.ratio&&JSON.stringify(report.restored.css)===JSON.stringify(css.toArray())&&JSON.stringify(report.restored.drawing)===JSON.stringify(drawing.toArray())&&report.restored.target,'renderer dimensions or destination were not restored');
+        report.glError=gl.getError();assert(report.glError===0,'lifecycle check GL error');return report;
     }
     function glass(){
         const h=root.__fixture.handle,r=h.renderer,original=h.getPresentation();
         const report={};console.log('hdr-glass','start');h.setPresentation({enabled:true,bloom:false,persist:false});
-        report.rgbt=metrics(pixels(h));console.log('hdr-glass','rgbt checked');assert(h.__debug().sceneRgbt.mode==='rgbt','RGBT not active');
+        report.rgbt=metrics(pixels(h));console.log('hdr-glass','rgbt checked');assert(h.__debug().sceneRgbt.mode==='rgbt','RGBT not active');report.rgbtContract=renderContract();
         const mat=h.__debug().materials.find(m=>m.userData?.mtlxScenePeel&&m.uniforms?.u_peelRgbtPass);
         assert(mat,'transmissive MaterialX payload missing');
         // A new material represents a shader without the RGB-T payload.
@@ -127,7 +177,7 @@
             if(!a.includes(mat))return;replacements.push([o,o.material]);
             o.material=Array.isArray(o.material)?a.map(m=>m===mat?legacy:m):legacy;
         });
-        try{console.log('hdr-glass','starting legacy');report.legacy=metrics(pixels(h));console.log('hdr-glass','legacy checked');report.legacyState=h.__debug().sceneRgbt;assert(report.legacyState.mode==='legacy','legacy fallback did not run');assert(report.legacy.max>0.05,'legacy HDR fallback is blank');stateCheck(h);}
+        try{console.log('hdr-glass','starting legacy');report.legacy=metrics(pixels(h));console.log('hdr-glass','legacy checked');report.legacyState=h.__debug().sceneRgbt;assert(report.legacyState.mode==='legacy','legacy fallback did not run');assert(report.legacy.max>0.05,'legacy HDR fallback is blank');report.legacyContract=renderContract();stateCheck(h);}
         finally{replacements.forEach(([o,m])=>o.material=m);legacy.dispose();}
         console.log('hdr-glass','disable');h.setPresentation({enabled:false,persist:false});report.disabled=metrics(pixels(h));assert(report.disabled.max>0.05,'disabled presentation blank');stateCheck(h);
         console.log('hdr-glass','restore');h.setPresentation({...original,persist:false});h.renderNow();report.restoredMode=h.__debug().sceneRgbt.mode;
@@ -155,5 +205,5 @@
         h.setSceneDisplayTransform('neutral');h.setPresentation({...original,persist:false});
         report.stateRestored=stateCheck(h);return report;
     }
-    root.HDRRegression={emission,renderContract,glass,color,pixels,metrics,difference,stateCheck};
+    root.HDRRegression={emission,renderContract,lifecycle,glass,color,pixels,metrics,difference,stateCheck};
 })(window);

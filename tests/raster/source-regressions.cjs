@@ -33,6 +33,8 @@ for (const gray of [0,85,128,255]) {
   assert.equal(max-min,0,'uniform targets must not pass the image-variation gate');
 }
 const engine = read('js/mtlx-engine.js');
-assert(engine.includes('renderQuad(resources.finalMat, oldTarget)'), 'RGB-T final pass must honor the caller target');
-assert(engine.includes('outputTarget'), 'legacy compositor must retain caller target contract');
+assert(engine.includes('snapshotRenderDestination'), 'peel paths must snapshot the caller destination');
+assert(engine.includes('renderer.setRenderTarget(target, state.face, state.mip)'), 'destination restore must retain cube face and mip');
+assert(engine.includes('restoreRenderDestination(renderer, destination);'), 'RGB-T final pass must bind the caller active destination');
+assert(engine.includes('restoreRenderDestination(renderer, outputDestination);'), 'legacy compositor must bind the caller active destination');
 console.log(JSON.stringify({status:'passed', three:THREE.REVISION, luminance, constantColorRejection:true, callerTargetContract:true}, null, 2));
