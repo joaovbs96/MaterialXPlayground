@@ -834,6 +834,22 @@ const downloadSnapshot = (view, baseName) => {
   a.click();
 };
 
+// Snapshot base name for any preview: `<name>_<geom>`, except when geom is
+// the imported custom model, where the loaded model's own name is used
+// instead of the literal 'custom'. Never throws.
+const snapshotBaseName = (name, geom) => {
+  try {
+    let label = geom;
+    if (geom === 'custom') {
+      const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+      label = String(c && c.name || 'custom').replace(/\.[A-Za-z0-9]+$/, '') || 'custom';
+    }
+    return (name || 'material') + '_' + label;
+  } catch (e) {
+    return (name || 'material') + '_' + geom;
+  }
+};
+
 // Download a Blob as a file: object URL -> synthetic anchor click ->
 // delayed revoke (gives the download a moment to start before the URL is
 // freed).
@@ -3439,6 +3455,7 @@ Object.assign(window, {
   useViewToggle,
   useViewEnum,
   downloadSnapshot,
+  snapshotBaseName,
   downloadBlob,
   downloadXml,
   attributeExportedXml,

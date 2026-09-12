@@ -637,7 +637,7 @@
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
                 takeScreenshot: takeScreenshotRaw,
-            } = useViewportControls(viewRef, viewportRef, () => label + '_shaderball');
+            } = useViewportControls(viewRef, viewportRef, () => snapshotBaseName(label, resolvedGeom || geomMode));
             const takeScreenshot = () => {
                 try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };

@@ -394,7 +394,7 @@
             // before; read fresh by the hook on every screenshot.
             const getSnapshotBase = () => {
                 const matName = (renderables[chosenMat] && renderables[chosenMat].name) || 'material';
-                return matName + '_' + geom;
+                return snapshotBaseName(matName, geom);
             };
             const {
                 rotating, toggleRotating,
