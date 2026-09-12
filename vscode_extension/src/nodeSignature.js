@@ -140,6 +140,55 @@ const pickTableForType = (tables, type) => {
     return null;
 };
 
+// Mirrors js/docs/port-tables.jsx's pickTableForVersion: picks the table
+// matching a nodedef-index VERSION entry's inputTypes/outputTypes maps.
+// Unused today (no nodedef-index version at hover time), kept for parity.
+const pickTableForVersion = (tables, version) => {
+    if (!version || !tables || !tables.length) return null;
+    const outKeys = Object.keys(version.outputTypes || {});
+    const inTypes = version.inputTypes || {};
+    let best = null;
+    let bestScore = 0;
+    for (const table of tables) {
+        const ports = table.ports || {};
+        const names = Object.keys(ports);
+        let score = 0;
+        let outHits = 0;
+        names.filter(n => isOutputPort(n, ports[n])).forEach((n) => {
+            if (outKeys.includes(n)) { score += 2; outHits += 1; }
+        });
+        Object.keys(inTypes).forEach((n) => {
+            if (!Object.prototype.hasOwnProperty.call(ports, n)) return;
+            const resolved = (resolveType(ports, n) || '').trim().toLowerCase();
+            const want = String(inTypes[n] || '').trim().toLowerCase();
+            if (expandSigToken(resolved).includes(want)) score += 1;
+        });
+        if (outHits > 0 && score > bestScore) { bestScore = score; best = table; }
+    }
+    return best;
+};
+
+// Mirrors js/docs/port-tables.jsx's pickTableForInputs: the fallback used
+// by this file's hover path, scoring tables by how many of the hovered
+// element's authored `inputs` ({name, type}) match a port name and type.
+const pickTableForInputs = (tables, inputs) => {
+    if (!inputs || !inputs.length || !tables || !tables.length) return null;
+    let best = null;
+    let bestScore = 0;
+    for (const table of tables) {
+        const ports = table.ports || {};
+        let score = 0;
+        inputs.forEach(({ name, type }) => {
+            if (!name || !Object.prototype.hasOwnProperty.call(ports, name)) return;
+            const resolved = (resolveType(ports, name) || '').trim().toLowerCase();
+            const want = String(type || '').trim().toLowerCase();
+            if (expandSigToken(resolved).includes(want)) score += 1;
+        });
+        if (score > bestScore) { bestScore = score; best = table; }
+    }
+    return bestScore >= 1 ? best : null;
+};
+
 // ---------------------------------------------------------------------
 // extractElementContext — bounded, best-effort scan of a raw .mtlx
 // document's TEXT (no XML parser: this must stay fast enough to run on
@@ -517,6 +566,8 @@ module.exports = {
     SIG_FAMILY_EXPANSIONS,
     expandSigToken,
     pickTableForType,
+    pickTableForVersion,
+    pickTableForInputs,
     extractElementContext,
     buildSigToken,
     renderPortsMarkdown,

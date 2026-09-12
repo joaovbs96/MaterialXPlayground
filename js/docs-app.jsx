@@ -46,12 +46,12 @@
         };
 
         // Which table(s) to render: narrows multi-table documented nodes to
-        // the ONE table matching the selected signature. Keep `sigCount > 1`
-        // here in sync with the same gate on typesOverride/defaultsOverride below.
-        const resolveDisplayTables = (portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables) =>
+        // the ONE table matching the selected version, or its output type
+        // when no version matches. Keep `sigCount > 1` in sync with below.
+        const resolveDisplayTables = (portTables, sigCount, selectedGroup, selectedVersion, autoDoc, sig, effectiveTables) =>
             portTables.length > 0
                 ? (portTables.length > 1 && sigCount > 1 && selectedGroup
-                    ? [pickTableForType(portTables, selectedGroup.type) || portTables[0]]
+                    ? [pickTableForVersion(portTables, selectedVersion) || pickTableForType(portTables, selectedGroup.type) || portTables[0]]
                     : portTables)
                 : (sigCount > 1 ? [autoDoc && autoDoc.tables && autoDoc.tables[sig]].filter(Boolean)
                     : effectiveTables);
@@ -566,11 +566,17 @@
                         return { value: i, label: l || String(i + 1) };
                     });
             }, [sigGroups]);
+            // versionIdx/selectedVersion computed here, ahead of
+            // displayTables below, since that memo needs selectedVersion
+            // to disambiguate same-output-type signatures like separate4.
+            const versionIdx = selectedGroup
+                ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
+            const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
             // Which table(s) to render — see resolveDisplayTables above
             // for the full selection rules.
             const displayTables = React.useMemo(
-                () => resolveDisplayTables(portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables),
-                [portTables, sigCount, selectedGroup, autoDoc, sig, effectiveTables]
+                () => resolveDisplayTables(portTables, sigCount, selectedGroup, selectedVersion, autoDoc, sig, effectiveTables),
+                [portTables, sigCount, selectedGroup, selectedVersion, autoDoc, sig, effectiveTables]
             );
             // Concrete type this signature previews as (null → auto-pick).
             // Falls back to the markdown-table heuristic while
@@ -578,12 +584,9 @@
             const previewType = selectedGroup ? selectedGroup.type
                 : (effectiveTables.length > 0 ? signaturePreviewType(effectiveTables[0]) : null);
             // The VERSION picker (same/multiple defaults within a signature)
-            // now reads directly off the selected group instead of
-            // re-matching by output type.
+            // reads directly off the selected group instead of re-matching
+            // by output type.
             const showVersionPicker = !!selectedGroup && selectedGroup.versions.length > 1;
-            const versionIdx = selectedGroup
-                ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
-            const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
             // Index of the nodedef's own default version, for the version
             // picker's automatic 'default' badge (MtlxSelect's defValue).
             const defaultVersionIdx = selectedGroup ? selectedGroup.versions.findIndex((v) => v.isDefaultVersion) : -1;

@@ -86,16 +86,13 @@ function buildHoverMarkdown(category, repoRootFsPath, ctx) {
         md.appendMarkdown(doc.description + '\n\n');
     }
 
-    // Port table: prefer the table matching the hovered element's ACTUAL
-    // signature (ctx.type, resolved via pickTableForType against every
-    // table's output-port types) when derivable; otherwise fall back to
-    // the FIRST table — the same "no confident signature: show
-    // something rather than nothing" rule the docs site itself applies
-    // (js/docs-app.jsx ~:528's `pickTableForType(...) || portTables[0]`),
-    // so a hover on an element with no readable type (or no <input>
-    // children to key off of) still surfaces useful port data.
+    // Port table: try pickTableForType against ctx.type first, then
+    // pickTableForInputs against ctx.inputs (no nodedef-index version is
+    // available here, unlike the docs site), then fall back to tables[0].
     const tables = (doc && doc.port_tables) || [];
-    const table = nodeSignature.pickTableForType(tables, ctx && ctx.type) || tables[0] || null;
+    const table = nodeSignature.pickTableForType(tables, ctx && ctx.type)
+        || nodeSignature.pickTableForInputs(tables, ctx && ctx.inputs)
+        || tables[0] || null;
     if (table) {
         const rendered = nodeSignature.renderPortsMarkdown(table);
         if (rendered) md.appendMarkdown(rendered + '\n\n');
