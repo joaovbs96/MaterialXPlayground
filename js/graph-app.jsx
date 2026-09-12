@@ -507,6 +507,10 @@
             // Bumped on every committed edit that reached the MaterialX
             // document — the material preview regenerates from the live doc.
             const [docRev, setDocRev] = React.useState(0);
+            // Document-local definitions (Tab palette, doc badge rows).
+            // Recomputed on docRev so an edited/added local nodedef shows
+            // up without reopening the palette.
+            const docCatalog = React.useMemo(() => buildDocCatalog(parsed), [parsed, docRev]);
             // Validate source-of-truth: the exact XML text Validate checks
             // — never `parsed` itself, since serializeDocXml heals faults
             // in place and would mask exactly what Validate should catch.
@@ -4341,6 +4345,11 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     // A type hint was used to disambiguate — lock in that
                     // exact signature explicitly.
                     mxSetAttr(el, 'nodedef', def.name);
+                } else if (entry.local && def) {
+                    // A document-local definition can share its node string
+                    // with a library one; pin the exact local nodedef so
+                    // shader gen resolves to it, not the library's.
+                    mxSetAttr(el, 'nodedef', def.name);
                 } else if (def && def.ambiguous) {
                     // When several signatures share this output type, pin the
                     // exact one — otherwise MaterialX could resolve a sibling.
@@ -7582,6 +7591,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     {addOpen && (
                         <AddNodeSearch
                             catalog={catalog}
+                            docCatalog={docCatalog}
                             ifaceMode={scope !== '' && !portAddFilter}
                             onAddInterface={addInterfacePin}
                             onPick={handleCatalogPick}

@@ -115,4 +115,34 @@
             return nodeCatalogPromise;
         };
 
-Object.assign(window, { buildNodeCatalog, nodeDefInfo, groupSignatures });
+        // Document-local definitions for the Tab palette: same grouping
+        // and signature shape as buildNodeCatalog, but scanned from
+        // parsed.definitions' local entries instead of the stdlib.
+        const buildDocCatalog = (parsed) => {
+            if (!parsed || !parsed.definitions || !parsed.definitions.length) return [];
+            const byCat = {};
+            for (const entry of parsed.definitions) {
+                if (!entry.local || !entry.nodedef) continue;
+                const def = docChild(parsed.doc, entry.nodedef);
+                if (!def) continue;
+                const category = mxSafe(() => def.getNodeString(), '') || entry.node;
+                if (!category) continue;
+                if (!byCat[category]) {
+                    byCat[category] = {
+                        category,
+                        group: mxSafe(() => def.getNodeGroup(), '') || 'document',
+                        defs: [nodeDefInfo(def)],
+                        local: true,
+                    };
+                } else {
+                    byCat[category].defs.push(nodeDefInfo(def));
+                }
+            }
+            return Object.keys(byCat).sort().map((k) => {
+                const e = byCat[k];
+                e.signatures = groupSignatures(e.defs);
+                return e;
+            });
+        };
+
+Object.assign(window, { buildNodeCatalog, nodeDefInfo, groupSignatures, buildDocCatalog });

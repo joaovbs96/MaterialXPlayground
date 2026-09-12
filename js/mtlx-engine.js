@@ -827,8 +827,8 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
 };
 
 // Doc-level renderable scan: returns [{ name, node }], one entry per
-// renderable surface. Scans by TYPE rather than getMaterialNodes(),
-// which isn't bound in every JS build. Live-doc callers need mxExclusive.
+// renderable surface, by TYPE rather than getMaterialNodes(); a third
+// pass falls back to surfaceshader nodedef/nodegraph DEFINITIONS. Live-doc callers need mxExclusive.
 const listDocRenderables = (doc) => {
     mxWarnIfLocked('listDocRenderables'); // exported doc-reading helper, see mxWarnIfLocked's header comment
     const renderables = [];
@@ -876,6 +876,72 @@ const listDocRenderables = (doc) => {
         for (const n of allNodes) {
             if (typeOf(n) === 'surfaceshader') pushShader(nameOf(n), n);
         }
+    }
+    if (!renderables.length) {
+        // Third pass: no instance renders at all, so surface every
+        // surfaceshader nodedef/nodegraph DEFINITION the document
+        // declares, so at least the definition itself can be previewed.
+        try {
+            const children = vecToArray(doc.getChildren());
+            const nodedefChildren = children.filter((c) => mxElCat(c) === 'nodedef');
+            const nodegraphChildren = children.filter((c) => mxElCat(c) === 'nodegraph');
+            const localDefNames = new Set(nodedefChildren.map((d) => mxElName(d)));
+            // Single-output nodedefs expose their type via getOutputs();
+            // a def with no <output> children falls back to its own
+            // type attribute (mxElType covers both wrapper shapes).
+            const isSurfaceShaderDef = (def) => {
+                const outs = vecToArray(mxSafe(() => (def.getOutputs ? def.getOutputs() : null), null));
+                if (outs.length) return outs.some((o) => mxElType(o) === 'surfaceshader');
+                return mxElType(def) === 'surfaceshader';
+            };
+            const entries = []; // { nodedefName, def, graphs }
+            const seenDefNames = new Set();
+            // (i) local nodedef children whose output is surfaceshader.
+            for (const def of nodedefChildren) {
+                const nodedefName = mxElName(def);
+                if (!nodedefName || seenDefNames.has(nodedefName) || !isSurfaceShaderDef(def)) continue;
+                seenDefNames.add(nodedefName);
+                const graphs = nodegraphChildren.filter((g) => mxSafe(() => g.getNodeDefString(), '') === nodedefName);
+                entries.push({ nodedefName, def, graphs });
+            }
+            // (ii) local nodegraphs implementing a LIBRARY-owned (not
+            // document-local) surfaceshader nodedef.
+            for (const g of nodegraphChildren) {
+                const nodedefName = mxElAttr(g, 'nodedef');
+                if (!nodedefName || localDefNames.has(nodedefName) || seenDefNames.has(nodedefName)) continue;
+                const def = mxSafe(() => g.getNodeDef(), null);
+                if (!def || !isSurfaceShaderDef(def)) continue;
+                seenDefNames.add(nodedefName);
+                const graphs = nodegraphChildren.filter((gg) => mxSafe(() => gg.getNodeDefString(), '') === nodedefName);
+                entries.push({ nodedefName, def, graphs });
+            }
+            // Materialize each entry as unique document-local copies, so
+            // shader gen compiles THIS document's nodedef/graph instead
+            // of a same-named library one (see the GenContext caching
+            // note above listDocRenderables' caller in viewer-app.jsx).
+            for (const entry of entries) {
+                const nodeString = mxSafe(() => entry.def.getNodeString(), '');
+                if (!nodeString) continue;
+                const defCopyName = mxSafe(() => doc.createValidChildName(entry.nodedefName + '_preview'), null);
+                const copyDef = defCopyName && mxSafe(() => doc.addNodeDef(defCopyName, 'surfaceshader', nodeString), null);
+                if (!copyDef) continue;
+                mxSafe(() => { copyDef.copyContentFrom(entry.def); return true; }, false);
+                mxSafe(() => { copyDef.setName(defCopyName); return true; }, false);
+                for (const g of entry.graphs) {
+                    const graphCopyName = mxSafe(() => doc.createValidChildName(mxElName(g) + '_preview'), null);
+                    const copyGraph = graphCopyName && mxSafe(() => doc.addNodeGraph(graphCopyName), null);
+                    if (!copyGraph) continue;
+                    mxSafe(() => { copyGraph.copyContentFrom(g); return true; }, false);
+                    mxSafe(() => { copyGraph.setName(graphCopyName); return true; }, false);
+                    mxSafe(() => { copyGraph.setNodeDefString(defCopyName); return true; }, false);
+                }
+                const instName = mxSafe(() => doc.createValidChildName(nodeString + '_definition'), null);
+                const inst = instName && mxSafe(() => doc.addNode(nodeString, instName, 'surfaceshader'), null);
+                if (!inst) continue;
+                mxSafe(() => { inst.setNodeDefString(defCopyName); return true; }, false);
+                renderables.push({ name: nodeString + ' (definition)', node: inst, definition: true });
+            }
+        } catch (e) { /* third pass is best-effort */ }
     }
     return renderables;
 };

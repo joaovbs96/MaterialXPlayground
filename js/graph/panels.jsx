@@ -18,7 +18,7 @@
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
         // an INPUT that can consume it; null/'' is the normal flow.
-        function AddNodeSearch({ catalog, ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
+        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
@@ -46,8 +46,9 @@
             const typeOptions = React.useMemo(() => {
                 const s = new Set();
                 (catalog || []).forEach((c) => (c.signatures || []).forEach((sig) => { if (sig.type) s.add(sig.type); }));
+                (docCatalog || []).forEach((c) => (c.signatures || []).forEach((sig) => { if (sig.type) s.add(sig.type); }));
                 return Array.from(s).sort();
-            }, [catalog]);
+            }, [catalog, docCatalog]);
             const items = React.useMemo(() => {
                 const s = q.trim().toLowerCase();
                 const synth = [];
@@ -60,20 +61,6 @@
                     }
                 }
                 if (!catalog) return synth;
-                let pool = catalog;
-                if (typeFilter) {
-                    pool = filterMode === 'out'
-                        // The double-clicked port is an OUTPUT: the new node
-                        // must be able to consume it, i.e. have some INPUT
-                        // of that type.
-                        ? pool.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
-                        // Default (including filterMode 'in'): the new node
-                        // must produce that type as its OUTPUT.
-                        : pool.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
-                }
-                const match = s ? pool.filter((c) =>
-                    c.category.toLowerCase().indexOf(s) !== -1 ||
-                    (c.group || '').toLowerCase().indexOf(s) !== -1) : pool;
                 const rank = (c) => {
                     if (!s) return 2;
                     const n = c.category.toLowerCase();
@@ -82,10 +69,30 @@
                     if (n.indexOf(s) !== -1) return 2;
                     return 3; // matched on the group only
                 };
-                return synth.concat(match.slice()
-                    .sort((a, b) => rank(a) - rank(b) || a.category.localeCompare(b.category))
-                    .slice(0, 60));
-            }, [catalog, q, ifaceMode, typeFilter, filterMode]);
+                // Same typeFilter + text match applied to both pools, so
+                // document-local definitions rank identically to stdlib
+                // ones; only their placement (first) differs, below.
+                const filterPool = (pool) => {
+                    let p = pool;
+                    if (typeFilter) {
+                        p = filterMode === 'out'
+                            // The double-clicked port is an OUTPUT: the new node
+                            // must be able to consume it, i.e. have some INPUT
+                            // of that type.
+                            ? p.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
+                            // Default (including filterMode 'in'): the new node
+                            // must produce that type as its OUTPUT.
+                            : p.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
+                    }
+                    const matched = s ? p.filter((c) =>
+                        c.category.toLowerCase().indexOf(s) !== -1 ||
+                        (c.group || '').toLowerCase().indexOf(s) !== -1) : p;
+                    return matched.slice().sort((a, b) => rank(a) - rank(b) || a.category.localeCompare(b.category));
+                };
+                const docItems = (docCatalog && docCatalog.length) ? filterPool(docCatalog) : [];
+                const stdlibItems = filterPool(catalog);
+                return synth.concat(docItems, stdlibItems).slice(0, 60);
+            }, [catalog, docCatalog, q, ifaceMode, typeFilter, filterMode]);
             React.useEffect(() => { setHi(0); }, [q]);
             React.useEffect(() => { // keep the highlighted row in view
                 const el = listRef.current && listRef.current.children[hi];
@@ -313,6 +320,7 @@
                                                 <span className="ml-auto flex-none text-[9px] text-gray-500" title="This category has several signatures — pick one in the properties panel after adding">{c.signatures.length} sigs</span>
                                             )}
                                             {c.group && <span className={(c.signatures.length > 1 ? '' : 'ml-auto ') + 'flex-none text-[9px] text-gray-500 uppercase tracking-wider'}>{c.group}</span>}
+                                            {c.local && <span className={(c.signatures.length > 1 || c.group ? '' : 'ml-auto ') + 'flex-none text-blue-300/90 border border-blue-500/40 rounded px-1 text-[8px] uppercase tracking-wider'}>doc</span>}
                                         </React.Fragment>
                                     )}
                                 </button>
