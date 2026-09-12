@@ -354,8 +354,11 @@
         // unconnected ones edit the value, debounced (each commit writes
         // the doc and recompiles); onLive fires per tick for a live preview.
         function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
+            // A ref (not state): blurring alone must never re-trigger the
+            // re-seed effects below, only an actual value change should.
+            const focusedRef = React.useRef(false);
             const [draft, setDraft] = React.useState(inp.value || '');
-            React.useEffect(() => { setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
+            React.useEffect(() => { if (!focusedRef.current) setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
             // Displayed decimals: 4-component rows (color4/vector4) are tighter,
             // so round to 3; color3/vector2/3 round to 4.
             const compDec = (VEC_SIZE[inp.type] || 0) === 4 ? 3 : 4;
@@ -366,7 +369,9 @@
                 () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec))
             );
             React.useEffect(() => {
-                setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec)));
+                if (!focusedRef.current) {
+                    setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec)));
+                }
             }, [nodeId, inp.name, inp.value]);
             const onCommitRef = React.useRef(onCommit);
             onCommitRef.current = onCommit;
@@ -451,7 +456,8 @@
                     placeholder="(no value)"
                     spellCheck={false}
                     onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
+                    onFocus={() => { focusedRef.current = true; }}
+                    onBlur={() => { focusedRef.current = false; commit(); }}
                     onKeyDown={(e) => {
                         if (e.key === 'Enter') { commit(); e.target.blur(); }
                         if (e.key === 'Escape') { setDraft(inp.value || ''); e.target.blur(); }
@@ -524,7 +530,14 @@
                         nv[i] = raw;
                         setCompText(nv);
                         const n = parseFloat(raw);
-                        if (isNaN(n)) return; // e.g. "", "-", "1." — keep displaying, don't commit yet
+                        if (isNaN(n)) {
+                            // e.g. "", "-", "1.": keep displaying, don't commit
+                            // yet, and drop any earlier pending commit so it
+                            // can't land later and stomp this component.
+                            if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+                            pendingRef.current = null;
+                            return;
+                        }
                         const clamped = isColor ? Math.max(0, Math.min(1, n)) : n;
                         const nums = nv.map((s2, j) => {
                             if (j === i) return clamped;
@@ -566,11 +579,21 @@
                                         className={'w-full min-w-0 px-1 py-0.5 ' + boxCls}
                                         value={s}
                                         onChange={(e) => setComp(i, e.target.value, isSpinEvent(e))}
+                                        onFocus={() => { focusedRef.current = true; }}
                                         onBlur={(e) => {
-                                            const v = String(fmt(comps[i]));
-                                            e.target.value = v;
+                                            focusedRef.current = false;
+                                            flush();
                                             const nv = compText.slice();
-                                            nv[i] = v;
+                                            if (isNaN(parseFloat(nv[i]))) {
+                                                // Unparseable draft (fast backspacing
+                                                // to empty): restore from the
+                                                // document's own component value.
+                                                const docComps = parseComps(inpValRef.current, vecN);
+                                                nv[i] = numDec(docComps[i], compDec);
+                                            } else {
+                                                nv[i] = String(fmt(comps[i]));
+                                            }
+                                            e.target.value = nv[i];
                                             setCompText(nv);
                                         }}
                                     />
@@ -598,6 +621,8 @@
                                     min={lo} max={hi} step={step}
                                     value={Math.max(lo, Math.min(hi, curN))}
                                     onChange={(e) => commitSoon(numStr(parse(e.target.value)))}
+                                    onFocus={() => { focusedRef.current = true; }}
+                                    onBlur={() => { focusedRef.current = false; }}
                                 />
                             )}
                             <input
@@ -617,9 +642,25 @@
                                         // isSpinEvent above).
                                         if (isSpinEvent(e)) flush();
                                     }
-                                    else setDraft(raw);
+                                    else {
+                                        setDraft(raw);
+                                        // Unparseable draft: drop any commit
+                                        // still pending so it can't land
+                                        // later and overwrite this field.
+                                        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+                                        pendingRef.current = null;
+                                    }
                                 }}
-                                onBlur={() => setDraft(numStr(curN))}
+                                onFocus={() => { focusedRef.current = true; }}
+                                onBlur={() => {
+                                    focusedRef.current = false;
+                                    flush();
+                                    // If what's left doesn't parse (e.g. fast
+                                    // backspacing to empty), restore from the
+                                    // document value instead of a stale commit.
+                                    if (isNaN(parse(draft))) setDraft(inpValRef.current || '');
+                                    else setDraft(numStr(curN));
+                                }}
                             />
                         </div>
                     );
