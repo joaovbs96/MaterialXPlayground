@@ -1378,7 +1378,11 @@ const patchTransmissionThickness = fs => {
   // compiler has no UnitSystem, so raw transmission_depth remains in
   // source scene units and the renderer converts this measured path
   // back before applying Beer-Lambert.
-  'uniform float u_thicknessScale;', 'float mx_transmission_path_length() {', '    float back = texture(u_thicknessMap, gl_FragCoord.xy * u_thicknessTexel).r;', '    if (back <= 0.0) return 0.0; // nothing behind: treat as clear, never as opaque', '    float front = distance(positionWorld, u_viewPosition);', '    return max(back - front, 0.0) * u_thicknessScale;', '}', ''].join('\n');
+  'uniform float u_thicknessScale;',
+  // A bounded per-volume target allocation can overflow. In that case
+  // use the authored reference transmission distance rather than a
+  // borrowed back face or a silently clear absorbing solid.
+  'uniform float u_thicknessTargetValid;', 'uniform float u_thicknessReferencePath;', 'float mx_transmission_path_length() {', '    if (u_thicknessTargetValid < 0.5) return max(u_thicknessReferencePath, 0.0);', '    float back = texture(u_thicknessMap, gl_FragCoord.xy * u_thicknessTexel).r;', '    if (back <= 0.0) return 0.0; // nothing behind: treat as clear, never as opaque', '    float front = distance(positionWorld, u_viewPosition);', '    return max(back - front, 0.0) * u_thicknessScale;', '}', ''].join('\n');
   const fnIdx = out.indexOf('void mx_anisotropic_vdf');
   if (fnIdx === -1) return fs;
   return out.slice(0, fnIdx) + decls + out.slice(fnIdx);
@@ -6222,6 +6226,12 @@ const createMtlxSceneUniforms = ({
   };
   if (has('u_thicknessScale')) uniforms.u_thicknessScale = {
     value: thicknessMap ? thicknessScale : 0
+  };
+  if (has('u_thicknessTargetValid')) uniforms.u_thicknessTargetValid = {
+    value: thicknessMap ? 1 : 0
+  };
+  if (has('u_thicknessReferencePath')) uniforms.u_thicknessReferencePath = {
+    value: 0
   };
   // Squares the tint for a closed solid, where the ray crosses the surface
   // twice. MaterialXView sets this from the geometry; a USD stage's

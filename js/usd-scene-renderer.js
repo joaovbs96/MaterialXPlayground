@@ -680,6 +680,15 @@ const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
 // Layer the thickness pass draws, so it selects its meshes with a camera
 // mask instead of walking the scene graph every frame.
 const THICKNESS_LAYER = 1;
+// A thickness target is full drawing-buffer resolution and carries RGBA
+// distance plus a depth attachment. Keep the per-volume correction bounded:
+// crowded stages get an explicit material-reference fallback instead of one
+// volume borrowing another's exit distance. The accounting conservatively
+// reserves four bytes/pixel for the depth attachment; color is measured from
+// the selected Float/Half type.
+const THICKNESS_TARGET_MAX_ACTIVE = 4;
+const THICKNESS_TARGET_BUDGET_BYTES = 128 * 1024 * 1024;
+const THICKNESS_DEPTH_BYTES_PER_PIXEL = 4;
 const createThicknessMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: [
@@ -1153,7 +1162,20 @@ const createMtlxSceneView = async ({
     let aoBlurMaterial = null;
     let aoQuadScene = null;
     let aoQuadCamera = null;
+    // `thicknessTarget` remains the first allocated target for the existing
+    // diagnostic hook. Rendering and binding use the per-object map below.
     let thicknessTarget = null;
+    const thicknessTargets = new Map();
+    let thicknessInfo = {
+        activeVolumes: 0, allocatedVolumes: 0, overflowVolumes: 0,
+        bytesPerTarget: 0, bytesAllocated: 0, budgetBytes: THICKNESS_TARGET_BUDGET_BYTES,
+        maxTargets: THICKNESS_TARGET_MAX_ACTIVE, targetType: null, targetFormat: 'RGBA',
+        fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [],
+    };
+    // Set after the per-volume maps are rendered. Each mesh's established
+    // callback invokes this after its object matrices have been updated, so
+    // shared material instances cannot retain a previous mesh's target.
+    let applyObjectThickness = null;
     let thicknessMaterial = null;
     let thicknessDiscardMaterial = null;
     let thicknessCamera = null;
@@ -1165,7 +1187,16 @@ const createMtlxSceneView = async ({
     let aoEnabled = storedSceneAo();
     let aoStrength = storedSceneAoStrength();
     const disposeThicknessResources = () => {
-        if (thicknessTarget) { thicknessTarget.dispose(); thicknessTarget = null; }
+        thicknessTargets.forEach((target) => { try { target.dispose(); } catch (e) {} });
+        thicknessTargets.clear();
+        thicknessTarget = null;
+        thicknessInfo = {
+            activeVolumes: 0, allocatedVolumes: 0, overflowVolumes: 0,
+            bytesPerTarget: 0, bytesAllocated: 0, budgetBytes: THICKNESS_TARGET_BUDGET_BYTES,
+            maxTargets: THICKNESS_TARGET_MAX_ACTIVE, targetType: null, targetFormat: 'RGBA',
+            fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [],
+        };
+        applyObjectThickness = null;
         if (thicknessMaterial) { thicknessMaterial.dispose(); thicknessMaterial = null; }
         if (thicknessDiscardMaterial) { thicknessDiscardMaterial.dispose(); thicknessDiscardMaterial = null; }
         thicknessCamera = null;
@@ -2661,27 +2692,76 @@ const createMtlxSceneView = async ({
                 }
             }
         };
-        // Renders the back-face distance map for transmissive prims. Only
-        // runs when the stage has any, so an opaque stage pays nothing.
+        // Renders one back-face distance map per active solid. A shared map
+        // cannot identify the entry surface: a disjoint projected volume can
+        // otherwise replace another solid's exit distance. This intentionally
+        // remains a single nearest exit per mesh, so concave/disconnected and
+        // nested shells stay a documented clear-path limitation.
         const updateThickness = () => {
-            const list = collectThicknessMeshes();
-            if (!list.length) return null;
-            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            const list = collectThicknessMeshes().filter((object) => object.visible);
+            // Geometry is rendered into the HDR presentation target when a
+            // caller destination is bound. gl_FragCoord therefore indexes
+            // that target, not the canvas drawing buffer.
+            const destination = renderer.getRenderTarget();
+            const size = destination
+                ? new THREE.Vector2(destination.width, destination.height)
+                : renderer.getDrawingBufferSize(new THREE.Vector2());
             const tw = Math.max(1, Math.floor(size.x));
             const th = Math.max(1, Math.floor(size.y));
-            if (thicknessTarget && (thicknessTarget.width !== tw || thicknessTarget.height !== th)) {
-                thicknessTarget.dispose();
-                thicknessTarget = null;
+            const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                && !!renderer.extensions.get('EXT_color_buffer_float');
+            const targetType = floatOk ? THREE.FloatType : THREE.HalfFloatType;
+            const colorBytes = floatOk ? 16 : 8;
+            const bytesPerTarget = tw * th * (colorBytes + THICKNESS_DEPTH_BYTES_PER_PIXEL);
+            const ordered = list.slice().sort((a, b) => {
+                const ak = String(a.userData?.primPath || a.name || '') + '|' + Number(a.userData?.instanceIndex ?? -1);
+                const bk = String(b.userData?.primPath || b.name || '') + '|' + Number(b.userData?.instanceIndex ?? -1);
+                return ak.localeCompare(bk);
+            });
+            // Select this frame's stable priority set before looking at the
+            // cache. Retaining old entries first would make visibility churn
+            // decide which volume overflows instead of the documented order.
+            const capacity = Math.min(THICKNESS_TARGET_MAX_ACTIVE,
+                Math.floor(THICKNESS_TARGET_BUDGET_BYTES / Math.max(1, bytesPerTarget)));
+            const selected = ordered.slice(0, capacity);
+            const active = new Set(selected);
+            thicknessTargets.forEach((target, object) => {
+                if (!active.has(object) || target.width !== tw || target.height !== th || target.texture.type !== targetType) {
+                    try { target.dispose(); } catch (e) {}
+                    thicknessTargets.delete(object);
+                }
+            });
+            const allocated = [];
+            const overflow = ordered.slice(selected.length);
+            for (const object of selected) {
+                let target = thicknessTargets.get(object);
+                if (!target) {
+                    target = new THREE.WebGLRenderTarget(tw, th, {
+                        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                        format: THREE.RGBAFormat, type: targetType,
+                        depthBuffer: true, stencilBuffer: false,
+                    });
+                    thicknessTargets.set(object, target);
+                }
+                allocated.push({ object, target });
             }
-            if (!thicknessTarget) {
-                const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
-                    && !!renderer.extensions.get('EXT_color_buffer_float');
-                thicknessTarget = new THREE.WebGLRenderTarget(tw, th, {
-                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
-                    depthBuffer: true, stencilBuffer: false,
-                });
+            thicknessTarget = allocated.length ? allocated[0].target : null;
+            thicknessInfo = {
+                activeVolumes: ordered.length, allocatedVolumes: allocated.length, overflowVolumes: overflow.length,
+                bytesPerTarget, bytesAllocated: allocated.length * bytesPerTarget,
+                budgetBytes: THICKNESS_TARGET_BUDGET_BYTES, maxTargets: THICKNESS_TARGET_MAX_ACTIVE,
+                targetType: floatOk ? 'FloatType' : 'HalfFloatType', targetFormat: 'RGBA + depth',
+                fallback: 'material-reference-distance',
+                overflowPrims: overflow.slice(0, 32).map((object) => String(object.userData?.primPath || object.name || 'unknown')),
+                unsupportedFallbackPrims: [],
+            };
+            if (overflow.length) {
+                const warning = '[info] Thickness target budget: ' + overflow.length + ' of ' + ordered.length
+                    + ' volume instances use material-reference-distance fallback (' + thicknessInfo.bytesAllocated + ' / '
+                    + THICKNESS_TARGET_BUDGET_BYTES + ' bytes; max ' + THICKNESS_TARGET_MAX_ACTIVE + ' targets)';
+                if (!warnings.includes(warning)) warnings.push(warning);
             }
+            if (!allocated.length) return { targets: thicknessTargets, width: tw, height: th };
             if (!thicknessMaterial) thicknessMaterial = createThicknessMaterial();
             if (!thicknessDiscardMaterial) {
                 thicknessDiscardMaterial = new THREE.MeshBasicMaterial({
@@ -2692,8 +2772,6 @@ const createMtlxSceneView = async ({
             thicknessMaterial.uniforms.uEye = thicknessMaterial.uniforms.uEye || { value: new THREE.Vector3() };
             thicknessMaterial.uniforms.uEye.value.copy(camera.position);
 
-            // Only the transmissive meshes take part; everything else would
-            // put its own back faces into the map and bound the wrong medium.
             if (!thicknessCamera) thicknessCamera = camera.clone();
             thicknessCamera.copy(camera);
             thicknessCamera.layers.set(THICKNESS_LAYER);
@@ -2702,44 +2780,75 @@ const createMtlxSceneView = async ({
             const previousClearAlpha = renderer.getClearAlpha();
             const previousOverrideMaterial = scene.overrideMaterial;
             const materialState = new Map();
+            const visibleState = new Map();
             try {
                 // Override material ignores geometry groups, so replace each
                 // candidate mesh's slots explicitly. This keeps opaque
-                // subgroups out of the back-face distance map while retaining
-                // the transmissive subgroup on a mixed USD mesh.
-                list.forEach((object) => {
+                // subgroups out of the map while retaining the transmissive
+                // subgroup on a mixed USD mesh.
+                ordered.forEach((object) => {
                     const original = object.material;
                     const mats = Array.isArray(original) ? original : [original];
                     materialState.set(object, original);
+                    visibleState.set(object, object.visible);
                     const replacement = mats.map((material) => material && material.userData
                         && material.userData.mtlxSceneVolume ? thicknessMaterial : thicknessDiscardMaterial);
                     object.material = Array.isArray(original) ? replacement : replacement[0];
                 });
                 scene.overrideMaterial = null;
-                renderer.setRenderTarget(thicknessTarget);
                 renderer.setClearColor(0x000000, 1); // 0 distance means "no medium"
-                renderer.render(scene, thicknessCamera);
-                return thicknessTarget.texture;
+                for (const entry of allocated) {
+                    ordered.forEach((object) => { object.visible = object === entry.object && visibleState.get(object); });
+                    entry.target.viewport.set(0, 0, tw, th);
+                    entry.target.scissorTest = false;
+                    renderer.setRenderTarget(entry.target);
+                    renderer.clear();
+                    renderer.render(scene, thicknessCamera);
+                }
+                return { targets: thicknessTargets, width: tw, height: th };
             } finally {
                 materialState.forEach((original, object) => { object.material = original; });
+                visibleState.forEach((visible, object) => { object.visible = visible; });
                 scene.overrideMaterial = previousOverrideMaterial;
                 restoreRendererDestination(previousDestination);
                 renderer.setClearColor(previousClearColor, previousClearAlpha);
             }
         };
-        // Pushes the thickness map onto every live material, per frame.
-        const applyThickness = (texture, width, height) => {
-            for (const material of materials) {
-                if (!material.uniforms || !material.uniforms.u_thicknessMap) continue;
-                material.uniforms.u_thicknessMap.value = texture
-                    || (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+        // Set a safe default for every generated material, then bind the
+        // object-specific map from its draw callback. The callback runs after
+        // object matrices and preserves shared material/instance correctness.
+        const applyThickness = (state, width, height) => {
+            const dummy = (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+            const fallbackWarnings = new Set();
+            const setMaterial = (material, target, object = null) => {
+                if (!material || !material.uniforms || !material.uniforms.u_thicknessMap) return;
+                material.uniforms.u_thicknessMap.value = target ? target.texture : dummy;
                 if (material.uniforms.u_thicknessTexel && width && height) {
                     material.uniforms.u_thicknessTexel.value.set(1 / width, 1 / height);
                 }
-                if (material.uniforms.u_thicknessScale) {
-                    material.uniforms.u_thicknessScale.value = texture ? thicknessScale : 0;
+                if (material.uniforms.u_thicknessScale) material.uniforms.u_thicknessScale.value = target ? thicknessScale : 0;
+                if (material.uniforms.u_thicknessTargetValid) material.uniforms.u_thicknessTargetValid.value = target ? 1 : 0;
+                if (material.uniforms.u_thicknessReferencePath) {
+                    const reference = Number(material.uniforms.transmission_depth && material.uniforms.transmission_depth.value);
+                    material.uniforms.u_thicknessReferencePath.value = target ? 0 : (Number.isFinite(reference) && reference > 0 ? reference : 0);
+                    if (!target && !(Number.isFinite(reference) && reference > 0) && object) {
+                        const prim = String(object.userData?.primPath || object.name || 'unknown');
+                        fallbackWarnings.add(prim);
+                    }
                 }
-            }
+            };
+            for (const material of materials) setMaterial(material, null);
+            applyObjectThickness = (object, objectMaterials) => {
+                const target = state && state.targets ? state.targets.get(object) : null;
+                objectMaterials.forEach((material) => setMaterial(material, target, object));
+                if (fallbackWarnings.size) {
+                    const unsupported = Array.from(fallbackWarnings).sort();
+                    thicknessInfo.unsupportedFallbackPrims = unsupported.slice(0, 32);
+                    const warning = '[info] Thickness target fallback has no scalar transmission_depth for '
+                        + unsupported.join(', ') + '; using clear path for unsupported graph';
+                    if (!warnings.includes(warning)) warnings.push(warning);
+                }
+            };
         };
         // Refitting the frustum changes only the matrix, so push that alone.
         // applyMaterialEnvironment rebuilds every material's whole uniform set
@@ -3121,6 +3230,7 @@ const createMtlxSceneView = async ({
                     object.onBeforeRender = () => {
                         const currentMaterials = Array.isArray(object.material) ? object.material : [object.material];
                         currentMaterials.forEach((material) => applyObjectUniforms(material, object));
+                        if (applyObjectThickness) applyObjectThickness(object, currentMaterials);
                     };
                     sceneRoot.add(object);
                     prims.push(object);
@@ -3564,9 +3674,8 @@ const createMtlxSceneView = async ({
             // Volume absorption needs a path length whether or not the
             // peel pipeline is running, so this is not gated on the toggle.
             {
-                const thicknessTexture = updateThickness();
-                const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-                applyThickness(thicknessTexture, size.x, size.y);
+                const thicknessState = updateThickness();
+                applyThickness(thicknessState, thicknessState.width, thicknessState.height);
             }
             const forceOn = sceneTransparencyEnabled();
             // The shadow caster set changes when Scene transparency toggles:
@@ -4068,6 +4177,7 @@ const createMtlxSceneView = async ({
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
             __debug: () => ({ renderer, scene, camera, materials: Array.from(materials), thicknessScale, thicknessTarget,
+                thickness: Object.assign({}, thicknessInfo),
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
                 linearScopeActive: !!sceneLinearState }),

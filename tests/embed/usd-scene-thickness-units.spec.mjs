@@ -27,6 +27,18 @@ async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weig
     handle.camera.updateMatrixWorld(true);
     handle.renderNow();
     const material = handle.prims[0].material;
+    let drawThickness = null;
+    const previousDraw = handle.prims[0].onBeforeRender;
+    handle.prims[0].onBeforeRender = function (...args) {
+      if (previousDraw) previousDraw.apply(this, args);
+      drawThickness = {
+        scale: Number(material.uniforms?.u_thicknessScale?.value),
+        valid: Number(material.uniforms?.u_thicknessTargetValid?.value),
+        texel: material.uniforms?.u_thicknessTexel?.value?.toArray?.() || null,
+      };
+    };
+    handle.renderNow();
+    handle.prims[0].onBeforeRender = previousDraw;
     const debug = handle.__debug();
     const thicknessSample = new Float32Array(4);
     if (debug.thicknessTarget) debug.renderer.readRenderTargetPixels(debug.thicknessTarget, 48, 48, 1, 1, thicknessSample);
@@ -42,7 +54,10 @@ async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weig
       prepassMode: material.userData?.mtlxScenePrepassCoverage?.mode || null,
       prepassOpacity: Number(material.userData?.mtlxScenePrepassCoverage?.opacity),
       hasTarget: !!debug.thicknessTarget,
-      uniformScale: Number(material.uniforms?.u_thicknessScale?.value),
+      // Per-volume binding happens in each mesh draw callback; a shared
+      // material's last inspected uniform is not a stable global binding.
+      thicknessInfo: debug.thickness || null,
+      drawThickness,
       hasThicknessPath: /mx_transmission_path_length/.test(fragmentShader) && /u_thicknessScale/.test(fragmentShader),
       hasThicknessInput: /transmission_depth/.test(fragmentShader), compiled: !!material.userData?.mtlxSceneCompiled?.vs,
     };
@@ -84,8 +99,16 @@ test('@scene OpenPBR transmission depth keeps the same physical ratio across met
   expect(metreStage.worldLength).toBeCloseTo(0.1, 6);
   expect(centimetreStage.scale).toBeCloseTo(100, 6);
   expect(metreStage.scale).toBeCloseTo(1, 6);
-  expect(centimetreStage.uniformScale).toBeCloseTo(centimetreStage.scale, 6);
-  expect(metreStage.uniformScale).toBeCloseTo(metreStage.scale, 6);
+  expect(centimetreStage.thicknessInfo?.allocatedVolumes).toBe(1);
+  expect(metreStage.thicknessInfo?.allocatedVolumes).toBe(1);
+  expect(centimetreStage.thicknessInfo?.overflowVolumes).toBe(0);
+  expect(metreStage.thicknessInfo?.overflowVolumes).toBe(0);
+  expect(centimetreStage.drawThickness?.scale).toBeCloseTo(centimetreStage.scale, 6);
+  expect(metreStage.drawThickness?.scale).toBeCloseTo(metreStage.scale, 6);
+  expect(centimetreStage.drawThickness?.valid).toBe(1);
+  expect(metreStage.drawThickness?.valid).toBe(1);
+  expect(centimetreStage.drawThickness?.texel).toEqual([1 / 96, 1 / 96]);
+  expect(metreStage.drawThickness?.texel).toEqual([1 / 96, 1 / 96]);
   expect(centimetreStage.thicknessSample).toBeGreaterThan(centimetreStage.worldLength * 5);
   expect(metreStage.thicknessSample).toBeGreaterThan(metreStage.worldLength * 5);
   expect((centimetreStage.pathLength * centimetreStage.scale) / centimetreStage.depth).toBeCloseTo(1, 3);
