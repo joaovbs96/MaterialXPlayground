@@ -327,6 +327,31 @@
             );
         }
 
+        // Small blur/Enter-committing text field for the Interface metadata
+        // group (params panel, i: nodes) and the Definition panel, mirroring
+        // ParamRow's textField commit pattern since that pattern isn't exported standalone.
+        function IfaceMetaField({ value, placeholder, onCommit, readOnly }) {
+            const [draft, setDraft] = React.useState(value || '');
+            React.useEffect(() => { setDraft(value || ''); }, [value]);
+            const commit = () => { if (draft !== (value || '')) onCommit(draft); };
+            return (
+                <input
+                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
+                        + (readOnly ? ' opacity-60' : '')}
+                    value={draft}
+                    placeholder={placeholder}
+                    spellCheck={false}
+                    readOnly={!!readOnly}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') { commit(); e.target.blur(); }
+                        if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); }
+                    }}
+                />
+            );
+        }
+
         // ---- Typed parameter controls --------------------------------------
         // Mirrors the docs-page previewer: color/vector spinners, a
         // range slider, enum/boolean dropdowns, text on blur/Enter.
@@ -733,4 +758,4 @@
             );
         }
 
-Object.assign(window, { AddNodeSearch, ParamRow, VEC_SIZE });
+Object.assign(window, { AddNodeSearch, ParamRow, VEC_SIZE, IfaceMetaField, IFACE_VALUE_TYPES });

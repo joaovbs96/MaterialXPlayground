@@ -322,31 +322,6 @@
             + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
             + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
 
-        // Small blur/Enter-committing text field for the Interface metadata
-        // group (params panel, i: nodes), mirroring ParamRow's textField
-        // commit pattern since that pattern isn't exported standalone.
-        function IfaceMetaField({ value, placeholder, onCommit, readOnly }) {
-            const [draft, setDraft] = React.useState(value || '');
-            React.useEffect(() => { setDraft(value || ''); }, [value]);
-            const commit = () => { if (draft !== (value || '')) onCommit(draft); };
-            return (
-                <input
-                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
-                        + (readOnly ? ' opacity-60' : '')}
-                    value={draft}
-                    placeholder={placeholder}
-                    spellCheck={false}
-                    readOnly={!!readOnly}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') { commit(); e.target.blur(); }
-                        if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); }
-                    }}
-                />
-            );
-        }
-
         // Right sidebar resize range and localStorage key. Max also never
         // exceeds ~70% of the editor width (see clampSidebarWidth).
         const SIDEBAR_MIN_WIDTH = 320; // narrow enough to be tidy, wide enough to read both dropdowns
@@ -2436,6 +2411,401 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         : n),
                 }));
             };
+
+            // ---- Definition panel actions (nodedef/functional-graph cards) --
+            // Shared tail for every mutating action below: refresh the
+            // definitions inventory, mark the doc dirty, and rebuild the
+            // whole scope so cards + the sidebar pick up the edit, the
+            // same rebuild renameElement performs after a document mutation.
+            const refreshAfterDefEdit = (nodedefName) => {
+                refreshDefinitions(parsed);
+                markDirty('def:' + nodedefName);
+                setDocRev((r) => r + 1);
+                const { descs, edges } = buildScope(parsed, scope);
+                const rebuilt = toFlow(descs, edges, {
+                    portMode: globalPortsRef.current,
+                    portModes: capturePortModes(),
+                    onOpenScope: changeScope,
+                    onTogglePorts: (id2) => togglePortsRef.current(id2),
+                    onPortAdd: (info) => onPortAddRef.current(info),
+                    onRenameStart: (id2) => inlineRenameStartRef.current(id2),
+                    onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
+                    onRenameCancel: () => inlineRenameCancelRef.current(),
+                    renameIssueFor: (id2, nm) => renameIssueRef.current(id2, nm),
+                });
+                setFlow(rebuilt);
+            };
+
+            // Every node input, plus a container's own outputs, mirrors
+            // renameElement's own connectables() helper (private to that
+            // closure) for rewriting nodegraph-output referrers at the root.
+            const collectConnectables = (container) => {
+                const out = [];
+                for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                    out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
+                }
+                out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
+                return out;
+            };
+
+            // Rename a nodedef, then rewrite every node/nodegraph that
+            // pins it via nodedef=. MaterialX's setName does NOT do this.
+            const renameDefinition = (oldName, newName) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, oldName);
+                if (!def) { setError('Definition "' + oldName + '" is not in this document.'); return; }
+                if (newName === oldName) return;
+                if (!isValidMtlxName(newName)) {
+                    setError('"' + newName + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(newName) + '.');
+                    return;
+                }
+                if (docChild(parsed.doc, newName)) { setError('A sibling element already has this name.'); return; }
+                mxSafe(() => { def.setName(newName); return true; }, false);
+                for (const g of docChildren(parsed.doc).filter((el) => mxElCat(el) === 'nodegraph')) {
+                    if (mxElAttr(g, 'nodedef') === oldName) mxSetAttr(g, 'nodedef', newName);
+                    for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) {
+                        if (mxElAttr(n, 'nodedef') === oldName) mxSetAttr(n, 'nodedef', newName);
+                    }
+                }
+                for (const n of vecToArray(mxSafe(() => parsed.doc.getNodes(), []))) {
+                    if (mxElAttr(n, 'nodedef') === oldName) mxSetAttr(n, 'nodedef', newName);
+                }
+                if (selectedId === 'd:' + oldName) setSelectedId('d:' + newName);
+                setPreviewSel((prev) => (prev && prev.id === 'd:' + oldName) ? { scope: prev.scope, id: 'd:' + newName } : prev);
+                refreshAfterDefEdit(newName);
+            };
+
+            // Change the nodedef's node= string, refused while any node
+            // in the document still resolves against the OLD string, since
+            // that node would silently stop matching this definition.
+            const setDefinitionNode = (nodedefName, nodeString) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                if (!isValidMtlxName(nodeString)) {
+                    setError('"' + nodeString + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(nodeString) + '.');
+                    return;
+                }
+                const oldNode = mxSafe(() => def.getNodeString(), '');
+                if (nodeString === oldNode) return;
+                const hasInstance = (container) => vecToArray(mxSafe(() => container.getNodes(), []))
+                    .some((n) => mxElCat(n) === oldNode);
+                let blocked = hasInstance(parsed.doc);
+                if (!blocked) {
+                    for (const g of docChildren(parsed.doc).filter((el) => mxElCat(el) === 'nodegraph')) {
+                        if (hasInstance(g)) { blocked = true; break; }
+                    }
+                }
+                if (blocked) { setError('Rename the instances first.'); return; }
+                mxSafe(() => { def.setNodeString(nodeString); return true; }, false);
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // nodegroup/version/isdefaultversion/uiname/doc on the nodedef
+            // element itself, same mxSetAttr/mxRemoveAttr shape as applyInterfaceMeta.
+            const applyDefinitionMeta = (nodedefName, patch) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                Object.keys(patch).forEach((key) => {
+                    const value = patch[key];
+                    if (key === 'nodegroup') {
+                        if (value) mxSafe(() => { def.setNodeGroup(value); return true; }, false);
+                        else mxRemoveAttr(def, 'nodegroup');
+                        return;
+                    }
+                    if (key === 'version') {
+                        if (value) mxSafe(() => { def.setVersionString(value); return true; }, false);
+                        else mxRemoveAttr(def, 'version');
+                        return;
+                    }
+                    if (key === 'isdefaultversion') {
+                        mxSafe(() => { def.setDefaultVersion(!!value); return true; }, false);
+                        if (!value) mxRemoveAttr(def, 'isdefaultversion');
+                        return;
+                    }
+                    if (value) mxSetAttr(def, key, value);
+                    else mxRemoveAttr(def, key);
+                });
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const addDefinitionInput = (nodedefName, rawName, type) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const trimmed = (rawName || '').trim();
+                let name;
+                if (trimmed) {
+                    if (!isValidMtlxName(trimmed)) {
+                        setError('"' + trimmed + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(trimmed) + '.');
+                        return;
+                    }
+                    if (mxSafe(() => def.getInput(trimmed), null)) { setError('Input "' + trimmed + '" already exists.'); return; }
+                    name = trimmed;
+                } else {
+                    name = mxSafe(() => def.createValidChildName('input1'), 'input1');
+                }
+                const el = mxSafe(() => def.addInput(name, type), null);
+                if (!el) { setError('Could not add the input.'); return; }
+                if (mxElType(el) !== type) {
+                    mxSafe(() => {
+                        if (typeof el.setType === 'function') el.setType(type);
+                        else el.setAttribute('type', type);
+                        return true;
+                    }, false);
+                    if (mxElType(el) !== type) mxSetAttr(el, 'type', type);
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // Removing an input the implementation graph(s) still reference
+            // via interfacename= clears those references first, with a
+            // confirm since it silently changes the graph's own wiring.
+            const removeDefinitionInput = (nodedefName, name) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                const referrers = [];
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    if (!g) continue;
+                    for (const p of collectConnectables(g)) {
+                        if (mxElAttr(p, 'interfacename') === name) referrers.push(p);
+                    }
+                }
+                if (referrers.length) {
+                    const ok = window.confirm('Remove input "' + name + '"? ' + referrers.length
+                        + ' connection(s) inside the implementation will be cleared.');
+                    if (!ok) return;
+                    referrers.forEach((el) => mxRemoveAttr(el, 'interfacename'));
+                }
+                mxSafe(() => { def.removeInput(name); return true; }, false);
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // Rename an input, then rewrite interfacename= referrers inside
+            // every graph implementing this nodedef.
+            const renameDefinitionInput = (nodedefName, oldName, newName) => {
+                if (!parsed || oldName === newName) return;
+                if (!isValidMtlxName(newName)) {
+                    setError('"' + newName + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(newName) + '.');
+                    return;
+                }
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                if (mxSafe(() => def.getInput(newName), null)) { setError('Input "' + newName + '" already exists.'); return; }
+                const input = mxSafe(() => def.getInput(oldName), null);
+                if (!input) return;
+                mxSafe(() => { input.setName(newName); return true; }, false);
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    if (!g) continue;
+                    for (const p of collectConnectables(g)) {
+                        if (mxElAttr(p, 'interfacename') === oldName) mxSetAttr(p, 'interfacename', newName);
+                    }
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // Reorder a declared input using swap semantics: this child's
+            // index becomes its neighbour's, shifting the rest along.
+            const moveDefinitionInput = (nodedefName, name, delta) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const names = vecToArray(mxSafe(() => def.getInputs(), [])).map(mxElName);
+                const idx = names.indexOf(name);
+                if (idx === -1) return;
+                const targetIdx = idx + delta;
+                if (targetIdx < 0 || targetIdx >= names.length) return;
+                const neighbourName = names[targetIdx];
+                mxSafe(() => { def.setChildIndex(name, def.getChildIndex(neighbourName)); return true; }, false);
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const setDefinitionInputValue = (nodedefName, name, value) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const input = mxSafe(() => def.getInput(name), null);
+                if (!input) return;
+                if (value === '') mxRemoveAttr(input, 'value');
+                else mxWriteValue(input, value, mxElType(input));
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // uiname/uifolder/doc/uimin/uimax/uisoftmin/uisoftmax/uiadvanced/
+            // defaultgeomprop/enum/enumvalues/colorspace on a declared input.
+            const applyDefinitionInputMeta = (nodedefName, name, patch) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const input = mxSafe(() => def.getInput(name), null);
+                if (!input) return;
+                Object.keys(patch).forEach((key) => {
+                    const value = patch[key];
+                    if (key === 'uiadvanced') {
+                        if (value) mxSetAttr(input, key, 'true');
+                        else mxRemoveAttr(input, key);
+                        return;
+                    }
+                    if (value) mxSetAttr(input, key, value);
+                    else mxRemoveAttr(input, key);
+                });
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // Changing a declared input's type drops its old literal value
+            // (and colorspace, unless the new type is still color-managed)
+            // since neither necessarily fits the new type.
+            const setDefinitionInputType = (nodedefName, name, type) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const input = mxSafe(() => def.getInput(name), null);
+                if (!input) return;
+                mxSafe(() => {
+                    if (typeof input.setType === 'function') input.setType(type);
+                    else input.setAttribute('type', type);
+                    return true;
+                }, false);
+                if (mxElType(input) !== type) mxSetAttr(input, 'type', type);
+                mxRemoveAttr(input, 'value');
+                if (!ifaceColorManaged(type)) mxRemoveAttr(input, 'colorspace');
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // Outputs are declared on the nodedef AND on every graph that
+            // implements it (both name the same interface pin), so add/
+            // remove/rename/retype all mirror across the whole set.
+            const addDefinitionOutput = (nodedefName, rawName, type) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const trimmed = (rawName || '').trim();
+                let name;
+                if (trimmed) {
+                    if (!isValidMtlxName(trimmed)) {
+                        setError('"' + trimmed + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(trimmed) + '.');
+                        return;
+                    }
+                    if (mxSafe(() => def.getOutput(trimmed), null)) { setError('Output "' + trimmed + '" already exists.'); return; }
+                    name = trimmed;
+                } else {
+                    name = mxSafe(() => def.createValidChildName('out'), 'out');
+                }
+                const el = mxSafe(() => def.addOutput(name, type), null);
+                if (!el) { setError('Could not add the output.'); return; }
+                if (mxElType(el) !== type) mxSetAttr(el, 'type', type);
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    if (!g || mxSafe(() => g.getOutput(name), null)) continue;
+                    const gOut = mxSafe(() => g.addOutput(name, type), null);
+                    if (gOut && mxElType(gOut) !== type) mxSetAttr(gOut, 'type', type);
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const removeDefinitionOutput = (nodedefName, name) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                if (vecToArray(mxSafe(() => def.getOutputs(), [])).length <= 1) return; // never remove the last output
+                mxSafe(() => { def.removeOutput(name); return true; }, false);
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    if (g) mxSafe(() => { g.removeOutput(name); return true; }, false);
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const renameDefinitionOutput = (nodedefName, oldName, newName) => {
+                if (!parsed || oldName === newName) return;
+                if (!isValidMtlxName(newName)) {
+                    setError('"' + newName + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(newName) + '.');
+                    return;
+                }
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                if (mxSafe(() => def.getOutput(newName), null)) { setError('Output "' + newName + '" already exists.'); return; }
+                const defOut = mxSafe(() => def.getOutput(oldName), null);
+                if (!defOut) return;
+                mxSafe(() => { defOut.setName(newName); return true; }, false);
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    if (!g) continue;
+                    const gOut = mxSafe(() => g.getOutput(oldName), null);
+                    if (gOut) mxSafe(() => { gOut.setName(newName); return true; }, false);
+                    // Root referrers: nodegraph=<gName> output=<oldName>.
+                    for (const p of collectConnectables(parsed.doc)) {
+                        if (mxElAttr(p, 'nodegraph') === gName && mxElAttr(p, 'output') === oldName) {
+                            mxSetAttr(p, 'output', newName);
+                        }
+                    }
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const setDefinitionOutputType = (nodedefName, name, type) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const defOut = mxSafe(() => def.getOutput(name), null);
+                if (defOut && mxElType(defOut) !== type) mxSetAttr(defOut, 'type', type);
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    const gOut = g ? mxSafe(() => g.getOutput(name), null) : null;
+                    if (gOut && mxElType(gOut) !== type) mxSetAttr(gOut, 'type', type);
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            // A fresh nodegraph wired to this nodedef via setNodeDefString,
+            // seeded with one unconnected output per the nodedef's own:
+            // the minimum shape buildScope needs to treat it as an implementation.
+            const createImplementationGraph = (nodedefName) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const doc = parsed.doc;
+                const base = nodedefName.replace(/^ND_/, 'NG_');
+                const gName = mxSafe(() => doc.createValidChildName(base), base);
+                const g = mxSafe(() => doc.addNodeGraph(gName), null);
+                if (!g) { setError('Could not create an implementation graph.'); return; }
+                mxSafe(() => { g.setNodeDefString(nodedefName); return true; }, false);
+                for (const out of nodedefPorts(def).outputs) {
+                    const gOut = mxSafe(() => g.addOutput(out.name, out.type), null);
+                    if (gOut && mxElType(gOut) !== out.type) mxSetAttr(gOut, 'type', out.type);
+                }
+                refreshAfterDefEdit(nodedefName);
+                changeScope(gName);
+            };
+
+            // Shadows the library nodedef with a document-local copy so
+            // its interface becomes editable (mirrors the library-owned
+            // guard used throughout renameElement/applyInterfaceMeta/etc).
+            const copyLibraryDefinition = (nodedefName) => {
+                if (!parsed) return;
+                if (docChild(parsed.doc, nodedefName)) { setError('"' + nodedefName + '" is already in this document.'); return; }
+                const libDef = mxSafe(() => parsed.doc.getNodeDef(nodedefName), null);
+                if (!libDef) { setError('Could not find "' + nodedefName + '" in the library.'); return; }
+                const outType = (nodedefPorts(libDef).outputs[0] || {}).type || 'color3';
+                const nodeString = mxSafe(() => libDef.getNodeString(), '') || nodedefName;
+                const copy = mxSafe(() => parsed.doc.addNodeDef(nodedefName, outType, nodeString), null);
+                if (!copy) { setError('Could not copy the definition into the document.'); return; }
+                mxSafe(() => { copy.copyContentFrom(libDef); return true; }, false);
+                mxSafe(() => { copy.setName(nodedefName); return true; }, false);
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const openGraph = (gName) => { changeScope(gName); };
 
             // Serialize the CURRENT document with a retry against the
             // transient '__pv_*' preview-tap race: up to 8 retries, 250ms
@@ -5730,6 +6100,27 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             React.useEffect(() => { setNameEditing(false); }, [displayNode && displayNode.id]);
             const panelReadOnly = !!displayNode && (displayNode.id.indexOf('o:') === 0
                 || !!displayNode.data.readOnly || !!displayNode.data.functional || displayNode.data.kind === 'nodedef');
+            // A definition card (functional graph or bare nodedef): the
+            // Definition panel replaces the plain param-row list for these.
+            const isDefinitionCard = !!displayNode && (displayNode.data.functional || displayNode.data.kind === 'nodedef');
+            // The definitions-inventory entry backing a definition card:
+            // 'g:' cards match by graph membership, 'd:' cards by nodedef
+            // name with no implementation graph yet (see js/graph/model.jsx).
+            const definitionEntryFor = (node) => {
+                if (!parsed || !node) return null;
+                const defs = parsed.definitions || [];
+                if (node.data.kind === 'nodedef') {
+                    return defs.find((e) => e.nodedef === node.data.nodedef && (!e.graphs || !e.graphs.length)) || null;
+                }
+                return defs.find((e) => e.graphs && e.graphs.indexOf(node.data.name) !== -1) || null;
+            };
+            const definitionActions = {
+                renameDefinition, setDefinitionNode, applyDefinitionMeta,
+                addDefinitionInput, removeDefinitionInput, renameDefinitionInput, moveDefinitionInput,
+                setDefinitionInputValue, applyDefinitionInputMeta, setDefinitionInputType,
+                addDefinitionOutput, removeDefinitionOutput, renameDefinitionOutput, setDefinitionOutputType,
+                createImplementationGraph, copyLibraryDefinition, openGraph,
+            };
             const panelInputs = !displayNode ? [] :
                 (displayNode.id.indexOf('i:') === 0
                     ? (ifaceLiteralType(displayNode.data.type)
@@ -6809,6 +7200,20 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                         )}
                                     </div>
                                 ) : displayNode ? [
+                                    // Definition panel: replaces the plain
+                                    // param-row list for a functional-graph
+                                    // or bare-nodedef card (see js/graph/definition-panel.jsx).
+                                    isDefinitionCard && (
+                                        <div key="definition">
+                                            <DefinitionPanel
+                                                parsed={parsed}
+                                                docRev={docRev}
+                                                entry={definitionEntryFor(displayNode)}
+                                                readOnly={!displayNode.data.nodedefLocal}
+                                                actions={definitionActions}
+                                            />
+                                        </div>
+                                    ),
                                     // Ungroup (inverse of Ctrl+G) — only for a
                                     // single selected nodegraph at the document
                                     // root, same gate as the keybind.
@@ -6891,10 +7296,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             )}
                                         </div>
                                     ),
-                                    !panelInputs.length && (
+                                    !isDefinitionCard && !panelInputs.length && (
                                         <div key="none" className="text-[11px] text-gray-500 py-2">This node has no parameters.</div>
                                     ),
-                                    panelParamGroups.ungrouped.map(renderParamRow).concat(
+                                    !isDefinitionCard && panelParamGroups.ungrouped.map(renderParamRow).concat(
                                         panelParamGroups.folders.map((f, fi) => {
                                             const open = Object.prototype.hasOwnProperty.call(panelFoldersOpen, f.name)
                                                 ? panelFoldersOpen[f.name] : f.defaultOpen !== false;

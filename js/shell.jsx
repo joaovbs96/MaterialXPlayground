@@ -179,6 +179,7 @@ const VIEW_DEPS = {
             'js/graph/catalog.jsx',
             'js/graph/dialogs.jsx',
             'js/graph/panels.jsx',
+            'js/graph/definition-panel.jsx',
             'js/graph/texture-convert.jsx',
         ],
         app: 'js/graph-app.jsx',
