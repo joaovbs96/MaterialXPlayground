@@ -1441,6 +1441,64 @@ const patchSceneThinWalledTransmission = (fs, enabled, notices) => {
     return out;
 };
 
+// Transport-only record payload. Values are captured at the generated
+// OpenPBR terminal after connected/image inputs have been evaluated. Each
+// record is a separate compile-time variant: returning immediately after the
+// terminal call prevents the display shader's lighting/environment work from
+// surviving in the detached transport program.
+const patchLightTransportPayload = (fs, notices, requestedMode) => {
+    if (fs.indexOf('/* MX_LIGHT_TRANSPORT */') !== -1) return fs;
+    const mode = requestedMode === true ? 1 : Number(requestedMode);
+    if (![1, 2, 3].includes(mode)) {
+        if (notices) notices.push('Light transport unavailable: select record B, C, or D.');
+        return fs;
+    }
+    let seen = 0;
+    let terminal = '';
+    let out = fs.replace(/void\s+NG_open_pbr_surface_surfaceshader\w*\s*\(([^)]*)\)\s*\{/g, (head, args) => {
+        const terminalOut = args.match(/\bout\s+(\w+)\s+(\w+)\s*$/);
+        if (!/\bfloat\s+transmission_weight\b/.test(args) || !/\bvec3\s+transmission_color\b/.test(args) || !/\bfloat\s+transmission_depth\b/.test(args) || !/\bfloat\s+geometry_opacity\b/.test(args) || !/\bbool\s+geometry_thin_walled\b/.test(args) || !terminalOut) return head;
+        seen++;
+        terminal = (head.match(/void\s+(\w+)\s*\(/) || [])[1] || '';
+        return head + '\n    /* MX_LIGHT_TRANSPORT */\n'
+            // Thin transfer owns the authored tint. Solid tint belongs only
+            // to sigmaA, otherwise the receiver would apply it twice.
+            + '    mx_transportB = geometry_thin_walled ? clamp(transmission_weight * transmission_color, vec3(0.0), vec3(1.0)) : vec3(clamp(transmission_weight, 0.0, 1.0));\n'
+            + '    mx_transportD = geometry_thin_walled ? vec3(0.0) : -log(max(transmission_color, vec3(1e-6))) / max(transmission_depth, 1e-6);\n'
+            + '    mx_transportOpacity = clamp(geometry_opacity, 0.0, 1.0);\n'
+            + '    mx_transportThin = geometry_thin_walled ? 1.0 : 0.0;\n'
+            // The transport main body is pruned below, so no caller reads the
+            // terminal out value. Return here after evaluating the inputs to
+            // avoid the terminal's generated closure/light work as well.
+            + '    /* MX_LIGHT_TRANSPORT_TERMINAL_RETURN */\n'
+            + '    return;\n';
+    });
+    if (seen !== 1) { if (notices) notices.push('Light transport unavailable: ambiguous generated OpenPBR terminal'); return fs; }
+    const first = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const om = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
+    if (first < 0 || !om) { if (notices) notices.push('Light transport unavailable: generated output contract changed'); return fs; }
+    const decl='vec3 mx_transportB=vec3(1.0), mx_transportD=vec3(0.0); float mx_transportOpacity=0.0, mx_transportThin=0.0;\n';
+    out=out.slice(0,first)+decl+out.slice(first);
+    const main = out.search(/\bvoid\s+main\s*\(\s*\)\s*\{/);
+    const call = main < 0 || !terminal ? null : out.slice(main).match(new RegExp('\\b' + terminal + '\\s*\\([\\s\\S]*?\\);'));
+    if (!call) { if (notices) notices.push('Light transport unavailable: generated terminal call contract changed'); return fs; }
+    const payload = mode === 1 ? 'vec4(mx_transportB,mx_transportOpacity)'
+        : mode === 2 ? 'vec4(vec3(1.0),mx_transportThin)'
+            : 'vec4(mx_transportD,mx_transportOpacity)';
+    const at = main + call.index + call[0].length;
+    const mainOpen = out.indexOf('{', main);
+    let depth = 0, mainEnd = -1;
+    for (let i = mainOpen; i >= 0 && i < out.length; i++) {
+        if (out[i] === '{') depth++;
+        else if (out[i] === '}' && --depth === 0) { mainEnd = i; break; }
+    }
+    if (mainEnd < 0) { if (notices) notices.push('Light transport unavailable: generated main contract changed'); return fs; }
+    // Physically remove the post-terminal main body rather than relying on
+    // a runtime branch for dead-code elimination. This lets linkers drop
+    // lighting/environment sampler paths that the terminal does not need.
+    return out.slice(0,at) + '\n    /* MX_LIGHT_TRANSPORT_EARLY_RETURN MX_LIGHT_TRANSPORT_TAIL_PRUNED */\n    ' + om[1] + '=' + payload + '; return;\n' + out.slice(mainEnd);
+};
+
 // Gives MaterialX's volume absorption the path length it is missing.
 //
 // mx_anisotropic_vdf.glsl computes `vdf.throughput = exp(-absorption)` with
@@ -5340,7 +5398,7 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false }) => {
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -5483,6 +5541,11 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         fs = patchRgbtPayload(fs);
         payloadSupported = fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */') !== -1;
     }
+    let lightTransportSupported = false;
+    if (lightTransport) {
+        fs = patchLightTransportPayload(fs, notices, lightTransport);
+        lightTransportSupported = fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN') !== -1;
+    }
     fs = patchShadowBounds(fs);
     fs = patchShadowLightScope(fs);
     fs = patchLightSourceKindStruct(fs);
@@ -5518,7 +5581,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // generation. Loop-local `st` handles are left for FinalizationRegistry.
     try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported };
+    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported };
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
@@ -5530,9 +5593,9 @@ const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSou
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
 // instances for each object that uses that source.
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
-    const srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt });
+    const srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport });
     if (!srcs) return null;
     const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
     return {
@@ -5542,6 +5605,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         // text is already fully adapted by generatePreviewSources.
         programKey: srcs.vs + '\\n/* scene-fs */\\n' + srcs.fs,
         sceneRgbt,
+        lightTransport: lightTransport === true ? 1 : Number(lightTransport) || 0,
+        lightTransportSupported: !!srcs.lightTransportSupported,
         payloadSupported: !!srcs.payloadSupported,
         label,
     };
