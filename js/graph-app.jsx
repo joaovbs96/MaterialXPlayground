@@ -452,6 +452,10 @@
             // Tab quick-add: whether the search palette is open, and the
             // stdlib node catalog once loaded.
             const [addOpen, setAddOpen] = React.useState(false);
+            // Set by the Edit menu / pane context menu's "New Node
+            // Definition…" row right before opening the palette, so it
+            // starts directly in that form; reset whenever the palette closes.
+            const [addInitialMode, setAddInitialMode] = React.useState(null);
             // Set when the add-search palette was opened via double-
             // clicking a port dot (item 4): { mode, type } pre-filters and
             // locks AddNodeSearch's type dropdown, and drives auto-wire.
@@ -1032,6 +1036,7 @@
                 setAddOpen(true);
                 buildNodeCatalog().then(setCatalog).catch((e) => {
                     setAddOpen(false);
+                    setAddInitialMode(null);
                     setError(errMsg(e));
                 });
             };
@@ -2809,6 +2814,43 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 refreshAfterDefEdit(nodedefName);
             };
 
+            // Creates a brand-new nodedef from scratch (Tab palette's
+            // "node definition" row, or the Edit menu's "New Node
+            // Definition…"), optionally paired with a fresh implementation
+            // graph wired to it via setNodeDefString.
+            const createDefinition = ({ node, type, nodegroup, withGraph }) => {
+                if (!parsed) return;
+                const trimmed = (node || '').trim();
+                if (!isValidMtlxName(trimmed)) {
+                    setError('"' + trimmed + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(trimmed) + '.');
+                    return;
+                }
+                const doc = parsed.doc;
+                const ndName = mxSafe(() => doc.createValidChildName('ND_' + trimmed + '_' + type), 'ND_' + trimmed + '_' + type);
+                const def = mxSafe(() => doc.addNodeDef(ndName, type, trimmed), null);
+                if (!def) { setError('Could not create the node definition.'); return; }
+                if (nodegroup) mxSafe(() => { def.setNodeGroup(nodegroup); return true; }, false);
+                let ngName = '';
+                if (withGraph) {
+                    ngName = mxSafe(() => doc.createValidChildName('NG_' + trimmed + '_' + type), 'NG_' + trimmed + '_' + type);
+                    const g = mxSafe(() => doc.addNodeGraph(ngName), null);
+                    if (g) {
+                        mxSafe(() => { g.setNodeDefString(ndName); return true; }, false);
+                        const out = mxSafe(() => g.addOutput('out', type), null);
+                        if (out && mxElType(out) !== type) mxSetAttr(out, 'type', type);
+                    } else {
+                        ngName = '';
+                    }
+                }
+                refreshAfterDefEdit(ndName);
+                if (ngName) {
+                    changeScope(ngName);
+                } else {
+                    setSelectedId('d:' + ndName);
+                    setPreviewSel({ scope: '', id: 'd:' + ndName });
+                }
+            };
+
             const openGraph = (gName) => { changeScope(gName); };
 
             // Serialize the CURRENT document with a retry against the
@@ -4315,6 +4357,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             // viewport center — layout/positions survive; Arrange re-lays out.
             const addNodeFromCatalog = (entry, typeHint) => {
                 setAddOpen(false);
+                setAddInitialMode(null);
                 if (!parsed) return null;
                 const doc = parsed.doc;
                 const container = scope ? (docChild(doc, scope) || mxSafe(() => doc.getNodeGraph(scope), null)) : doc;
@@ -5369,6 +5412,145 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 ungroupNodegraph(selectedId.slice(2));
             };
 
+            // Seeds the sidebar/menu "Convert to Node Definition" name
+            // field from the nodegraph's own name: strip a generated-name
+            // prefix, keep only valid identifier characters, lower-case,
+            // and guarantee the result parses as a MaterialX name.
+            const defaultDefinitionNodeName = (gName) => {
+                let s = String(gName || '');
+                if (s.indexOf('NG_') === 0) s = s.slice(3);
+                else if (s.indexOf('nodegraph') === 0) s = s.slice('nodegraph'.length);
+                s = s.replace(/[^A-Za-z0-9_]/g, '').toLowerCase();
+                if (!s) s = 'custom_node';
+                if (!isValidMtlxName(s)) s = /^[0-9]/.test(s) ? ('n_' + s) : 'custom_node';
+                return s;
+            };
+
+            // ---- Convert to Node Definition, the mirror image of
+            // createDefinition: promotes an existing INSTANCE nodegraph to
+            // a nodedef plus a renamed implementation graph, then replaces
+            // the original graph in place with an instance node of it.
+            const promoteNodegraph = (gName, nodeName) => {
+                if (!parsed) return;
+                if (scope !== '') {
+                    setError('Converting is only available at the document root.');
+                    return;
+                }
+                if (!gName || (parsed.nodegraphs || []).indexOf(gName) === -1) return;
+                const trimmed = (nodeName || '').trim();
+                if (!isValidMtlxName(trimmed)) {
+                    setError('"' + trimmed + '" is not a valid MaterialX name: ' + describeInvalidMtlxName(trimmed) + '.');
+                    return;
+                }
+                setActionBusy('Converting' + '\u2026');
+                (async () => {
+                    await nextFrame();
+                    await nextFrame();
+                    try {
+                        const doc = parsed.doc;
+                        const g = docChild(doc, gName);
+                        if (!g) { setError('Nodegraph "' + gName + '" is not in this document.'); return; }
+
+                        // 1: snapshot everything BEFORE any mutation. The
+                        // input elements themselves (`el`) are still read
+                        // from below, so they must survive until step 3.
+                        const outputsSnapshot = vecToArray(mxSafe(() => g.getOutputs(), []))
+                            .filter((o) => mxElName(o).indexOf('__pv_') !== 0)
+                            .map((o) => ({ name: mxElName(o), type: mxElType(o) }));
+                        const inputsSnapshot = vecToArray(mxSafe(() => g.getInputs(), [])).map((p) => ({
+                            name: mxElName(p), type: mxElType(p), el: p,
+                            nodename: mxElAttr(p, 'nodename'), nodegraph: mxElAttr(p, 'nodegraph'),
+                            output: mxElAttr(p, 'output'), interfacename: mxElAttr(p, 'interfacename'),
+                            channel: mxElAttr(p, 'channel'),
+                        }));
+
+                        // 2: the nodedef, typed off the first output (or
+                        // color3 when the graph has none yet); extra
+                        // outputs and a missing default "out" reconcile after.
+                        const outType = outputsSnapshot.length > 1 ? 'multioutput'
+                            : (outputsSnapshot[0] ? outputsSnapshot[0].type : 'color3');
+                        const ndBase = 'ND_' + trimmed + '_' + (outType === 'multioutput' ? 'multi' : outType);
+                        const ndName = mxSafe(() => doc.createValidChildName(ndBase), ndBase);
+                        const def = mxSafe(() => doc.addNodeDef(ndName, outputsSnapshot[0] ? outputsSnapshot[0].type : 'color3', trimmed), null);
+                        if (!def) { setError('Could not create the node definition.'); return; }
+                        for (const o of outputsSnapshot) {
+                            const existing = mxSafe(() => def.getOutput(o.name), null);
+                            if (existing) {
+                                if (mxElType(existing) !== o.type) mxSetAttr(existing, 'type', o.type);
+                            } else {
+                                const added = mxSafe(() => def.addOutput(o.name, o.type), null);
+                                if (added && mxElType(added) !== o.type) mxSetAttr(added, 'type', o.type);
+                            }
+                        }
+                        if (!outputsSnapshot.some((o) => o.name === 'out')) {
+                            mxSafe(() => { def.removeOutput('out'); return true; }, false);
+                        }
+
+                        // 3: mirror each graph input onto the nodedef as a
+                        // plain (unconnected) input, connections never belong on a nodedef.
+                        for (const inp of inputsSnapshot) {
+                            const ndIn = mxSafe(() => def.addInput(inp.name, inp.type), null);
+                            if (!ndIn) continue;
+                            mxSafe(() => { ndIn.copyContentFrom(inp.el); return true; }, false);
+                            mxRemoveAttr(ndIn, 'nodename');
+                            mxRemoveAttr(ndIn, 'nodegraph');
+                            mxRemoveAttr(ndIn, 'output');
+                            mxRemoveAttr(ndIn, 'interfacename');
+                            mxRemoveAttr(ndIn, 'channel');
+                            if (mxElType(ndIn) !== inp.type) mxSetAttr(ndIn, 'type', inp.type);
+                        }
+
+                        // 4: strip the graph down to a pure implementation,
+                        // wired to the new nodedef, and rename it out of the way.
+                        for (const inp of inputsSnapshot) {
+                            mxSafe(() => { g.removeInput(inp.name); return true; }, false);
+                        }
+                        mxSafe(() => { g.setNodeDefString(ndName); return true; }, false);
+                        const ngBase = 'NG_' + trimmed + '_' + (outType === 'multioutput' ? 'multi' : outType);
+                        const newGName = mxSafe(() => doc.createValidChildName(ngBase), ngBase);
+                        mxSafe(() => { g.setName(newGName); return true; }, false);
+
+                        // 5: a root instance takes the OLD graph name (now
+                        // free) and its xpos/ypos, then re-authors every
+                        // connection the graph's boundary inputs used to carry.
+                        const instName = mxSafe(() => doc.createValidChildName(gName), gName);
+                        const inst = mxSafe(() => doc.addNode(trimmed, instName, outType), null);
+                        if (!inst) { setError('Could not create the instance node.'); return; }
+                        mxSafe(() => { inst.setNodeDefString(ndName); return true; }, false);
+                        const gxpos = mxElAttr(g, 'xpos');
+                        const gypos = mxElAttr(g, 'ypos');
+                        if (gxpos) mxSetAttr(inst, 'xpos', gxpos);
+                        if (gypos) mxSetAttr(inst, 'ypos', gypos);
+                        for (const inp of inputsSnapshot) {
+                            if (!inp.nodename && !inp.nodegraph) continue;
+                            const ii = ensureTypedInput(doc, inst, inp.name, inp.type);
+                            if (!ii) continue;
+                            if (inp.nodename) mxSetAttr(ii, 'nodename', inp.nodename);
+                            if (inp.nodegraph) mxSetAttr(ii, 'nodegraph', inp.nodegraph);
+                            if (inp.output) mxSetAttr(ii, 'output', inp.output);
+                            if (inp.channel) mxSetAttr(ii, 'channel', inp.channel);
+                        }
+
+                        // 6: every root referrer that pointed at the old
+                        // graph now points at the instance instead.
+                        for (const p of collectConnectables(doc)) {
+                            if (mxElAttr(p, 'nodegraph') !== gName) continue;
+                            mxRemoveAttr(p, 'nodegraph');
+                            mxSetAttr(p, 'nodename', instName);
+                            if (outType !== 'multioutput') mxRemoveAttr(p, 'output');
+                        }
+
+                        refreshAfterDefEdit(ndName);
+                        setSelectedId('n:' + instName);
+                        setPreviewSel({ scope: '', id: 'n:' + instName });
+                    } catch (e) {
+                        setError('Convert to definition failed: ' + errMsg(e));
+                    } finally {
+                        setActionBusy(null);
+                    }
+                })();
+            };
+
             // Kept current every render so the [] -dep Ctrl/Cmd+C / +V / +G
             // keydown handlers below never call a stale closure (same
             // trick as openAddRef/deleteSelectionRef).
@@ -6186,6 +6368,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // Interface metadata group (i: nodes only), same per-node reset.
             const [ifaceMetaOpen, setIfaceMetaOpen] = React.useState(true);
             React.useEffect(() => { setPanelFoldersOpen({}); setDownstreamOpen(true); setIfaceMetaOpen(true); }, [displayNode && displayNode.id]);
+            // Convert to Node Definition sidebar draft: the proposed root
+            // node= name, reseeded from the nodegraph's own name whenever
+            // the displayed card changes (same reset trigger as above).
+            const [promoteNameDraft, setPromoteNameDraft] = React.useState('');
+            React.useEffect(() => {
+                if (displayNode) setPromoteNameDraft(defaultDefinitionNodeName(displayNode.data.name));
+            }, [displayNode && displayNode.id]);
             // Edges leaving the displayed element — feeds the Downstream
             // Connections group. Empty for o: pseudo-nodes (no outputs)
             // and unconnected nodes, which hides the group entirely.
@@ -6434,6 +6623,16 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     onSelect: () => { if (canUngroupSelection) ungroupNodegraph(displayNode.data.name); },
                     title: 'Dissolve the selected nodegraph back into its nodes, keeping every connection',
                 },
+                {
+                    label: 'Convert to Node Definition', icon: 'cube', disabled: !canUngroupSelection,
+                    onSelect: () => promoteNodegraph(displayNode.data.name, defaultDefinitionNodeName(displayNode.data.name)),
+                    title: 'Turn the selected nodegraph into a nodedef plus implementation graph and replace it with an instance',
+                },
+                {
+                    label: 'New Node Definition' + '\u2026', icon: 'plus', disabled: !parsed || scope !== '',
+                    onSelect: () => { setAddInitialMode('definition'); openAddSearch(); },
+                    title: 'Create a nodedef and its implementation nodegraph',
+                },
             ];
 
             // ---- Context-menu contents ---------------------------------
@@ -6499,6 +6698,9 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 canUngroupSelection && {
                     label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G',
                     onSelect: () => ungroupNodegraph(displayNode.data.name) },
+                canUngroupSelection && {
+                    label: 'Convert to Node Definition', icon: 'cube',
+                    onSelect: () => promoteNodegraph(displayNode.data.name, defaultDefinitionNodeName(displayNode.data.name)) },
                 { separator: true },
                 ctxNode && { label: 'Frame Node', icon: 'zoom-in-area',
                     onSelect: () => smartFitView({ nodes: [{ id: ctxNode.id }], duration: 400, padding: 0.4, maxZoom: 1.2 }) },
@@ -6525,6 +6727,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 { label: 'Add Node…', icon: 'share', keys: 'Tab', disabled: !parsed,
                     onSelect: () => {
                         addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
+                        openAddSearch();
+                    } },
+                scope === '' && {
+                    label: 'New Node Definition…', icon: 'plus', disabled: !parsed,
+                    onSelect: () => {
+                        addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
+                        setAddInitialMode('definition');
                         openAddSearch();
                     } },
                 { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
@@ -7227,7 +7436,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     // single selected nodegraph at the document
                                     // root, same gate as the keybind.
                                     canUngroupSelection && (
-                                        <div key="ungroup" className="py-1.5">
+                                        <div key="ungroup" className="py-1.5 space-y-1.5">
                                             <button
                                                 onClick={() => ungroupNodegraph(displayNode.data.name)}
                                                 title="Dissolve this nodegraph back into its nodes, keeping every connection"
@@ -7235,6 +7444,22 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             >
                                                 Ungroup (Ctrl+Shift+G)
                                             </button>
+                                            <div className="flex items-center gap-1.5">
+                                                <input
+                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                                    value={promoteNameDraft}
+                                                    placeholder="node name"
+                                                    spellCheck={false}
+                                                    onChange={(e) => setPromoteNameDraft(e.target.value)}
+                                                />
+                                                <button
+                                                    onClick={() => promoteNodegraph(displayNode.data.name, promoteNameDraft)}
+                                                    title="Turn this nodegraph into a nodedef plus implementation graph and replace it with an instance"
+                                                    className="h-7 flex-none text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                >
+                                                    Convert to Definition
+                                                </button>
+                                            </div>
                                         </div>
                                     ),
                                     // Interface metadata (i: nodes only): uiname/uifolder/
@@ -7594,10 +7819,13 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             docCatalog={docCatalog}
                             ifaceMode={scope !== '' && !portAddFilter}
                             onAddInterface={addInterfacePin}
+                            defMode={scope === '' && !portAddFilter}
+                            onCreateDefinition={createDefinition}
+                            initialMode={addInitialMode}
                             onPick={handleCatalogPick}
                             filterMode={portAddFilter && portAddFilter.mode}
                             filterType={portAddFilter && portAddFilter.type}
-                            onClose={() => { setAddOpen(false); pendingConnRef.current = null; addAtPointRef.current = null; setPortAddFilter(null); }}
+                            onClose={() => { setAddOpen(false); setAddInitialMode(null); pendingConnRef.current = null; addAtPointRef.current = null; setPortAddFilter(null); }}
                         />
                     )}
 

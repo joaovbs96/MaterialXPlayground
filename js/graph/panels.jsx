@@ -18,7 +18,7 @@
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
         // an INPUT that can consume it; null/'' is the normal flow.
-        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
+        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
@@ -28,10 +28,17 @@
             // rows below — picking one doesn't add anything yet, it swaps
             // the palette body to this small name+type form.
             const [ifaceDraft, setIfaceDraft] = React.useState(null); // { kind, name, type, value, colorspace, uiname, uifolder, uimin, uimax, uiadvanced }
+            // Same idea for the synthetic "node definition" row: name,
+            // output type, nodegroup and the implementation-graph toggle.
+            // initialMode lets a caller (the Edit menu / pane context menu)
+            // open the palette straight into this form.
+            const [defDraft, setDefDraft] = React.useState(initialMode === 'definition'
+                ? { node: '', type: 'color3', nodegroup: '', withGraph: true } : null);
             // "More options" disclosure (interface inputs only): collapsed
             // by default so the quick name+type add flow stays unchanged.
             const [ifaceMoreOpen, setIfaceMoreOpen] = React.useState(false);
             const nameRef = React.useRef(null);
+            const defNameRef = React.useRef(null);
             React.useEffect(() => {
                 const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0);
                 return () => clearTimeout(t);
@@ -41,6 +48,11 @@
                 const t = setTimeout(() => { if (nameRef.current) nameRef.current.focus(); }, 0);
                 return () => clearTimeout(t);
             }, [!!ifaceDraft]);
+            React.useEffect(() => {
+                if (!defDraft) return;
+                const t = setTimeout(() => { if (defNameRef.current) defNameRef.current.focus(); }, 0);
+                return () => clearTimeout(t);
+            }, [!!defDraft]);
             // Distinct output types present across the whole catalog, for
             // the type-filter dropdown next to the search box.
             const typeOptions = React.useMemo(() => {
@@ -58,6 +70,11 @@
                     }
                     if (!s || 'output'.indexOf(s) !== -1) {
                         synth.push({ synthetic: 'iface-output', category: 'output' });
+                    }
+                }
+                if (defMode) {
+                    if (!s || 'definition'.indexOf(s) !== -1 || 'nodedef'.indexOf(s) !== -1 || 'new'.indexOf(s) !== -1) {
+                        synth.push({ synthetic: 'definition', category: 'node definition' });
                     }
                 }
                 if (!catalog) return synth;
@@ -92,14 +109,17 @@
                 const docItems = (docCatalog && docCatalog.length) ? filterPool(docCatalog) : [];
                 const stdlibItems = filterPool(catalog);
                 return synth.concat(docItems, stdlibItems).slice(0, 60);
-            }, [catalog, docCatalog, q, ifaceMode, typeFilter, filterMode]);
+            }, [catalog, docCatalog, q, ifaceMode, defMode, typeFilter, filterMode]);
             React.useEffect(() => { setHi(0); }, [q]);
             React.useEffect(() => { // keep the highlighted row in view
                 const el = listRef.current && listRef.current.children[hi];
                 if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
             }, [hi, items]);
             const pick = (c) => {
-                if (c.synthetic) {
+                if (c.synthetic === 'definition') {
+                    setDefDraft({ node: '', type: 'color3', nodegroup: '', withGraph: true });
+                }
+                else if (c.synthetic) {
                     setIfaceDraft({
                         kind: c.synthetic, name: '', type: 'color3',
                         value: '', colorspace: '', uiname: '', uifolder: '',
@@ -120,6 +140,11 @@
                 onAddInterface(ifaceDraft.kind, ifaceDraft.name, ifaceDraft.type, meta);
                 onClose();
             };
+            const confirmDef = () => {
+                if (!defDraft || !defDraft.node.trim()) return;
+                onCreateDefinition(defDraft);
+                onClose();
+            };
             const onKeyDown = (e) => {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(items.length - 1, 0))); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
@@ -129,6 +154,10 @@
             const onDraftKeyDown = (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); confirmIface(); }
                 else if (e.key === 'Escape') { e.preventDefault(); setIfaceDraft(null); }
+            };
+            const onDefDraftKeyDown = (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); confirmDef(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setDefDraft(null); }
             };
             return (
                 <div className="absolute inset-0 z-40" onMouseDown={onClose}>
@@ -265,6 +294,61 @@
                                     Enter add {'·'} Esc back
                                 </div>
                             </div>
+                        ) : defDraft ? (
+                            <div onKeyDown={onDefDraftKeyDown}>
+                                <div className="px-3 py-2 border-b border-gray-700 text-[11px] text-gray-400 italic">
+                                    New node definition
+                                </div>
+                                <div className="px-3 py-2.5 space-y-2">
+                                    <input
+                                        ref={defNameRef}
+                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        placeholder="node name, e.g. my_shader"
+                                        value={defDraft.node}
+                                        spellCheck={false}
+                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { node: e.target.value }))}
+                                    />
+                                    <select
+                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                        value={defDraft.type}
+                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { type: e.target.value }))}
+                                    >
+                                        {IFACE_VALUE_TYPES.filter((t) => t !== 'material').map((t) => (
+                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
+                                        ))}
+                                    </select>
+                                    <input
+                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        placeholder="nodegroup (optional)"
+                                        value={defDraft.nodegroup}
+                                        spellCheck={false}
+                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { nodegroup: e.target.value }))}
+                                    />
+                                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 font-mono">
+                                        <input
+                                            type="checkbox"
+                                            className="h-3.5 w-3.5 accent-blue-500"
+                                            checked={defDraft.withGraph}
+                                            onChange={(e) => setDefDraft(Object.assign({}, defDraft, { withGraph: e.target.checked }))}
+                                        />
+                                        Create implementation graph
+                                    </label>
+                                    <div className="flex items-center gap-2 pt-0.5">
+                                        <button
+                                            onClick={confirmDef}
+                                            disabled={!defDraft.node.trim()}
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >Create</button>
+                                        <button
+                                            onClick={() => setDefDraft(null)}
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                        >Back</button>
+                                    </div>
+                                </div>
+                                <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                                    Enter create {'·'} Esc back
+                                </div>
+                            </div>
                         ) : (<React.Fragment>
                         <div className="flex items-stretch border-b border-gray-700">
                             <input
@@ -310,7 +394,7 @@
                                         <React.Fragment>
                                             <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: '#94a3b8' }} />
                                             <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">interface</span>
+                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
