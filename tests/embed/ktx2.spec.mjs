@@ -97,7 +97,7 @@ test.beforeAll(() => {
 });
 test.afterAll(() => { try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) { /* best-effort */ } });
 
-async function loadDirAndScreenshot(page, embedURL, dir) {
+async function loadDirAndScreenshot(page, embedURL, dir, artifactPath, minimumTextureWidth = 64) {
   await page.goto(embedURL + '/index.html#!viewer');
   const dirInput = page.locator('input[type=file][webkitdirectory]').first();
   await dirInput.waitFor({ state: 'attached', timeout: WAIT_TIMEOUT });
@@ -106,11 +106,42 @@ async function loadDirAndScreenshot(page, embedURL, dir) {
   page.on('console', onConsole);
   await dirInput.setInputFiles(dir);
   await expect(page.getByText('1 .mtlx', { exact: false })).toBeVisible({ timeout: WAIT_TIMEOUT });
-  await page.waitForTimeout(1200); // texture bind is async; let it settle
+  // The app's `#!viewer` route owns its renderer in the top page.  The
+  // iframe variant is only the external embed surface, so inspect the real
+  // route owner rather than assuming an embed/viewer.html child frame.
+  // Do not use an arbitrary sleep: wait for the actual generated filename
+  // sampler to hold a decoded/compressed texture of the authored size, then
+  // render once before reading the canvas.
+  await page.waitForFunction((minimumWidth) => {
+    const h = window.__mtlxViewerHandle;
+    if (!h?.uniforms) return false;
+    return Object.entries(h.uniforms).some(([name, slot]) => {
+      if (!/_file$/i.test(name)) return false;
+      const v = slot?.value;
+      const width = v?.image?.width || v?.source?.data?.width || v?.mipmaps?.[0]?.width || 0;
+      return !!v?.isTexture && width >= minimumWidth;
+    });
+  }, minimumTextureWidth, { timeout: WAIT_TIMEOUT });
+  const textureMetadata = await page.evaluate(() => {
+    const h = window.__mtlxViewerHandle;
+    return {
+      notices: h?.notices || [],
+      textures: Object.entries(h?.uniforms || {}).filter(([name]) => /_file$/i.test(name)).map(([name, slot]) => {
+        const v = slot?.value;
+        return { name, isTexture: !!v?.isTexture, compressed: !!v?.isCompressedTexture,
+          width: v?.image?.width || v?.source?.data?.width || v?.mipmaps?.[0]?.width || null,
+          height: v?.image?.height || v?.source?.data?.height || v?.mipmaps?.[0]?.height || null,
+          mipmaps: v?.mipmaps?.length || 0, colorSpace: v?.colorSpace ?? null };
+      }),
+    };
+  });
+  await page.evaluate(() => window.__mtlxViewerHandle?.renderNow?.());
   const canvas = page.locator('canvas').first();
-  const png = decodePNG(await canvas.screenshot());
+  const bytes = await canvas.screenshot();
+  if (artifactPath) fs.writeFileSync(artifactPath, bytes);
+  const png = decodePNG(bytes);
   page.off('console', onConsole); // page.on persists across page.goto; a later run must not leak into this one's array
-  return { png, consoleLines };
+  return { png, consoleLines, textureMetadata };
 }
 
 function quadrantMeanColors(png) {
@@ -134,15 +165,18 @@ function quadrantMeanColors(png) {
   return sums.map(([r, g, b, n]) => (n ? [r / n, g / n, b / n] : [0, 0, 0]));
 }
 
-test('@ktx2 a .ktx2 sibling renders with the same orientation as its source PNG', async ({ page, embedURL }) => {
+test('@ktx2 a .ktx2 sibling renders with the same orientation as its source PNG', async ({ page, embedURL }, testInfo) => {
   const pngOnlyDir = path.join(workDir, 'png-only');
   const withKtx2Dir = path.join(workDir, 'with-ktx2');
 
-  const runA = await loadDirAndScreenshot(page, embedURL, pngOnlyDir);
-  const runB = await loadDirAndScreenshot(page, embedURL, withKtx2Dir);
+  const runA = await loadDirAndScreenshot(page, embedURL, pngOnlyDir, testInfo.outputPath('ktx2-png.png'));
+  const runB = await loadDirAndScreenshot(page, embedURL, withKtx2Dir, testInfo.outputPath('ktx2-sibling.png'));
 
   const quadA = quadrantMeanColors(runA.png);
   const quadB = quadrantMeanColors(runB.png);
+  fs.writeFileSync(testInfo.outputPath('ktx2-parity.json'), JSON.stringify({ quadA, quadB,
+    png: { console: runA.consoleLines, textures: runA.textureMetadata },
+    ktx2: { console: runB.consoleLines, textures: runB.textureMetadata } }, null, 2));
 
   // Same geometry/camera/material both runs: only the bound texture format
   // differs. Any orientation mismatch (a baked-in flip going the wrong way)
@@ -151,12 +185,18 @@ test('@ktx2 a .ktx2 sibling renders with the same orientation as its source PNG'
     const [ar, ag, ab] = quadA[i];
     const [br, bg, bb] = quadB[i];
     const dist = Math.sqrt((ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2);
-    expect(dist, `quadrant ${i} color drifted between the PNG-only and KTX2 runs`).toBeLessThan(40);
+    // Screenshots are 8-bit display output, so one code value is the
+    // justified parity tolerance. The measured sibling drift is far below it;
+    // a wide threshold here could hide a color-transfer regression.
+    expect(dist, `quadrant ${i} color drifted between the PNG-only and KTX2 runs`).toBeLessThan(1);
   }
 
   // Only the second run (folder + sibling) should report a substitution.
   expect(runA.consoleLines.some((l) => /loaded from \.ktx2 sibling/i.test(l))).toBe(false);
   expect(runB.consoleLines.some((l) => /loaded from \.ktx2 sibling/i.test(l))).toBe(true);
+  expect(runA.textureMetadata.textures.some((texture) => texture.compressed), 'PNG source is not a compressed texture').toBe(false);
+  expect(runB.textureMetadata.textures.some((texture) => texture.compressed && texture.width === 64 && texture.height === 64),
+    'KTX2 sibling binds a ready 64x64 CompressedTexture').toBe(true);
 });
 
 // --- invalid base level fixture: a hand-built 10x10 UASTC .ktx2 whose base
@@ -179,7 +219,7 @@ const BADBASE_MTLX = `<?xml version="1.0"?>
 </materialx>
 `;
 
-test('@ktx2 an invalid (non-multiple-of-4) .ktx2 base level falls back to the source', async ({ page, embedURL }) => {
+test('@ktx2 an invalid (non-multiple-of-4) .ktx2 base level falls back to the source', async ({ page, embedURL }, testInfo) => {
   const referenceDir = path.join(workDir, 'badbase-reference'); // PNG only, no .ktx2 sibling at all
   const badbaseDir = path.join(workDir, 'badbase'); // PNG plus its invalid .ktx2 sibling
   fs.mkdirSync(referenceDir, { recursive: true });
@@ -191,13 +231,16 @@ test('@ktx2 an invalid (non-multiple-of-4) .ktx2 base level falls back to the so
   fs.copyFileSync(path.join(__dirname, 'fixtures', 'ktx2-badbase-10x10.ktx2'), path.join(badbaseDir, 'badbase.ktx2'));
 
   await page.addInitScript(() => { try { localStorage.setItem('mtlxDebugShaders', '1'); } catch (e) {} });
-  const reference = await loadDirAndScreenshot(page, embedURL, referenceDir);
-  const run = await loadDirAndScreenshot(page, embedURL, badbaseDir);
+  const reference = await loadDirAndScreenshot(page, embedURL, referenceDir, testInfo.outputPath('ktx2-invalid-reference.png'), 10);
+  const run = await loadDirAndScreenshot(page, embedURL, badbaseDir, testInfo.outputPath('ktx2-invalid-fallback.png'), 10);
 
   // The whole model is one flat color; sample its center in both runs.
   const cx = Math.floor(run.png.width / 2), cy = Math.floor(run.png.height / 2);
   const refPixel = reference.png.getPixel(cx, cy);
   const p = run.png.getPixel(cx, cy);
+  fs.writeFileSync(testInfo.outputPath('ktx2-invalid-fallback.json'), JSON.stringify({ refPixel, pixel: p,
+    reference: { console: reference.consoleLines, textures: reference.textureMetadata },
+    fallback: { console: run.consoleLines, textures: run.textureMetadata } }, null, 2));
 
   // A black (invalid-KTX2) render would sample near (0,0,0); the reference
   // (PNG-only, never touches the bad .ktx2) proves what the orange source
