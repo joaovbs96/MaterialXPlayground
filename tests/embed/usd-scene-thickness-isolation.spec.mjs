@@ -271,6 +271,19 @@ test('@scene topology follows drawRange and live material-group mutations', asyn
       range.h.renderNow();
       range.result = snapshot(range.h);
     } finally { range.h.dispose(); range.holder.remove(); range.doc.delete(); }
+    const indexMutation = await create();
+    try {
+      indexMutation.h.renderNow();
+      const index = indexMutation.h.prims[0].geometry.index;
+      // Keep the render count constant while making the indexed shell an
+      // open, repeated triangle. This exercises BufferAttribute.version
+      // without relying on a non-existent shrinking API in Three r128.
+      for (let i = 3; i < index.array.length; i++) index.array[i] = index.array[i % 3];
+      index.needsUpdate = true;
+      indexMutation.h.renderNow();
+      indexMutation.result = snapshot(indexMutation.h);
+      indexMutation.result.index = { arrayLength: index.array.length, count: index.count, version: index.version, head: Array.from(index.array.slice(0, 6)), drawRange: { start: indexMutation.h.prims[0].geometry.drawRange.start, count: indexMutation.h.prims[0].geometry.drawRange.count } };
+    } finally { indexMutation.h.dispose(); indexMutation.holder.remove(); indexMutation.doc.delete(); }
     const groups = await create();
     try {
       groups.h.renderNow();
@@ -282,9 +295,11 @@ test('@scene topology follows drawRange and live material-group mutations', asyn
       groups.result = snapshot(groups.h);
       opaque.dispose();
     } finally { groups.h.dispose(); groups.holder.remove(); groups.doc.delete(); }
-    return { range: range.result, groups: groups.result };
+    return { range: range.result, indexMutation: indexMutation.result, groups: groups.result };
   }, { xml: OPEN_PBR, mesh: box('TopologyMutation', 0, 0, .8) });
-  for (const entry of [result.range, result.groups]) {
+  fs.mkdirSync(path.dirname(testInfo.outputPath('m2-topology-mutation.json')), { recursive: true });
+  fs.writeFileSync(testInfo.outputPath('m2-topology-mutation.json'), JSON.stringify(result, null, 2));
+  for (const entry of [result.range, result.indexMutation, result.groups]) {
     expect(entry.glError).toBe(0);
     expect(entry.target).toBe(false);
     expect(entry.thickness).toMatchObject({ activeVolumes: 1, eligibleVolumes: 0, allocatedVolumes: 0, overflowVolumes: 0 });
@@ -293,7 +308,6 @@ test('@scene topology follows drawRange and live material-group mutations', asyn
     expect(entry.referencePath).toBeCloseTo(0.2, 6);
   }
   expect(result.range.thickness.unsupportedTopologyPrims).toEqual([{ prim: '/TopologyMutation', reason: 'non-watertight-volume' }]);
+  expect(result.indexMutation.thickness.unsupportedTopologyPrims).toEqual([{ prim: '/TopologyMutation', reason: 'non-watertight-volume' }]);
   expect(result.groups.thickness.unsupportedTopologyPrims).toEqual([{ prim: '/TopologyMutation', reason: 'no-volume-triangles' }]);
-  fs.mkdirSync(path.dirname(testInfo.outputPath('m2-topology-mutation.json')), { recursive: true });
-  fs.writeFileSync(testInfo.outputPath('m2-topology-mutation.json'), JSON.stringify(result, null, 2));
 });
