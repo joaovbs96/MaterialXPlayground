@@ -54,7 +54,21 @@ test('@scene UsdLux colorTemperature tints light color and is inert when disable
     const warm = readAt([-4, 0, -0.5]);
     const cool = readAt([0, 0, -0.5]);
     const disabled = readAt([4, 0, -0.5]);
-    return { warm, cool, disabled };
+    const identity = [
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1,
+    ];
+    const temperatureColors = window.convertUsdStageLights([
+      { primPath: '/Warm', type: 'PointLight', matrix: identity, intensity: 1, exposure: 0,
+        color: [1, 1, 1], enableColorTemperature: true, colorTemperature: 3000 },
+      { primPath: '/D65', type: 'PointLight', matrix: identity, intensity: 1, exposure: 0,
+        color: [1, 1, 1], enableColorTemperature: true, colorTemperature: 6500 },
+      { primPath: '/Disabled', type: 'PointLight', matrix: identity, intensity: 1, exposure: 0,
+        color: [1, 1, 1], enableColorTemperature: false, colorTemperature: 3000 },
+    ], { limit: 16 }).map((light) => light.color.toArray());
+    return { warm, cool, disabled, temperatureColors };
   });
   console.log('[color-temperature]', JSON.stringify(result));
 
@@ -69,4 +83,13 @@ test('@scene UsdLux colorTemperature tints light color and is inert when disable
   const disabledSpread = Math.max(result.disabled[0], result.disabled[1], result.disabled[2])
     - Math.min(result.disabled[0], result.disabled[1], result.disabled[2]);
   expect(disabledSpread).toBeLessThan(0.05);
+  // UsdLux specifies 6500 K as D65 white. Check the converter's linear
+  // light color directly, without display encoding or the camera readback.
+  const d65 = result.temperatureColors[1];
+  expect(Math.max(...d65) - Math.min(...d65)).toBeLessThan(1e-6);
+  expect(d65[0]).toBeCloseTo(1, 6);
+  const warmLinear = result.temperatureColors[0];
+  expect(warmLinear[0]).toBeGreaterThan(warmLinear[2]);
+  const disabledLinear = result.temperatureColors[2];
+  expect(Math.max(...disabledLinear) - Math.min(...disabledLinear)).toBeLessThan(1e-6);
 });

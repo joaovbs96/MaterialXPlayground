@@ -109,15 +109,22 @@
     // Rec.709 and normalized to unit luminance so it only tints the
     // authored color rather than adding its own brightness.
     function blackbodyColor(kelvin) {
-        var temp = Math.min(40000, Math.max(1000, Number(kelvin) || 6500)) / 100;
-        var r = temp <= 66 ? 255 : 329.698727446 * Math.pow(temp - 60, -0.1332047592);
-        var g = temp <= 66
-            ? 99.4708025861 * Math.log(temp) - 161.1195681661
-            : 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
-        var b = temp >= 66 ? 255 : (temp <= 19 ? 0 : 138.5177312231 * Math.log(temp - 10) - 305.0447927307);
-        var unit = function (v) { return Math.min(255, Math.max(0, v)) / 255; };
-        var toLinear = function (c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
-        var lin = [toLinear(unit(r)), toLinear(unit(g)), toLinear(unit(b))];
+        // The fit is approximate. Adapt it to its own 6500 K value so
+        // UsdLux's D65 fallback remains neutral in linear Rec.709.
+        var fitLinear = function (value) {
+            var temp = Math.min(40000, Math.max(1000, Number(value) || 6500)) / 100;
+            var r = temp <= 66 ? 255 : 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+            var g = temp <= 66
+                ? 99.4708025861 * Math.log(temp) - 161.1195681661
+                : 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+            var b = temp >= 66 ? 255 : (temp <= 19 ? 0 : 138.5177312231 * Math.log(temp - 10) - 305.0447927307);
+            var unit = function (channel) { return Math.min(255, Math.max(0, channel)) / 255; };
+            var toLinear = function (channel) { return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4); };
+            return [toLinear(unit(r)), toLinear(unit(g)), toLinear(unit(b))];
+        };
+        var lin = fitLinear(kelvin);
+        var d65 = fitLinear(6500);
+        lin = lin.map(function (value, index) { return value / Math.max(1e-6, d65[index]); });
         var luminance = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
         if (!(luminance > 1e-6)) return [1, 1, 1];
         return [lin[0] / luminance, lin[1] / luminance, lin[2] / luminance];
