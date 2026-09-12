@@ -9,7 +9,7 @@ import { chromium } from 'playwright-core';
 import { startServer } from '../embed/lib/server.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const HELP = `Usage: node tests/raster/run-scene.mjs --asset-root <dir> --stage <relative-path> --cameras <comma-names|first> --out <dir> [--backend d3d11|swiftshader] [--viewport WxH] [--chromium <path>]`;
-const productSources = ['js/mtlx-engine.js', 'embed/gen/mtlx-engine.js', 'index.html', 'js/usd/usd-stage-loader.js', 'js/usd/usd-stage-worker.js', 'js/usd-scene-app.jsx', 'js/usd-scene-renderer.js', 'js/usd-scene-post.js', 'tests/embed/lib/server.mjs', 'tests/raster/run-scene.mjs'];
+const productSources = ['js/mtlx-engine.js', 'embed/gen/mtlx-engine.js', 'index.html', 'js/usd-scene-lights.js', 'js/usd/usd-stage-loader.js', 'js/usd/usd-stage-worker.js', 'js/usd-scene-app.jsx', 'js/usd-scene-renderer.js', 'js/usd-scene-post.js', 'tests/embed/lib/server.mjs', 'tests/raster/run-scene.mjs'];
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const sourceHashes = () => Object.fromEntries(productSources.filter(p => fs.existsSync(path.join(ROOT, p))).map(p => [p, hash(path.join(ROOT, p))]));
 function parse(argv) {
