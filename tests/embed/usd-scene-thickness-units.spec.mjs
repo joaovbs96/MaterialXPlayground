@@ -28,14 +28,33 @@ async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weig
     handle.renderNow();
     const material = handle.prims[0].material;
     let drawThickness = null;
+    let originalDraws = 0;
+    let validOriginalDraws = 0;
+    const originalDrawMismatches = [];
+    const expectedScale = 1 / stage.metersPerUnit;
+    const expectedTexel = 1 / 96;
     const previousDraw = handle.prims[0].onBeforeRender;
     handle.prims[0].onBeforeRender = function (...args) {
+      const effective = args[4];
       if (previousDraw) previousDraw.apply(this, args);
-      drawThickness = {
-        scale: Number(material.uniforms?.u_thicknessScale?.value),
-        valid: Number(material.uniforms?.u_thicknessTargetValid?.value),
-        texel: material.uniforms?.u_thicknessTexel?.value?.toArray?.() || null,
-      };
+      if (effective === material && this.material === material) {
+        originalDraws += 1;
+        const valid = Number(effective.uniforms?.u_thicknessTargetValid?.value);
+        const scale = Number(effective.uniforms?.u_thicknessScale?.value);
+        const texel = effective.uniforms?.u_thicknessTexel?.value?.toArray?.() || null;
+        const matches = valid === 1 && Math.abs(scale - expectedScale) <= 1e-9
+          && Array.isArray(texel) && texel.length === 2
+          && Math.abs(texel[0] - expectedTexel) <= 1e-12 && Math.abs(texel[1] - expectedTexel) <= 1e-12;
+        if (!matches && originalDrawMismatches.length < 4) {
+          originalDrawMismatches.push({ valid, scale, texel });
+        }
+        if (valid === 1) {
+          validOriginalDraws += 1;
+          drawThickness = {
+            scale, valid, texel,
+          };
+        }
+      }
     };
     handle.renderNow();
     handle.prims[0].onBeforeRender = previousDraw;
@@ -58,6 +77,7 @@ async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weig
       // material's last inspected uniform is not a stable global binding.
       thicknessInfo: debug.thickness || null,
       drawThickness,
+      drawBinding: { originalDraws, validOriginalDraws, originalDrawMismatches },
       hasThicknessPath: /mx_transmission_path_length/.test(fragmentShader) && /u_thicknessScale/.test(fragmentShader),
       hasThicknessInput: /transmission_depth/.test(fragmentShader), compiled: !!material.userData?.mtlxSceneCompiled?.vs,
     };
@@ -107,6 +127,12 @@ test('@scene OpenPBR transmission depth keeps the same physical ratio across met
   expect(metreStage.drawThickness?.scale).toBeCloseTo(metreStage.scale, 6);
   expect(centimetreStage.drawThickness?.valid).toBe(1);
   expect(metreStage.drawThickness?.valid).toBe(1);
+  expect(centimetreStage.drawBinding?.originalDraws).toBeGreaterThan(0);
+  expect(metreStage.drawBinding?.originalDraws).toBeGreaterThan(0);
+  expect(centimetreStage.drawBinding?.validOriginalDraws).toBe(centimetreStage.drawBinding?.originalDraws);
+  expect(metreStage.drawBinding?.validOriginalDraws).toBe(metreStage.drawBinding?.originalDraws);
+  expect(centimetreStage.drawBinding?.originalDrawMismatches).toEqual([]);
+  expect(metreStage.drawBinding?.originalDrawMismatches).toEqual([]);
   expect(centimetreStage.drawThickness?.texel).toEqual([1 / 96, 1 / 96]);
   expect(metreStage.drawThickness?.texel).toEqual([1 / 96, 1 / 96]);
   expect(centimetreStage.thicknessSample).toBeGreaterThan(centimetreStage.worldLength * 5);

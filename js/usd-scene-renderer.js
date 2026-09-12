@@ -586,12 +586,19 @@ const createAoMaterial = () => new THREE.RawShaderMaterial({
         'out vec4 fragColor;',
         'const int SAMPLES = ' + AO_SAMPLES + ';',
         'const float M_PI = 3.1415926535897932;',
-        // View-space position of a prepass texel, rebuilt from its depth.
+        // View-space position of a prepass texel, rebuilt from its positive
+        // view depth. Interpolating the inverse-projected near/far endpoints
+        // works for both perspective and orthographic cameras; scaling one
+        // near-plane ray by depth only works for perspective projection.
         'vec3 viewPosAt(vec2 uv, float depth) {',
-        '    vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0, 1.0);',
-        '    vec4 dir = uInverseProjection * ndc;',
-        '    vec3 ray = dir.xyz / dir.w;',
-        '    return ray * (depth / max(-ray.z, 1e-6));',
+        '    vec2 xy = uv * 2.0 - 1.0;',
+        '    vec4 nearH = uInverseProjection * vec4(xy, -1.0, 1.0);',
+        '    vec4 farH = uInverseProjection * vec4(xy, 1.0, 1.0);',
+        '    vec3 nearP = nearH.xyz / nearH.w;',
+        '    vec3 farP = farH.xyz / farH.w;',
+        '    float zSpan = farP.z - nearP.z;',
+        '    float t = (-depth - nearP.z) / (abs(zSpan) > 1e-6 ? zSpan : -1e-6);',
+        '    return mix(nearP, farP, clamp(t, 0.0, 1.0));',
         '}',
         'float hash12(vec2 p) {',
         '    vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
@@ -655,18 +662,35 @@ const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
     fragmentShader: [
         'precision highp float;',
         'uniform sampler2D tAo;',
+        'uniform sampler2D tPrepass;',
         'uniform vec2 uTexel;',
+        'uniform float uDepthThreshold;',
+        'uniform float uNormalExponent;',
         'out vec4 fragColor;',
         'void main() {',
+        '    vec2 centerUv = gl_FragCoord.xy * uTexel;',
+        '    vec4 centerPre = texture(tPrepass, centerUv);',
+        // AO is a screen-space visibility estimate. Never filter it across
+        // a geometry edge: empty pixels, a depth discontinuity, or a normal
+        // break carry no common hemisphere with the center receiver.
+        '    if (centerPre.a <= 0.0) { fragColor = vec4(1.0); return; }',
+        '    vec3 centerNormal = normalize(centerPre.rgb);',
         '    float sum = 0.0;',
-        '    float count = 0.0;',
+        '    float weightSum = 0.0;',
         '    for (int x = -' + AO_BLUR_RADIUS + '; x <= ' + AO_BLUR_RADIUS + '; x++) {',
         '        for (int y = -' + AO_BLUR_RADIUS + '; y <= ' + AO_BLUR_RADIUS + '; y++) {',
-        '            sum += texture(tAo, gl_FragCoord.xy * uTexel + vec2(x, y) * uTexel).r;',
-        '            count += 1.0;',
+        '            vec2 uv = centerUv + vec2(x, y) * uTexel;',
+        '            vec4 samplePre = texture(tPrepass, uv);',
+        '            if (samplePre.a <= 0.0) continue;',
+        '            vec3 sampleNormal = normalize(samplePre.rgb);',
+        '            float normalWeight = pow(max(dot(centerNormal, sampleNormal), 0.0), uNormalExponent);',
+        '            float depthWeight = 1.0 - smoothstep(0.5 * uDepthThreshold, uDepthThreshold, abs(centerPre.a - samplePre.a));',
+        '            float weight = normalWeight * depthWeight;',
+        '            sum += texture(tAo, uv).r * weight;',
+        '            weightSum += weight;',
         '        }',
         '    }',
-        '    fragColor = vec4(vec3(sum / count), 1.0);',
+        '    fragColor = vec4(vec3(sum / max(weightSum, 1e-6)), 1.0);',
         '}',
     ].join('\n'),
     depthTest: false,
@@ -1172,6 +1196,19 @@ const createMtlxSceneView = async ({
         maxTargets: THICKNESS_TARGET_MAX_ACTIVE, targetType: null, targetFormat: 'RGBA',
         fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [],
     };
+    let thicknessDiagnosticPlanKey = null;
+    let thicknessDiagnosticPlanRevision = 0;
+    let thicknessUnsupportedFallbackPrims = [];
+    let thicknessBudgetWarning = null;
+    let thicknessUnsupportedWarning = null;
+    const replaceThicknessWarning = (previous, next) => {
+        if (previous && previous !== next) {
+            const index = warnings.indexOf(previous);
+            if (index >= 0) warnings.splice(index, 1);
+        }
+        if (next && warnings.indexOf(next) < 0) warnings.push(next);
+        return next || null;
+    };
     // Set after the per-volume maps are rendered. Each mesh's established
     // callback invokes this after its object matrices have been updated, so
     // shared material instances cannot retain a previous mesh's target.
@@ -1197,6 +1234,11 @@ const createMtlxSceneView = async ({
             fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [],
         };
         applyObjectThickness = null;
+        thicknessDiagnosticPlanKey = null;
+        thicknessDiagnosticPlanRevision = 0;
+        thicknessUnsupportedFallbackPrims = [];
+        thicknessBudgetWarning = replaceThicknessWarning(thicknessBudgetWarning, null);
+        thicknessUnsupportedWarning = replaceThicknessWarning(thicknessUnsupportedWarning, null);
         if (thicknessMaterial) { thicknessMaterial.dispose(); thicknessMaterial = null; }
         if (thicknessDiscardMaterial) { thicknessDiscardMaterial.dispose(); thicknessDiscardMaterial = null; }
         thicknessCamera = null;
@@ -2560,9 +2602,13 @@ const createMtlxSceneView = async ({
         // Renders the AO buffer for the current camera. Cheap enough to run
         // per frame at half resolution, and it has to: the term is screen
         // space, so it is invalid the moment the camera moves.
-        const updateAmbientOcclusion = () => {
+        const updateAmbientOcclusion = (outputSize = null) => {
             if (!aoEnabled || !sceneRoot) return null;
-            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            // gl_FragCoord is in the final caller destination's pixel space.
+            // The HDR presenter can render into an offscreen target whose
+            // dimensions differ from the canvas drawing buffer, so AO must be
+            // allocated and sampled against that destination, not the canvas.
+            const size = outputSize || renderer.getDrawingBufferSize(new THREE.Vector2());
             const aw = Math.max(1, Math.floor(size.x * AO_SCALE));
             const ah = Math.max(1, Math.floor(size.y * AO_SCALE));
             if (aoTarget && (aoTarget.width !== aw || aoTarget.height !== ah)) disposeAoResources();
@@ -2593,7 +2639,10 @@ const createMtlxSceneView = async ({
                     uRadius: { value: 1 }, uBias: { value: 0.01 },
                 };
                 aoBlurMaterial = createAoBlurMaterial();
-                aoBlurMaterial.uniforms = { tAo: { value: null }, uTexel: { value: new THREE.Vector2() } };
+                aoBlurMaterial.uniforms = {
+                    tAo: { value: null }, tPrepass: { value: null }, uTexel: { value: new THREE.Vector2() },
+                    uDepthThreshold: { value: 0.01 }, uNormalExponent: { value: 8 },
+                };
                 aoQuadScene = new THREE.Scene();
                 aoQuadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial));
                 aoQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -2664,7 +2713,10 @@ const createMtlxSceneView = async ({
             renderer.render(aoQuadScene, aoQuadCamera);
 
             aoBlurMaterial.uniforms.tAo.value = aoTarget.texture;
+            aoBlurMaterial.uniforms.tPrepass.value = aoPrepassTarget.texture;
             aoBlurMaterial.uniforms.uTexel.value.set(1 / aw, 1 / ah);
+            aoBlurMaterial.uniforms.uDepthThreshold.value = Math.max(1e-6, aoMaterial.uniforms.uRadius.value * 0.25);
+            aoBlurMaterial.uniforms.uNormalExponent.value = 8;
             aoQuadScene.children[0].material = aoBlurMaterial;
             renderer.setRenderTarget(aoBlurTarget);
             renderer.render(aoQuadScene, aoQuadCamera);
@@ -2755,12 +2807,50 @@ const createMtlxSceneView = async ({
                 overflowPrims: overflow.slice(0, 32).map((object) => String(object.userData?.primPath || object.name || 'unknown')),
                 unsupportedFallbackPrims: [],
             };
-            if (overflow.length) {
-                const warning = '[info] Thickness target budget: ' + overflow.length + ' of ' + ordered.length
-                    + ' volume instances use material-reference-distance fallback (' + thicknessInfo.bytesAllocated + ' / '
-                    + THICKNESS_TARGET_BUDGET_BYTES + ' bytes; max ' + THICKNESS_TARGET_MAX_ACTIVE + ' targets)';
-                if (!warnings.includes(warning)) warnings.push(warning);
+            // Warning collection is a plan diagnostic, not a draw operation.
+            // Rebuilding/sorting it in each mesh callback made an overflowed
+            // scene quadratic in its fallback count. Keep the complete report
+            // current when the allocation/material plan changes, while every
+            // draw below still writes its own live material binding.
+            const fallbackMaterialState = overflow.map((object) => {
+                const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+                const unsupported = objectMaterials.some((material) => {
+                    if (!material || !material.uniforms || !material.uniforms.u_thicknessMap
+                        || !material.uniforms.u_thicknessReferencePath) return false;
+                    const reference = Number(material.uniforms.transmission_depth && material.uniforms.transmission_depth.value);
+                    return !(Number.isFinite(reference) && reference > 0);
+                });
+                return {
+                    prim: String(object.userData?.primPath || object.name || 'unknown'),
+                    unsupported,
+                    materials: objectMaterials.map((material) => {
+                        const reference = Number(material?.uniforms?.transmission_depth?.value);
+                        return String(material?.uuid || '') + ':' + (Number.isFinite(reference) && reference > 0 ? reference : 0);
+                    }).join(','),
+                };
+            });
+            const diagnosticPlanKey = [tw, th, targetType, capacity,
+                ordered.map((object) => String(object.uuid || '') + ':' + String(object.userData?.primPath || object.name || '')).join('|'),
+                fallbackMaterialState.map((entry) => entry.prim + ':' + entry.materials).join('|')].join(';');
+            if (diagnosticPlanKey !== thicknessDiagnosticPlanKey) {
+                thicknessDiagnosticPlanKey = diagnosticPlanKey;
+                thicknessDiagnosticPlanRevision += 1;
+                thicknessUnsupportedFallbackPrims = fallbackMaterialState
+                    .filter((entry) => entry.unsupported).map((entry) => entry.prim).sort();
+                const budgetWarning = overflow.length
+                    ? '[info] Thickness target budget: ' + overflow.length + ' of ' + ordered.length
+                        + ' volume instances use material-reference-distance fallback (' + thicknessInfo.bytesAllocated + ' / '
+                        + THICKNESS_TARGET_BUDGET_BYTES + ' bytes; max ' + THICKNESS_TARGET_MAX_ACTIVE + ' targets)'
+                    : null;
+                const unsupportedWarning = thicknessUnsupportedFallbackPrims.length
+                    ? '[info] Thickness target fallback has no scalar transmission_depth for '
+                        + thicknessUnsupportedFallbackPrims.join(', ') + '; using clear path for unsupported graph'
+                    : null;
+                thicknessBudgetWarning = replaceThicknessWarning(thicknessBudgetWarning, budgetWarning);
+                thicknessUnsupportedWarning = replaceThicknessWarning(thicknessUnsupportedWarning, unsupportedWarning);
             }
+            thicknessInfo.unsupportedFallbackPrims = thicknessUnsupportedFallbackPrims.slice(0, 32);
+            thicknessInfo.diagnosticPlanRevision = thicknessDiagnosticPlanRevision;
             if (!allocated.length) return { targets: thicknessTargets, width: tw, height: th };
             if (!thicknessMaterial) thicknessMaterial = createThicknessMaterial();
             if (!thicknessDiscardMaterial) {
@@ -2819,9 +2909,10 @@ const createMtlxSceneView = async ({
         // object matrices and preserves shared material/instance correctness.
         const applyThickness = (state, width, height) => {
             const dummy = (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
-            const fallbackWarnings = new Set();
-            const setMaterial = (material, target, object = null) => {
+            const setMaterial = (material, target) => {
                 if (!material || !material.uniforms || !material.uniforms.u_thicknessMap) return;
+                const reference = Number(material.uniforms.transmission_depth && material.uniforms.transmission_depth.value);
+                const referencePath = target ? 0 : (Number.isFinite(reference) && reference > 0 ? reference : 0);
                 material.uniforms.u_thicknessMap.value = target ? target.texture : dummy;
                 if (material.uniforms.u_thicknessTexel && width && height) {
                     material.uniforms.u_thicknessTexel.value.set(1 / width, 1 / height);
@@ -2829,25 +2920,16 @@ const createMtlxSceneView = async ({
                 if (material.uniforms.u_thicknessScale) material.uniforms.u_thicknessScale.value = target ? thicknessScale : 0;
                 if (material.uniforms.u_thicknessTargetValid) material.uniforms.u_thicknessTargetValid.value = target ? 1 : 0;
                 if (material.uniforms.u_thicknessReferencePath) {
-                    const reference = Number(material.uniforms.transmission_depth && material.uniforms.transmission_depth.value);
-                    material.uniforms.u_thicknessReferencePath.value = target ? 0 : (Number.isFinite(reference) && reference > 0 ? reference : 0);
-                    if (!target && !(Number.isFinite(reference) && reference > 0) && object) {
-                        const prim = String(object.userData?.primPath || object.name || 'unknown');
-                        fallbackWarnings.add(prim);
-                    }
+                    material.uniforms.u_thicknessReferencePath.value = referencePath;
                 }
             };
+            // A helper/prepass can replace material uniforms. Restore the
+            // safe fallback every frame before an actual object draw supplies
+            // its object-qualified target below.
             for (const material of materials) setMaterial(material, null);
             applyObjectThickness = (object, objectMaterials) => {
                 const target = state && state.targets ? state.targets.get(object) : null;
-                objectMaterials.forEach((material) => setMaterial(material, target, object));
-                if (fallbackWarnings.size) {
-                    const unsupported = Array.from(fallbackWarnings).sort();
-                    thicknessInfo.unsupportedFallbackPrims = unsupported.slice(0, 32);
-                    const warning = '[info] Thickness target fallback has no scalar transmission_depth for '
-                        + unsupported.join(', ') + '; using clear path for unsupported graph';
-                    if (!warnings.includes(warning)) warnings.push(warning);
-                }
+                objectMaterials.forEach((material) => setMaterial(material, target));
             };
         };
         // Refitting the frustum changes only the matrix, so push that alone.
@@ -3664,12 +3746,15 @@ const createMtlxSceneView = async ({
         }).sort((a, b) => a.primPath.localeCompare(b.primPath));
         const renderFrame = () => {
             ensureShadowCurrent();
+            const callerTarget = renderer.getRenderTarget();
+            const outputSize = callerTarget
+                ? new THREE.Vector2(callerTarget.width, callerTarget.height)
+                : renderer.getDrawingBufferSize(new THREE.Vector2());
             // AO first: the materials sample its buffer, so it has to be
             // valid for THIS camera before any of them draw.
             if (aoEnabled) {
-                const aoTexture = updateAmbientOcclusion();
-                const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-                applyAmbientOcclusion(aoTexture, size.x, size.y);
+                const aoTexture = updateAmbientOcclusion(outputSize);
+                applyAmbientOcclusion(aoTexture, outputSize.x, outputSize.y);
             }
             // Volume absorption needs a path length whether or not the
             // peel pipeline is running, so this is not gated on the toggle.
@@ -4178,6 +4263,10 @@ const createMtlxSceneView = async ({
             // Not for production UI code.
             __debug: () => ({ renderer, scene, camera, materials: Array.from(materials), thicknessScale, thicknessTarget,
                 thickness: Object.assign({}, thicknessInfo),
+                ao: { rawTarget: aoTarget, blurTarget: aoBlurTarget, prepassTarget: aoPrepassTarget,
+                    blurMaterial: aoBlurMaterial, quadScene: aoQuadScene, quadCamera: aoQuadCamera,
+                    depthThreshold: aoBlurMaterial ? aoBlurMaterial.uniforms.uDepthThreshold.value : null,
+                    normalExponent: aoBlurMaterial ? aoBlurMaterial.uniforms.uNormalExponent.value : null },
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
                 linearScopeActive: !!sceneLinearState }),

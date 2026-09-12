@@ -31,15 +31,21 @@ test('@scene solid transmission thickness budget is bounded and deterministic', 
       h.setBackdrop('none'); h.setEnvironment(window.makeFlatEnvironment([1,1,1])); h.setEnvExposure(0); h.setSkyVisibility(false); h.setAmbientOcclusionEnabled(false); h.setShadowsEnabled(false); h.setPresentation({enabled:true,bloom:false,antialias:false,samples:0,persist:false}); h.setSceneDisplayTransform('lin_rec709');
       h.camera.position.set(0,0,5); h.camera.lookAt(0,0,-.8); h.camera.updateProjectionMatrix(); h.camera.updateMatrixWorld(true);
       const r=h.renderer, gl=r.getContext(); r.setPixelRatio(1); r.setSize(256,256,false);
+      const overflowPrim=h.prims.find(mesh=>String(mesh.userData?.primPath||mesh.name||'')==='/H');
+      const overflowMaterial=overflowPrim.material.clone(); overflowPrim.material=overflowMaterial;
+      const validReference=Number(overflowMaterial.uniforms.transmission_depth.value);
       const caller=new THREE.WebGLRenderTarget(256,256,{type:THREE.FloatType,format:THREE.RGBAFormat,minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter}); caller.viewport.set(9,7,221,223); caller.scissor.set(13,11,213,215); caller.scissorTest=true;
       const snap=()=>({target:r.getRenderTarget(),viewport:r.getViewport(new THREE.Vector4()).toArray(),scissor:r.getScissor(new THREE.Vector4()).toArray(),test:r.getScissorTest(),actual:Array.from(gl.getParameter(gl.SCISSOR_BOX)),glTest:gl.isEnabled(gl.SCISSOR_TEST)});
       r.setRenderTarget(caller); const before=snap();
-      const activate=names=>{for(const mesh of h.prims){const prim=String(mesh.userData?.primPath||mesh.name||''); if(/^\/[A-H]$/.test(prim)) mesh.visible=names.includes(prim.slice(1));} r.setRenderTarget(caller); h.renderNow(); const info={...h.__debug().thickness}; const materialValues=h.__debug().materials.map(m=>({path:m.userData?.mtlxSceneMaterialPath||null,scale:m.uniforms?.u_thicknessScale?.value??null,valid:m.uniforms?.u_thicknessTargetValid?.value??null,reference:m.uniforms?.u_thicknessReferencePath?.value??null})); return {names,info,materialValues,state:snap()};};
-      const first=activate(['D','E','F','G','H']); const second=activate(['A','B','C','D','E']);
+      const activate=names=>{for(const mesh of h.prims){const prim=String(mesh.userData?.primPath||mesh.name||''); if(/^\/[A-H]$/.test(prim)) mesh.visible=names.includes(prim.slice(1));} r.setRenderTarget(caller); h.renderNow(); const info={...h.__debug().thickness}; const materialValues=h.__debug().materials.map(m=>({path:m.userData?.mtlxSceneMaterialPath||null,scale:m.uniforms?.u_thicknessScale?.value??null,valid:m.uniforms?.u_thicknessTargetValid?.value??null,reference:m.uniforms?.u_thicknessReferencePath?.value??null})); const thicknessWarnings=(h.warnings||[]).filter(warning=>/Thickness target/.test(warning)).sort(); return {names,info,materialValues,thicknessWarnings,state:snap()};};
+      const first=activate(['D','E','F','G','H']); overflowMaterial.uniforms.transmission_depth.value=0;
+      const unsupported=activate(['D','E','F','G','H']); const unsupportedStable=activate(['D','E','F','G','H']); overflowMaterial.uniforms.transmission_depth.value=validReference;
+      const restored=activate(['D','E','F','G','H']); const second=activate(['A','B','C','D','E']);
+      const stable=activate(['A','B','C','D','E']);
       r.setSize(192,192,false); caller.setSize(192,192); caller.viewport.set(0,0,192,192); caller.scissor.set(0,0,192,192); caller.scissorTest=false; r.setRenderTarget(caller); h.renderNow();
       const resized={info:{...h.__debug().thickness},state:snap()};
       const after=snap();
-      return {first,second,resized,before:{...before,target:before.target===caller},after:{...after,target:after.target===caller},caller:{size:[caller.width,caller.height],viewport:caller.viewport.toArray(),scissor:caller.scissor.toArray(),scissorTest:caller.scissorTest},glError:gl.getError()};
+      return {first,unsupported,unsupportedStable,restored,second,stable,resized,before:{...before,target:before.target===caller},after:{...after,target:after.target===caller},caller:{size:[caller.width,caller.height],viewport:caller.viewport.toArray(),scissor:caller.scissor.toArray(),scissorTest:caller.scissorTest},glError:gl.getError()};
     } finally { h.dispose(); holder.remove(); doc.delete(); }
   }, { xml:XML, meshes });
   for (const pass of [result.first,result.second]) {
@@ -47,6 +53,21 @@ test('@scene solid transmission thickness budget is bounded and deterministic', 
     expect(pass.info.bytesAllocated).toBeLessThanOrEqual(pass.info.budgetBytes); expect(pass.info.overflowPrims.length).toBe(1); expect(pass.info.fallback).toBe('material-reference-distance');
   }
   expect(result.first.info.overflowPrims).toEqual(['/H']); expect(result.second.info.overflowPrims).toEqual(['/E']);
+  expect(result.first.thicknessWarnings).toHaveLength(1); expect(result.first.thicknessWarnings[0]).toContain('1 of 5');
+  expect(result.second.thicknessWarnings).toEqual(result.first.thicknessWarnings);
+  expect(result.stable.thicknessWarnings).toEqual(result.second.thicknessWarnings);
+  expect(result.first.info.unsupportedFallbackPrims).toEqual([]);
+  expect(result.unsupported.info.unsupportedFallbackPrims).toEqual(['/H']);
+  expect(result.unsupported.thicknessWarnings.filter(warning=>/no scalar transmission_depth/.test(warning))).toEqual([expect.stringContaining('/H')]);
+  expect(result.unsupportedStable.thicknessWarnings).toEqual(result.unsupported.thicknessWarnings);
+  expect(result.restored.info.unsupportedFallbackPrims).toEqual([]);
+  expect(result.restored.thicknessWarnings.filter(warning=>/no scalar transmission_depth/.test(warning))).toEqual([]);
+  expect(result.first.info.diagnosticPlanRevision).toBeGreaterThan(0);
+  expect(result.unsupported.info.diagnosticPlanRevision).toBe(result.first.info.diagnosticPlanRevision + 1);
+  expect(result.unsupportedStable.info.diagnosticPlanRevision).toBe(result.unsupported.info.diagnosticPlanRevision);
+  expect(result.restored.info.diagnosticPlanRevision).toBe(result.unsupported.info.diagnosticPlanRevision + 1);
+  expect(result.second.info.diagnosticPlanRevision).toBe(result.restored.info.diagnosticPlanRevision + 1);
+  expect(result.stable.info.diagnosticPlanRevision).toBe(result.second.info.diagnosticPlanRevision);
   expect(result.first.info.targetType).toMatch(/FloatType|HalfFloatType/); expect(result.glError).toBe(0);
   expect(result.resized.info.allocatedVolumes).toBe(4); expect(result.resized.info.bytesPerTarget).toBe(192*192*20);
   expect(result.before.target).toBe(true); expect(result.second.state.target).toBeTruthy(); expect(result.second.state.test).toBe(result.before.test); expect(result.second.state.viewport).toEqual(result.before.viewport); expect(result.second.state.scissor).toEqual(result.before.scissor); expect(result.second.state.actual).toEqual(result.before.actual);
