@@ -212,6 +212,7 @@
             // replayed before temps so document-local __pv_ND/NG names are
             // never dereferenced by a still-pinned node.
             const restores = [];
+            const materialized = new Map(); // definition key -> materializeDefinition result
             const cleanup = () => {
                 for (let i = restores.length - 1; i >= 0; i--) {
                     const r = restores[i];
@@ -423,9 +424,12 @@
             const definitionByNodedef = (nd) => (parsed.definitions || []).find((d) => d.nodedef === nd) || null;
 
             // Materializes a definition as transient '__pv_ND'/'__pv_NG'
-            // root copies, so shader gen compiles the DOCUMENT's version,
-            // never the library's. Nodedef pushed FIRST (cleanup is LIFO).
+            // root copies (memoized per build), so shader gen compiles the
+            // DOCUMENT's version. Nodedef pushed FIRST (cleanup is LIFO).
             const materializeDefinition = (entry) => {
+                const key = entry.nodedef || entry.id;
+                if (materialized.has(key)) return materialized.get(key);
+                materialized.set(key, null); // re-entry guard (self reference)
                 const firstGraph = entry.graphs[0] ? docChild(doc, entry.graphs[0]) : null;
                 const defEl = docChild(doc, entry.nodedef)
                     || (firstGraph ? resolveNodedefFor(doc, firstGraph) : null)
@@ -440,7 +444,8 @@
                 temps.push({ container: doc, name: defName });
                 mxSafe(() => { copyDef.copyContentFrom(defEl); return true; }, false);
                 mxSafe(() => { copyDef.setName(defName); return true; }, false);
-                const graphNames = [];
+                const copies = {}; // original graph name -> copy name
+                const copyGraphs = [];
                 for (const gName of entry.graphs) {
                     const localGraphEl = docChild(doc, gName);
                     if (!localGraphEl) continue;
@@ -451,55 +456,49 @@
                     mxSafe(() => { copyGraph.copyContentFrom(localGraphEl); return true; }, false);
                     mxSafe(() => { copyGraph.setName(copyName); return true; }, false);
                     mxSafe(() => { copyGraph.setNodeDefString(defName); return true; }, false);
-                    graphNames.push(copyName);
+                    copies[gName] = copyName;
+                    copyGraphs.push(copyGraph);
                 }
-                return { defName, graphNames, nodeString: entry.node, outType: entry.outType, outputs: entry.outputs };
+                const m = { defName, copies, nodeString: entry.node, outType: entry.outType, outputs: entry.outputs };
+                materialized.set(key, m);
+                // Nested instances of other shadowed local definitions
+                // inside the copy must point at their own copies as well.
+                for (const cg of copyGraphs) retargetShadowed(cg);
+                return m;
             };
 
-            // Preview a definitions entry: instantiate the materialized
-            // copy and wrap it exactly like previewing any other node.
-            const previewDefinition = (entry, outputName, label) => {
-                const m = materializeDefinition(entry);
-                if (!m) return fail('No definition found for "' + label + '".');
-                const pick = (outputName && m.outputs.find((o) => o.name === outputName))
-                    || m.outputs.find((o) => COLOR_VIEWABLE.indexOf(o.type) !== -1)
-                    || m.outputs[0];
-                if (!pick) return fail('No preview for "' + label + '": it has no outputs.');
-                const multi = m.outputs.length > 1;
-                const inst = addTempNode(m.nodeString, '__pv_inst', multi ? 'multioutput' : (pick.type || m.outType));
-                if (!inst) return fail('Could not build the preview graph.');
-                mxSafe(() => { inst.setNodeDefString(m.defName); return true; }, false);
-                return withGeom(
-                    wrapAsSurface({ nodename: mxElName(inst), output: multi ? pick.name : null }, pick.type || m.outType, label),
-                    'shaderball-scene'
-                );
-            };
+            // Local definitions whose name also exists in the library are
+            // invisible to shader gen (by-name lookups favor the library).
+            const shadowedEntries = () => (parsed.definitions || []).filter((entry) => {
+                if (!entry.local) return false;
+                const libDef = mxSafe(() => doc.getNodeDef(entry.nodedef), null);
+                return !!libDef && !isDocLocal(libDef);
+            });
 
-            // A local nodedef sharing its name with a library one is
-            // invisible to shader gen (by-name lookups favor the library),
-            // so pin every matching root/nodegraph instance to a copy of it.
-            const shadowLocalDefinitions = () => {
-                const defs = parsed.definitions || [];
-                if (!defs.length) return;
-                const instanceGraphs = docChildren(doc).filter((el) => mxElCat(el) === 'nodegraph'
-                    && !(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(el)) !== -1));
-                for (const entry of defs) {
-                    if (!entry.local) continue;
-                    const libDef = mxSafe(() => doc.getNodeDef(entry.nodedef), null);
-                    const shadowed = libDef && !isDocLocal(libDef);
-                    if (!shadowed) continue;
+            // Pins every node in `container` whose category is a shadowed
+            // local definition to that definition's transient copy; undone
+            // by cleanup() through `restores`.
+            const retargetShadowed = (container) => {
+                const shadowed = shadowedEntries();
+                if (!shadowed.length) return;
+                for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                    const entry = shadowed.find((e) => e.node === mxElCat(n));
+                    if (!entry) continue;
                     const m = materializeDefinition(entry);
                     if (!m) continue;
-                    const retarget = (container) => {
-                        for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
-                            if (mxElCat(n) !== entry.node) continue;
-                            restores.push({ el: n, prev: mxElAttr(n, 'nodedef') });
-                            mxSetAttr(n, 'nodedef', m.defName);
-                        }
-                    };
-                    retarget(doc);
-                    for (const g of instanceGraphs) retarget(g);
+                    restores.push({ el: n, prev: mxElAttr(n, 'nodedef') });
+                    mxSetAttr(n, 'nodedef', m.defName);
                 }
+            };
+
+            // Root-level network: retarget the root and every instance
+            // nodegraph (functional graphs copy their own on demand).
+            const shadowLocalDefinitions = () => {
+                if (!shadowedEntries().length) return;
+                retargetShadowed(doc);
+                const instanceGraphs = docChildren(doc).filter((el) => mxElCat(el) === 'nodegraph'
+                    && !(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(el)) !== -1));
+                for (const g of instanceGraphs) retargetShadowed(g);
             };
 
             // Tags a successful ok(...) result with its default preview
@@ -532,7 +531,7 @@
                     if (tScopeFunctional) {
                         const entry = definitionForGraph(tScope);
                         const m = entry && materializeDefinition(entry);
-                        const copyName = m && m.graphNames[entry.graphs.indexOf(tScope)];
+                        const copyName = m && m.copies[tScope];
                         const copyGraph = copyName ? docChild(doc, copyName) : null;
                         const el = copyGraph ? mxSafe(() => copyGraph.getNode(name), null) : null;
                         const realGraph = docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null);

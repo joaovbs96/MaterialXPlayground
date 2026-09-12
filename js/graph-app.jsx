@@ -3408,6 +3408,15 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 return { graph: g, functional, def, owner: functional ? def : g, local: functional ? isDocLocal(def) : true };
             };
 
+            // Other local graphs implementing the same nodedef as the
+            // current functional scope: output edits mirror onto them too.
+            const siblingImplGraphs = (o) => {
+                if (!parsed || !o || !o.functional || !o.def) return [];
+                const ndName = mxElName(o.def);
+                return docChildren(parsed.doc).filter((el) => mxElCat(el) === 'nodegraph'
+                    && mxElName(el) !== scope && mxSafe(() => el.getNodeDefString(), '') === ndName);
+            };
+
             // The document ELEMENT that carries a connection's attributes
             // — the target <input>, or the <output> itself for output
             // pseudo-nodes; `create` authors a default input on first use.
@@ -4086,6 +4095,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     // Keep the nodedef's declared output name in lockstep
                     // with the graph's own, since both name the same pin.
                     mxSafe(() => { const defOut = o.def.getOutput(oldName); if (defOut) defOut.setName(newName); return true; }, false);
+                    for (const sib of siblingImplGraphs(o)) {
+                        mxSafe(() => { const so = sib.getOutput(oldName); if (so) so.setName(newName); return true; }, false);
+                        for (const p of collectConnectables(parsed.doc)) {
+                            if (mxElAttr(p, 'nodegraph') === mxElName(sib) && mxElAttr(p, 'output') === oldName) mxSetAttr(p, 'output', newName);
+                        }
+                    }
                 }
 
                 // Every node input, plus a container's own outputs — the
@@ -4250,6 +4265,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                             // Drop the matching declared output on the
                             // nodedef too, since both name the same pin.
                             mxSafe(() => { o.def.removeOutput(name); return true; }, false);
+                            for (const sib of siblingImplGraphs(o)) mxSafe(() => { sib.removeOutput(name); return true; }, false);
                         }
                     }
                     if (removed) { setDocRev((r) => r + 1); markDirty(); }
@@ -4608,6 +4624,11 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     // The nodedef declares the same output alongside the
                     // graph's, since both name the same interface pin.
                     mxSafe(() => { o.def.addOutput(name, type); return true; }, false);
+                    for (const sib of siblingImplGraphs(o)) {
+                        if (mxSafe(() => sib.getOutput(name), null)) continue;
+                        const so = mxSafe(() => sib.addOutput(name, type), null);
+                        if (so && mxElType(so) !== type) mxSetAttr(so, 'type', type);
+                    }
                 }
                 if (mxElType(el) !== type) {
                     mxSafe(() => {

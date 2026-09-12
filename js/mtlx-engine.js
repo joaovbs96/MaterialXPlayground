@@ -827,10 +827,14 @@ const stripValuesFromConnectedInputs = (doc, maxDepth) => {
 };
 
 // Doc-level renderable scan: returns [{ name, node }], one entry per
-// renderable surface, by TYPE rather than getMaterialNodes(); a third
-// pass falls back to surfaceshader nodedef/nodegraph DEFINITIONS. Live-doc callers need mxExclusive.
-const listDocRenderables = (doc) => {
+// renderable surface, by TYPE rather than getMaterialNodes(). Live-doc
+// callers need mxExclusive; opts.synthesizeDefinitions adds a third pass.
+const listDocRenderables = (doc, opts) => {
     mxWarnIfLocked('listDocRenderables'); // exported doc-reading helper, see mxWarnIfLocked's header comment
+    // The third pass ADDS nodedef/nodegraph/node copies to `doc`, so only
+    // throwaway documents (the viewer's) may opt in; the editor's live
+    // document must never be scanned with it.
+    const synthesizeDefinitions = !!(opts && opts.synthesizeDefinitions);
     const renderables = [];
     const seen = new Set();
     // Defensive skip of transient __pv_* wrapper nodes: the graph
@@ -877,7 +881,7 @@ const listDocRenderables = (doc) => {
             if (typeOf(n) === 'surfaceshader') pushShader(nameOf(n), n);
         }
     }
-    if (!renderables.length) {
+    if (!renderables.length && synthesizeDefinitions) {
         // Third pass: no instance renders at all, so surface every
         // surfaceshader nodedef/nodegraph DEFINITION the document
         // declares, so at least the definition itself can be previewed.

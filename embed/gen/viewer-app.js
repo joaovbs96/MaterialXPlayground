@@ -98,7 +98,9 @@ const loadMtlxDocument = async (xmlText, path, version) => {
   // Renderables: material nodes' surfaceshader inputs first, then
   // bare surfaceshader nodes as a fallback (see listDocRenderables
   // in js/mtlx-engine.js for the caveat this works around).
-  const renderables = listDocRenderables(doc);
+  const renderables = listDocRenderables(doc, {
+    synthesizeDefinitions: true
+  });
   // A definition-only renderable (see listDocRenderables' third
   // pass) instantiates from a document-local copy, so shader gen
   // needs a FRESH context, the shared one caches compound
