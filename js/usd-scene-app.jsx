@@ -253,7 +253,7 @@
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
-        const [presentation, setPresentation] = React.useState({ enabled: true, bloom: true, strength: 0.25, supported: true });
+        const [presentation, setPresentation] = React.useState({ enabled: true, bloom: true, strength: 0.25, threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4, debugView: 'final', supported: true });
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
@@ -612,6 +612,15 @@
             if (typeof fn !== 'function') return false;
             try { fn(...args); return true; } catch (e) { setError(String(e && e.message || e)); return false; }
         };
+        const refreshPresentation = () => {
+            const getter = handleRef.current && handleRef.current.getPresentation;
+            if (typeof getter !== 'function') return;
+            try { setPresentation(getter()); } catch (e) {}
+        };
+        const updatePresentation = (patch) => {
+            if (callHandle('setPresentation', patch)) refreshPresentation();
+        };
+        const resetPresentation = () => updatePresentation({ reset: true });
         const disposeUnusedEnvironment = (env) => {
             const seen = new Set();
             ['radiance', 'irradiance', 'background'].forEach((name) => {
@@ -913,17 +922,48 @@
                     <label className="flex items-center justify-between gap-2" title="Capture scene-linear HDR before a single display transform. Off uses the previous rendering path.">
                         <span className="text-xs font-medium text-gray-400">HDR presentation</span>
                         <Toggle checked={!!presentation.enabled} disabled={!handle || !presentation.supported}
-                            onChange={(enabled) => { if(callHandle('setPresentation', { enabled }))setPresentation(handleRef.current.getPresentation()); }} />
+                            onChange={(enabled) => updatePresentation({ enabled })} />
                     </label>
                     <label className="flex items-center justify-between gap-2" title="Optical glow from actual HDR highlights. This does not add lighting to nearby geometry.">
                         <span className="text-xs font-medium text-gray-400">Highlight glow</span>
                         <Toggle checked={!!presentation.bloom} disabled={!handle || !presentation.enabled || !presentation.supported}
-                            onChange={(bloom) => { if(callHandle('setPresentation', { bloom }))setPresentation(handleRef.current.getPresentation()); }} />
+                            onChange={(bloom) => updatePresentation({ bloom })} />
                     </label>
                     {presentation.enabled && presentation.bloom && presentation.supported ? (
                         <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025}
-                            onSlider={(strength) => { if(callHandle('setPresentation', { strength }))setPresentation(handleRef.current.getPresentation()); }}
-                            onNumber={(strength) => { if(callHandle('setPresentation', { strength }))setPresentation(handleRef.current.getPresentation()); }} />
+                            onSlider={(strength) => updatePresentation({ strength })}
+                            onNumber={(strength) => updatePresentation({ strength })} />
+                    ) : null}
+                    {presentation.supported ? (
+                        <>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-gray-400">HDR view</span>
+                                <MtlxSelect
+                                    value={presentation.debugView || 'final'}
+                                    options={['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite']}
+                                    labels={{ final: 'Final', linear: 'Scene linear', 'no-bloom': 'No glow', highlights: 'Highlights', bloom: 'Glow', composite: 'Composite' }}
+                                    onChange={(debugView) => updatePresentation({ debugView })}
+                                    defValue="final"
+                                    title="Temporary inspection view for the HDR presentation pipeline."
+                                    size="sm"
+                                    disabled={!handle}
+                                />
+                            </div>
+                            {presentation.enabled && presentation.bloom ? (
+                                <>
+                                    <SliderField label="Glow threshold" value={presentation.threshold} min={0.01} max={1000} step={0.01}
+                                        onSlider={(threshold) => updatePresentation({ threshold })}
+                                        onNumber={(threshold) => updatePresentation({ threshold })} />
+                                    <SliderField label="Glow knee" value={presentation.knee} min={0} max={1} step={0.01}
+                                        onSlider={(knee) => updatePresentation({ knee })}
+                                        onNumber={(knee) => updatePresentation({ knee })} />
+                                    <SliderField label="Glow radius" value={presentation.radius} min={0} max={1} step={0.01}
+                                        onSlider={(radius) => updatePresentation({ radius })}
+                                        onNumber={(radius) => updatePresentation({ radius })} />
+                                </>
+                            ) : null}
+                            <button type="button" onClick={resetPresentation} className={BTN_SECONDARY + ' w-full'} disabled={!handle}>Reset HDR presentation</button>
+                        </>
                     ) : null}
                     <div className="text-[11px] text-gray-400">
                         {presentation.supported ? 'Scene-linear HDR preserves luminous highlights. Glow redistributes their brightness before the display transform; it does not replace emissive lighting or change authored colors.' : presentation.reason || 'HDR is unavailable on this device. The existing renderer remains active.'}

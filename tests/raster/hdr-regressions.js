@@ -91,6 +91,27 @@
             for(let j=0;j<3;j++)interiorMax=Math.max(interiorMax,Math.abs(hdrNeutral[i+j]-oldNeutral[i+j]));n++;
         }
         report.neutralInterior={pixels:n,maxByteError:interiorMax};assert(n>30&&interiorMax<=2,'HDR path changes the established tone transform on interiors');
+        // The inspection views provide a caller-readable linear boundary.
+        // They are intentionally transient: storing one would make a later
+        // scene open in a diagnostic output without the user asking for it.
+        const storedPresentation=localStorage.getItem('mtlx_scene_presentation');
+        try{
+            handle.setPresentation({reset:true,persist:true});
+            assert(handle.getPresentation().debugView==='final','presentation reset did not restore final view');
+            handle.setPresentation({debugView:'linear',persist:true});
+            const stored=JSON.parse(localStorage.getItem('mtlx_scene_presentation')||'{}');
+            assert(!Object.prototype.hasOwnProperty.call(stored,'debugView'),'transient HDR inspection view was persisted');
+            const inspected=pixels(handle);assert(metrics(inspected).max>5,'scene-linear inspection lost HDR values');
+            handle.setPresentation({debugView:'highlights',persist:false});
+            const extracted=metrics(pixels(handle));assert(extracted.max>0.01&&extracted.nonZero>0,'highlight inspection is blank');
+            handle.setPresentation({debugView:'bloom',persist:false});
+            handle.setPresentation({bloom:false,antialias:false,persist:false});
+            const bypass=metrics(pixels(handle)), bypassState=handle.getPresentation(), bypassPasses=handle.__debug().presentation.lastPasses;
+            assert(bypassState.debugView==='final'&&bypassPasses===1,'bloom disable did not fully bypass bloom processing');
+            report.inspection={linear:metrics(inspected),highlights:extracted,bypass:{pixels:bypass,settings:bypassState,passes:bypassPasses},stored};
+        }finally{
+            if(storedPresentation===null)localStorage.removeItem('mtlx_scene_presentation');else localStorage.setItem('mtlx_scene_presentation',storedPresentation);
+        }
         handle.setPresentation({...original,persist:false});handle.setSceneDisplayTransform(initialMode);
         report.stateRestored=stateCheck(handle);return report;
     }

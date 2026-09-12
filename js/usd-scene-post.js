@@ -8,6 +8,9 @@
     const VERSION = 'hdr-presentation-m3-20260911';
     const DEFAULTS = Object.freeze({ enabled: true, bloom: true, strength: 0.25,
         threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4 });
+    // These are inspection outputs, rather than creative looks. They must
+    // never become a surprise persisted presentation choice on a later load.
+    const DEBUG_VIEWS = Object.freeze(['final','linear','no-bloom','highlights','bloom','composite']);
     const KEY = 'mtlx_scene_presentation';
     const vertex = 'in vec3 position; in vec2 uv; out vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}';
     const header = 'precision highp float; precision highp int; in vec2 vUv; out vec4 o;\n';
@@ -92,6 +95,7 @@
             const v=Number(value?.[key]); if(Number.isFinite(v)) s[key]=Math.max(lo,Math.min(hi,v));
         }
         s.samples = Math.floor(s.samples);
+        s.debugView = DEBUG_VIEWS.includes(value?.debugView) ? value.debugView : 'final';
         return s;
     }
     function create(renderer, options = {}) {
@@ -116,7 +120,7 @@
         const combineMat=material(header+`
             uniform sampler2D u_image,u_b0,u_b1,u_b2,u_b3,u_b4;
             uniform float u_exposure,u_strength,u_threshold,u_knee,u_radius;
-            uniform int u_displayTransform;
+            uniform int u_displayTransform,u_debugView;
             ${brightFunction}
             void main(){
                 vec4 hdr=texture(u_image,vUv);
@@ -130,13 +134,21 @@
                 // adding arbitrary brightness to every pixel. Exposure has
                 // already been applied once to both source and bloom.
                 vec3 scattered=max(vec3(0.0),color+u_strength*(glow-bright(color)));
+                // Debug outputs deliberately stay scene-linear. This gives
+                // Float32 callers an unambiguous probe boundary and avoids
+                // hiding an HDR/exposure error behind a second OETF.
+                if(u_debugView==1){o=vec4(max(hdr.rgb,vec3(0.0)),hdr.a);return;}
+                if(u_debugView==2){o=vec4(color,hdr.a);return;}
+                if(u_debugView==3){o=vec4(bright(color),hdr.a);return;}
+                if(u_debugView==4){o=vec4(u_strength*glow,hdr.a);return;}
+                if(u_debugView==5){o=vec4(scattered,hdr.a);return;}
                 ${root.sceneDisplayTransformGLSL('scattered','encoded','u_displayTransform',null)}
                 // Keep the source coverage. Optical glow can also be saved
                 // over an opaque backdrop; it does not invent alpha coverage.
                 o=vec4(encoded,hdr.a);
             }
         `,{u_image:{value:null},u_b0:{value:null},u_b1:{value:null},u_b2:{value:null},u_b3:{value:null},u_b4:{value:null},
-            u_exposure:{value:1},u_strength:{value:0},u_threshold:{value:1},u_knee:{value:0.5},u_radius:{value:0.65},u_displayTransform:{value:3}});
+            u_exposure:{value:1},u_strength:{value:0},u_threshold:{value:1},u_knee:{value:0.5},u_radius:{value:0.65},u_displayTransform:{value:3},u_debugView:{value:0}});
         const fxaaMat=material(fxaaShader,{u_image:{value:null},u_texel:{value:new THREE.Vector2(1,1)}});
         const black=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat);black.needsUpdate=true;
         const free = () => {
@@ -229,7 +241,12 @@
                 // All paths draw real geometry or a composite via render(),
                 // which resolves r128 multisample targets before sampling.
                 const exposure=Math.max(0.000001,Number(options.getExposure?.()??1));
-                if(settings.bloom && settings.strength>0){
+                const debugView=DEBUG_VIEWS.indexOf(settings.debugView);
+                // Bloom=false is a full processing bypass. Diagnostic views
+                // must not leave extraction, downsample or blur passes alive
+                // after the user has disabled glow.
+                const needsBloom=settings.bloom&&settings.strength>0;
+                if(needsBloom){
                     Object.assign(brightMat.uniforms.u_exposure,{value:exposure});
                     brightMat.uniforms.u_image.value=resources.hdr.texture;
                     brightMat.uniforms.u_threshold.value=settings.threshold;brightMat.uniforms.u_knee.value=settings.knee;
@@ -247,11 +264,12 @@
                 const u=combineMat.uniforms;u.u_image.value=resources.hdr.texture;u.u_exposure.value=exposure;
                 u.u_threshold.value=settings.threshold;u.u_knee.value=settings.knee;u.u_radius.value=settings.radius;
                 u.u_strength.value=settings.bloom?settings.strength:0;
+                u.u_debugView.value=Math.max(0,debugView);
                 u.u_displayTransform.value=root.displayTransformId(options.getDisplayTransform?.()||'neutral');
-                for(let i=0;i<5;i++)u['u_b'+i].value=settings.bloom&&settings.strength>0?resources.bloom[i].texture:black;
+                for(let i=0;i<5;i++)u['u_b'+i].value=needsBloom?resources.bloom[i].texture:black;
                 // Inspection readbacks must not be spatially filtered by a
                 // display-referred antialiaser. This also preserves >1 HDR.
-                const aa=settings.antialias && u.u_displayTransform.value!==2;
+                const aa=settings.antialias && debugView===0 && u.u_displayTransform.value!==2;
                 if(aa){
                     pass(combineMat,resources.present);fxaaMat.uniforms.u_image.value=resources.present.texture;
                     fxaaMat.uniforms.u_texel.value.set(1/resources.w,1/resources.h);
@@ -269,13 +287,18 @@
         return {
             render,getSettings,
             setSettings(next={}){
-                const oldSamples=settings.samples;settings=sanitize(Object.assign({},settings,next));
+                const oldSamples=settings.samples;
+                settings=sanitize(Object.assign({},next.reset===true?DEFAULTS:settings,next));
+                if(next.reset===true&&!Object.prototype.hasOwnProperty.call(next,'debugView'))settings.debugView='final';
+                if(!settings.bloom&&['highlights','bloom','composite'].includes(settings.debugView))settings.debugView='final';
                 if(oldSamples!==settings.samples||!settings.enabled)free();
-                if(next.persist!==false){try{if(root.top===root)root.localStorage.setItem(KEY,JSON.stringify(settings));}catch(_) {}}
+                // Persist only supported artistic/presentation controls. An
+                // active diagnostic must never survive a reload unnoticed.
+                if(next.persist!==false){try{if(root.top===root){const persisted=Object.assign({},settings);delete persisted.debugView;root.localStorage.setItem(KEY,JSON.stringify(persisted));}}catch(_) {}}
                 return getSettings();
             },
             debug:()=>({settings:getSettings(),frames,lastPasses,size:resources?[resources.w,resources.h]:null,
-                hdrTarget:resources?.hdr||null,rendering}),
+                hdrTarget:resources?.hdr||null,bloomTargets:resources?.bloom||[],presentTarget:resources?.present||null,rendering}),
             dispose(){free();[brightMat,downMat,blurMat,combineMat,fxaaMat].forEach(m=>m.dispose());black.dispose();quad.geometry.dispose();},
         };
     }
