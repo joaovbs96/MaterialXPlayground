@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 const openPbrPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'materials', 'open_pbr_default.mtlx');
 const OPEN_PBR_XML = fs.readFileSync(openPbrPath, 'utf8');
 
-async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weight = 1 }) {
+async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weight = 1, thin = false, thinConnected = false, opacity = 1, legacyFallback = false }) {
   await page.goto(embedURL + '/index.html#!scene');
   await page.waitForFunction(() => window.createMtlxSceneView && window.getMxEnv, null, { timeout: 30000 });
-  return page.evaluate(async ({ xml, stage }) => {
+  return page.evaluate(async ({ xml, stage, legacyFallback }) => {
     const env = await window.getMxEnv();
     const doc = env.mx.createDocument();
     await window.mxExclusive(() => env.mx.readFromXmlString(doc, xml));
@@ -27,6 +27,16 @@ async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weig
     handle.camera.updateMatrixWorld(true);
     handle.renderNow();
     const material = handle.prims[0].material;
+    let legacyMaterial = null;
+    if (legacyFallback) {
+      // Exercise the real Scene RGB-T fallback boundary. A material clone is
+      // necessary because r128 caches the original uniform upload list.
+      legacyMaterial = material.clone();
+      delete legacyMaterial.uniforms.u_peelRgbtPass;
+      if (legacyMaterial.uniforms.u_peelRgbt) legacyMaterial.uniforms.u_peelRgbt.value = 0;
+      legacyMaterial.fragmentShader += '\n// thin-wall legacy fallback fixture\n';
+      handle.prims[0].material = legacyMaterial;
+    }
     let drawThickness = null;
     let originalDraws = 0;
     let validOriginalDraws = 0;
@@ -70,26 +80,44 @@ async function inspectUnits(page, embedURL, { metersPerUnit, length, depth, weig
       transparent: !!material.userData?.mtlxSceneTransparent,
       peel: !!material.userData?.mtlxScenePeel,
       volume: !!material.userData?.mtlxSceneVolume,
+      thinWalled: material.userData?.mtlxSceneThinWalled || null,
       prepassMode: material.userData?.mtlxScenePrepassCoverage?.mode || null,
       prepassOpacity: Number(material.userData?.mtlxScenePrepassCoverage?.opacity),
       hasTarget: !!debug.thicknessTarget,
       // Per-volume binding happens in each mesh draw callback; a shared
       // material's last inspected uniform is not a stable global binding.
       thicknessInfo: debug.thickness || null,
+      sceneRgbt: debug.sceneRgbt || null,
+      warnings: (handle.warnings || []).slice(),
       drawThickness,
       drawBinding: { originalDraws, validOriginalDraws, originalDrawMismatches },
       hasThicknessPath: /mx_transmission_path_length/.test(fragmentShader) && /u_thicknessScale/.test(fragmentShader),
       hasThicknessInput: /transmission_depth/.test(fragmentShader), compiled: !!material.userData?.mtlxSceneCompiled?.vs,
     };
+    if (legacyMaterial) {
+      handle.prims[0].material = material;
+      legacyMaterial.dispose();
+    }
     handle.dispose();
     holder.remove();
     doc.delete();
     return result;
   }, {
-    xml: OPEN_PBR_XML
+    xml: (() => {
+      let configured = OPEN_PBR_XML
       .replace(/(<input name="transmission_weight" type="float" value=")[^"]+(")/, `$1${weight}$2`)
       .replace(/(<input name="transmission_color" type="color3" value=")[^"]+(")/, '$10.8,0.9,1$2')
-      .replace(/(<input name="transmission_depth" type="float" value=")[^"]+(")/, `$1${depth}$2`),
+      .replace(/(<input name="transmission_depth" type="float" value=")[^"]+(")/, `$1${depth}$2`)
+      .replace(/(<input name="geometry_opacity" type="float" value=")[^"]+(")/, `$1${opacity}$2`)
+      .replace(/(<input name="geometry_thin_walled" type="boolean" value=")[^"]+(")/, `$1${thin}$2`);
+      if (thinConnected) {
+        configured = configured
+          .replace('<open_pbr_surface', `<constant name="thin_selector" type="boolean"><input name="value" type="boolean" value="${thin}"/></constant><open_pbr_surface`)
+          .replace(/<input name="geometry_thin_walled"[^>]+\/>/, '<input name="geometry_thin_walled" type="boolean" nodename="thin_selector"/>');
+      }
+      return configured;
+    })(),
+    legacyFallback,
     stage: {
       upAxis: 'Y', metersPerUnit, length, depth, materials: [], lights: [],
       meshes: [{
@@ -157,4 +185,39 @@ test('@scene source-qualified prepass excludes opaque OpenPBR uniforms and keeps
   expect(partial.prepassMode).toBe('static');
   expect(partial.prepassOpacity).toBeCloseTo(0.955, 3);
   expect(partial.hasTarget).toBe(true);
+});
+
+test('@scene thickness allocates only known solid volume interiors', async ({ page, embedURL }) => {
+  const base = { metersPerUnit: 1, length: 0.1, depth: 0.1, weight: 1 };
+  const constantThin = await inspectUnits(page, embedURL, { ...base, thin: true });
+  const constantSolid = await inspectUnits(page, embedURL, { ...base, thin: false });
+  const connectedThin = await inspectUnits(page, embedURL, { ...base, thin: true, thinConnected: true });
+  const connectedSolid = await inspectUnits(page, embedURL, { ...base, thin: false, thinConnected: true });
+  const zeroOpacity = await inspectUnits(page, embedURL, { ...base, thin: false, opacity: 0 });
+
+  expect(constantThin.thinWalled).toMatchObject({ value: true, connected: false, reason: 'constant-thin' });
+  expect(constantThin.volume).toBe(false);
+  expect(constantThin.hasTarget).toBe(false);
+  expect(constantSolid.thinWalled).toMatchObject({ value: false, connected: false, reason: 'constant-solid' });
+  expect(constantSolid.volume).toBe(true);
+  expect(constantSolid.hasTarget).toBe(true);
+  for (const entry of [connectedThin, connectedSolid]) {
+    expect(entry.thinWalled).toMatchObject({ value: null, connected: true, reason: 'connected' });
+    expect(entry.volume).toBe(true);
+    expect(entry.hasTarget).toBe(true);
+  }
+  expect(zeroOpacity.volume).toBe(false);
+  expect(zeroOpacity.hasTarget).toBe(false);
+  expect(zeroOpacity.prepassMode).toBe('clear');
+});
+
+test('@scene thin-wall scope reports an explicit RGB-T legacy fallback', async ({ page, embedURL }) => {
+  const legacyThin = await inspectUnits(page, embedURL, {
+    metersPerUnit: 1, length: 0.1, depth: 0.1, weight: 1, thin: true, legacyFallback: true,
+  });
+  expect(legacyThin.thinWalled).toMatchObject({ value: true, connected: false });
+  expect(legacyThin.volume).toBe(false);
+  expect(legacyThin.sceneRgbt?.mode).toBe('legacy');
+  expect(legacyThin.sceneRgbt?.reason).toMatch(/RGBT.*payload|payload.*RGBT/i);
+  expect(legacyThin.warnings.some((warning) => /Scene RGB-T fallback/.test(warning))).toBe(true);
 });

@@ -262,6 +262,23 @@ const sceneMaterialClassification = (compiled, sourceMetadata = null) => {
         && opacityValues.every(Number.isFinite));
     const dynamicOpacity = !!(opacityInput && (opacityInput.connected || !staticOpacity));
     const partialOpacity = staticOpacity && opacityValues.some((value) => value < 1);
+    const zeroOpacity = staticOpacity && opacityValues.every((value) => Math.max(0, Math.min(1, value)) === 0);
+    const thinInput = inputs.geometry_thin_walled;
+    const thinText = thinInput && thinInput.hasValue ? String(thinInput.value).trim().toLowerCase() : '';
+    const thinBoolean = thinInput && thinInput.type === 'boolean' && !thinInput.connected
+        && (thinText === 'true' || thinText === 'false' || thinText === '1' || thinText === '0')
+        ? (thinText === 'true' || thinText === '1') : null;
+    // A connected boolean may be true in the current graph, but source
+    // metadata cannot prove that it stays thin through a material update.
+    // Keep that path conservative: only a direct constant true can bypass
+    // the solid exit target. The shader-side correction remains responsible
+    // for the runtime boolean in both cases.
+    const thinWalled = {
+        value: thinBoolean,
+        connected: !!(thinInput && thinInput.connected),
+        reason: thinBoolean === true ? 'constant-thin' : thinBoolean === false ? 'constant-solid'
+            : thinInput ? (thinInput.connected ? 'connected' : 'unresolved') : 'default-solid',
+    };
     // A direct surface input is source-qualified; a generic u_thicknessScale
     // uniform is intentionally insufficient because the shader injector adds
     // it to many opaque programs. Unknown graphs stay peel candidates only
@@ -272,10 +289,14 @@ const sceneMaterialClassification = (compiled, sourceMetadata = null) => {
     // generic injected uniform is not enough to classify known opaque direct
     // surfaces. Restrict this fallback to an already-transparent compiled
     // graph whose source surface could not be qualified.
-    const volume = !!(meta && meta.direct && (staticTransmission || dynamicTransmission))
+    const volumeCandidate = !!(meta && meta.direct && (staticTransmission || dynamicTransmission))
         || !!(!meta?.direct && compiled && compiled.transparent && /u_thicknessScale/.test(compiled.fs || ''));
+    // A constant thin sheet has no bulk interior, and fully absent geometry
+    // cannot attenuate the receiver. Neither needs an object exit target.
+    // Do not infer either condition for graph-connected inputs.
+    const volume = volumeCandidate && thinBoolean !== true && !zeroOpacity;
     return {
-        peel, volume,
+        peel, volume, thinWalled,
         coverage: sceneMaterialPrepassCoverage(compiled, meta),
     };
 };
@@ -730,14 +751,22 @@ const createThicknessMaterial = () => new THREE.RawShaderMaterial({
         'precision highp float;',
         'in vec3 vWorld;',
         'uniform vec3 uEye;',
+        'uniform float uThicknessHandedness;',
         'out vec4 fragColor;',
-        'void main() { float d = distance(vWorld, uEye); fragColor = vec4(d, d, d, 1.0); }',
+        'void main() {',
+        // Negative object determinants reverse gl_FrontFacing. Select the
+        // physical exit face for both winding conventions without switching
+        // the shared material/program between per-object target renders.
+        '    bool exitFace = uThicknessHandedness >= 0.0 ? !gl_FrontFacing : gl_FrontFacing;',
+        '    if (!exitFace) discard;',
+        '    float d = distance(vWorld, uEye); fragColor = vec4(d, d, d, 1.0);',
+        '}',
     ].join('\n'),
     // Far side only, nearest first: for a convex solid the nearest back face
     // IS where the ray leaves the medium, which is the segment Beer-Lambert
     // wants. A concave or multi-shell prop underestimates the path, which
     // errs toward clear rather than toward black.
-    side: THREE.BackSide,
+    side: THREE.DoubleSide,
     depthTest: true,
     depthWrite: true,
 });
@@ -1071,9 +1100,11 @@ const createMtlxSceneView = async ({
     };
     let transparentMeshCache = null;
     let thicknessMeshCache = null;
+    let thicknessTopologyCache = new WeakMap();
     const invalidateTransparentMeshCache = () => {
         transparentMeshCache = null;
         thicknessMeshCache = null;
+        thicknessTopologyCache = new WeakMap();
     };
     let resizeObserver = null;
     let stopped = false;
@@ -1194,13 +1225,15 @@ const createMtlxSceneView = async ({
         activeVolumes: 0, allocatedVolumes: 0, overflowVolumes: 0,
         bytesPerTarget: 0, bytesAllocated: 0, budgetBytes: THICKNESS_TARGET_BUDGET_BYTES,
         maxTargets: THICKNESS_TARGET_MAX_ACTIVE, targetType: null, targetFormat: 'RGBA',
-        fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [],
+        fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [], unsupportedTopologyPrims: [],
     };
     let thicknessDiagnosticPlanKey = null;
     let thicknessDiagnosticPlanRevision = 0;
     let thicknessUnsupportedFallbackPrims = [];
+    let thicknessUnsupportedTopologyPrims = [];
     let thicknessBudgetWarning = null;
     let thicknessUnsupportedWarning = null;
+    let thicknessTopologyWarning = null;
     const replaceThicknessWarning = (previous, next) => {
         if (previous && previous !== next) {
             const index = warnings.indexOf(previous);
@@ -1231,14 +1264,16 @@ const createMtlxSceneView = async ({
             activeVolumes: 0, allocatedVolumes: 0, overflowVolumes: 0,
             bytesPerTarget: 0, bytesAllocated: 0, budgetBytes: THICKNESS_TARGET_BUDGET_BYTES,
             maxTargets: THICKNESS_TARGET_MAX_ACTIVE, targetType: null, targetFormat: 'RGBA',
-            fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [],
+            fallback: 'material-reference-distance', overflowPrims: [], unsupportedFallbackPrims: [], unsupportedTopologyPrims: [],
         };
         applyObjectThickness = null;
         thicknessDiagnosticPlanKey = null;
         thicknessDiagnosticPlanRevision = 0;
         thicknessUnsupportedFallbackPrims = [];
+        thicknessUnsupportedTopologyPrims = [];
         thicknessBudgetWarning = replaceThicknessWarning(thicknessBudgetWarning, null);
         thicknessUnsupportedWarning = replaceThicknessWarning(thicknessUnsupportedWarning, null);
+        thicknessTopologyWarning = replaceThicknessWarning(thicknessTopologyWarning, null);
         if (thicknessMaterial) { thicknessMaterial.dispose(); thicknessMaterial = null; }
         if (thicknessDiscardMaterial) { thicknessDiscardMaterial.dispose(); thicknessDiscardMaterial = null; }
         thicknessCamera = null;
@@ -1697,6 +1732,7 @@ const createMtlxSceneView = async ({
         material.userData.mtlxSceneTransparent = !!classification.peel;
         material.userData.mtlxScenePeel = !!classification.peel;
         material.userData.mtlxSceneVolume = !!classification.volume;
+        material.userData.mtlxSceneThinWalled = classification.thinWalled;
         material.userData.mtlxSceneRgbt = !!compiled.sceneRgbt;
         material.userData.mtlxSceneRgbtPayload = !!compiled.payloadSupported;
         material.userData.mtlxScenePrepassCoverage = classification.coverage;
@@ -2744,13 +2780,161 @@ const createMtlxSceneView = async ({
                 }
             }
         };
+        // Determines whether this mesh can safely use one nearest-exit map.
+        // Coordinate welding is intentional: BufferGeometry commonly splits
+        // shared positions along UV or normal seams, which is still one shell.
+        // Separate shells in one Mesh do not have an object-qualified exit at
+        // every ray, so route those to the documented reference fallback.
+        const thicknessTopology = (object) => {
+            const cached = thicknessTopologyCache.get(object);
+            const geometry = object && object.geometry;
+            const position = geometry && geometry.getAttribute && geometry.getAttribute('position');
+            const usesMaterialArray = Array.isArray(object && object.material);
+            const materialsForObject = usesMaterialArray ? object.material : [object && object.material];
+            const indexAttribute = geometry && geometry.index;
+            const index = indexAttribute && indexAttribute.array;
+            // BufferAttribute.count is Three's draw-count authority. Keep
+            // the typed-array bound as a defensive cap for a partially
+            // replaced attribute, but never traverse stale tail indices.
+            const indexedCount = index && indexAttribute && Number.isFinite(indexAttribute.count)
+                ? Math.min(index.length, indexAttribute.count)
+                : (index ? index.length : 0);
+            const vertexLimit = index ? indexedCount : (position ? position.count : 0);
+            const drawRange = geometry && geometry.drawRange;
+            const drawStart = Math.max(0, Math.min(vertexLimit, Math.floor(Number(drawRange && drawRange.start) || 0)));
+            const requestedCount = Number(drawRange && drawRange.count);
+            const drawEnd = Math.max(drawStart, Math.min(vertexLimit,
+                Number.isFinite(requestedCount) ? drawStart + Math.max(0, Math.floor(requestedCount)) : vertexLimit));
+            const signature = [position && position.version, position && position.count, indexAttribute && indexAttribute.version, indexAttribute && indexAttribute.count, index && index.length,
+                drawStart, drawEnd, usesMaterialArray ? 1 : 0,
+                geometry && geometry.groups ? geometry.groups.map((group) => [group.start, group.count, group.materialIndex].join(',')).join('|') : '',
+                materialsForObject.map((material) => String(material && material.uuid || '') + ':' + Number(!!(material && material.userData && material.userData.mtlxSceneVolume))).join('|')].join(';');
+            if (cached && cached.geometry === geometry && cached.position === position && cached.indexAttribute === indexAttribute && cached.signature === signature) return cached.result;
+            const remember = (result) => {
+                thicknessTopologyCache.set(object, { geometry, position, indexAttribute, signature, result });
+                return result;
+            };
+            if (!geometry || !position || !position.count) {
+                const invalid = { supported: false, reason: 'missing-position' };
+                return remember(invalid);
+            }
+            const selectedRanges = (usesMaterialArray
+                // Three renders no triangles for a material array when there
+                // are no groups. Do not synthesize a slot-zero range here:
+                // that would allocate an exit map for geometry absent from
+                // the actual draw.
+                ? (geometry.groups || [])
+                    .map((group) => {
+                        const start = Math.max(drawStart, Math.floor(Number(group.start) || 0));
+                        const end = Math.min(drawEnd, Math.max(start, Math.floor(Number(group.start) || 0) + Math.max(0, Math.floor(Number(group.count) || 0))));
+                        return { start, count: end - start, materialIndex: Number.isInteger(group.materialIndex) ? group.materialIndex : 0 };
+                    })
+                // A single Material renders the entire effective draw range;
+                // group indices only choose slots for material arrays.
+                : [{ start: drawStart, count: drawEnd - drawStart, materialIndex: 0 }])
+                .filter((group) => {
+                    // Three renders every group with a single Material even
+                    // when BoxGeometry labels its faces 0..5. A material
+                    // array, in contrast, makes group materialIndex an
+                    // actual selection and invalid slots must stay absent.
+                    const material = usesMaterialArray && group.materialIndex >= 0
+                        ? materialsForObject[group.materialIndex]
+                        : (!usesMaterialArray ? materialsForObject[0] : null);
+                    return !!(material && material.userData && material.userData.mtlxSceneVolume);
+                });
+            const triangleVertexCount = selectedRanges.reduce((sum, group) => sum + Math.floor((group.count || 0) / 3) * 3, 0);
+            if (!triangleVertexCount) {
+                return remember({ supported: false, reason: 'no-volume-triangles' });
+            }
+            // Never allocate a target after inspecting only a prefix of a
+            // large solid. Its omitted faces could make the apparent shell
+            // closed while the rendered draw range is not.
+            if (triangleVertexCount > 1500000) {
+                return remember({ supported: false, reason: 'topology-unverified' });
+            }
+            const parent = new Int32Array(position.count);
+            // Edge multiplicity needs a stable welded vertex identity. This
+            // is deliberately separate from `parent`: after connectivity is
+            // resolved every vertex in a closed shell has one component root,
+            // which is not an edge endpoint identity.
+            const weldedCoordinate = new Int32Array(position.count);
+            for (let i = 0; i < parent.length; i++) parent[i] = i;
+            const find = (value) => {
+                let root = value;
+                while (parent[root] !== root) root = parent[root];
+                while (parent[value] !== value) { const next = parent[value]; parent[value] = root; value = next; }
+                return root;
+            };
+            const join = (a, b) => {
+                const left = find(a), right = find(b);
+                if (left !== right) parent[right] = left;
+            };
+            const coordinateOwner = new Map();
+            for (let vertex = 0; vertex < position.count; vertex++) {
+                const key = [position.getX(vertex), position.getY(vertex), position.getZ(vertex)]
+                    .map((value) => Math.round(value * 1e6)).join(',');
+                const prior = coordinateOwner.get(key);
+                if (prior == null) {
+                    coordinateOwner.set(key, vertex);
+                    weldedCoordinate[vertex] = vertex;
+                } else {
+                    weldedCoordinate[vertex] = prior;
+                    join(vertex, prior);
+                }
+            }
+            const used = new Set();
+            const edges = new Map();
+            const recordEdge = (a, b) => {
+                const left = Math.min(a, b), right = Math.max(a, b), key = left + ':' + right;
+                edges.set(key, (edges.get(key) || 0) + 1);
+            };
+            for (const group of selectedRanges) {
+                const start = Math.max(0, Math.floor(group.start || 0));
+                const end = Math.min(index ? index.length : position.count, start + Math.floor(group.count || 0));
+                for (let offset = start; offset + 2 < end; offset += 3) {
+                    const a = index ? index[offset] : offset;
+                    const b = index ? index[offset + 1] : offset + 1;
+                    const c = index ? index[offset + 2] : offset + 2;
+                    if (a >= position.count || b >= position.count || c >= position.count) continue;
+                    join(a, b); join(b, c); used.add(a); used.add(b); used.add(c);
+                }
+            }
+            // Complete all coordinate/triangle unions before recording edge
+            // ownership. A seam can join two roots later in the traversal;
+            // recording before that would turn a closed BoxGeometry into six
+            // apparent open faces.
+            for (const group of selectedRanges) {
+                const start = Math.max(0, Math.floor(group.start || 0));
+                const end = Math.min(index ? index.length : position.count, start + Math.floor(group.count || 0));
+                for (let offset = start; offset + 2 < end; offset += 3) {
+                    const a = index ? index[offset] : offset;
+                    const b = index ? index[offset + 1] : offset + 1;
+                    const c = index ? index[offset + 2] : offset + 2;
+                    if (a >= position.count || b >= position.count || c >= position.count) continue;
+                    recordEdge(weldedCoordinate[a], weldedCoordinate[b]);
+                    recordEdge(weldedCoordinate[b], weldedCoordinate[c]);
+                    recordEdge(weldedCoordinate[c], weldedCoordinate[a]);
+                }
+            }
+            const components = new Set(Array.from(used, find));
+            const openEdges = Array.from(edges.values()).filter((count) => count !== 2).length;
+            const result = components.size > 1
+                ? { supported: false, reason: 'disconnected-shell-components', components: components.size, openEdges }
+                : openEdges > 0
+                    ? { supported: false, reason: 'non-watertight-volume', components: components.size, openEdges }
+                    : { supported: true, reason: 'single-closed-shell', components: components.size, openEdges };
+            return remember(result);
+        };
         // Renders one back-face distance map per active solid. A shared map
         // cannot identify the entry surface: a disjoint projected volume can
         // otherwise replace another solid's exit distance. This intentionally
         // remains a single nearest exit per mesh, so concave/disconnected and
         // nested shells stay a documented clear-path limitation.
         const updateThickness = () => {
-            const list = collectThicknessMeshes().filter((object) => object.visible);
+            const candidates = collectThicknessMeshes().filter((object) => object.visible);
+            const topology = candidates.map((object) => ({ object, topology: thicknessTopology(object) }));
+            const topologyUnsupported = topology.filter((entry) => !entry.topology.supported);
+            const list = topology.filter((entry) => entry.topology.supported).map((entry) => entry.object);
             // Geometry is rendered into the HDR presentation target when a
             // caller destination is bound. gl_FragCoord therefore indexes
             // that target, not the canvas drawing buffer.
@@ -2799,13 +2983,16 @@ const createMtlxSceneView = async ({
             }
             thicknessTarget = allocated.length ? allocated[0].target : null;
             thicknessInfo = {
-                activeVolumes: ordered.length, allocatedVolumes: allocated.length, overflowVolumes: overflow.length,
+                activeVolumes: candidates.length, eligibleVolumes: ordered.length, allocatedVolumes: allocated.length, overflowVolumes: overflow.length,
                 bytesPerTarget, bytesAllocated: allocated.length * bytesPerTarget,
                 budgetBytes: THICKNESS_TARGET_BUDGET_BYTES, maxTargets: THICKNESS_TARGET_MAX_ACTIVE,
                 targetType: floatOk ? 'FloatType' : 'HalfFloatType', targetFormat: 'RGBA + depth',
                 fallback: 'material-reference-distance',
                 overflowPrims: overflow.slice(0, 32).map((object) => String(object.userData?.primPath || object.name || 'unknown')),
                 unsupportedFallbackPrims: [],
+                unsupportedTopologyPrims: topologyUnsupported.slice(0, 32).map(({ object, topology: info }) => ({
+                    prim: String(object.userData?.primPath || object.name || 'unknown'), reason: info.reason,
+                })),
             };
             // Warning collection is a plan diagnostic, not a draw operation.
             // Rebuilding/sorting it in each mesh callback made an overflowed
@@ -2831,12 +3018,14 @@ const createMtlxSceneView = async ({
             });
             const diagnosticPlanKey = [tw, th, targetType, capacity,
                 ordered.map((object) => String(object.uuid || '') + ':' + String(object.userData?.primPath || object.name || '')).join('|'),
-                fallbackMaterialState.map((entry) => entry.prim + ':' + entry.materials).join('|')].join(';');
+                fallbackMaterialState.map((entry) => entry.prim + ':' + entry.materials).join('|'),
+                thicknessInfo.unsupportedTopologyPrims.map((entry) => entry.prim + ':' + entry.reason).join('|')].join(';');
             if (diagnosticPlanKey !== thicknessDiagnosticPlanKey) {
                 thicknessDiagnosticPlanKey = diagnosticPlanKey;
                 thicknessDiagnosticPlanRevision += 1;
                 thicknessUnsupportedFallbackPrims = fallbackMaterialState
                     .filter((entry) => entry.unsupported).map((entry) => entry.prim).sort();
+                thicknessUnsupportedTopologyPrims = thicknessInfo.unsupportedTopologyPrims.slice();
                 const budgetWarning = overflow.length
                     ? '[info] Thickness target budget: ' + overflow.length + ' of ' + ordered.length
                         + ' volume instances use material-reference-distance fallback (' + thicknessInfo.bytesAllocated + ' / '
@@ -2846,10 +3035,16 @@ const createMtlxSceneView = async ({
                     ? '[info] Thickness target fallback has no scalar transmission_depth for '
                         + thicknessUnsupportedFallbackPrims.join(', ') + '; using clear path for unsupported graph'
                     : null;
+                const topologyWarning = thicknessUnsupportedTopologyPrims.length
+                    ? '[info] Thickness target fallback uses material-reference-distance for unsupported shell topology: '
+                        + thicknessUnsupportedTopologyPrims.map((entry) => entry.prim + ' (' + entry.reason + ')').join(', ')
+                    : null;
                 thicknessBudgetWarning = replaceThicknessWarning(thicknessBudgetWarning, budgetWarning);
                 thicknessUnsupportedWarning = replaceThicknessWarning(thicknessUnsupportedWarning, unsupportedWarning);
+                thicknessTopologyWarning = replaceThicknessWarning(thicknessTopologyWarning, topologyWarning);
             }
             thicknessInfo.unsupportedFallbackPrims = thicknessUnsupportedFallbackPrims.slice(0, 32);
+            thicknessInfo.unsupportedTopologyPrims = thicknessUnsupportedTopologyPrims.slice(0, 32);
             thicknessInfo.diagnosticPlanRevision = thicknessDiagnosticPlanRevision;
             if (!allocated.length) return { targets: thicknessTargets, width: tw, height: th };
             if (!thicknessMaterial) thicknessMaterial = createThicknessMaterial();
@@ -2860,6 +3055,7 @@ const createMtlxSceneView = async ({
             }
             thicknessMaterial.uniforms = thicknessMaterial.uniforms || {};
             thicknessMaterial.uniforms.uEye = thicknessMaterial.uniforms.uEye || { value: new THREE.Vector3() };
+            thicknessMaterial.uniforms.uThicknessHandedness = thicknessMaterial.uniforms.uThicknessHandedness || { value: 1 };
             thicknessMaterial.uniforms.uEye.value.copy(camera.position);
 
             if (!thicknessCamera) thicknessCamera = camera.clone();
@@ -2889,6 +3085,8 @@ const createMtlxSceneView = async ({
                 renderer.setClearColor(0x000000, 1); // 0 distance means "no medium"
                 for (const entry of allocated) {
                     ordered.forEach((object) => { object.visible = object === entry.object && visibleState.get(object); });
+                    entry.object.updateMatrixWorld(true);
+                    thicknessMaterial.uniforms.uThicknessHandedness.value = entry.object.matrixWorld.determinant() < 0 ? -1 : 1;
                     entry.target.viewport.set(0, 0, tw, th);
                     entry.target.scissorTest = false;
                     renderer.setRenderTarget(entry.target);
