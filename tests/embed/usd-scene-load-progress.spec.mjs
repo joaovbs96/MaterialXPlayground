@@ -95,7 +95,7 @@ test('@scene load-progress events carry per-material and per-phase counts in ord
     expect(e.index).toBe(i + 1);
     expect(e.total).toBe(stepEvents.length);
   });
-  const knownStepOrder = ['sky-visibility', 'shadow-atlas', 'gpu-program', 'first-frame'];
+  const knownStepOrder = ['sky-visibility', 'occlusion-volume', 'shadow-atlas', 'gpu-program', 'first-frame'];
   const seenSteps = stepEvents.map((e) => e.step);
   const expectedSteps = knownStepOrder.filter((s) => seenSteps.includes(s));
   expect(seenSteps).toEqual(expectedSteps);

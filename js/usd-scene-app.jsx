@@ -780,7 +780,7 @@
         const progressLabel = phaseLabels[progress.phase] || (progress.phase ? progress.phase.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : (status === 'rendered' ? 'Ready' : 'Loading'));
         const progressText = progress.total ? (progress.done + '/' + progress.total) : (/texture|material/i.test(progress.phase) ? '' : progress.message);
         // Second, dimmer overlay line: the current item within the phase.
-        const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
+        const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'occlusion-volume': 'Baking occlusion volume', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
         const progressDetail = progress.phase === 'renderer' ? (RENDERER_STEP_LABELS[progress.step] || '') : (progress.label || '');
         const busy = status === 'loading' || status === 'loading-example' || status === 'loaded';
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';

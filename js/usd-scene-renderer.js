@@ -648,6 +648,7 @@ const createAoMaterial = () => new THREE.RawShaderMaterial({
         'uniform vec2 uSize;',
         'uniform float uRadius;',
         'uniform float uBias;',
+        'uniform float uOrthographic;',
         'out vec4 fragColor;',
         'const int SAMPLES = ' + AO_SAMPLES + ';',
         'const float M_PI = 3.1415926535897932;',
@@ -674,12 +675,13 @@ const createAoMaterial = () => new THREE.RawShaderMaterial({
         '    vec2 uv = gl_FragCoord.xy / uSize;',
         '    vec4 pre = texture(tPrepass, uv);',
         '    float depth = pre.a;',
-        // Background texels (nothing drawn) stay fully lit.
-        '    if (depth <= 0.0) { fragColor = vec4(1.0); return; }',
+        // Background texels (nothing drawn) stay fully lit and fully confident.
+        '    if (depth <= 0.0) { fragColor = vec4(1.0, 1.0, 0.0, 1.0); return; }',
         '    vec3 N = normalize(pre.rgb);',
         '    vec3 P = viewPosAt(uv, depth);',
         '    float angleOffset = hash12(gl_FragCoord.xy) * 2.0 * M_PI;',
         '    float occlusion = 0.0;',
+        '    int missed = 0;',
         '    for (int i = 0; i < SAMPLES; i++) {',
         // Cosine-weighted hemisphere direction around N, spiralled so the
         // samples spread over the disc rather than clustering.
@@ -692,10 +694,10 @@ const createAoMaterial = () => new THREE.RawShaderMaterial({
         '        vec3 samplePos = P + dir * uRadius * (0.3 + 0.7 * t);',
         '        vec4 clip = uProjection * vec4(samplePos, 1.0);',
         '        vec2 sampleUv = (clip.xy / clip.w) * 0.5 + 0.5;',
-        '        if (any(lessThan(sampleUv, vec2(0.0))) || any(greaterThan(sampleUv, vec2(1.0)))) continue;',
+        '        if (any(lessThan(sampleUv, vec2(0.0))) || any(greaterThan(sampleUv, vec2(1.0)))) { missed++; continue; }',
         '        vec4 samplePre = texture(tPrepass, sampleUv);',
         '        float sceneDepth = samplePre.a;',
-        '        if (sceneDepth <= 0.0) continue;',
+        '        if (sceneDepth <= 0.0) { missed++; continue; }',
         '        float sampleDepth = -samplePos.z;',
         // Occluded when real geometry sits in front of the sample point.
         '        float occluded = (sceneDepth < sampleDepth - uBias) ? 1.0 : 0.0;',
@@ -714,7 +716,19 @@ const createAoMaterial = () => new THREE.RawShaderMaterial({
         '        occluded *= 1.0 - smoothstep(0.0, 1.0, abs(depth - sceneDepth) / max(uRadius, 1e-6));',
         '        occlusion += occluded;',
         '    }',
-        '    fragColor = vec4(vec3(1.0 - occlusion / float(SAMPLES)), 1.0);',
+        '    float ao = 1.0 - occlusion / float(SAMPLES);',
+        // Projected sample radius in pixels, so the guard below fades AO out
+        // near the frame edge over the same footprint the samples actually
+        // reach. Orthographic projections have no perspective divide.
+        '    float rPx = uOrthographic > 0.5',
+        '        ? uRadius * uProjection[0][0] * 0.5 * uSize.x',
+        '        : uRadius * uProjection[0][0] / max(depth, 1e-6) * 0.5 * uSize.x;',
+        '    float border = smoothstep(0.0, max(rPx, 1.0), min(min(gl_FragCoord.x, uSize.x - gl_FragCoord.x), min(gl_FragCoord.y, uSize.y - gl_FragCoord.y)));',
+        // Confidence: how many samples actually landed on screen and on
+        // geometry, scaled by distance from the frame edge. Low confidence
+        // means this pixel's AO estimate is unreliable, not that it is 1.0.
+        '    float confidence = (1.0 - float(missed) / float(SAMPLES)) * border;',
+        '    fragColor = vec4(ao, confidence, 0.0, 1.0);',
         '}',
     ].join('\n'),
     depthTest: false,
@@ -738,9 +752,10 @@ const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
         // AO is a screen-space visibility estimate. Never filter it across
         // a geometry edge: empty pixels, a depth discontinuity, or a normal
         // break carry no common hemisphere with the center receiver.
-        '    if (centerPre.a <= 0.0) { fragColor = vec4(1.0); return; }',
+        '    if (centerPre.a <= 0.0) { fragColor = vec4(1.0, 1.0, 0.0, 1.0); return; }',
         '    vec3 centerNormal = normalize(centerPre.rgb);',
-        '    float sum = 0.0;',
+        '    float sumAo = 0.0;',
+        '    float sumConfidence = 0.0;',
         '    float weightSum = 0.0;',
         '    for (int x = -' + AO_BLUR_RADIUS + '; x <= ' + AO_BLUR_RADIUS + '; x++) {',
         '        for (int y = -' + AO_BLUR_RADIUS + '; y <= ' + AO_BLUR_RADIUS + '; y++) {',
@@ -751,16 +766,56 @@ const createAoBlurMaterial = () => new THREE.RawShaderMaterial({
         '            float normalWeight = pow(max(dot(centerNormal, sampleNormal), 0.0), uNormalExponent);',
         '            float depthWeight = 1.0 - smoothstep(0.5 * uDepthThreshold, uDepthThreshold, abs(centerPre.a - samplePre.a));',
         '            float weight = normalWeight * depthWeight;',
-        '            sum += texture(tAo, uv).r * weight;',
+        '            vec2 aoSample = texture(tAo, uv).rg;',
+        '            sumAo += aoSample.r * weight;',
+        '            sumConfidence += aoSample.g * weight;',
         '            weightSum += weight;',
         '        }',
         '    }',
-        '    fragColor = vec4(vec3(sum / max(weightSum, 1e-6)), 1.0);',
+        '    fragColor = vec4(sumAo / max(weightSum, 1e-6), sumConfidence / max(weightSum, 1e-6), 0.0, 1.0);',
         '}',
     ].join('\n'),
     depthTest: false,
     depthWrite: false,
 });
+
+// CPU-side trilinear sample of a baked RGBA8 occlusion volume, matching the
+// shader's texture() filtering (clamp to edge) for the __aoProbe debug hook.
+const sampleTrilinearRGBA = (data, dimX, dimY, dimZ, u, v, w) => {
+    const clamp01 = (n) => Math.max(0, Math.min(1, n));
+    const fx = clamp01(u) * dimX - 0.5, fy = clamp01(v) * dimY - 0.5, fz = clamp01(w) * dimZ - 0.5;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz);
+    const tx = fx - x0, ty = fy - y0, tz = fz - z0;
+    const clampIdx = (i, n) => Math.max(0, Math.min(n - 1, i));
+    const at = (xi, yi, zi, c) => data[((clampIdx(zi, dimZ) * dimY + clampIdx(yi, dimY)) * dimX + clampIdx(xi, dimX)) * 4 + c];
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const out = [0, 0, 0, 0];
+    for (let c = 0; c < 4; c++) {
+        const c00 = lerp(at(x0, y0, z0, c), at(x0 + 1, y0, z0, c), tx);
+        const c10 = lerp(at(x0, y0 + 1, z0, c), at(x0 + 1, y0 + 1, z0, c), tx);
+        const c01 = lerp(at(x0, y0, z0 + 1, c), at(x0 + 1, y0, z0 + 1, c), tx);
+        const c11 = lerp(at(x0, y0 + 1, z0 + 1, c), at(x0 + 1, y0 + 1, z0 + 1, c), tx);
+        out[c] = lerp(lerp(c00, c10, ty), lerp(c01, c11, ty), tz);
+    }
+    return out;
+};
+
+// Decodes a baked sky/volume texture at a world point, biased 1.5 cells along
+// the normal exactly like mx_sky_visibility/mx_volume_occlusion. Returns 1
+// (unoccluded, a no-op) when the texture is missing or the point is outside it.
+const probeBakedVisibility = (texture, min, size, cell, point, normal) => {
+    if (!texture || !texture.image || !min || !size || !cell) return 1;
+    const biased = point.clone().addScaledVector(normal, 1.5 * cell);
+    const u = (biased.x - min.x) / Math.max(size.x, 1e-6);
+    const v = (biased.y - min.y) / Math.max(size.y, 1e-6);
+    const w = (biased.z - min.z) / Math.max(size.z, 1e-6);
+    if (u < 0 || v < 0 || w < 0 || u > 1 || v > 1 || w > 1) return 1;
+    const img = texture.image;
+    const [r, g, b, a] = sampleTrilinearRGBA(img.data, img.width, img.height, img.depth, u, v, w);
+    const mean = r / 255;
+    const dirDot = ((g - 128) / 127) * normal.x + ((b - 128) / 127) * normal.y + ((a - 128) / 127) * normal.z;
+    return Math.max(0, Math.min(1, mean + dirDot));
+};
 
 // Back-face distance for transmissive prims, the path length MaterialX's
 // volume absorption needs (see patchTransmissionThickness in
@@ -1321,6 +1376,14 @@ const createMtlxSceneView = async ({
     let skyVisEnabled = storedSceneSkyVis();
     let skyVisStrength = storedSceneSkyVisStrength();
     let skyVisInfo = null;
+    // Baked world-space occlusion volume (js/usd-scene-skyvis.js's AO bake).
+    // Local, contact-scale occlusion the sky volume is too coarse to resolve;
+    // rebuilt alongside the sky volume, never per frame.
+    let aoVolumeTexture = null;
+    let aoVolumeMin = null;
+    let aoVolumeSize = null;
+    let aoVolumeCell = 0;
+    let aoVolumeInfo = null;
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
@@ -1973,6 +2036,7 @@ const createMtlxSceneView = async ({
             shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
+            aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -3392,7 +3456,7 @@ const createMtlxSceneView = async ({
                 aoMaterial.uniforms = {
                     tPrepass: { value: null }, uProjection: { value: new THREE.Matrix4() },
                     uInverseProjection: { value: new THREE.Matrix4() }, uSize: { value: new THREE.Vector2() },
-                    uRadius: { value: 1 }, uBias: { value: 0.01 },
+                    uRadius: { value: 1 }, uBias: { value: 0.01 }, uOrthographic: { value: 0 },
                 };
                 aoBlurMaterial = createAoBlurMaterial();
                 aoBlurMaterial.uniforms = {
@@ -3451,6 +3515,7 @@ const createMtlxSceneView = async ({
             aoMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
             aoMaterial.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
             aoMaterial.uniforms.uSize.value.set(aw, ah);
+            aoMaterial.uniforms.uOrthographic.value = camera.isPerspectiveCamera ? 0 : 1;
             // A WORLD radius, tied to the stage rather than to the view.
             // Deriving it from what is on screen was wrong: it shrank as the
             // camera zoomed in, reaching under two units on a desk close-up,
@@ -3865,6 +3930,8 @@ const createMtlxSceneView = async ({
         // and is far too heavy to run on each frame of an orbit.
         // Bakes the sky visibility volume for the loaded stage. Geometry only,
         // so it runs once after the bounds are final and never per frame.
+        // Returns the raw bake result (or null), so buildAoVolume can reuse
+        // its voxel grid when the two resolutions happen to match.
         const buildSkyVisibilityVolume = (stageBox) => {
             if (skyVisTexture) { try { skyVisTexture.dispose(); } catch (e) {} }
             skyVisTexture = null;
@@ -3872,8 +3939,8 @@ const createMtlxSceneView = async ({
             skyVisSize = null;
             skyVisCell = 0;
             skyVisInfo = null;
-            if (!skyVisEnabled || !window.buildSkyVisibility || !THREE.DataTexture3D) return;
-            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return;
+            if (!skyVisEnabled || !window.buildSkyVisibility || !THREE.DataTexture3D) return null;
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return null;
             const meshes = [];
             sceneRoot.traverse((object) => {
                 if (!object.isMesh || !object.geometry) return;
@@ -3887,7 +3954,7 @@ const createMtlxSceneView = async ({
                 if (opacity === 0) return;
                 meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity });
             });
-            if (!meshes.length) return;
+            if (!meshes.length) return null;
             const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
             let result = null;
             try {
@@ -3895,9 +3962,9 @@ const createMtlxSceneView = async ({
             } catch (error) {
                 const note = 'Sky visibility bake failed: ' + (error && error.message || error);
                 if (warnings.indexOf(note) < 0) warnings.push(note);
-                return;
+                return null;
             }
-            if (!result) return;
+            if (!result) return null;
             const texture = new THREE.DataTexture3D(result.data, result.dim[0], result.dim[1], result.dim[2]);
             // Sky visibility stores first-order moments in RGBA8: R is the
             // mean visibility and GBA encodes the signed directional term.
@@ -3930,6 +3997,83 @@ const createMtlxSceneView = async ({
                 + Math.round(result.occupiedFraction * 100) + ' percent of cells inside geometry, '
                 + Math.round(ms) + ' ms)';
             if (warnings.indexOf(note) < 0) warnings.push(note);
+            return result;
+        };
+        // Bakes the local occlusion volume (js/usd-scene-skyvis.js), reusing
+        // the sky bake's voxel grid when its resolution happens to match.
+        // Same lifecycle as buildSkyVisibilityVolume: called right after it,
+        // rebuilt wherever the sky volume is rebuilt.
+        const buildAoVolume = (stageBox, skyResult) => {
+            if (aoVolumeTexture) { try { aoVolumeTexture.dispose(); } catch (e) {} }
+            aoVolumeTexture = null;
+            aoVolumeMin = null;
+            aoVolumeSize = null;
+            aoVolumeCell = 0;
+            aoVolumeInfo = null;
+            if (!aoEnabled || !window.buildSkyVisibility || !THREE.DataTexture3D) return null;
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return null;
+            const meshes = [];
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                if (object.userData && object.userData.excludeFromFrame) return;
+                const opacity = sceneObjectPrepassCoverage(object);
+                if (opacity === 0) return;
+                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity });
+            });
+            if (!meshes.length) return null;
+            const size = stageBox.getSize(new THREE.Vector3());
+            const longest = Math.max(size.x, size.y, size.z);
+            if (!(longest > 0)) return null;
+            // Predict the voxel count for a candidate resolution without
+            // voxelizing: mirrors voxelizeStage's own dim formula so the
+            // budget search below costs nothing extra.
+            const dimAt = (resolution) => {
+                const cell = longest / resolution;
+                return [
+                    Math.max(4, Math.ceil(size.x / cell) + 4),
+                    Math.max(4, Math.ceil(size.y / cell) + 4),
+                    Math.max(4, Math.ceil(size.z / cell) + 4),
+                ];
+            };
+            let resolution = 64;
+            while (resolution > 8) {
+                const dim = dimAt(resolution);
+                if (dim[0] * dim[1] * dim[2] <= 400000) break;
+                resolution -= 8;
+            }
+            const stageRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
+            const voxels = (skyResult && skyResult.voxels && skyResult.voxels.resolution === resolution)
+                ? skyResult.voxels : undefined;
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            let result = null;
+            try {
+                result = window.buildSkyVisibility(meshes, stageBox,
+                    { resolution, rays: 32, maxDistance: 2 * stageRadius * 0.05, voxels });
+            } catch (error) {
+                const note = 'Occlusion volume bake failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!result) return null;
+            const texture = new THREE.DataTexture3D(result.data, result.dim[0], result.dim[1], result.dim[2]);
+            texture.format = THREE.RGBAFormat;
+            texture.type = THREE.UnsignedByteType;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.wrapR = THREE.ClampToEdgeWrapping;
+            texture.unpackAlignment = 1;
+            texture.needsUpdate = true;
+            aoVolumeTexture = texture;
+            aoVolumeCell = result.cell;
+            aoVolumeMin = new THREE.Vector3(result.min[0], result.min[1], result.min[2]);
+            aoVolumeSize = new THREE.Vector3(result.size[0], result.size[1], result.size[2]);
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            aoVolumeInfo = { dim: result.dim.slice(), cell: result.cell, ms };
+            const note = '[info] Occlusion volume baked at ' + result.dim.join('x') + ' in ' + Math.round(ms) + ' ms';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+            return result;
         };
         // Pushes the baked volume onto every live material without a rebuild.
         const applySkyVisibility = () => {
@@ -3941,6 +4085,20 @@ const createMtlxSceneView = async ({
                 if (u.u_skyVisSize && skyVisSize) u.u_skyVisSize.value.copy(skyVisSize);
                 if (u.u_skyVisCell) u.u_skyVisCell.value = skyVisCell;
                 if (u.u_skyVisStrength) u.u_skyVisStrength.value = (skyVisEnabled && skyVisTexture) ? skyVisStrength : 0;
+            }
+        };
+        // Pushes the baked occlusion volume onto every live material. Strength
+        // follows aoEnabled alone: the SSAO guard already handles the screen
+        // space term, this only gates the separate baked-volume factor.
+        const applyAoVolume = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_aoVolumeMap) u.u_aoVolumeMap.value = (aoEnabled && aoVolumeTexture) ? aoVolumeTexture : (window.getDummyTex3DWhite ? window.getDummyTex3DWhite() : u.u_aoVolumeMap.value);
+                if (u.u_aoVolumeMin && aoVolumeMin) u.u_aoVolumeMin.value.copy(aoVolumeMin);
+                if (u.u_aoVolumeSize && aoVolumeSize) u.u_aoVolumeSize.value.copy(aoVolumeSize);
+                if (u.u_aoVolumeCell) u.u_aoVolumeCell.value = aoVolumeCell;
+                if (u.u_aoVolumeStrength) u.u_aoVolumeStrength.value = aoEnabled ? aoStrength : 0;
             }
         };
         const applyShadowMatrix = () => {
@@ -4033,6 +4191,7 @@ const createMtlxSceneView = async ({
             shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
+            aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,
@@ -4308,15 +4467,18 @@ const createMtlxSceneView = async ({
         // first frame rather than leaving the opening frames unshadowed.
         // Materials were built during the geometry pass, before the volume
         // existed, so push it onto them once it does.
-        const rendererStepTotal = 3 + (shadowsEnabled ? 1 : 0);
+        const rendererStepTotal = 4 + (shadowsEnabled ? 1 : 0);
         let rendererStepIndex = 0;
         const reportRendererStep = (step) => {
             rendererStepIndex += 1;
             report({ phase: 'renderer', status: 'step', step, index: rendererStepIndex, total: rendererStepTotal });
         };
         reportRendererStep('sky-visibility');
-        buildSkyVisibilityVolume(stageBox);
+        const skyBakeResult = buildSkyVisibilityVolume(stageBox);
         applySkyVisibility();
+        reportRendererStep('occlusion-volume');
+        buildAoVolume(stageBox, skyBakeResult);
+        applyAoVolume();
         if (shadowsEnabled) { reportRendererStep('shadow-atlas'); updateShadowMap(); }
         applyMaterialEnvironment();
         const resize = () => {
@@ -4963,9 +5125,12 @@ const createMtlxSceneView = async ({
             try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_KEY, skyVisEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
             // Turning it back on has to re-bake: the volume is dropped when off.
             if (skyVisEnabled && !skyVisTexture && sceneRoot) {
-                buildSkyVisibilityVolume(new THREE.Box3().setFromObject(sceneRoot));
+                const box = new THREE.Box3().setFromObject(sceneRoot);
+                const skyResult = buildSkyVisibilityVolume(box);
+                if (aoEnabled && !aoVolumeTexture) buildAoVolume(box, skyResult);
             }
             applySkyVisibility();
+            applyAoVolume();
             renderFrame();
             return skyVisEnabled;
         };
@@ -4973,6 +5138,7 @@ const createMtlxSceneView = async ({
             skyVisStrength = Math.max(0, Math.min(1, Number(value) || 0));
             try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_STRENGTH_KEY, String(skyVisStrength)); } catch (e) { /* privacy mode */ }
             applySkyVisibility();
+            applyAoVolume();
             renderFrame();
             return skyVisStrength;
         };
@@ -4986,15 +5152,26 @@ const createMtlxSceneView = async ({
             aoEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
             if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
+            applyAoVolume();
             return aoEnabled;
         };
         const setAmbientOcclusionStrength = (value) => {
             const next = Number(value);
             aoStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_STRENGTH_KEY, String(aoStrength)); } catch (e) { /* privacy mode */ }
+            applyAoVolume();
             return aoStrength;
         };
-        const getAmbientOcclusion = () => ({ enabled: aoEnabled, strength: aoStrength });
+        const getAmbientOcclusion = () => ({
+            enabled: aoEnabled,
+            strength: aoStrength,
+            volume: {
+                ready: !!aoVolumeTexture,
+                dim: aoVolumeInfo ? aoVolumeInfo.dim.slice() : null,
+                cell: aoVolumeCell,
+                ms: aoVolumeInfo ? aoVolumeInfo.ms : null,
+            },
+        });
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -5364,6 +5541,28 @@ const createMtlxSceneView = async ({
                 return { ready: true, size: [t.width, t.height], min: mn, max: mx, mean: +(sum / n).toFixed(1),
                     radius: aoMaterial ? aoMaterial.uniforms.uRadius.value : null,
                     bias: aoMaterial ? aoMaterial.uniforms.uBias.value : null };
+            },
+            // Debug hook: the three occlusion terms at one world point, read
+            // the same way the shader does (CPU trilinear for the two baked
+            // volumes, a real GPU readback for the screen space guard).
+            __aoProbe: (worldPoint, worldNormal) => {
+                const point = worldPoint.isVector3 ? worldPoint.clone() : new THREE.Vector3(worldPoint[0], worldPoint[1], worldPoint[2]);
+                const normal = (worldNormal.isVector3 ? worldNormal.clone() : new THREE.Vector3(worldNormal[0], worldNormal[1], worldNormal[2])).normalize();
+                const volume = probeBakedVisibility(aoVolumeTexture, aoVolumeMin, aoVolumeSize, aoVolumeCell, point, normal);
+                const sky = probeBakedVisibility(skyVisTexture, skyVisMin, skyVisSize, skyVisCell, point, normal);
+                let ssao = { ao: 1, confidence: 0, x: -1, y: -1 };
+                if (aoBlurTarget && camera) {
+                    const clip = point.clone().project(camera);
+                    const x = Math.floor(((clip.x + 1) / 2) * aoBlurTarget.width);
+                    const y = Math.floor(((clip.y + 1) / 2) * aoBlurTarget.height);
+                    if (x >= 0 && y >= 0 && x < aoBlurTarget.width && y < aoBlurTarget.height) {
+                        const prev = snapshotRendererDestination();
+                        const buf = new Uint8Array(4);
+                        try { renderer.readRenderTargetPixels(aoBlurTarget, x, y, 1, 1, buf); } finally { restoreRendererDestination(prev); }
+                        ssao = { ao: buf[0] / 255, confidence: buf[1] / 255, x, y };
+                    }
+                }
+                return { volume, sky, ssao };
             },
             __shadowDebug: () => {
                 if (!shadowTarget) return { ready: false };

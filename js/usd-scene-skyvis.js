@@ -91,7 +91,10 @@
     // this avoids multiplying a thin wall once per voxel while preserving
     // opaque behavior. Distinct surfaces that touch in one cell are an
     // acknowledged resolution limit of this inexpensive bake.
-    function escapeVisibility(occ, dim, sx, sy, sz, dx, dy, dz) {
+    // maxT (cells) stops the march early: used by the AO volume bake, whose
+    // occlusion is local rather than sky-scale. Infinity (the default) is a
+    // byte for byte no-op against the original unbounded march.
+    function escapeVisibility(occ, dim, sx, sy, sz, dx, dy, dz, maxT) {
         const dimX = dim[0], dimY = dim[1], dimZ = dim[2];
         let x = sx, y = sy, z = sz;
         const stepX = dx > 0 ? 1 : -1;
@@ -106,7 +109,9 @@
         let tZ = dz !== 0 ? invZ * 0.5 : Infinity;
         let visibility = 1;
         let occupiedRun = false;
+        const limit = maxT != null ? maxT : Infinity;
         for (;;) {
+            if (Math.min(tX, tY, tZ) > limit) return visibility;
             if (tX < tY && tX < tZ) { x += stepX; tX += invX; } else if (tY < tZ) { y += stepY; tY += invY; } else { z += stepZ; tZ += invZ; }
             if (x < 0 || y < 0 || z < 0 || x >= dimX || y >= dimY || z >= dimZ) return visibility;
             const coverage = occ[(z * dimY + y) * dimX + x];
@@ -119,16 +124,13 @@
     }
 
     // meshes: [{ geometry, matrixWorld }]. box: THREE.Box3 of the stage.
-    // Returns { data: Uint8Array (RGBA), dim, min, size, cell, occupiedFraction }
-    // ready for a RGBA DataTexture3D, or null when the stage is degenerate.
-    // R stores a=<V>, while GBA store the signed first moment d=2<V omega>
-    // with a centered 128/127 UNORM encoding. The shader reconstructs the
-    // diffuse visibility for a normal with clamp(a + dot(d, N), 0, 1).
-    function buildSkyVisibility(meshes, box, options) {
+    // Returns { occ, dim, min, cell, occupiedFraction, triangles, stride,
+    // sampledTriangles, structuralTriangles, subcellTriangles, resolution },
+    // or null when the stage is degenerate. occ is a Float32Array of per-cell
+    // opacity, the shared input to marchVisibility.
+    function voxelizeStage(meshes, box, options) {
         const opts = options || {};
         const resolution = Math.max(8, Math.min(96, opts.resolution || 32));
-        const requestedRays = Math.floor(Math.max(8, Math.min(128, Number(opts.rays) || 32)));
-        const rayCount = requestedRays % 2 === 0 ? requestedRays : (requestedRays < 128 ? requestedRays + 1 : requestedRays - 1);
         if (!meshes || !meshes.length || !box || box.isEmpty()) return null;
 
         const size = box.getSize(new THREE.Vector3());
@@ -222,7 +224,38 @@
         let occupied = 0;
         for (let i = 0; i < total; i++) if (occ[i]) occupied++;
 
+        return {
+            occ,
+            dim,
+            min,
+            cell,
+            occupiedFraction: total ? occupied / total : 0,
+            triangles,
+            stride,
+            sampledTriangles,
+            structuralTriangles,
+            subcellTriangles,
+            resolution,
+        };
+    }
+
+    // voxels: a voxelizeStage() result. Casts rays from every cell (occupied
+    // ones included, see below) and stores the mean escape visibility plus its
+    // first directional moment. Returns { data: Uint8Array (RGBA), rayCount }.
+    // R stores a=<V>, while GBA store the signed first moment d=2<V omega>
+    // with a centered 128/127 UNORM encoding. The shader reconstructs the
+    // diffuse visibility for a normal with clamp(a + dot(d, N), 0, 1).
+    // opts.maxDistance (world units) caps the march; unset marches to the
+    // grid edge, the original unbounded behaviour.
+    function marchVisibility(voxels, options) {
+        const opts = options || {};
+        const { occ, dim, cell } = voxels;
+        const requestedRays = Math.floor(Math.max(8, Math.min(128, Number(opts.rays) || 32)));
+        const rayCount = requestedRays % 2 === 0 ? requestedRays : (requestedRays < 128 ? requestedRays + 1 : requestedRays - 1);
+        const maxDistance = Number(opts.maxDistance);
+        const maxT = (Number.isFinite(maxDistance) && maxDistance > 0 && cell > 0) ? maxDistance / cell : Infinity;
         const dirs = sphereDirections(rayCount);
+        const total = dim[0] * dim[1] * dim[2];
         const data = new Uint8Array(total * 4);
         for (let z = 0; z < dim[2]; z++) {
             for (let y = 0; y < dim[1]; y++) {
@@ -240,7 +273,7 @@
                     let dirY = 0;
                     let dirZ = 0;
                     for (let r = 0; r < rayCount; r++) {
-                        const visibility = escapeVisibility(occ, dim, x, y, z, dirs[r * 3], dirs[r * 3 + 1], dirs[r * 3 + 2]);
+                        const visibility = escapeVisibility(occ, dim, x, y, z, dirs[r * 3], dirs[r * 3 + 1], dirs[r * 3 + 2], maxT);
                         visibilitySum += visibility;
                         dirX += dirs[r * 3] * visibility;
                         dirY += dirs[r * 3 + 1] * visibility;
@@ -256,24 +289,37 @@
                 }
             }
         }
+        return { data, rayCount };
+    }
 
+    // meshes/box/options: see voxelizeStage. Reuses opts.voxels when its own
+    // resolution already matches, so a second bake at the same resolution
+    // (the AO volume, at the sky's resolution) skips re-voxelizing the stage.
+    function buildSkyVisibility(meshes, box, options) {
+        const opts = options || {};
+        const resolution = Math.max(8, Math.min(96, opts.resolution || 32));
+        const voxels = (opts.voxels && opts.voxels.resolution === resolution)
+            ? opts.voxels : voxelizeStage(meshes, box, { resolution, maxTriangles: opts.maxTriangles });
+        if (!voxels) return null;
+        const marched = marchVisibility(voxels, { rays: opts.rays, maxDistance: opts.maxDistance });
         return {
-            data,
+            data: marched.data,
             channels: 4,
             format: 'rgba8',
-            dim,
-            min,
-            cell,
-            size: [dim[0] * cell, dim[1] * cell, dim[2] * cell],
-            occupiedFraction: total ? occupied / total : 0,
-            triangles,
-            stride,
-            sampledTriangles,
-            structuralTriangles,
-            subcellTriangles,
+            dim: voxels.dim,
+            min: voxels.min,
+            cell: voxels.cell,
+            size: [voxels.dim[0] * voxels.cell, voxels.dim[1] * voxels.cell, voxels.dim[2] * voxels.cell],
+            occupiedFraction: voxels.occupiedFraction,
+            triangles: voxels.triangles,
+            stride: voxels.stride,
+            sampledTriangles: voxels.sampledTriangles,
+            structuralTriangles: voxels.structuralTriangles,
+            subcellTriangles: voxels.subcellTriangles,
+            voxels,
         };
     }
 
     window.buildSkyVisibility = buildSkyVisibility;
-    window.UsdSceneSkyVisibility = { build: buildSkyVisibility };
+    window.UsdSceneSkyVisibility = { build: buildSkyVisibility, voxelizeStage, marchVisibility };
 })();

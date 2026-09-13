@@ -27,7 +27,7 @@ test('@scene AO scope: emission/direct/diffuse/specular environment responses ar
   // input, before the environment closure. The runtime fixture below proves
   // the environment diffuse/specular response; this source boundary proves
   // neither term reaches direct light or emission a second time.
-  const skyEnvironmentOnly = /patchAmbientOcclusion[\s\S]*immediately before the environment contribution[\s\S]*occlusion = mx_ssao_occlusion\(\) \* mx_sky_visibility\(\);/.test(engineSource);
+  const skyEnvironmentOnly = /patchAmbientOcclusion[\s\S]*immediately before the environment contribution[\s\S]*occlusion = mx_sky_visibility\(\) \* min\(mx_volume_occlusion\(\), mx_ssao_occlusion\(\)\);/.test(engineSource);
   const result = await page.evaluate(async ({ emissionXml, diffuseXml, specularXml, sourceHash }) => {
     const env = await window.getMxEnv(), T = window.THREE;
     const makeNode = async xml => { const doc = env.mx.createDocument(); await window.mxExclusive(() => env.mx.readFromXmlString(doc, xml)); if (doc.setDataLibrary) doc.setDataLibrary(env.stdlib); return { node: window.listDocRenderables(doc)[0].node, doc }; };
@@ -51,7 +51,9 @@ test('@scene AO scope: emission/direct/diffuse/specular environment responses ar
     const directLightId = h.getShadowDiagnostic().availableLights.find((light) => light.kind === 'stage-source' && light.sourceId === '/Direct')?.id;
     if (!directLightId) throw new Error('stage point light was not exposed to the direct diagnostic');
     const white = new T.DataTexture(new Uint8Array([255,255,255,255]), 1, 1, T.RGBAFormat, T.UnsignedByteType);
-    const black = new T.DataTexture(new Uint8Array([0,0,0,255]), 1, 1, T.RGBAFormat, T.UnsignedByteType);
+    // ao=0 (r), confidence=1 (g): the black case must still fully occlude
+    // now that mx_ssao_occlusion() weighs ao by the guard's confidence too.
+    const black = new T.DataTexture(new Uint8Array([0,255,0,255]), 1, 1, T.RGBAFormat, T.UnsignedByteType);
     // The generated sky helper reads RGBA moments: R is visibility and GBA
     // are centered directional moments. A neutral 128 GBA gives no directional
     // bias, so this exercises exactly a uniform 1 or 1/2 environment factor.

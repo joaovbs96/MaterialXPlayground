@@ -1498,7 +1498,7 @@ const patchAreaLightSourceCosine = (fs) => {
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
-const patchAmbientOcclusion = (fs, { skipSkyVis = false } = {}) => {
+const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } = {}) => {
     const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
     if (!anchor.test(fs)) return fs;
     // Sky visibility needs the world position; without that varying only the
@@ -1507,9 +1507,16 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false } = {}) => {
     // u_skyVisMap (a sampler3D) is never declared.
     const hasWorldPos = !skipSkyVis && /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
         && /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
-    const out = fs.replace(anchor, hasWorldPos
-        ? '$1occlusion = mx_ssao_occlusion() * mx_sky_visibility();'
-        : '$1occlusion = mx_ssao_occlusion();');
+    // The baked occlusion VOLUME (js/usd-scene-skyvis.js's AO bake) is a
+    // separate sampler-budget drop from sky visibility; skipAoVolume falls
+    // back to the sky-times-ssao combination without it.
+    const useVolume = hasWorldPos && !skipAoVolume;
+    const assignment = !hasWorldPos
+        ? 'occlusion = mx_ssao_occlusion();'
+        : (useVolume
+            ? 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());'
+            : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility();');
+    const out = fs.replace(anchor, '$1' + assignment);
     const skyDecls = !hasWorldPos ? [] : [
         // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
         // MaterialX's IBL has no visibility term at all, so an interior lit by
@@ -1550,15 +1557,40 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false } = {}) => {
         '    return mix(1.0, vis, clamp(u_skyVisStrength, 0.0, 1.0));',
         '}',
     ];
+    // A copy of mx_sky_visibility over its own baked volume (see
+    // buildAoVolume in js/usd-scene-renderer.js): local occlusion the sky
+    // bake is too coarse to resolve, sampled the same biased way.
+    const volumeDecls = !useVolume ? [] : [
+        'uniform highp sampler3D u_aoVolumeMap;',
+        'uniform vec3 u_aoVolumeMin;',
+        'uniform vec3 u_aoVolumeSize;',
+        'uniform float u_aoVolumeCell;',
+        'uniform float u_aoVolumeStrength;',
+        'float mx_volume_occlusion() {',
+        '    if (u_aoVolumeStrength <= 0.0) return 1.0;',
+        '    vec3 skyNormal = normalize(normalWorld);',
+        '    if (!gl_FrontFacing) skyNormal = -skyNormal;',
+        '    vec3 uvw = (positionWorld + skyNormal * (1.5 * u_aoVolumeCell) - u_aoVolumeMin) / max(u_aoVolumeSize, vec3(1e-6));',
+        '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 1.0;',
+        '    vec4 moments = texture(u_aoVolumeMap, uvw);',
+        '    float visibilityMean = moments.r;',
+        '    vec3 visibilityDirection = (moments.gba * 255.0 - vec3(128.0)) / 127.0;',
+        '    float vis = clamp(visibilityMean + dot(visibilityDirection, skyNormal), 0.0, 1.0);',
+        '    return mix(1.0, vis, clamp(u_aoVolumeStrength, 0.0, 1.0));',
+        '}',
+    ];
     const decls = [
         'uniform sampler2D u_ssaoMap;',
         'uniform vec2 u_ssaoTexel;',
         'uniform float u_ssaoStrength;',
+        // .r is the raw AO factor, .g the guard's per-pixel confidence (screen
+        // edges and rays that miss the frame or the scene); low confidence
+        // fades the term back to unoccluded rather than trusting a bad sample.
         'float mx_ssao_occlusion() {',
-        '    float ao = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).r;',
-        '    return mix(1.0, clamp(ao, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0));',
+        '    vec2 aoSample = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).rg;',
+        '    return mix(1.0, clamp(aoSample.r, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0) * clamp(aoSample.g, 0.0, 1.0));',
         '}',
-    ].concat(skyDecls).concat(['']).join('\n');
+    ].concat(skyDecls).concat(volumeDecls).concat(['']).join('\n');
     // Must land before the FIRST function definition, not before main():
     // the generator emits the ambient-occlusion slot inside a surface
     // evaluation function that precedes main, so declaring the helper any
@@ -5728,6 +5760,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // Sampler-budget drops, requested only by compileMtlxSceneMaterial's
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
+    const skipAoVolume = !!(sceneFeatureOptions && sceneFeatureOptions.skipAoVolume);
     const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
     const skipTransmittance = !!(sceneFeatureOptions && sceneFeatureOptions.skipTransmittance);
     const skipRefraction = !!(sceneFeatureOptions && sceneFeatureOptions.skipRefraction);
@@ -5882,7 +5915,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     fs = patchShadowLightScope(fs, { skipTransmittance });
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
-    fs = patchAmbientOcclusion(fs, { skipSkyVis });
+    fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume });
     fs = patchTransmissionThickness(fs, { dropThicknessMap });
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
@@ -5921,8 +5954,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
 // generatePreviewSourcesUnlocked directly, to avoid overlapping wasm ops.
 const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
 
-// ANGLE D3D11 reports 16 texture image units; a Scene material bakes eleven
-// fixed samplers plus one per texture, so eleven textures already exceed it.
+// ANGLE D3D11 reports 16 texture image units; a Scene material bakes twelve
+// fixed samplers plus one per texture, so twelve textures already exceed it.
 // Fallback default only: real callers pass gl.MAX_TEXTURE_IMAGE_UNITS.
 const DEFAULT_SAMPLER_BUDGET = 16;
 
@@ -5930,6 +5963,7 @@ const DEFAULT_SAMPLER_BUDGET = 16;
 // is a sceneFeatureOptions flag of generatePreviewSourcesUnlocked. Append
 // future samplers here.
 const SAMPLER_BUDGET_DROP_ORDER = [
+    { key: 'skipAoVolume', label: 'occlusion volume (u_aoVolumeMap)' },
     { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)' },
     { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)' },
     { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)' },
@@ -5990,7 +6024,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0,
+    aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -6059,6 +6094,14 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         u_skyVisSize: { value: skyVisSize ? skyVisSize.clone() : new THREE.Vector3(1, 1, 1) },
         u_skyVisCell: { value: skyVisCell || 0 },
         u_skyVisStrength: { value: skyVisMap ? skyVisStrength : 0 },
+        // Baked occlusion volume, same sampler-unit hazard as u_skyVisMap
+        // above: a highp sampler3D is invisible to has()/parseUniforms, so
+        // this is seeded unconditionally too. White at strength 0: no-op.
+        u_aoVolumeMap: { value: aoVolumeMap || getDummyTex3DWhite() },
+        u_aoVolumeMin: { value: aoVolumeMin ? aoVolumeMin.clone() : new THREE.Vector3() },
+        u_aoVolumeSize: { value: aoVolumeSize ? aoVolumeSize.clone() : new THREE.Vector3(1, 1, 1) },
+        u_aoVolumeCell: { value: aoVolumeCell || 0 },
+        u_aoVolumeStrength: { value: aoVolumeMap ? aoVolumeStrength : 0 },
     };
     if (compiled.payloadSupported) {
         // Scene RGB-T is opt-in at compile time and remains inactive until
@@ -8780,6 +8823,13 @@ const createMtlxRenderView = async ({
                         u_skyVisSize: { value: new THREE.Vector3(1, 1, 1) },
                         u_skyVisCell: { value: 0 },
                         u_skyVisStrength: { value: 0 },
+                        // No baked occlusion volume in the Viewer either;
+                        // same sampler-unit hazard as u_skyVisMap above.
+                        u_aoVolumeMap: { value: getDummyTex3DWhite() },
+                        u_aoVolumeMin: { value: new THREE.Vector3() },
+                        u_aoVolumeSize: { value: new THREE.Vector3(1, 1, 1) },
+                        u_aoVolumeCell: { value: 0 },
+                        u_aoVolumeStrength: { value: 0 },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
