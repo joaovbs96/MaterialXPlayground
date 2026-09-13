@@ -531,15 +531,21 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
 // mx_shadow_occlusion() against a variance (moments) map, so we render our own
 // vec2(z, z*z) rather than reuse three's VSM target, whose packing is not
 // guaranteed to match and would misread rather than error.
-// 8 casters at 1024px tiles, laid out 4 x 2 so no tile drops below the
-// minimum useful resolution found during the M0 quality pass. RGBA16F at
-// 4096x2048 is 64MB; RGBA32F (used when float-linear filtering is missing)
-// is 128MB.
-const SHADOW_TILE_SIZE = 1024;
-const SHADOW_ATLAS_COLS = 4;
-const SHADOW_ATLAS_ROWS = 2;
-const SHADOW_ATLAS_WIDTH = SHADOW_TILE_SIZE * SHADOW_ATLAS_COLS;
-const SHADOW_ATLAS_HEIGHT = SHADOW_TILE_SIZE * SHADOW_ATLAS_ROWS;
+// A pool of 512px cells, 8 x 4 = 32 total. A directional caster gets one
+// 1024px tile (2x2 cells); an omni/area caster gets up to six single cells,
+// one per cube face. RGBA16F at 4096x2048 is 64MB, RGBA32F is 128MB.
+const SHADOW_CELL_SIZE = 512;
+const SHADOW_CELL_COLS = 8;
+const SHADOW_CELL_ROWS = 4;
+const SHADOW_CELL_TOTAL = SHADOW_CELL_COLS * SHADOW_CELL_ROWS;
+const SHADOW_TILE_SIZE = SHADOW_CELL_SIZE * 2;
+const SHADOW_TILE_COLS = SHADOW_CELL_COLS / 2;
+const SHADOW_TILE_ROWS = SHADOW_CELL_ROWS / 2;
+const SHADOW_ATLAS_WIDTH = SHADOW_CELL_SIZE * SHADOW_CELL_COLS;
+const SHADOW_ATLAS_HEIGHT = SHADOW_CELL_SIZE * SHADOW_CELL_ROWS;
+// Compile-time GLSL array size for shadow faces, set by mtlx-engine.js and
+// read here so the two files cannot drift out of sync.
+const SHADOW_ATLAS_FACE_SLOTS = (typeof window !== 'undefined' && Number(window.SHADOW_FACE_SLOTS)) || 24;
 // Variance shadow maps are meant to be blurred: filtering the moments is what
 // turns the hard per-texel test into a soft edge. Without it an orthographic
 // frustum covering a whole room stair-steps every silhouette.
@@ -771,10 +777,6 @@ const createThicknessMaterial = () => new THREE.RawShaderMaterial({
     depthWrite: true,
 });
 
-// Independent shadow casters packed into one atlas. GLSL ES 3.0 only allows a
-// constant index into a sampler array, so a per-light lookup has to address
-// tiles inside a single map. Must match the engine's SHADOW_CASTER_SLOTS.
-const SHADOW_CASTERS = 8;
 const createShadowBlurMaterial = () => new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: [
@@ -1154,28 +1156,38 @@ const createMtlxSceneView = async ({
     // is nowhere to put a second map.
     let shadowTarget = null;
     let shadowDepthMaterial = null;
+    // Flat list of shadow FACES: a directional/area caster contributes one
+    // entry, an omni caster reserves six (one per cube face), some of
+    // which may be unallocated.
     let shadowCasters = [];
+    let shadowCellsUsed = 0;
+    let shadowDroppedCasters = [];
+    // Faces dropped mid-group because the cell pool ran dry, distinct from a
+    // caster dropped entirely for lack of face slots (shadowDroppedCasters).
+    let shadowDroppedFaces = [];
     // Which u_lightData slots the shadow map belongs to. MaterialX shadows one
     // light, and until this existed it always shadowed slot 0 (the environment
     // key light) no matter which light the map was actually drawn from.
-    let shadowSlotCaster = new Int32Array(window.SHADOW_LIGHT_SLOTS_MAX || 32).fill(-1);
-    // Always full length: the uniform is a fixed-size GLSL array, so an unused
-    // caster gets an identity matrix that nothing indexes into (its slots map
-    // to -1). Declared beside the state they read, not inside the render
-    // closure, because the material builder runs in the outer scope.
-    const shadowCasterMatrices = () => Array.from({ length: SHADOW_CASTERS }, (_, i) =>
+    // shadowSlotFace: base face index into `shadowCasters` for that light
+    // slot, or -1. shadowSlotFaceCount: 1 (single face) or 6 (omni cube).
+    let shadowSlotFace = new Int32Array(window.SHADOW_LIGHT_SLOTS_MAX || 32).fill(-1);
+    let shadowSlotFaceCount = new Int32Array(window.SHADOW_LIGHT_SLOTS_MAX || 32).fill(0);
+    // Always full length: an unused face gets an identity matrix that
+    // nothing indexes into (its slots map to -1). Declared beside the
+    // state they read, since the material builder runs in the outer scope.
+    const shadowCasterMatrices = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
         (shadowCasters[i] ? shadowCasters[i].matrix : new THREE.Matrix4()));
-    const shadowCasterTiles = () => Array.from({ length: SHADOW_CASTERS }, (_, i) =>
+    const shadowCasterTiles = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
         (shadowCasters[i] ? shadowCasters[i].tileRect : new THREE.Vector4(0, 0, 1, 1)));
-    const shadowCasterDepthPlanes = () => Array.from({ length: SHADOW_CASTERS }, (_, i) =>
+    const shadowCasterDepthPlanes = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
         (shadowCasters[i] && shadowCasters[i].depthPlane
             ? shadowCasters[i].depthPlane : new THREE.Vector4(0, 0, 0, 1)));
-    const shadowCasterDepthRanges = () => Array.from({ length: SHADOW_CASTERS }, (_, i) => {
+    const shadowCasterDepthRanges = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) => {
         const caster = shadowCasters[i];
         if (!caster) return new THREE.Vector2(0, 1);
         return new THREE.Vector2(caster.near, Math.max(1e-9, caster.far - caster.near));
     });
-    const shadowCasterSourceRadii = () => Array.from({ length: SHADOW_CASTERS }, (_, i) => {
+    const shadowCasterSourceRadii = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) => {
         const caster = shadowCasters[i];
         const extent = caster && Number(caster.sourceExtent);
         const radius = Number.isFinite(extent) ? Math.max(0, extent * 0.5) : 0;
@@ -1190,11 +1202,26 @@ const createMtlxSceneView = async ({
     // World-space size of one atlas texel, at the near plane for a
     // perspective caster or across the whole frustum for an orthographic
     // one. Feeds the shader's normal-offset receiver bias (mx_shadow_atlas).
-    const shadowCasterTexelSizes = () => Array.from({ length: SHADOW_CASTERS }, (_, i) => {
+    const shadowCasterTexelSizes = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) => {
         const caster = shadowCasters[i];
         const size = caster && Number(caster.texelWorldSize);
         return Number.isFinite(size) ? Math.max(0, size) : 0;
     });
+    // Light position for an omni face, used by the shader to pick which of
+    // the six faces a shaded point falls into. Zero for non-omni faces.
+    const shadowCasterFaceOrigins = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
+        (shadowCasters[i] && shadowCasters[i].faceOrigin ? shadowCasters[i].faceOrigin : new THREE.Vector3()));
+    const shadowCasterFaceValid = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
+        (shadowCasters[i] && shadowCasters[i].faceValid ? 1 : 0));
+    // Group basis (world +X/+Y/+Z of the group's own local frame), read by
+    // the shader only at a group's base face index. World axes for an omni
+    // caster; the emitter's own frame for an area caster.
+    const shadowCasterFaceBasisX = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
+        (shadowCasters[i] && shadowCasters[i].basis ? shadowCasters[i].basis.x : new THREE.Vector3(1, 0, 0)));
+    const shadowCasterFaceBasisY = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
+        (shadowCasters[i] && shadowCasters[i].basis ? shadowCasters[i].basis.y : new THREE.Vector3(0, 1, 0)));
+    const shadowCasterFaceBasisZ = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
+        (shadowCasters[i] && shadowCasters[i].basis ? shadowCasters[i].basis.z : new THREE.Vector3(0, 0, 1)));
     let shadowCasterLabel = null;
     // Baked coarse sky visibility (js/usd-scene-skyvis.js). Built once per
     // stage, never per frame: it depends only on geometry.
@@ -1707,7 +1734,7 @@ const createMtlxSceneView = async ({
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
-            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowSlotCaster,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace, shadowSlotFaceCount,
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             envTilt,
             thicknessScale, refractionTwoSided: true,
@@ -2178,9 +2205,9 @@ const createMtlxSceneView = async ({
             shadowCamera.near = Math.max(Number.EPSILON * 1024, -zMax - margin);
             shadowCamera.far = Math.max(shadowCamera.near + margin, -zMin + margin);
         };
-        // Allocates the atlas once. One texture holding SHADOW_CASTERS tiles,
+        // Allocates the atlas once. One texture holding the whole cell pool,
         // because GLSL ES 3.0 only allows a constant index into a sampler
-        // array, so a per-light lookup has to address tiles inside one map.
+        // array, so a per-light lookup has to address cells inside one map.
         const ensureShadowTargets = () => {
             if (shadowTarget) return;
             // Full float where available: half float carries about 11 bits of
@@ -2198,66 +2225,94 @@ const createMtlxSceneView = async ({
             });
         };
 
-        // One caster's camera. A directional light gets an orthographic frustum
-        // along its own direction. Every local source gets a perspective
-        // frustum from the actual emitter position. Using an orthographic
-        // camera for an emitter inside the stage is geometrically wrong: it
-        // turns a point/area source into parallel rays, and it also includes
-        // geometry behind the emitter which cannot occlude a receiver in
-        // front of it. The receiver fit below keeps the perspective depth
-        // interval fully encloses the stage depth while the lateral fit keeps
-        // the map useful for the visible image.
-        const buildCasterCamera = (rec, box, center, radius) => {
-            const source = rec.source;
-            let shadowCamera;
-            const position = source.position || null;
-            if (!rec.directional && position) {
-                const rawAim = (controls && controls.target) ? controls.target.clone() : center.clone();
-                const aim = box.clampPoint(rawAim, new THREE.Vector3());
-                const distance = position.distanceTo(aim);
-                // Fit the receiver patch to the active view. Keep the full
-                // patch even when it surrounds the emitter: clipping it at a
-                // source distance would drop valid receivers and blockers.
-                // The perspective FOV is allowed to widen for near sources;
-                // the linear depth metric used by the shadow lookup keeps a
-                // broad local-light interval numerically usable.
-                const viewDistance = Math.max(1e-6, camera.position.distanceTo(aim));
-                const halfHeight = viewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-                const halfWidth = halfHeight * Math.max(1e-6, camera.aspect);
-                const viewFit = Math.min(radius, Math.max(radius * 0.01, Math.hypot(halfWidth, halfHeight) * 1.4));
-                const receiverRadius = viewFit;
-                const safeDistance = Math.max(distance, radius * 0.001);
-                const lookTarget = aim;
-                if (distance < 1e-6) lookTarget.add(new THREE.Vector3(0, 0, -safeDistance));
-                const halfAngle = Math.atan(receiverRadius / safeDistance);
-                const fov = Math.min(175, Math.max(20, 2 * halfAngle * 180 / Math.PI * 1.1));
-                // Include every front-facing stage caster. A receiver may be
-                // near the source, so near is a small scale-relative epsilon;
-                // using the receiver interval here clipped legitimate blockers
-                // before they reached the receiver. Far is tightened to the
-                // stage bounds after the camera is oriented below.
-                const depthEpsilon = Math.max(radius * 1e-5, Number.EPSILON * 1024);
-                const near = depthEpsilon;
-                const farFallback = near + depthEpsilon;
-                shadowCamera = new THREE.PerspectiveCamera(fov, 1, near, farFallback);
-                shadowCamera.position.copy(position);
-                shadowCamera.lookAt(lookTarget);
-                shadowCamera.updateMatrixWorld(true);
-                const stageBox = new THREE.Box3().copy(box);
-                const corners = [];
-                for (const x of [stageBox.min.x, stageBox.max.x]) {
-                    for (const y of [stageBox.min.y, stageBox.max.y]) {
-                        for (const z of [stageBox.min.z, stageBox.max.z]) {
-                            corners.push(new THREE.Vector3(x, y, z).applyMatrix4(shadowCamera.matrixWorldInverse));
-                        }
+        // A directional caster gets one orthographic tile; an area/omni
+        // source gets perspective cube faces, fitted from the mesh geometry
+        // each face actually sees rather than receiver vertex samples.
+        const shadowClassifyCaster = (rec) => {
+            const position = rec.source.position || null;
+            if (rec.directional || !position) return 'distant';
+            return (rec.planarSource && rec.source.direction) ? 'area' : 'omni';
+        };
+        // Forward-depth interval of a world-space box's eight corners in a
+        // face camera's view space, clamped at 0 for a box that straddles
+        // the camera plane (its front-facing part still needs a near of 0).
+        const shadowBoxDepthInterval = (shadowCamera, box) => {
+            let lower = Infinity; let upper = -Infinity;
+            const corner = new THREE.Vector3();
+            for (const x of [box.min.x, box.max.x]) {
+                for (const y of [box.min.y, box.max.y]) {
+                    for (const z of [box.min.z, box.max.z]) {
+                        corner.set(x, y, z).applyMatrix4(shadowCamera.matrixWorldInverse);
+                        const depth = -corner.z;
+                        if (depth < lower) lower = depth;
+                        if (depth > upper) upper = depth;
                     }
                 }
-                const maxDepth = corners.reduce((m, p) => Math.max(m, -p.z), 0);
-                shadowCamera.far = Math.max(farFallback, maxDepth + depthEpsilon);
-                shadowCamera.updateProjectionMatrix();
-                shadowCamera.userData.shadowAim = aim.toArray();
-                return shadowCamera;
             }
+            return { lower: Math.max(0, lower), upper };
+        };
+        // near = 0.9 * the smallest non-straddling lower bound (or 1e-3 *
+        // far if every box straddles), floored at the source radius;
+        // far = 1.05 * the largest upper bound.
+        const shadowFitDepthRangeFromBoxes = (intervals, sourceRadius, minFloor) => {
+            if (!intervals.length) return null;
+            let far = 0;
+            for (const iv of intervals) far = Math.max(far, iv.upper);
+            far = Math.max(minFloor * 2, far * 1.05);
+            let minPositiveLower = Infinity;
+            for (const iv of intervals) { if (iv.lower > 0) minPositiveLower = Math.min(minPositiveLower, iv.lower); }
+            const nearBase = Number.isFinite(minPositiveLower) ? 0.9 * minPositiveLower : far * 1e-3;
+            const near = Math.min(far * 0.99, Math.max(nearBase, sourceRadius, minFloor));
+            return { near, far };
+        };
+        // Decides whether a perspective face needs a cell, and fits its
+        // near/far, from the mesh boxes that intersect its own frustum.
+        // Returns null when nothing intersects, so the face stays unallocated.
+        const shadowEvaluateFace = (shadowCamera, meshBoxes, sourceRadius, minFloor) => {
+            const viewProjection = new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+            const frustum = new THREE.Frustum().setFromProjectionMatrix(viewProjection);
+            const intervals = [];
+            for (const meshBox of meshBoxes) {
+                if (!frustum.intersectsBox(meshBox)) continue;
+                intervals.push(shadowBoxDepthInterval(shadowCamera, meshBox));
+            }
+            return shadowFitDepthRangeFromBoxes(intervals, sourceRadius, minFloor);
+        };
+        // Canonical cube faces in a group's own local frame, fixed order
+        // +X,-X,+Y,-Y,+Z,-Z. Must match the axis-index arithmetic the shader
+        // uses to pick a face in patchShadowLightScope.
+        const SHADOW_OMNI_FACES = [
+            { label: '+X', axis: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, -1, 0) },
+            { label: '-X', axis: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3(0, -1, 0) },
+            { label: '+Y', axis: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, 1) },
+            { label: '-Y', axis: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1) },
+            { label: '+Z', axis: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, -1, 0) },
+            { label: '-Z', axis: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(0, -1, 0) },
+        ];
+        const SHADOW_WORLD_BASIS = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+        // An area caster's own frame: local -Z is the emitter's forward
+        // direction, so local +Z (axis index 4) is never allocated since
+        // a light does not shine backward.
+        const shadowAreaBasis = (forward) => {
+            const upHint = Math.abs(forward.y) > 0.99 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+            const z = forward.clone().multiplyScalar(-1);
+            const x = new THREE.Vector3().crossVectors(upHint, z).normalize();
+            const y = new THREE.Vector3().crossVectors(z, x);
+            return { x, y, z };
+        };
+        // Transforms one canonical local face (axis + up) into a group's
+        // world basis.
+        const shadowFaceWorldVectors = (basis, axisIndex) => {
+            const face = SHADOW_OMNI_FACES[axisIndex];
+            const axis = new THREE.Vector3()
+                .addScaledVector(basis.x, face.axis.x).addScaledVector(basis.y, face.axis.y).addScaledVector(basis.z, face.axis.z);
+            const up = new THREE.Vector3()
+                .addScaledVector(basis.x, face.up.x).addScaledVector(basis.y, face.up.y).addScaledVector(basis.z, face.up.z);
+            return { axis, up };
+        };
+        const shadowBuildDistantCamera = (rec, box, center, radius) => {
+            const source = rec.source;
+            const position = source.position || null;
             // Aim at what the camera is looking at, NOT at the stage centre.
             // A room's bounding box centre is up near the ceiling, so a desk
             // lamp sitting below it produced a direction pointing UP and cast
@@ -2272,7 +2327,7 @@ const createMtlxSceneView = async ({
                 : ((env && env.keyLight && env.keyLight.direction) || (env && env.softKeyDir) || new THREE.Vector3(-0.4, -1, 0.7)).clone();
             if (dir.lengthSq() < 1e-9) dir.set(-0.4, -1, 0.7);
             dir.normalize();
-            shadowCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            const shadowCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
             shadowCamera.position.copy(aim).addScaledVector(dir, -radius * 2);
             shadowCamera.lookAt(aim);
             shadowCamera.updateMatrixWorld(true);
@@ -2281,6 +2336,134 @@ const createMtlxSceneView = async ({
             shadowCamera.updateProjectionMatrix();
             shadowCamera.userData.shadowAim = aim.toArray();
             return shadowCamera;
+        };
+        // One face of an omni/area group: a fixed 90 degree perspective
+        // frustum aimed along a basis axis, built with a provisional far
+        // (the stage radius) so shadowEvaluateFace has a bounded test shape.
+        const shadowBuildFaceCamera = (position, basis, axisIndex, radius) => {
+            const { axis, up } = shadowFaceWorldVectors(basis, axisIndex);
+            const depthEpsilon = Math.max(radius * 1e-5, Number.EPSILON * 1024);
+            const shadowCamera = new THREE.PerspectiveCamera(90, 1, depthEpsilon, Math.max(depthEpsilon * 2, radius));
+            shadowCamera.position.copy(position);
+            shadowCamera.up.copy(up);
+            shadowCamera.lookAt(position.clone().add(axis));
+            shadowCamera.updateMatrixWorld(true);
+            shadowCamera.updateProjectionMatrix();
+            shadowCamera.userData.shadowAim = position.clone().add(axis).toArray();
+            return shadowCamera;
+        };
+        // Common bookkeeping for one rendered face: depth plane, matrix,
+        // atlas tile rect (the shader clamps its own UV, no half-texel
+        // inset here), and the debug metadata used by __shadowDebug/__shadowProbe.
+        const shadowFinalizeFace = ({ rec, kind, faceLabel, camera: shadowCamera, cellAlloc, faceOrigin, basis, receiverTarget, box }) => {
+            const size = cellAlloc.size;
+            const view = shadowCamera.matrixWorldInverse.elements;
+            const depthRange = Math.max(1e-6, shadowCamera.far - shadowCamera.near);
+            const depthPlane = new THREE.Vector4(
+                -view[2] / depthRange, -view[6] / depthRange, -view[10] / depthRange,
+                (-view[14] - shadowCamera.near) / depthRange,
+            );
+            const receiverView = receiverTarget.clone().applyMatrix4(shadowCamera.matrixWorldInverse);
+            const projectedCorners = [];
+            for (const x of [box.min.x, box.max.x]) {
+                for (const y of [box.min.y, box.max.y]) {
+                    for (const z of [box.min.z, box.max.z]) {
+                        const clip = new THREE.Vector4(x, y, z, 1).applyMatrix4(shadowCamera.matrixWorldInverse)
+                            .applyMatrix4(shadowCamera.projectionMatrix);
+                        if (Number.isFinite(clip.w) && Math.abs(clip.w) > 1e-9) {
+                            projectedCorners.push([clip.x / clip.w, clip.y / clip.w]);
+                        }
+                    }
+                }
+            }
+            const projectedSpan = projectedCorners.length ? {
+                x: Number(((Math.max(...projectedCorners.map((p) => p[0]))
+                    - Math.min(...projectedCorners.map((p) => p[0]))) * 0.5 * size).toFixed(2)),
+                y: Number(((Math.max(...projectedCorners.map((p) => p[1]))
+                    - Math.min(...projectedCorners.map((p) => p[1]))) * 0.5 * size).toFixed(2)),
+            } : null;
+            const sourceExtent = Number(rec.source && rec.source.extent);
+            // World-space texel footprint for the shader's normal-offset
+            // bias: perspective is world size per unit of light-to-receiver
+            // distance; orthographic is the fitted frustum over pixel size.
+            const texelWorldSize = shadowCamera.isPerspectiveCamera
+                ? (shadowCamera.projectionMatrix.elements[0] > 1e-9
+                    ? 2 / (shadowCamera.projectionMatrix.elements[0] * size) : 0)
+                : (((shadowCamera.right - shadowCamera.left) + (shadowCamera.top - shadowCamera.bottom)) * 0.5) / size;
+            return {
+                rec, kind, faceLabel,
+                projection: shadowCamera.isPerspectiveCamera ? 'perspective' : 'orthographic',
+                near: shadowCamera.near,
+                far: shadowCamera.far,
+                fov: shadowCamera.isPerspectiveCamera ? shadowCamera.fov : null,
+                cameraPosition: shadowCamera.position.toArray(),
+                aim: shadowCamera.userData && shadowCamera.userData.shadowAim ? shadowCamera.userData.shadowAim.slice() : null,
+                sourceExtent: Number.isFinite(sourceExtent) ? sourceExtent : 0,
+                sourceRadius: Number.isFinite(sourceExtent) ? sourceExtent * 0.5 : 0,
+                texelWorldSize: Number.isFinite(texelWorldSize) ? texelWorldSize : 0,
+                projectionScale: shadowCamera.isPerspectiveCamera
+                    ? [shadowCamera.projectionMatrix.elements[0], shadowCamera.projectionMatrix.elements[5]] : null,
+                receiverDepth: Number.isFinite(-receiverView.z) ? -receiverView.z : null,
+                projectedStageSpanPixels: projectedSpan,
+                // Linear light-view depth plane, avoiding the precision loss
+                // of a perspective post-projection depth while keeping the
+                // actual emitter projection for the XY coordinates.
+                depthPlane,
+                matrix: new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse),
+                faceOrigin: faceOrigin || null,
+                faceValid: true,
+                basis: basis || null,
+                size,
+                cellRect: { px: cellAlloc.px, py: cellAlloc.py, size },
+                tileRect: new THREE.Vector4(
+                    cellAlloc.px / SHADOW_ATLAS_WIDTH, cellAlloc.py / SHADOW_ATLAS_HEIGHT,
+                    size / SHADOW_ATLAS_WIDTH, size / SHADOW_ATLAS_HEIGHT,
+                ),
+            };
+        };
+        // A face-group face that was not allocated (no intersecting mesh,
+        // an unused area emission-opposite face, or the cell pool ran out).
+        // faceValid=0 makes the shader treat that direction as unshadowed.
+        const shadowInvalidFace = (rec, position, axisIndex, sourceRadius, basis) => ({
+            rec, kind: shadowClassifyCaster(rec), faceLabel: SHADOW_OMNI_FACES[axisIndex].label,
+            projection: 'perspective', near: 0, far: 1, fov: 90,
+            cameraPosition: position.toArray(), aim: null,
+            sourceExtent: Number.isFinite(Number(rec.source && rec.source.extent)) ? Number(rec.source.extent) : 0,
+            sourceRadius, texelWorldSize: 0, projectionScale: [0, 0],
+            receiverDepth: null, projectedStageSpanPixels: null,
+            depthPlane: new THREE.Vector4(0, 0, 0, 1),
+            matrix: new THREE.Matrix4(),
+            faceOrigin: position.clone(), faceValid: false,
+            basis: basis || null,
+            size: SHADOW_CELL_SIZE, cellRect: null,
+            tileRect: new THREE.Vector4(0, 0, 1, 1),
+        });
+        // Fixed-size pool of 512px cells for the atlas: 8 x 4 = 32. A
+        // directional/area caster claims a tile-aligned 2x2 block (one
+        // 1024px tile); an omni caster claims up to six single cells.
+        const shadowAllocateTile = (pool) => {
+            for (let tileRow = 0; tileRow < SHADOW_TILE_ROWS; tileRow++) {
+                for (let tileCol = 0; tileCol < SHADOW_TILE_COLS; tileCol++) {
+                    const baseCol = tileCol * 2; const baseRow = tileRow * 2;
+                    const cells = [
+                        baseRow * SHADOW_CELL_COLS + baseCol, baseRow * SHADOW_CELL_COLS + baseCol + 1,
+                        (baseRow + 1) * SHADOW_CELL_COLS + baseCol, (baseRow + 1) * SHADOW_CELL_COLS + baseCol + 1,
+                    ];
+                    if (cells.some((ci) => pool[ci])) continue;
+                    cells.forEach((ci) => { pool[ci] = 1; });
+                    return { px: baseCol * SHADOW_CELL_SIZE, py: baseRow * SHADOW_CELL_SIZE, size: SHADOW_TILE_SIZE };
+                }
+            }
+            return null;
+        };
+        const shadowAllocateCell = (pool) => {
+            for (let ci = 0; ci < SHADOW_CELL_TOTAL; ci++) {
+                if (pool[ci]) continue;
+                pool[ci] = 1;
+                const col = ci % SHADOW_CELL_COLS; const row = Math.floor(ci / SHADOW_CELL_COLS);
+                return { px: col * SHADOW_CELL_SIZE, py: row * SHADOW_CELL_SIZE, size: SHADOW_CELL_SIZE };
+            }
+            return null;
         };
 
         // Builds one shadow map per dominant emitter, packed into a single
@@ -2329,10 +2512,25 @@ const createMtlxSceneView = async ({
             }
             return points;
         };
+        // World-space bounding box of every mesh in the shadow pass, called
+        // AFTER hidden-mesh exclusion so it matches the render loop's
+        // visibility state. Face allocation and near/far fitting use these.
+        const gatherShadowMeshBoxes = () => {
+            const boxes = [];
+            scene.traverse((o) => {
+                if (!o.isMesh || !o.visible || !o.geometry) return;
+                boxes.push(new THREE.Box3().setFromObject(o));
+            });
+            return boxes;
+        };
         const updateShadowMap = () => {
             if (!shadowsEnabled || !sceneRoot) {
                 shadowCasters = [];
-                shadowSlotCaster.fill(-1);
+                shadowSlotFace.fill(-1);
+                shadowSlotFaceCount.fill(0);
+                shadowCellsUsed = 0;
+                shadowDroppedCasters = [];
+                shadowDroppedFaces = [];
                 shadowCasterLabel = null;
                 return;
             }
@@ -2349,12 +2547,9 @@ const createMtlxSceneView = async ({
             const rawReceiverTarget = controls && controls.target ? controls.target.clone() : center.clone();
             const receiverTarget = box.clampPoint(rawReceiverTarget, new THREE.Vector3());
             const stageLights = activeStageLights() || [];
-            // A bounded sample of what the camera can actually see. Local
-            // lights are ranked by irradiance averaged over these points, not
-            // a single aim point, so a large source that lights most of the
-            // frame cannot be displaced by one that merely grazes the orbit
-            // target. Directional terms have no falloff to sample against,
-            // so they keep a single evaluation (below).
+            // Local lights are ranked by irradiance over a bounded sample of
+            // the visible frame, not a single aim point. Ranking only: face
+            // allocation and near/far fitting use mesh geometry gathered later.
             const receiverSamples = gatherReceiverSamples();
             const samplePoints = receiverSamples.length ? receiverSamples : [receiverTarget];
 
@@ -2409,7 +2604,7 @@ const createMtlxSceneView = async ({
                 }
                 let rec = emitters.get(key);
                 if (!rec) {
-                    rec = { key, source, slots: [], directional, energy: contribution, score: contribution };
+                    rec = { key, source, slots: [], directional, planarSource, energy: contribution, score: contribution };
                     emitters.set(key, rec);
                 } else {
                     rec.energy += contribution;
@@ -2437,15 +2632,15 @@ const createMtlxSceneView = async ({
                         source: Object.assign({}, envKey, { direction: keyDirection, intensity: keyIntensity }),
                         slots: [-1],
                         directional: true,
+                        planarSource: false,
                         score: keyIntensity,
                     });
                 }
             }
-            // Ranked by irradiance so the ones dropped from the fixed budget
-            // are always the least significant.
-            const ranked = [...emitters.values()]
-                .sort((a, b) => b.score - a.score)
-                .slice(0, SHADOW_CASTERS);
+            // Ranked by irradiance, NOT sliced to a fixed caster count: the
+            // atlas is a cell/face-slot pool, so candidates that do not fit
+            // are recorded in shadowDroppedCasters instead.
+            const ranked = [...emitters.values()].sort((a, b) => b.score - a.score);
 
             // A stage with no analytic lights is lit by the environment alone,
             // and the key light extracted from it sits in the reserved slot
@@ -2458,13 +2653,18 @@ const createMtlxSceneView = async ({
                     ? Math.max(0, Number(env.keyLight.intensity) || 0) * Math.max(0, Number(envExposure) || 0) : 0;
                 if (!keyDir || keyEnergy <= 0) {
                     shadowCasters = [];
-                    shadowSlotCaster.fill(-1);
+                    shadowSlotFace.fill(-1);
+                    shadowSlotFaceCount.fill(0);
+                    shadowCellsUsed = 0;
+                    shadowDroppedCasters = [];
+                    shadowDroppedFaces = [];
                     return;
                 }
                 ranked.push({
                     key: 'environment key light',
                     source: { direction: keyDir, position: null, intensity: keyEnergy },
                     directional: true,
+                    planarSource: false,
                     slots: [-1], // the key slot, addressed as slotOffset - 1
                     score: keyEnergy,
                 });
@@ -2495,39 +2695,31 @@ const createMtlxSceneView = async ({
                     shadowCallbacks.push({ object, previous });
                 }
             });
+            // Computed AFTER the exclusion above, so it reflects the exact
+            // set of meshes the shadow pass itself will render: see
+            // gatherShadowMeshBoxes.
+            const meshBoxes = gatherShadowMeshBoxes();
 
             const previousDestination = snapshotRendererDestination();
             const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
             const previousClearAlpha = renderer.getClearAlpha();
             const previousOverrideMaterial = scene.overrideMaterial;
-            const tile = SHADOW_TILE_SIZE;
+            const pool = new Uint8Array(SHADOW_CELL_TOTAL);
             const built = [];
-            try {
+            const dropped = [];
+            const droppedFaces = [];
+            let facesUsed = 0;
             // Tiling goes on the TARGET, not the renderer: setRenderTarget
             // copies viewport, scissor and scissorTest off the target itself
             // (three r128), so renderer.setViewport is overwritten the moment
-            // render() rebinds. Setting it renderer-side left every tile
+            // render() rebinds. Setting it renderer-side left every cell
             // holding a crop of one full-size render, which showed up as half
             // the atlas being empty.
-            shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
-            shadowTarget.scissorTest = false;
-            renderer.setRenderTarget(shadowTarget);
-            renderer.setClearColor(0xffffff, 1); // white moments read as fully lit
-            renderer.clear();
-            scene.overrideMaterial = shadowDepthMaterial;
-
-            for (let c = 0; c < ranked.length; c++) {
-                const rec = ranked[c];
-                const shadowCamera = buildCasterCamera(rec, box, center, radius);
-                if (!shadowCamera) continue;
-                const col = c % SHADOW_ATLAS_COLS;
-                const row = Math.floor(c / SHADOW_ATLAS_COLS);
-                const px = col * tile;
-                const py = row * tile;
-                shadowTarget.viewport.set(px, py, tile, tile);
-                shadowTarget.scissor.set(px, py, tile, tile);
+            const renderFace = (shadowCamera, cellAlloc) => {
+                shadowTarget.viewport.set(cellAlloc.px, cellAlloc.py, cellAlloc.size, cellAlloc.size);
+                shadowTarget.scissor.set(cellAlloc.px, cellAlloc.py, cellAlloc.size, cellAlloc.size);
                 shadowTarget.scissorTest = true;
-                renderer.setRenderTarget(shadowTarget); // re-applies the tile
+                renderer.setRenderTarget(shadowTarget); // re-applies the cell
                 const view = shadowCamera.matrixWorldInverse.elements;
                 const depthRange = Math.max(1e-6, shadowCamera.far - shadowCamera.near);
                 const depthPlane = new THREE.Vector4(
@@ -2538,73 +2730,73 @@ const createMtlxSceneView = async ({
                 shadowDepthMaterial.uniforms.uDepthPlane.value.copy(depthPlane);
                 shadowDepthMaterial.uniformsNeedUpdate = true;
                 renderer.render(scene, shadowCamera);
-                const receiverView = receiverTarget.clone().applyMatrix4(shadowCamera.matrixWorldInverse);
-                const projectedCorners = [];
-                for (const x of [box.min.x, box.max.x]) {
-                    for (const y of [box.min.y, box.max.y]) {
-                        for (const z of [box.min.z, box.max.z]) {
-                            const clip = new THREE.Vector4(x, y, z, 1).applyMatrix4(shadowCamera.matrixWorldInverse)
-                                .applyMatrix4(shadowCamera.projectionMatrix);
-                            if (Number.isFinite(clip.w) && Math.abs(clip.w) > 1e-9) {
-                                projectedCorners.push([clip.x / clip.w, clip.y / clip.w]);
-                            }
-                        }
-                    }
+            };
+            try {
+            shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
+            shadowTarget.scissorTest = false;
+            renderer.setRenderTarget(shadowTarget);
+            renderer.setClearColor(0xffffff, 1); // white moments read as fully lit
+            renderer.clear();
+            scene.overrideMaterial = shadowDepthMaterial;
+
+            for (const rec of ranked) {
+                const source = rec.source;
+                const position = source.position || null;
+                const kind = shadowClassifyCaster(rec);
+
+                if (kind === 'distant') {
+                    if (facesUsed + 1 > SHADOW_ATLAS_FACE_SLOTS) { dropped.push(rec.key); continue; }
+                    let cellAlloc = shadowAllocateTile(pool);
+                    if (!cellAlloc) cellAlloc = shadowAllocateCell(pool);
+                    if (!cellAlloc) { dropped.push(rec.key); continue; }
+                    const shadowCamera = shadowBuildDistantCamera(rec, box, center, radius);
+                    renderFace(shadowCamera, cellAlloc);
+                    built.push(shadowFinalizeFace({
+                        rec, kind, faceLabel: null, camera: shadowCamera, cellAlloc,
+                        faceOrigin: null, basis: null, receiverTarget, box,
+                    }));
+                    rec.baseFace = facesUsed;
+                    rec.faceCount = 1;
+                    facesUsed += 1;
+                    continue;
                 }
-                const projectedSpan = projectedCorners.length ? {
-                    x: Number(((Math.max(...projectedCorners.map((p) => p[0]))
-                        - Math.min(...projectedCorners.map((p) => p[0]))) * 0.5 * tile).toFixed(2)),
-                    y: Number(((Math.max(...projectedCorners.map((p) => p[1]))
-                        - Math.min(...projectedCorners.map((p) => p[1]))) * 0.5 * tile).toFixed(2)),
-                } : null;
-                const sourceExtent = Number(rec.source && rec.source.extent);
-                // World-space texel footprint, used only for the shader's
-                // normal-offset bias. Perspective: world size PER UNIT of
-                // light-to-receiver distance, from the projection matrix's
-                // own scale (proj[0] == 1 / tan(halfFov) for the square
-                // per-tile viewport used here); the shader multiplies this by
-                // the receiver's actual distance. Deliberately NOT anchored
-                // to the camera's near plane, which is an artificial epsilon
-                // (buildCasterCamera) with no relation to scene scale: an
-                // earlier version divided by it and produced an offset many
-                // orders of magnitude too large, which read as shadows barely
-                // darkening the receiver at all. Orthographic: the fitted
-                // frustum divided by the tile, constant with depth since
-                // parallel rays never diverge.
-                const texelWorldSize = shadowCamera.isPerspectiveCamera
-                    ? (shadowCamera.projectionMatrix.elements[0] > 1e-9
-                        ? 2 / (shadowCamera.projectionMatrix.elements[0] * SHADOW_TILE_SIZE) : 0)
-                    : (((shadowCamera.right - shadowCamera.left) + (shadowCamera.top - shadowCamera.bottom)) * 0.5) / SHADOW_TILE_SIZE;
-                built.push({
-                    rec,
-                    projection: shadowCamera.isPerspectiveCamera ? 'perspective' : 'orthographic',
-                    near: shadowCamera.near,
-                    far: shadowCamera.far,
-                    fov: shadowCamera.isPerspectiveCamera ? shadowCamera.fov : null,
-                    cameraPosition: shadowCamera.position.toArray(),
-                    aim: shadowCamera.userData && shadowCamera.userData.shadowAim ? shadowCamera.userData.shadowAim.slice() : null,
-                    sourceExtent: Number.isFinite(sourceExtent) ? sourceExtent : 0,
-                    sourceRadius: Number.isFinite(sourceExtent) ? sourceExtent * 0.5 : 0,
-                    texelWorldSize: Number.isFinite(texelWorldSize) ? texelWorldSize : 0,
-                    projectionScale: shadowCamera.isPerspectiveCamera
-                        ? [shadowCamera.projectionMatrix.elements[0], shadowCamera.projectionMatrix.elements[5]] : null,
-                    receiverDepth: Number.isFinite(-receiverView.z) ? -receiverView.z : null,
-                    projectedStageSpanPixels: projectedSpan,
-                    // Linear light-view depth plane. The fragment shader uses
-                    // this alongside the projected XY coordinates, avoiding
-                    // perspective post-projection depth precision loss while
-                    // retaining the actual emitter projection.
-                    depthPlane,
-                    matrix: new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse),
-                    // Inset by half a texel so trilinear taps cannot reach into
-                    // the neighbouring tile along a shared edge.
-                    tileRect: new THREE.Vector4(
-                        (px + 0.5) / SHADOW_ATLAS_WIDTH,
-                        (py + 0.5) / SHADOW_ATLAS_HEIGHT,
-                        (tile - 1) / SHADOW_ATLAS_WIDTH,
-                        (tile - 1) / SHADOW_ATLAS_HEIGHT
-                    ),
-                });
+
+                // Omni and area casters both get a fixed 6-face group. Omni
+                // uses the world-identity basis; area uses its own frame,
+                // whose local +Z (axis index 4) is never allocated.
+                if (facesUsed + 6 > SHADOW_ATLAS_FACE_SLOTS) { dropped.push(rec.key); continue; }
+                const sourceRadius = Math.max(0, Number(source.extent) * 0.5 || 0);
+                const depthEpsilon = Math.max(radius * 1e-5, Number.EPSILON * 1024);
+                const basis = kind === 'area' ? shadowAreaBasis(source.direction.clone().normalize()) : SHADOW_WORLD_BASIS;
+                const skipAxis = kind === 'area' ? 4 : -1;
+                const faceEntries = [];
+                let allocatedAny = false;
+                for (let axisIndex = 0; axisIndex < 6; axisIndex++) {
+                    if (axisIndex === skipAxis) { faceEntries.push(shadowInvalidFace(rec, position, axisIndex, sourceRadius, basis)); continue; }
+                    const shadowCamera = shadowBuildFaceCamera(position, basis, axisIndex, radius);
+                    const range = shadowEvaluateFace(shadowCamera, meshBoxes, Math.max(sourceRadius, depthEpsilon), depthEpsilon);
+                    if (!range) { faceEntries.push(shadowInvalidFace(rec, position, axisIndex, sourceRadius, basis)); continue; }
+                    const cellAlloc = shadowAllocateCell(pool);
+                    if (!cellAlloc) {
+                        droppedFaces.push({ caster: rec.key, face: SHADOW_OMNI_FACES[axisIndex].label });
+                        faceEntries.push(shadowInvalidFace(rec, position, axisIndex, sourceRadius, basis));
+                        continue;
+                    }
+                    shadowCamera.near = range.near;
+                    shadowCamera.far = range.far;
+                    shadowCamera.updateProjectionMatrix();
+                    renderFace(shadowCamera, cellAlloc);
+                    faceEntries.push(shadowFinalizeFace({
+                        rec, kind, faceLabel: SHADOW_OMNI_FACES[axisIndex].label, camera: shadowCamera, cellAlloc,
+                        faceOrigin: position.clone(), basis, receiverTarget, box,
+                    }));
+                    allocatedAny = true;
+                }
+                if (!allocatedAny) { dropped.push(rec.key); continue; }
+                rec.baseFace = facesUsed;
+                rec.faceCount = 6;
+                facesUsed += 6;
+                built.push(...faceEntries);
             }
 
             } finally {
@@ -2613,7 +2805,7 @@ const createMtlxSceneView = async ({
             shadowDepthMaterial.uniforms.uCoverage.value = 1;
             shadowDepthMaterial.uniformsNeedUpdate = true;
             // Leave the target as a plain full-size one, or the next pass that
-            // binds it inherits the last tile.
+            // binds it inherits the last cell.
             shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
             shadowTarget.scissorTest = false;
             restoreRendererDestination(previousDestination);
@@ -2621,15 +2813,23 @@ const createMtlxSceneView = async ({
             hidden.forEach(({ object, visible }) => { object.visible = visible; });
             }
 
-            // No blur pass: a separable blur would bleed moments across tile
+            // No blur pass: a separable blur would bleed moments across cell
             // boundaries, and the bleed reduction in mx_shadow_atlas already
             // does the softening the blur was there for.
             shadowCasters = built;
-            shadowSlotCaster.fill(-1);
-            for (let c = 0; c < built.length; c++) {
-                for (const stageIndex of built[c].rec.slots) {
+            shadowCellsUsed = pool.reduce((sum, v) => sum + v, 0);
+            shadowDroppedCasters = dropped;
+            shadowDroppedFaces = droppedFaces;
+            shadowSlotFace.fill(-1);
+            shadowSlotFaceCount.fill(0);
+            for (const rec of ranked) {
+                if (!Number.isInteger(rec.baseFace)) continue;
+                for (const stageIndex of rec.slots) {
                     const slot = slotOffset + stageIndex;
-                    if (slot >= 0 && slot < shadowSlotCaster.length) shadowSlotCaster[slot] = c;
+                    if (slot >= 0 && slot < shadowSlotFace.length) {
+                        shadowSlotFace[slot] = rec.baseFace;
+                        shadowSlotFaceCount[slot] = rec.faceCount;
+                    }
                 }
             }
             shadowCasterLabel = built.map((b) => b.rec.key).join(', ');
@@ -3250,7 +3450,28 @@ const createMtlxSceneView = async ({
                     const src = shadowCasterTexelSizes();
                     for (let i = 0; i < src.length; i++) u.u_shadowTexelWorldSize.value[i] = src[i];
                 }
-                if (u.u_shadowSlotCaster) u.u_shadowSlotCaster.value.set(shadowSlotCaster);
+                if (u.u_shadowFaceOrigin) {
+                    const src = shadowCasterFaceOrigins();
+                    for (let i = 0; i < src.length; i++) u.u_shadowFaceOrigin.value[i].copy(src[i]);
+                }
+                if (u.u_shadowFaceValid) {
+                    const src = shadowCasterFaceValid();
+                    for (let i = 0; i < src.length; i++) u.u_shadowFaceValid.value[i] = src[i];
+                }
+                if (u.u_shadowFaceBasisX) {
+                    const src = shadowCasterFaceBasisX();
+                    for (let i = 0; i < src.length; i++) u.u_shadowFaceBasisX.value[i].copy(src[i]);
+                }
+                if (u.u_shadowFaceBasisY) {
+                    const src = shadowCasterFaceBasisY();
+                    for (let i = 0; i < src.length; i++) u.u_shadowFaceBasisY.value[i].copy(src[i]);
+                }
+                if (u.u_shadowFaceBasisZ) {
+                    const src = shadowCasterFaceBasisZ();
+                    for (let i = 0; i < src.length; i++) u.u_shadowFaceBasisZ.value[i].copy(src[i]);
+                }
+                if (u.u_shadowSlotFace) u.u_shadowSlotFace.value.set(shadowSlotFace);
+                if (u.u_shadowSlotFaceCount) u.u_shadowSlotFaceCount.value.set(shadowSlotFaceCount);
             }
         };
         const applyMaterialEnvironment = () => {
@@ -3268,7 +3489,7 @@ const createMtlxSceneView = async ({
                 const next = window.createMtlxSceneUniforms({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
-            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowSlotCaster,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace, shadowSlotFaceCount,
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
                     envTilt,
                     thicknessScale, refractionTwoSided: true,
@@ -4492,46 +4713,60 @@ const createMtlxSceneView = async ({
             },
             __shadowDebug: () => {
                 if (!shadowTarget) return { ready: false };
-                const tileSize = SHADOW_TILE_SIZE;
                 const w = 160;
                 const prev = renderer.getRenderTarget();
                 const tiles = [];
                 try {
                     renderer.setRenderTarget(shadowTarget);
-                    for (let c = 0; c < SHADOW_CASTERS; c++) {
-                        const col = c % SHADOW_ATLAS_COLS;
-                        const row = Math.floor(c / SHADOW_ATLAS_COLS);
-                        const ox = col * tileSize + Math.floor((tileSize - w) / 2);
-                        const oy = row * tileSize + Math.floor((tileSize - w) / 2);
-                        const buf = new Float32Array(w * w * 4);
-                        renderer.readRenderTargetPixels(shadowTarget, ox, oy, w, w, buf);
-                        let mn = Infinity, mx = -Infinity, sum = 0, n = 0, cleared = 0;
-                        for (let i = 0; i < buf.length; i += 4) {
-                            const v = buf[i];
-                            if (!Number.isFinite(v)) continue;
-                            if (v >= 0.99999) cleared++;
-                            if (v < mn) mn = v;
-                            if (v > mx) mx = v;
-                            sum += v; n++;
+                    for (let c = 0; c < SHADOW_ATLAS_FACE_SLOTS; c++) {
+                        const face = shadowCasters[c];
+                        const cellRect = face && face.cellRect;
+                        let mn = null; let mx = null; let meanV = null; let clearedFraction = null;
+                        if (cellRect) {
+                            const size = cellRect.size;
+                            const sampleSize = Math.min(w, size);
+                            const ox = cellRect.px + Math.floor((size - sampleSize) / 2);
+                            const oy = cellRect.py + Math.floor((size - sampleSize) / 2);
+                            const buf = new Float32Array(sampleSize * sampleSize * 4);
+                            renderer.readRenderTargetPixels(shadowTarget, ox, oy, sampleSize, sampleSize, buf);
+                            let mnV = Infinity; let mxV = -Infinity; let sum = 0; let n = 0; let cleared = 0;
+                            for (let i = 0; i < buf.length; i += 4) {
+                                const v = buf[i];
+                                if (!Number.isFinite(v)) continue;
+                                if (v >= 0.99999) cleared++;
+                                if (v < mnV) mnV = v;
+                                if (v > mxV) mxV = v;
+                                sum += v; n++;
+                            }
+                            mn = Number(mnV.toFixed(5)); mx = Number(mxV.toFixed(5));
+                            meanV = Number((sum / Math.max(1, n)).toFixed(5));
+                            clearedFraction = Number((cleared / Math.max(1, n)).toFixed(3));
                         }
                         tiles.push({
-                            caster: shadowCasters[c] ? shadowCasters[c].rec.key : null,
-                            projection: shadowCasters[c] ? shadowCasters[c].projection : null,
-                            near: shadowCasters[c] ? Number(shadowCasters[c].near.toFixed(5)) : null,
-                            far: shadowCasters[c] ? Number(shadowCasters[c].far.toFixed(5)) : null,
-                            fov: shadowCasters[c] && shadowCasters[c].fov != null ? Number(shadowCasters[c].fov.toFixed(3)) : null,
-                            cameraPosition: shadowCasters[c] ? shadowCasters[c].cameraPosition.map((v) => Number(v.toFixed(4))) : null,
-                            aim: shadowCasters[c] && shadowCasters[c].aim ? shadowCasters[c].aim.map((v) => Number(v.toFixed(4))) : null,
-                            sourceKind: shadowCasters[c] && shadowCasters[c].rec && shadowCasters[c].rec.source
-                                ? Number(shadowCasters[c].rec.source.sourceKind || 0) : null,
-                            sourceExtent: shadowCasters[c] ? shadowCasters[c].sourceExtent : null,
-                            sourceRadius: shadowCasters[c] ? shadowCasters[c].sourceRadius : null,
-                            projectionScale: shadowCasters[c] ? shadowCasters[c].projectionScale : null,
-                            receiverDepth: shadowCasters[c] ? shadowCasters[c].receiverDepth : null,
-                            projectedStageSpanPixels: shadowCasters[c] ? shadowCasters[c].projectedStageSpanPixels : null,
-                            min: Number(mn.toFixed(5)), max: Number(mx.toFixed(5)),
-                            mean: Number((sum / Math.max(1, n)).toFixed(5)),
-                            clearedFraction: Number((cleared / Math.max(1, n)).toFixed(3)),
+                            caster: face ? face.rec.key : null,
+                            kind: face ? face.kind : null,
+                            face: face ? face.faceLabel : null,
+                            size: face ? face.size : null,
+                            cellRect: cellRect ? { px: cellRect.px, py: cellRect.py, size: cellRect.size } : null,
+                            projection: face ? face.projection : null,
+                            near: face ? Number(face.near.toFixed(5)) : null,
+                            far: face ? Number(face.far.toFixed(5)) : null,
+                            fov: face && face.fov != null ? Number(face.fov.toFixed(3)) : null,
+                            cameraPosition: face ? face.cameraPosition.map((v) => Number(v.toFixed(4))) : null,
+                            aim: face && face.aim ? face.aim.map((v) => Number(v.toFixed(4))) : null,
+                            sourceKind: face && face.rec && face.rec.source
+                                ? Number(face.rec.source.sourceKind || 0) : null,
+                            sourceExtent: face ? face.sourceExtent : null,
+                            sourceRadius: face ? face.sourceRadius : null,
+                            projectionScale: face ? face.projectionScale : null,
+                            receiverDepth: face ? face.receiverDepth : null,
+                            projectedStageSpanPixels: face ? face.projectedStageSpanPixels : null,
+                            basis: face && face.basis ? {
+                                x: face.basis.x.toArray().map((v) => Number(v.toFixed(4))),
+                                y: face.basis.y.toArray().map((v) => Number(v.toFixed(4))),
+                                z: face.basis.z.toArray().map((v) => Number(v.toFixed(4))),
+                            } : null,
+                            min: mn, max: mx, mean: meanV, clearedFraction,
                         });
                     }
                 } catch (e) {
@@ -4558,7 +4793,11 @@ const createMtlxSceneView = async ({
                     ready: true,
                     tiles,
                     casters: shadowCasters.length,
-                    shadowedSlots: Array.from(shadowSlotCaster).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
+                    cellsUsed: shadowCellsUsed,
+                    cellsTotal: SHADOW_CELL_TOTAL,
+                    droppedCasters: shadowDroppedCasters.slice(),
+                    droppedFaces: shadowDroppedFaces.slice(),
+                    shadowedSlots: Array.from(shadowSlotFace).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
                     prepass,
                 };
             },
@@ -4578,8 +4817,16 @@ const createMtlxSceneView = async ({
                 const inside = sc.x >= 0 && sc.x <= 1 && sc.y >= 0 && sc.y <= 1 && sc.z >= 0 && sc.z <= 1;
                 if (!inside) return { ready: true, inside: false, projected: [sc.x, sc.y, sc.z] };
                 const uv = b.tileRect.clone();
-                const px = Math.max(0, Math.min(SHADOW_ATLAS_WIDTH - 1, Math.floor((uv.x + sc.x * uv.z) * SHADOW_ATLAS_WIDTH)));
-                const py = Math.max(0, Math.min(SHADOW_ATLAS_HEIGHT - 1, Math.floor((uv.y + sc.y * uv.w) * SHADOW_ATLAS_HEIGHT)));
+                // Clamp the local (0..1) tile coordinate by half a texel, the
+                // same clamp mx_shadow_atlas applies in mtlx-engine.js, so a
+                // probe at the tile edge reads the same texel the shader does.
+                const atlasTexelX = 1 / SHADOW_ATLAS_WIDTH; const atlasTexelY = 1 / SHADOW_ATLAS_HEIGHT;
+                const tileTexelX = atlasTexelX / Math.max(uv.z, 1e-9);
+                const tileTexelY = atlasTexelY / Math.max(uv.w, 1e-9);
+                const localX = Math.min(Math.max(sc.x, tileTexelX * 0.5), 1 - tileTexelX * 0.5);
+                const localY = Math.min(Math.max(sc.y, tileTexelY * 0.5), 1 - tileTexelY * 0.5);
+                const px = Math.max(0, Math.min(SHADOW_ATLAS_WIDTH - 1, Math.floor((uv.x + localX * uv.z) * SHADOW_ATLAS_WIDTH)));
+                const py = Math.max(0, Math.min(SHADOW_ATLAS_HEIGHT - 1, Math.floor((uv.y + localY * uv.w) * SHADOW_ATLAS_HEIGHT)));
                 const buf = new Float32Array(4);
                 const prev = renderer.getRenderTarget();
                 try {
@@ -4603,10 +4850,8 @@ const createMtlxSceneView = async ({
             __shadowCoverageProbe: (bounds, casterIndex = 0) => {
                 const c = Math.floor(Number(casterIndex));
                 const b = shadowCasters[c];
-                if (!b || !bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) return { ready: false };
-                const tileSize = SHADOW_TILE_SIZE;
-                const col = c % SHADOW_ATLAS_COLS;
-                const row = Math.floor(c / SHADOW_ATLAS_COLS);
+                if (!b || !b.cellRect || !bounds || !Array.isArray(bounds.min) || !Array.isArray(bounds.max)) return { ready: false };
+                const tileSize = b.cellRect.size;
                 const corners = [];
                 for (const x of [bounds.min[0], bounds.max[0]]) {
                     for (const y of [bounds.min[1], bounds.max[1]]) {
@@ -4635,7 +4880,7 @@ const createMtlxSceneView = async ({
                 const previous = renderer.getRenderTarget();
                 try {
                     renderer.setRenderTarget(shadowTarget);
-                    renderer.readRenderTargetPixels(shadowTarget, col * tileSize + x0, row * tileSize + y0, width, height, buf);
+                    renderer.readRenderTargetPixels(shadowTarget, b.cellRect.px + x0, b.cellRect.py + y0, width, height, buf);
                 } catch (e) {
                     renderer.setRenderTarget(previous);
                     return { ready: true, error: String(e && e.message || e) };

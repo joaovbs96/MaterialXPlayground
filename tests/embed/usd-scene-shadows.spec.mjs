@@ -112,7 +112,10 @@ async function capture(page) {
     const project = (v) => { const q = v.clone().project(h.camera); return [q.x * 0.5 + 0.5, -q.y * 0.5 + 0.5]; };
     return {
       shadow: project(new window.THREE.Vector3(0, 0.01, -0.45)),
-      localShadow: project(new window.THREE.Vector3(0, 0.01, 2.0)),
+      // The local light sits at height 4 behind the 1.2 m blocker whose front
+      // face is at z 0.95, so its umbra on the ground ends at z 1.99; probe
+      // well inside it instead of on that edge.
+      localShadow: project(new window.THREE.Vector3(0, 0.01, 1.7)),
       clear: project(new window.THREE.Vector3(-1.8, 0.01, -0.7)),
       opposite: project(new window.THREE.Vector3(0, 0.01, 1.5)),
       debug: h.__shadowDebug(),
@@ -347,7 +350,9 @@ test('@scene shared material draw preserves Bayer shadow coverage for mixed bloc
   expect(result.debug.prepass.clear).toBeGreaterThanOrEqual(1);
   expect(result.debug.prepass.opaque).toBeGreaterThanOrEqual(1);
   expect(onLuma[0]).toBeGreaterThan(offLuma[0] * 0.8);
-  expect(onLuma[3]).toBeLessThan(offLuma[3] * 0.5);
+  // This fixture's environment fill equals its direct term, so a fully
+  // shadowed region's exact expected value is offLuma[3] * 0.5.
+  expect(onLuma[3]).toBeLessThanOrEqual(offLuma[3] * 0.5);
   expect(onLuma[1]).toBeGreaterThan(onLuma[3]);
   expect(onLuma[2]).toBeLessThan(onLuma[1]);
   expect(normalizedCoverage[0]).toBeLessThan(0.15);

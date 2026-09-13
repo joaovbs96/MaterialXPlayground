@@ -161,7 +161,23 @@ async function renderProfile(page, options) {
     const debug = handle.__shadowDebug();
     const receiverPoint = transform(0, 0, 1.9);
     const blockerPoint = transform(0, 1.1, 1.0);
-    const tile = debug.tiles[0];
+    // An area caster is a hemisphere of faces in its own frame, so resolve
+    // the face that shades the receiver the way the shader does: receiver
+    // relative to the group origin, in the group basis, major axis wins.
+    const originTile = debug.tiles.find((t) => t && t.cameraPosition);
+    const basisTile = debug.tiles.find((t) => t && t.basis);
+    const origin = new THREE.Vector3().fromArray(originTile.cameraPosition);
+    const bx = new THREE.Vector3().fromArray(basisTile.basis.x);
+    const by = new THREE.Vector3().fromArray(basisTile.basis.y);
+    const bz = new THREE.Vector3().fromArray(basisTile.basis.z);
+    const faceVec = receiverPoint.clone().sub(origin);
+    const local = new THREE.Vector3(faceVec.dot(bx), faceVec.dot(by), faceVec.dot(bz));
+    const localAbs = new THREE.Vector3(Math.abs(local.x), Math.abs(local.y), Math.abs(local.z));
+    let axisIndex;
+    if (localAbs.x >= localAbs.y && localAbs.x >= localAbs.z) axisIndex = local.x >= 0 ? 0 : 1;
+    else if (localAbs.y >= localAbs.x && localAbs.y >= localAbs.z) axisIndex = local.y >= 0 ? 2 : 3;
+    else axisIndex = local.z >= 0 ? 4 : 5;
+    const tile = debug.tiles[axisIndex];
     // Perspective Z is measured along the actual shadow camera forward axis,
     // which can differ substantially from the source-to-receiver ray for a
     // wide local-light frustum.

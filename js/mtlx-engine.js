@@ -1107,10 +1107,10 @@ const patchShadowBounds = (fs) => {
 // slots (an area emitter is split across several) carry the shadow, everything
 // else stays lit. u_shadowLightBegin == u_shadowLightEnd means "no caster",
 // which is the safe default and what the Material Viewer runs with.
-// Number of independent shadow casters packed into the atlas, and the light
-// slots the per-light lookup can address. Both are compile-time array sizes,
-// so they are fixed here and must match the renderer's own constants.
-const SHADOW_CASTER_SLOTS = 8;
+// Compile-time GLSL array size: shadow faces packed into the atlas (a
+// directional caster uses one, an omni/area cube group reserves six) plus
+// the light slots the per-light lookup can address. Must match the renderer.
+const SHADOW_FACE_SLOTS = 24;
 const SHADOW_LIGHT_SLOTS_MAX = 32;
 
 const patchShadowLightScope = (fs) => {
@@ -1127,14 +1127,12 @@ const patchShadowLightScope = (fs) => {
     // MaterialX's own single-map call is dropped: it computes the shadow once,
     // before the loop, which is what limited it to light slot 0.
     let out = fs.replace(call, 'occlusion = 1.0;');
-    // A material's light loop evaluates the same world-space point once per
-    // analytic sample. Area emitters split across several slots therefore
-    // used to execute the identical 19-tap search/filter for every sample.
-    // Keep visibility local to this fragment evaluation and fill lazily by
-    // caster index; the sentinel is reset for every invocation of main().
+    // Caches shadow visibility per resolved face for this fragment
+    // invocation (reset each main()), so light slots that share an omni
+    // face reuse one lookup instead of repeating the atlas search.
     const lightLoop = '        // Light loop\n';
-    const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_CASTER_SLOTS + '];\n'
-        + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_CASTER_SLOTS + '; ++mx_shadowIndex) {\n'
+    const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_FACE_SLOTS + '];\n'
+        + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_FACE_SLOTS + '; ++mx_shadowIndex) {\n'
         + '            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'
         + '        }\n'
         + '        vec3 mx_shadowNormal = ' + shadowNormalExpr + ';\n\n';
@@ -1142,42 +1140,78 @@ const patchShadowLightScope = (fs) => {
         out = out.replace(lightLoop, cacheDecl + lightLoop);
     }
     const shadowPerCaster = out.indexOf('mx_shadowVisibility[') !== -1
-        ? '\n                if (mx_caster < 0) {'
+        ? '\n                if (mx_face < 0) {'
         + '\n                    occlusion = 1.0;'
-        + '\n                } else if (mx_shadowVisibility[mx_caster] < -0.5) {'
-        + '\n                    mx_shadowVisibility[mx_caster] = mx_shadow_atlas(mx_caster, positionWorld, mx_shadowNormal);'
-        + '\n                    occlusion = mx_shadowVisibility[mx_caster];'
+        + '\n                } else if (mx_shadowVisibility[mx_face] < -0.5) {'
+        + '\n                    mx_shadowVisibility[mx_face] = mx_shadow_atlas(mx_face, positionWorld, mx_shadowNormal);'
+        + '\n                    occlusion = mx_shadowVisibility[mx_face];'
         + '\n                } else {'
-        + '\n                    occlusion = mx_shadowVisibility[mx_caster];'
+        + '\n                    occlusion = mx_shadowVisibility[mx_face];'
         + '\n                }'
-        : '\n                occlusion = mx_shadow_atlas(mx_caster, positionWorld, ' + shadowNormalExpr + ');';
+        : '\n                occlusion = mx_shadow_atlas(mx_face, positionWorld, ' + shadowNormalExpr + ');';
+    // Resolves a light slot to an atlas face: faceCount 1 maps straight
+    // through, faceCount >= 2 (an omni/area cube group) expresses the
+    // shaded point in the group's basis and picks the face by major axis.
     out = out.replace(site, site
         + '\n            {'
-        + '\n                int mx_caster = u_shadowSlotCaster[activeLightIndex];'
+        + '\n                int mx_slotFace = u_shadowSlotFace[activeLightIndex];'
+        + '\n                int mx_slotCount = u_shadowSlotFaceCount[activeLightIndex];'
+        + '\n                int mx_face = -1;'
+        + '\n                if (mx_slotFace >= 0) {'
+        + '\n                    if (mx_slotCount >= 2) {'
+        + '\n                        vec3 mx_faceVec = positionWorld - u_shadowFaceOrigin[mx_slotFace];'
+        + '\n                        vec3 mx_faceLocal = vec3('
+        + '\n                            dot(mx_faceVec, u_shadowFaceBasisX[mx_slotFace]),'
+        + '\n                            dot(mx_faceVec, u_shadowFaceBasisY[mx_slotFace]),'
+        + '\n                            dot(mx_faceVec, u_shadowFaceBasisZ[mx_slotFace]));'
+        + '\n                        vec3 mx_faceAbs = abs(mx_faceLocal);'
+        + '\n                        int mx_axis;'
+        + '\n                        if (mx_faceAbs.x >= mx_faceAbs.y && mx_faceAbs.x >= mx_faceAbs.z) mx_axis = mx_faceLocal.x >= 0.0 ? 0 : 1;'
+        + '\n                        else if (mx_faceAbs.y >= mx_faceAbs.x && mx_faceAbs.y >= mx_faceAbs.z) mx_axis = mx_faceLocal.y >= 0.0 ? 2 : 3;'
+        + '\n                        else mx_axis = mx_faceLocal.z >= 0.0 ? 4 : 5;'
+        + '\n                        mx_face = mx_slotFace + mx_axis;'
+        + '\n                        if (u_shadowFaceValid[mx_face] < 0.5) mx_face = -1;'
+        + '\n                    } else {'
+        + '\n                        mx_face = mx_slotFace;'
+        + '\n                    }'
+        + '\n                }'
         + shadowPerCaster
         + '\n            }');
     if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
     const decl = [
         'uniform sampler2D u_shadowAtlas;',
-        'uniform mat4 u_shadowMatrices[' + SHADOW_CASTER_SLOTS + '];',
+        'uniform mat4 u_shadowMatrices[' + SHADOW_FACE_SLOTS + '];',
         // xy = tile origin in atlas UV, zw = tile size.
-        'uniform vec4 u_shadowTiles[' + SHADOW_CASTER_SLOTS + '];',
+        'uniform vec4 u_shadowTiles[' + SHADOW_FACE_SLOTS + '];',
         // Normalized positive light-view Z plane for linear moments.
-        'uniform vec4 u_shadowDepthPlanes[' + SHADOW_CASTER_SLOTS + '];',
+        'uniform vec4 u_shadowDepthPlanes[' + SHADOW_FACE_SLOTS + '];',
         // x = near, y = far - near, in the same world units used by the
         // authored emitter radius. Kept separate because the normalized
         // plane alone cannot recover its near offset.
-        'uniform vec2 u_shadowDepthRanges[' + SHADOW_CASTER_SLOTS + '];',
+        'uniform vec2 u_shadowDepthRanges[' + SHADOW_FACE_SLOTS + '];',
         // x/y = authored source radius in world units; z/w = explicit
         // perspective projection scale. Directional casters use all zeroes.
-        'uniform vec4 u_shadowSourceRadii[' + SHADOW_CASTER_SLOTS + '];',
+        'uniform vec4 u_shadowSourceRadii[' + SHADOW_FACE_SLOTS + '];',
         // World-space size of one atlas texel at the caster's near plane
         // (perspective) or across the whole frustum (orthographic). Used
         // only to push the receiver test point off the surface before the
         // lookup; zero disables the offset for that slot.
-        'uniform float u_shadowTexelWorldSize[' + SHADOW_CASTER_SLOTS + '];',
-        // Per light slot: which caster shadows it, or -1 for none.
-        'uniform int u_shadowSlotCaster[' + SHADOW_LIGHT_SLOTS_MAX + '];',
+        'uniform float u_shadowTexelWorldSize[' + SHADOW_FACE_SLOTS + '];',
+        // Light position for an omni caster's face, used to pick which of
+        // its six faces a shaded point falls into. Unused (zero) otherwise.
+        'uniform vec3 u_shadowFaceOrigin[' + SHADOW_FACE_SLOTS + '];',
+        // 1.0 where a face actually holds rendered data, 0.0 where the
+        // renderer reserved the slot but never allocated a cell for it.
+        'uniform float u_shadowFaceValid[' + SHADOW_FACE_SLOTS + '];',
+        // A cube group's own world +X/+Y/+Z, read only at the group's base
+        // face index: world axes for omni, the emitter's own frame for area.
+        'uniform vec3 u_shadowFaceBasisX[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec3 u_shadowFaceBasisY[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec3 u_shadowFaceBasisZ[' + SHADOW_FACE_SLOTS + '];',
+        // Per light slot: base face index (or -1 for none) and how many
+        // consecutive faces it spans (1 for directional, 6 for a cube group).
+        'uniform int u_shadowSlotFace[' + SHADOW_LIGHT_SLOTS_MAX + '];',
+        'uniform int u_shadowSlotFaceCount[' + SHADOW_LIGHT_SLOTS_MAX + '];',
         'float mx_shadow_vsm(vec2 moments, float receiverDepth) {',
         '    float p = (receiverDepth <= moments.x) ? 1.0 : 0.0;',
         '    float variance = max(moments.y - moments.x * moments.x, 2e-7);',
@@ -1233,7 +1267,11 @@ const patchShadowLightScope = (fs) => {
         '    vec4 tile = u_shadowTiles[caster];',
         '    vec2 atlasTexel = 1.0 / vec2(textureSize(u_shadowAtlas, 0));',
         '    vec2 tileTexel = atlasTexel / max(tile.zw, vec2(1e-6));',
-        '    vec2 centerUv = tile.xy + sc.xy * tile.zw;',
+        // Clamp the local tile coordinate by half a texel before mapping into
+        // the atlas, so a bilinear tap at the tile edge cannot cross into a
+        // neighbouring cell. tileRect no longer carries its own inset.
+        '    vec2 localUv = clamp(sc.xy, tileTexel * 0.5, vec2(1.0) - tileTexel * 0.5);',
+        '    vec2 centerUv = tile.xy + localUv * tile.zw;',
         '    vec2 moments = texture(u_shadowAtlas, centerUv).xy;',
         // Projected XY still comes from the real light camera, but moments
         // use a linear light-view depth plane supplied by the renderer.
@@ -1250,7 +1288,11 @@ const patchShadowLightScope = (fs) => {
         '    }',
         '    vec2 searchRadius = sourceRadius * projectionScale * 0.5 / max(nearDepth, 1e-9)',
         '        * max(receiverZ - nearDepth, 0.0) / max(receiverZ, 1e-6);',
-        '    searchRadius = min(searchRadius, vec2(2.0) * tileTexel);',
+        // The PCSS bound is a constant in tile space (two texels of a 1024
+        // tile) so a 512 cell filters the same world footprint as a full tile
+        // rather than twice as wide.
+        '    vec2 pcssMaxRadius = vec2(2.0 / 1024.0);',
+        '    searchRadius = min(searchRadius, pcssMaxRadius);',
         // Estimate a blocker over a source-size footprint. The search and
         // filter stay inside this caster tile, so atlas slots cannot bleed.
         '    float blockerSum = 0.0;',
@@ -1267,7 +1309,7 @@ const patchShadowLightScope = (fs) => {
         '    vec2 filterRadius = sourceRadius * projectionScale * 0.5',
         '        * max(receiverZ - blockerZ, 0.0) / max(blockerZ, 1e-6)',
         '        / max(receiverZ, 1e-6);',
-        '    filterRadius = min(filterRadius, vec2(2.0) * tileTexel);',
+        '    filterRadius = min(filterRadius, pcssMaxRadius);',
         '    float filtered = 0.0;',
         '    for (int oy = -1; oy <= 1; oy++) {',
         '        for (int ox = -1; ox <= 1; ox++) {',
@@ -5615,7 +5657,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowSlotCaster = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5637,20 +5679,35 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         // reason as the sky volume below, and defaulted to "no caster on any
         // slot", which makes the whole lookup an exact no-op.
         u_shadowAtlas: { value: shadowAtlas || getDummyTexWhite() },
-        u_shadowMatrices: { value: shadowMatrices && shadowMatrices.length === SHADOW_CASTER_SLOTS
-            ? shadowMatrices : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Matrix4()) },
-        u_shadowTiles: { value: shadowTiles && shadowTiles.length === SHADOW_CASTER_SLOTS
-            ? shadowTiles : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
-        u_shadowDepthPlanes: { value: shadowDepthPlanes && shadowDepthPlanes.length === SHADOW_CASTER_SLOTS
-            ? shadowDepthPlanes : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
-        u_shadowDepthRanges: { value: shadowDepthRanges && shadowDepthRanges.length === SHADOW_CASTER_SLOTS
-            ? shadowDepthRanges : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector2(0, 1)) },
-        u_shadowSourceRadii: { value: shadowSourceRadii && shadowSourceRadii.length === SHADOW_CASTER_SLOTS
-            ? shadowSourceRadii : Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4()) },
-        u_shadowTexelWorldSize: { value: shadowTexelSizes && shadowTexelSizes.length === SHADOW_CASTER_SLOTS
-            ? shadowTexelSizes : new Array(SHADOW_CASTER_SLOTS).fill(0) },
-        u_shadowSlotCaster: { value: shadowSlotCaster && shadowSlotCaster.length === SHADOW_LIGHT_SLOTS_MAX
-            ? shadowSlotCaster : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+        u_shadowMatrices: { value: shadowMatrices && shadowMatrices.length === SHADOW_FACE_SLOTS
+            ? shadowMatrices : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Matrix4()) },
+        u_shadowTiles: { value: shadowTiles && shadowTiles.length === SHADOW_FACE_SLOTS
+            ? shadowTiles : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
+        u_shadowDepthPlanes: { value: shadowDepthPlanes && shadowDepthPlanes.length === SHADOW_FACE_SLOTS
+            ? shadowDepthPlanes : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
+        u_shadowDepthRanges: { value: shadowDepthRanges && shadowDepthRanges.length === SHADOW_FACE_SLOTS
+            ? shadowDepthRanges : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector2(0, 1)) },
+        u_shadowSourceRadii: { value: shadowSourceRadii && shadowSourceRadii.length === SHADOW_FACE_SLOTS
+            ? shadowSourceRadii : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4()) },
+        u_shadowTexelWorldSize: { value: shadowTexelSizes && shadowTexelSizes.length === SHADOW_FACE_SLOTS
+            ? shadowTexelSizes : new Array(SHADOW_FACE_SLOTS).fill(0) },
+        // Light position for a cube-group face, and whether a face actually
+        // holds rendered data (the renderer always reserves six per group,
+        // but only allocates a cell where geometry actually falls in it).
+        u_shadowFaceOrigin: { value: shadowFaceOrigins && shadowFaceOrigins.length === SHADOW_FACE_SLOTS
+            ? shadowFaceOrigins : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3()) },
+        u_shadowFaceValid: { value: shadowFaceValid && shadowFaceValid.length === SHADOW_FACE_SLOTS
+            ? shadowFaceValid : new Array(SHADOW_FACE_SLOTS).fill(0) },
+        u_shadowFaceBasisX: { value: shadowFaceBasisX && shadowFaceBasisX.length === SHADOW_FACE_SLOTS
+            ? shadowFaceBasisX : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(1, 0, 0)) },
+        u_shadowFaceBasisY: { value: shadowFaceBasisY && shadowFaceBasisY.length === SHADOW_FACE_SLOTS
+            ? shadowFaceBasisY : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 1, 0)) },
+        u_shadowFaceBasisZ: { value: shadowFaceBasisZ && shadowFaceBasisZ.length === SHADOW_FACE_SLOTS
+            ? shadowFaceBasisZ : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 0, 1)) },
+        u_shadowSlotFace: { value: shadowSlotFace && shadowSlotFace.length === SHADOW_LIGHT_SLOTS_MAX
+            ? shadowSlotFace : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+        u_shadowSlotFaceCount: { value: shadowSlotFaceCount && shadowSlotFaceCount.length === SHADOW_LIGHT_SLOTS_MAX
+            ? shadowSlotFaceCount : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
         // Baked sky visibility. Seeded unconditionally, NOT through has():
         // parseUniforms' regex has no room for a precision qualifier, so
         // `uniform highp sampler3D` is invisible to it just as
@@ -8254,13 +8311,19 @@ const createMtlxRenderView = async ({
                         // No stage caster in the Viewer: an all -1 slot map
                         // makes the atlas lookup an exact no-op.
                         u_shadowAtlas: { value: getDummyTexWhite() },
-                        u_shadowMatrices: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Matrix4()) },
-                        u_shadowTiles: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
-                        u_shadowDepthPlanes: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
-                        u_shadowDepthRanges: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector2(0, 1)) },
-                        u_shadowSourceRadii: { value: Array.from({ length: SHADOW_CASTER_SLOTS }, () => new THREE.Vector4()) },
-                        u_shadowTexelWorldSize: { value: new Array(SHADOW_CASTER_SLOTS).fill(0) },
-                        u_shadowSlotCaster: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+                        u_shadowMatrices: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Matrix4()) },
+                        u_shadowTiles: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
+                        u_shadowDepthPlanes: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
+                        u_shadowDepthRanges: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector2(0, 1)) },
+                        u_shadowSourceRadii: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4()) },
+                        u_shadowTexelWorldSize: { value: new Array(SHADOW_FACE_SLOTS).fill(0) },
+                        u_shadowFaceOrigin: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3()) },
+                        u_shadowFaceValid: { value: new Array(SHADOW_FACE_SLOTS).fill(0) },
+                        u_shadowFaceBasisX: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(1, 0, 0)) },
+                        u_shadowFaceBasisY: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 1, 0)) },
+                        u_shadowFaceBasisZ: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 0, 1)) },
+                        u_shadowSlotFace: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+                        u_shadowSlotFaceCount: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
                         // Same sampler-unit hazard as the Scene: see
                         // createMtlxSceneUniforms. No stage volume here, so
                         // the white 1x1x1 dummy at strength 0 is the value.
@@ -9228,7 +9291,7 @@ Object.assign(window, {
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
     ensurePrefilteredEnv, getSpecularEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
-    SHADOW_CASTER_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
+    SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
     createPeelPipeline, createRgbtPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
