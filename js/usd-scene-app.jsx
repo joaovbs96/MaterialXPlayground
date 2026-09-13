@@ -1124,7 +1124,7 @@
                                 />
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
-                                Up to eight lights cast, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. More casters increase geometry-pass cost.
+                                Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. More casters increase geometry-pass cost.
                             </div>
                             <label
                                 className="flex items-center justify-between cursor-pointer"

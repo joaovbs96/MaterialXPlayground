@@ -500,6 +500,49 @@ const countFragmentSamplers = (fs) => {
     return { count, names };
 };
 
+// Estimates fragment uniform vector cost against MAX_FRAGMENT_UNIFORM_VECTORS.
+// Struct rows: scalars/vectors 1, mat2 2, mat3 3, mat4 4, nested structs
+// recursively. Uniform declarations: samplers 0, arrays times size, struct
+// types their row sum. Returns { estimate, largest } (top five by rows).
+const estimateFragmentUniformVectors = (fs) => {
+    const defines = new Map();
+    const defineRe = /#define\s+(\w+)\s+(\d+)\b/g;
+    let dm;
+    while ((dm = defineRe.exec(fs)) !== null) defines.set(dm[1], parseInt(dm[2], 10));
+    const resolveSize = (token) => (/^\d+$/.test(token) ? parseInt(token, 10) : (defines.has(token) ? defines.get(token) : 1));
+    const structRows = new Map();
+    const baseTypeRows = (type) => {
+        if (structRows.has(type)) return structRows.get(type);
+        if (type === 'mat2' || type === 'mat2x2') return 2;
+        if (type === 'mat3' || type === 'mat3x3') return 3;
+        if (type === 'mat4' || type === 'mat4x4') return 4;
+        return 1;
+    };
+    const structRe = /struct\s+(\w+)\s*\{([^}]*)\}/g;
+    const memberRe = /(?:(?:low|medium|high)p\s+)?(\w+)\s+\w+\s*(?:\[\s*(\w+)\s*\])?\s*;/g;
+    let sm;
+    while ((sm = structRe.exec(fs)) !== null) {
+        let rows = 0;
+        let mm;
+        memberRe.lastIndex = 0;
+        while ((mm = memberRe.exec(sm[2])) !== null) rows += baseTypeRows(mm[1]) * (mm[2] ? resolveSize(mm[2]) : 1);
+        structRows.set(sm[1], rows);
+    }
+    const isSampler = (type) => /^sampler(2D|3D|Cube)$/.test(type);
+    const uniformRe = /uniform\s+(?:(?:low|medium|high)p\s+)?(\w+)\s+(\w+)\s*(?:\[\s*(\w+)\s*\])?\s*;/g;
+    const entries = [];
+    let um;
+    while ((um = uniformRe.exec(fs)) !== null) {
+        const [, type, name, sizeToken] = um;
+        const size = sizeToken ? resolveSize(sizeToken) : 1;
+        const rows = isSampler(type) ? 0 : baseTypeRows(type) * size;
+        entries.push({ name, type, rows });
+    }
+    const estimate = entries.reduce((sum, e) => sum + e.rows, 0);
+    const largest = entries.slice().sort((a, b) => b.rows - a.rows).slice(0, 5);
+    return { estimate, largest };
+};
+
 // three.js RawShaderMaterial + glslVersion:GLSL3 prepends its own
 // "#version 300 es"; MaterialX ESSL output already has one. Strip the
 // generated version line to avoid a duplicate-directive compile error.
@@ -1126,7 +1169,7 @@ const patchShadowBounds = (fs) => {
 // Compile-time GLSL array size: shadow faces packed into the atlas (a
 // directional caster uses one, an omni/area cube group reserves six) plus
 // the light slots the per-light lookup can address. Must match the renderer.
-const SHADOW_FACE_SLOTS = 24;
+const SHADOW_FACE_SLOTS = 32;
 const SHADOW_LIGHT_SLOTS_MAX = 32;
 // One bias policy for every caster kind: a normal offset off the surface
 // and a depth bias on the comparison, both measured in atlas texels so
@@ -5897,13 +5940,16 @@ const SAMPLER_BUDGET_DROP_ORDER = [
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
 // instances for each object that uses that source.
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null }) => {
+const DEFAULT_UNIFORM_VECTOR_BUDGET = 1024;
+
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
     // Test-only override wins over the caller's live GL limit, so a headless
     // spec can force a tight budget without a real ANGLE context.
     const overrideBudget = typeof window !== 'undefined' ? window.__mtlxSamplerBudgetOverride : undefined;
     const budget = Number.isFinite(overrideBudget) ? overrideBudget
         : (Number.isFinite(samplerBudget) ? samplerBudget : DEFAULT_SAMPLER_BUDGET);
+    const uniformLimit = Number.isFinite(uniformVectorBudget) ? uniformVectorBudget : DEFAULT_UNIFORM_VECTOR_BUDGET;
 
     const dropped = [];
     let srcs = null;
@@ -5920,6 +5966,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     }
     const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
     const overBudget = samplerInfo.count > budget;
+    const uniformInfo = estimateFragmentUniformVectors(srcs.fs);
     return {
         ...srcs,
         declared,
@@ -5935,6 +5982,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         samplerNames: samplerInfo.names,
         samplerBudget: { limit: budget, count: samplerInfo.count, dropped: dropped.map((d) => d.label) },
         samplerOverBudget: overBudget,
+        fragmentUniformVectors: { estimate: uniformInfo.estimate, limit: uniformLimit, largest: uniformInfo.largest },
+        fragmentUniformOverBudget: uniformInfo.estimate > uniformLimit,
     };
 };
 

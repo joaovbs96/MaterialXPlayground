@@ -1241,6 +1241,14 @@ const createMtlxSceneView = async ({
     // Faces dropped mid-group because the cell pool ran dry, distinct from a
     // caster dropped entirely for lack of face slots (shadowDroppedCasters).
     let shadowDroppedFaces = [];
+    // Ranking snapshot for the debug surface: one entry per candidate caster,
+    // in score order, independent of which faces it was actually allocated.
+    let shadowRanking = [];
+    let shadowFacesUsed = 0;
+    // Cache for gatherReceiverSamples, keyed on mesh identity/visibility/
+    // vertex count so an unchanged scene reuses the same sample points.
+    let shadowReceiverCache = { key: null, points: [] };
+    let receiverSampleInfo = { count: 0, cached: false };
     // Which u_lightData slots the shadow map belongs to. MaterialX shadows one
     // light, and until this existed it always shadowed slot 0 (the environment
     // key light) no matter which light the map was actually drawn from.
@@ -1867,10 +1875,15 @@ const createMtlxSceneView = async ({
             const renderable = loaded.node;
             sourceDocument = loaded.document;
             let samplerBudget = null;
-            try { const gl = renderer.getContext(); samplerBudget = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS); } catch (e) { /* keep the engine's fallback default */ }
+            let uniformVectorBudget = null;
+            try {
+                const gl = renderer.getContext();
+                samplerBudget = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+                uniformVectorBudget = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
+            } catch (e) { /* keep the engine's fallback defaults */ }
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget,
+                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
             });
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
@@ -1884,6 +1897,10 @@ const createMtlxSceneView = async ({
             if (compiled.samplerOverBudget) {
                 warnings.push('Sampler budget exceeded for ' + label + ': ' + compiled.samplerBudget.count
                     + ' samplers over the ' + compiled.samplerBudget.limit + '-unit limit; material kept as compiled (may not draw on this GPU)');
+            }
+            if (compiled.fragmentUniformOverBudget) {
+                warnings.push('Fragment uniform budget exceeded for ' + label + ': ' + compiled.fragmentUniformVectors.estimate
+                    + ' vectors over the ' + compiled.fragmentUniformVectors.limit + '-vector limit; material kept as compiled (may not draw on this GPU)');
             }
             // Compile the transfer (light-transport) variant for a material
             // that could qualify as a shadow transmittance caster. Per-object
@@ -2928,41 +2945,48 @@ const createMtlxSceneView = async ({
         // light, which is invisible no matter how correct the binding is. The
         // rig has two window lights and two lamp emitters, and shadows only
         // read once most of the illumination casts.
-        // A bounded set of world-space points drawn from visible mesh surfaces
-        // inside the camera frustum. Scoring casters against many points of
-        // what the camera actually sees, instead of one aim point, is what
-        // lets a large area light that lights most of the visible geometry
-        // outrank a small distant one that only grazes the orbit target.
+        // Stage-wide receiver samples from every visible mesh, not the view:
+        // scoring casters against them lets a large area light outrank a small
+        // distant one and keeps the ranking fixed while the camera orbits.
         const SHADOW_RECEIVER_SAMPLES = 2000;
         const gatherReceiverSamples = () => {
-            const points = [];
-            if (!sceneRoot) return points;
-            const frustum = new THREE.Frustum().setFromProjectionMatrix(
-                new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+            if (!sceneRoot) { receiverSampleInfo = { count: 0, cached: false }; return []; }
             const meshes = [];
             let totalVerts = 0;
+            const keyParts = [];
             sceneRoot.traverse((o) => {
-                if (!o.isMesh || !o.visible) return;
+                if (!o.isMesh) return;
                 const pos = o.geometry && o.geometry.attributes && o.geometry.attributes.position;
                 if (!pos || !pos.count) return;
+                keyParts.push(o.uuid + ':' + (o.visible ? 1 : 0) + ':' + pos.count);
+                if (!o.visible) return;
                 meshes.push(o);
                 totalVerts += pos.count;
             });
-            if (!meshes.length || !totalVerts) return points;
-            const v = new THREE.Vector3();
-            for (const mesh of meshes) {
-                if (points.length >= SHADOW_RECEIVER_SAMPLES) break;
-                const pos = mesh.geometry.attributes.position;
-                // Proportional share of the budget, stride-sampled rather than
-                // scanned fully so a dense mesh cannot dominate the walk cost.
-                const share = Math.max(1, Math.round(SHADOW_RECEIVER_SAMPLES * (pos.count / totalVerts)));
-                const stride = Math.max(1, Math.floor(pos.count / share));
-                mesh.updateWorldMatrix(true, false);
-                for (let i = 0; i < pos.count && points.length < SHADOW_RECEIVER_SAMPLES; i += stride) {
-                    v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
-                    if (frustum.containsPoint(v)) points.push(v.clone());
+            const key = keyParts.join('|');
+            if (shadowReceiverCache.key === key) {
+                receiverSampleInfo = { count: shadowReceiverCache.points.length, cached: true };
+                return shadowReceiverCache.points;
+            }
+            const points = [];
+            if (meshes.length && totalVerts) {
+                const v = new THREE.Vector3();
+                for (const mesh of meshes) {
+                    if (points.length >= SHADOW_RECEIVER_SAMPLES) break;
+                    const pos = mesh.geometry.attributes.position;
+                    // Proportional share of the budget, stride-sampled rather than
+                    // scanned fully so a dense mesh cannot dominate the walk cost.
+                    const share = Math.max(1, Math.round(SHADOW_RECEIVER_SAMPLES * (pos.count / totalVerts)));
+                    const stride = Math.max(1, Math.floor(pos.count / share));
+                    mesh.updateWorldMatrix(true, false);
+                    for (let i = 0; i < pos.count && points.length < SHADOW_RECEIVER_SAMPLES; i += stride) {
+                        v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+                        points.push(v.clone());
+                    }
                 }
             }
+            shadowReceiverCache = { key, points };
+            receiverSampleInfo = { count: points.length, cached: false };
             return points;
         };
         // World-space bounding box of every mesh in the shadow pass, called
@@ -2986,6 +3010,8 @@ const createMtlxSceneView = async ({
                 shadowDroppedFaces = [];
                 shadowCasterLabel = null;
                 shadowTransmittanceInfo = [];
+                shadowRanking = [];
+                shadowFacesUsed = 0;
                 return;
             }
             const box = new THREE.Box3().setFromObject(sceneRoot);
@@ -3034,14 +3060,17 @@ const createMtlxSceneView = async ({
                         + 0.0722 * Number(lightColor.b ?? lightColor.z ?? lightColor[2] ?? 1)) : 1;
                 let contribution;
                 if (directional) {
-                    // No inverse-square falloff and no meaningful per-point
-                    // receiver dependence: one evaluation at the active
-                    // target already captures the authored energy that
-                    // reaches the visible stage.
-                    toPoint.copy(receiverTarget).sub(position);
-                    const d2 = toPoint.lengthSq();
-                    const cosine = sourceDir && d2 > 1e-12
-                        ? Math.max(0, sourceDir.dot(toPoint) / Math.sqrt(d2)) : 1;
+                    // No inverse-square falloff, so only the cosine varies per
+                    // receiver: sources without a direction score 1, a planar
+                    // source is averaged over the same stage-wide samples.
+                    let sum = 0;
+                    for (const p of samplePoints) {
+                        toPoint.copy(p).sub(position);
+                        const d2 = toPoint.lengthSq();
+                        sum += sourceDir && d2 > 1e-12
+                            ? Math.max(0, sourceDir.dot(toPoint) / Math.sqrt(d2)) : 1;
+                    }
+                    const cosine = samplePoints.length ? sum / samplePoints.length : 1;
                     contribution = lightEnergy * Math.max(0, luminance) * cosine;
                 } else {
                     // Local sources: irradiance averaged over the receiver
@@ -3112,6 +3141,8 @@ const createMtlxSceneView = async ({
                     shadowCellsUsed = 0;
                     shadowDroppedCasters = [];
                     shadowDroppedFaces = [];
+                    shadowRanking = [];
+                    shadowFacesUsed = 0;
                     return;
                 }
                 ranked.push({
@@ -3123,6 +3154,9 @@ const createMtlxSceneView = async ({
                     score: keyEnergy,
                 });
             }
+            shadowRanking = ranked.map((r) => ({
+                key: r.key, kind: shadowClassifyCaster(r), score: r.score, slots: r.slots.slice(),
+            }));
 
             ensureShadowTargets();
             if (!shadowDepthMaterial) shadowDepthMaterial = createShadowDepthMaterial();
@@ -3305,6 +3339,7 @@ const createMtlxSceneView = async ({
             shadowCellsUsed = pool.reduce((sum, v) => sum + v, 0);
             shadowDroppedCasters = dropped;
             shadowDroppedFaces = droppedFaces;
+            shadowFacesUsed = facesUsed;
             shadowSlotFace.fill(-1);
             shadowSlotFaceCount.fill(0);
             for (const rec of ranked) {
@@ -5468,6 +5503,10 @@ const createMtlxSceneView = async ({
                     droppedCasters: shadowDroppedCasters.slice(),
                     droppedFaces: shadowDroppedFaces.slice(),
                     shadowedSlots: Array.from(shadowSlotFace).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
+                    ranking: shadowRanking.slice(),
+                    facesUsed: shadowFacesUsed,
+                    faceSlots: SHADOW_ATLAS_FACE_SLOTS,
+                    receiverSamples: receiverSampleInfo,
                     atlas,
                     prepass,
                     transmittance: {
