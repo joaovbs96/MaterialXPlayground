@@ -6953,7 +6953,11 @@ const createRgbtPeelPipeline = (renderer, {
             if (opts.setSceneLinear) opts.setSceneLinear(false);
         }
     };
-    return { render, supported: halfOk, dispose: free };
+    // debug(): exposes the current opaque render target (with its
+    // depthTexture) for a headed diagnosis harness. Null before the
+    // first render() call has allocated resources.
+    return { render, supported: halfOk, dispose: free,
+        debug: () => ({ opaque: resources ? resources.opaque : null }) };
 };
 
 // createPeelPipeline(renderer, { getDisplayTransform, getDisplayExposure }): reusable depth-
@@ -7005,6 +7009,7 @@ const createPeelPipeline = (renderer, { getDisplayTransform: getDisplayTransform
             },
             setMeshMode: applyPeelMaterialMode,
             dispose: () => { rgbt.dispose(); legacy.dispose(); },
+            debug: rgbt.debug,
         };
     }
     const getDT = getDisplayTransformOpt || getDisplayTransform;

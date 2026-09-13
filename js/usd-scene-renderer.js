@@ -1105,6 +1105,9 @@ const createMtlxSceneView = async ({
         mode: 'inactive', reason: null, payloadMaterials: 0,
         unsupportedLabels: [],
     };
+    // Lazily built quad + Float32 target for __opaqueDepthAt below; sized to
+    // whatever the RGB-T opaque target currently is, rebuilt on resize.
+    let opaqueDepthProbe = null;
     let transparentMeshCache = null;
     let thicknessMeshCache = null;
     let thicknessTopologyCache = new WeakMap();
@@ -1319,6 +1322,13 @@ const createMtlxSceneView = async ({
         if (aoBlurMaterial) { aoBlurMaterial.dispose(); aoBlurMaterial = null; }
         aoQuadScene = null;
         aoQuadCamera = null;
+    };
+    const disposeOpaqueDepthProbe = () => {
+        if (!opaqueDepthProbe) return;
+        opaqueDepthProbe.target.dispose();
+        opaqueDepthProbe.material.dispose();
+        opaqueDepthProbe.quadScene.children.forEach((child) => { if (child.geometry) child.geometry.dispose(); });
+        opaqueDepthProbe = null;
     };
     let shadowDirty = true;
     const disposeShadowResources = () => {
@@ -4763,6 +4773,7 @@ const createMtlxSceneView = async ({
                 disposeShadowResources();
                 disposeAoResources();
                 disposeThicknessResources();
+                disposeOpaqueDepthProbe();
                 if (displayTransformListener) {
                     window.removeEventListener('mtlx-display-transform', displayTransformListener);
                     window.removeEventListener('mtlx-settings-changed', settingsChangedListener);
@@ -4803,6 +4814,58 @@ const createMtlxSceneView = async ({
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
                 linearScopeActive: !!sceneLinearState }),
+            // Reads the RGB-T pipeline's opaque depth at one canvas pixel (top-
+            // left origin), normalized to [0, 1]. Blits the depth texture
+            // through a tiny quad shader rather than reading it directly,
+            // since depth textures cannot be read back with readRenderTargetPixels.
+            __opaqueDepthAt: (x, y) => {
+                if (sceneRgbtState.mode !== 'rgbt' || !peelPipeline || typeof peelPipeline.debug !== 'function') {
+                    return { supported: false, reason: 'RGB-T pipeline is not active (mode=' + sceneRgbtState.mode + ')' };
+                }
+                const info = peelPipeline.debug();
+                const opaqueTarget = info && info.opaque;
+                if (!opaqueTarget || !opaqueTarget.depthTexture) {
+                    return { supported: false, reason: 'no opaque depth texture allocated yet' };
+                }
+                const w = opaqueTarget.width; const h = opaqueTarget.height;
+                const px = Math.floor(Number(x)); const py = Math.floor(Number(y));
+                if (!Number.isFinite(px) || !Number.isFinite(py) || px < 0 || py < 0 || px >= w || py >= h) {
+                    return { supported: false, reason: 'pixel out of range', width: w, height: h };
+                }
+                if (!opaqueDepthProbe || opaqueDepthProbe.w !== w || opaqueDepthProbe.h !== h) {
+                    disposeOpaqueDepthProbe();
+                    const quadScene = new THREE.Scene();
+                    const quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+                    const material = new THREE.RawShaderMaterial({
+                        glslVersion: THREE.GLSL3,
+                        vertexShader: 'in vec3 position; in vec2 uv; out vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}\n',
+                        fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o; uniform highp sampler2D u_depth;\n'
+                            + 'void main(){o=vec4(texture(u_depth,vUv).r,0.0,0.0,1.0);}\n',
+                        uniforms: { u_depth: { value: null } },
+                        depthTest: false, depthWrite: false,
+                    });
+                    quadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+                    const target = new THREE.WebGLRenderTarget(w, h, {
+                        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                        format: THREE.RGBAFormat, type: THREE.FloatType,
+                        depthBuffer: false, stencilBuffer: false,
+                    });
+                    opaqueDepthProbe = { w, h, quadScene, quadCamera, material, target };
+                }
+                opaqueDepthProbe.material.uniforms.u_depth.value = opaqueTarget.depthTexture;
+                const prev = snapshotRendererDestination();
+                const buf = new Float32Array(4);
+                try {
+                    renderer.setRenderTarget(opaqueDepthProbe.target);
+                    renderer.render(opaqueDepthProbe.quadScene, opaqueDepthProbe.quadCamera);
+                    // Render-target row 0 is the bottom of the frame; the
+                    // caller's (x, y) is a top-left canvas pixel.
+                    renderer.readRenderTargetPixels(opaqueDepthProbe.target, px, h - 1 - py, 1, 1, buf);
+                } finally {
+                    restoreRendererDestination(prev);
+                }
+                return { supported: true, depth: buf[0], width: w, height: h };
+            },
             // Reads the moments map back. An all-1.0 map means the depth pass
             // drew nothing, which looks identical to a correctly bound shadow
             // that simply never darkens anything.
