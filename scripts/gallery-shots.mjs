@@ -177,7 +177,12 @@ async function captureOne(context, baseURL, outDir, material) {
     const handle = await page.evaluateHandle((i) => window.__viewers[i], idx);
     const element = handle.asElement();
     if (!element) throw new Error("viewer element handle not found");
-    await element.screenshot({ type: "jpeg", quality: 80, path: path.join(outDir, "thumbs", `${material.id}.jpg`) });
+    // A page clip, not element.screenshot(): the element variant waits for
+    // the box to hold still across two animation frames, and a SwiftShader
+    // render loop stretches those frames past the 30s cap on a GPU-less CI runner.
+    const box = await element.boundingBox();
+    if (!box) throw new Error("viewer element has no layout box");
+    await page.screenshot({ type: "jpeg", quality: 80, clip: box, path: path.join(outDir, "thumbs", `${material.id}.jpg`) });
   } finally {
     await page.close().catch(() => {});
   }

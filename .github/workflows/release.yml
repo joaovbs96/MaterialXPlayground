@@ -46,7 +46,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Renders the gallery data once per release and hands it to the package
+  # and desktop jobs as an artifact. deploy.yml publishes the same tiles
+  # to Pages on the same release event, so pulling them from the live site
+  # here raced that deploy and shipped the gallery placeholder.
+  gallery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      - name: Install the capture browser
+        run: npx playwright install --with-deps chromium
+
+      # Reuses every tile the live site already has for an unchanged
+      # material and renders the rest (about 13s each on a GPU-less runner).
+      - name: Generate gallery data
+        run: |
+          node scripts/build-gallery.mjs
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+      - name: Upload gallery artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gallery-data
+          path: gallery
+          if-no-files-found: error
+          retention-days: 3
+
   package:
+    needs: gallery
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -144,15 +190,12 @@ jobs:
           echo "mtlx_default_version=$MTLX_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
 
       # Populates gallery/ at the repo root BEFORE the rsync below, so the
-      # offline zip carries it and electron/scripts/stage-site.mjs (desktop
-      # job) finds it too. --reuse-only downloads the tiles the live site
-      # already published and renders NOTHING: rendering needs a browser and
-      # costs ~13s a material on a GPU-less runner. Materials published since
-      # the last deploy simply keep the gallery placeholder.
+      # offline zip carries it; rendered once by the gallery job above.
       - name: Populate gallery data
-        run: |
-          node scripts/build-gallery.mjs
-          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gallery-data
+          path: gallery
 
       - name: Stage offline site
         run: |
@@ -284,7 +327,7 @@ jobs:
   # `needs: package` certifies the tree once (build, stale gate, check)
   # before three runners spend 40+ minutes each on it.
   desktop:
-    needs: package
+    needs: [gallery, package]
     if: github.event_name == 'release'
     strategy:
       # One platform failing must not deny the other two their artifacts.
@@ -316,14 +359,14 @@ jobs:
       - name: Vendor the offline MaterialX snapshot
         run: npm run vendor:offline
 
-      # Same reuse-only download as the package job: the desktop app ships
-      # the gallery, but no runner should re-render tiles the site already
-      # published. Without this the packaged app shows the gallery's "not
-      # generated" card and its preset picker falls back to MTLX_PRESETS.
+      # The desktop app ships the gallery; without it the packaged app shows
+      # the gallery's "not generated" card and its preset picker falls back
+      # to MTLX_PRESETS. Same artifact the package job used.
       - name: Populate gallery data
-        run: |
-          node scripts/build-gallery.mjs
-          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gallery-data
+          path: gallery
 
       - name: Install desktop dependencies
         run: npm ci
