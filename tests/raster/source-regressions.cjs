@@ -15,7 +15,9 @@ const source = read('js/usd-scene-renderer.js');
 const expr = source.match(/const luminance = lightColor\s*([\s\S]*?) : 1;/);
 assert(expr, 'production caster luminance expression not found');
 const luma = new Function('lightColor', `return lightColor ${expr[1]} : 1;`);
-const colors = [[0,0,0],[1,0,0],[0,1,0],[0,0,1],[1,1,1],[0.2,0.7,0.1]];
+// A zero-RGB emitter is excluded from the light budget before conversion.
+assert.equal(context.window.convertUsdStageLights([{type: 'DistantLight', primPath: '/TestLight', color: [0,0,0], intensity: 1}], {limit:1}).length, 0);
+const colors = [[1,0,0],[0,1,0],[0,0,1],[1,1,1],[0.2,0.7,0.1]];
 const luminance = colors.map(color => {
   const converted = context.window.convertUsdStageLights([{type: 'DistantLight', primPath: '/TestLight', color, intensity: 1}], {limit:1})[0];
   assert.equal(converted.color.isVector3, true);
