@@ -104,30 +104,66 @@
         return true;
     }
 
-    // UsdLuxLightAPI colorTemperature: a standard Planckian-locus fit (the
-    // widely used Tanner Helland approximation), converted to linear
-    // Rec.709 and normalized to unit luminance so it only tints the
-    // authored color rather than adding its own brightness.
+    // Ported from UsdLuxBlackbodyTemperatureAsRgb, pxr/usd/usdLux/blackbody.cpp,
+    // OpenUSD (Copyright Pixar, licensed as at https://openusd.org/license,
+    // a modified Apache License 2.0); adapted here from C++ to JavaScript.
+    var BLACKBODY_KNOTS = [
+        [1.000000, 0.027490, 0.000000],
+        [1.000000, 0.027490, 0.000000],
+        [1.000000, 0.149664, 0.000000],
+        [1.000000, 0.256644, 0.008095],
+        [1.000000, 0.372033, 0.067450],
+        [1.000000, 0.476725, 0.153601],
+        [1.000000, 0.570376, 0.259196],
+        [1.000000, 0.653480, 0.377155],
+        [1.000000, 0.726878, 0.501606],
+        [1.000000, 0.791543, 0.628050],
+        [1.000000, 0.848462, 0.753228],
+        [1.000000, 0.898581, 0.874905],
+        [1.000000, 0.942771, 0.991642],
+        [0.906947, 0.890456, 1.000000],
+        [0.828247, 0.841838, 1.000000],
+        [0.765791, 0.801896, 1.000000],
+        [0.715255, 0.768579, 1.000000],
+        [0.673683, 0.740423, 1.000000],
+        [0.638992, 0.716359, 1.000000],
+        [0.609681, 0.695588, 1.000000],
+        [0.609681, 0.695588, 1.000000],
+        [0.609681, 0.695588, 1.000000],
+    ];
+    var BLACKBODY_BASIS = [
+        [-0.5, 1.5, -1.5, 0.5],
+        [1.0, -2.5, 2.0, -0.5],
+        [-0.5, 0.0, 0.5, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+    ];
+
     function blackbodyColor(kelvin) {
-        // The fit is approximate. Adapt it to its own 6500 K value so
-        // UsdLux's D65 fallback remains neutral in linear Rec.709.
-        var fitLinear = function (value) {
-            var temp = Math.min(40000, Math.max(1000, Number(value) || 6500)) / 100;
-            var r = temp <= 66 ? 255 : 329.698727446 * Math.pow(temp - 60, -0.1332047592);
-            var g = temp <= 66
-                ? 99.4708025861 * Math.log(temp) - 161.1195681661
-                : 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
-            var b = temp >= 66 ? 255 : (temp <= 19 ? 0 : 138.5177312231 * Math.log(temp - 10) - 305.0447927307);
-            var unit = function (channel) { return Math.min(255, Math.max(0, channel)) / 255; };
-            var toLinear = function (channel) { return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4); };
-            return [toLinear(unit(r)), toLinear(unit(g)), toLinear(unit(b))];
+        // UsdLux has no unauthored-temperature fallback of its own; 6500 K
+        // is the schema's documented default for colorTemperature.
+        var temp = Number(kelvin);
+        if (!(temp > 0)) temp = 6500;
+        var numKnots = BLACKBODY_KNOTS.length;
+        var numSegs = numKnots - 4;
+        var uSpline = Math.min(1, Math.max(0, (temp - 1000) / 9000));
+        var x = uSpline * numSegs;
+        var seg = Math.floor(x);
+        var uSeg = x - seg;
+        var k0 = BLACKBODY_KNOTS[seg];
+        var k1 = BLACKBODY_KNOTS[seg + 1];
+        var k2 = BLACKBODY_KNOTS[seg + 2];
+        var k3 = BLACKBODY_KNOTS[seg + 3];
+        var coeff = function (row) {
+            return [0, 1, 2].map(function (i) {
+                return BLACKBODY_BASIS[row][0] * k0[i] + BLACKBODY_BASIS[row][1] * k1[i]
+                    + BLACKBODY_BASIS[row][2] * k2[i] + BLACKBODY_BASIS[row][3] * k3[i];
+            });
         };
-        var lin = fitLinear(kelvin);
-        var d65 = fitLinear(6500);
-        lin = lin.map(function (value, index) { return value / Math.max(1e-6, d65[index]); });
-        var luminance = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
-        if (!(luminance > 1e-6)) return [1, 1, 1];
-        return [lin[0] / luminance, lin[1] / luminance, lin[2] / luminance];
+        var a = coeff(0), b = coeff(1), c = coeff(2), d = coeff(3);
+        var rgb = [0, 1, 2].map(function (i) { return ((a[i] * uSeg + b[i]) * uSeg + c[i]) * uSeg + d[i]; });
+        var luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        rgb = rgb.map(function (v) { return v / luma; });
+        return rgb.map(function (v) { return Math.max(0, v); });
     }
 
     // Radiance carried into LightData.color, with intensity folded in so the
@@ -435,5 +471,5 @@
     }
 
     window.convertUsdStageLights = convertStageLights;
-    window.UsdSceneLights = { convert: convertStageLights };
+    window.UsdSceneLights = { convert: convertStageLights, blackbodyColor: blackbodyColor };
 })();
