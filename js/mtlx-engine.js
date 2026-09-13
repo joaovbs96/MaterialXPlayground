@@ -1942,24 +1942,29 @@ const patchScreenSpaceReflection = (fs, { skipSsr = false, notices = null } = {}
         declIfAbsent('uniform float u_opaqueColorLevels;') +
         declIfAbsent('uniform float u_sceneRadius;') +
         declIfAbsent('uniform highp sampler2D u_opaqueDepth;') +
+        // File-scope trace result: written by ONE call to mx_ssr_trace per
+        // fragment (see the injected call site below), read by every
+        // mx_environment_radiance call site the closures generate.
+        'bool mx_ssrTraced = false;\n' +
+        'bool mx_ssrHit = false;\n' +
+        'vec2 mx_ssrUv = vec2(0.0);\n' +
         'vec3 mx_environment_radiance(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd);\n';
-    out = out.slice(0, anchorMatch.index) + decls + out.slice(anchorMatch.index);
 
-    const wrapper =
-        'vec3 mx_environment_radiance(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd)\n' +
+    // The march (origin, 16 steps, 4-step bisection) lives here ONCE and
+    // runs at most once per fragment; the wrapper below only blends its
+    // result, so a material with several closures never re-runs it.
+    const trace =
+        'void mx_ssr_trace(vec3 N, vec3 V)\n' +
         '{\n' +
-        '    vec3 ibl = mx_environment_radiance_ibl(N, V, X, alpha, distribution, fd);\n' +
-        '    if (u_ssrEnabled == 0 || fd.refraction) return ibl;\n' +
-        '    float avgAlpha = mx_average_alpha(alpha);\n' +
-        '    if (avgAlpha >= u_ssrMaxRoughness) return ibl;\n' +
+        '    mx_ssrTraced = true;\n' +
         '    vec3 Nf = mx_forward_facing_normal(N, V);\n' +
-        '    float NdotV = clamp(dot(Nf, V), M_FLOAT_EPS, 1.0);\n' +
-        '    vec3 FG = mx_ggx_dir_albedo(NdotV, avgAlpha, fd);\n' +
         '    vec3 R = normalize(reflect(-V, Nf));\n' +
         '    vec3 origin = positionWorld + Nf * 0.002 * u_sceneRadius;\n' +
         '    bool hit = false;\n' +
         '    vec2 uv = vec2(0.0);\n' +
         '    float tPrev = 0.0;\n' +
+        '    float tLo = 0.0;\n' +
+        '    float tHi = 0.0;\n' +
         '    for (int i = 0; i < 16; i++) {\n' +
         '        float f = float(i) / 16.0;\n' +
         '        float t = 0.5 * u_sceneRadius * f * f;\n' +
@@ -1968,7 +1973,7 @@ const patchScreenSpaceReflection = (fs, { skipSsr = false, notices = null } = {}
         '        if (clip.w <= 0.0) break;\n' +
         '        vec2 sUv = (clip.xy / clip.w) * 0.5 + 0.5;\n' +
         '        if (sUv.x < 0.0 || sUv.x > 1.0 || sUv.y < 0.0 || sUv.y > 1.0) break;\n' +
-        '        float z = texture(u_opaqueDepth, sUv).r;\n' +
+        '        float z = textureLod(u_opaqueDepth, sUv, 0.0).r;\n' +
         '        if (z >= 1.0) { tPrev = t; continue; }\n' +
         '        vec4 unprojH = u_historyViewProjectionInverseMatrix * vec4(sUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);\n' +
         '        vec3 unprojected = unprojH.xyz / unprojH.w;\n' +
@@ -1978,41 +1983,73 @@ const patchScreenSpaceReflection = (fs, { skipSsr = false, notices = null } = {}
         '        if (behind > 0.0 && behind < 0.02 * u_sceneRadius + 0.02 * dSample) {\n' +
         '            hit = true;\n' +
         '            uv = sUv;\n' +
-        '            float tLo = tPrev;\n' +
-        '            float tHi = t;\n' +
-        '            for (int b = 0; b < 4; b++) {\n' +
-        '                float tm = 0.5 * (tLo + tHi);\n' +
-        '                vec3 Pm = origin + R * tm;\n' +
-        '                vec4 clipM = u_historyViewProjectionMatrix * vec4(Pm, 1.0);\n' +
-        '                if (clipM.w <= 0.0) { tLo = tm; continue; }\n' +
-        '                vec2 mUv = (clipM.xy / clipM.w) * 0.5 + 0.5;\n' +
-        '                if (mUv.x < 0.0 || mUv.x > 1.0 || mUv.y < 0.0 || mUv.y > 1.0) { tLo = tm; continue; }\n' +
-        '                float mZ = texture(u_opaqueDepth, mUv).r;\n' +
-        '                if (mZ >= 1.0) { tLo = tm; continue; }\n' +
-        '                vec4 mUnprojH = u_historyViewProjectionInverseMatrix * vec4(mUv * 2.0 - 1.0, mZ * 2.0 - 1.0, 1.0);\n' +
-        '                vec3 mUnprojected = mUnprojH.xyz / mUnprojH.w;\n' +
-        '                float mDScene = distance(mUnprojected, u_historyViewPosition);\n' +
-        '                float mDSample = distance(Pm, u_historyViewPosition);\n' +
-        '                float mBehind = mDSample - mDScene;\n' +
-        '                if (mBehind > 0.0 && mBehind < 0.02 * u_sceneRadius + 0.02 * mDSample) {\n' +
-        '                    tHi = tm;\n' +
-        '                    uv = mUv;\n' +
-        '                } else {\n' +
-        '                    tLo = tm;\n' +
-        '                }\n' +
-        '            }\n' +
+        '            tLo = tPrev;\n' +
+        '            tHi = t;\n' +
         '            break;\n' +
         '        }\n' +
         '        tPrev = t;\n' +
         '    }\n' +
-        '    float edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));\n' +
-        '    float confidence = hit ? smoothstep(0.0, 0.1, edge) * (1.0 - smoothstep(0.0, u_ssrMaxRoughness, avgAlpha)) : 0.0;\n' +
+        '    // Bisection after the march so the compiler unrolls 16 + 4 bodies, not 16 x 4.\n' +
+        '    for (int b = 0; b < 4; b++) {\n' +
+        '        if (!hit) break;\n' +
+        '        float tm = 0.5 * (tLo + tHi);\n' +
+        '        vec3 Pm = origin + R * tm;\n' +
+        '        vec4 clipM = u_historyViewProjectionMatrix * vec4(Pm, 1.0);\n' +
+        '        if (clipM.w <= 0.0) { tLo = tm; continue; }\n' +
+        '        vec2 mUv = (clipM.xy / clipM.w) * 0.5 + 0.5;\n' +
+        '        if (mUv.x < 0.0 || mUv.x > 1.0 || mUv.y < 0.0 || mUv.y > 1.0) { tLo = tm; continue; }\n' +
+        '        float mZ = textureLod(u_opaqueDepth, mUv, 0.0).r;\n' +
+        '        if (mZ >= 1.0) { tLo = tm; continue; }\n' +
+        '        vec4 mUnprojH = u_historyViewProjectionInverseMatrix * vec4(mUv * 2.0 - 1.0, mZ * 2.0 - 1.0, 1.0);\n' +
+        '        vec3 mUnprojected = mUnprojH.xyz / mUnprojH.w;\n' +
+        '        float mDScene = distance(mUnprojected, u_historyViewPosition);\n' +
+        '        float mDSample = distance(Pm, u_historyViewPosition);\n' +
+        '        float mBehind = mDSample - mDScene;\n' +
+        '        if (mBehind > 0.0 && mBehind < 0.02 * u_sceneRadius + 0.02 * mDSample) {\n' +
+        '            tHi = tm;\n' +
+        '            uv = mUv;\n' +
+        '        } else {\n' +
+        '            tLo = tm;\n' +
+        '        }\n' +
+        '    }\n' +
+        '    mx_ssrHit = hit;\n' +
+        '    mx_ssrUv = uv;\n' +
+        '}\n';
+    out = out.slice(0, anchorMatch.index) + decls + trace + out.slice(anchorMatch.index);
+
+    // No loop here: the march already ran (or did not) in mx_ssr_trace;
+    // this only blends its result per closure, using that closure's own
+    // roughness for FG and the confidence fade.
+    const wrapper =
+        'vec3 mx_environment_radiance(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd)\n' +
+        '{\n' +
+        '    vec3 ibl = mx_environment_radiance_ibl(N, V, X, alpha, distribution, fd);\n' +
+        '    if (u_ssrEnabled == 0 || fd.refraction || !mx_ssrTraced) return ibl;\n' +
+        '    float avgAlpha = mx_average_alpha(alpha);\n' +
+        '    if (avgAlpha >= u_ssrMaxRoughness) return ibl;\n' +
+        '    float NdotV = clamp(dot(mx_forward_facing_normal(N, V), V), M_FLOAT_EPS, 1.0);\n' +
+        '    vec3 FG = mx_ggx_dir_albedo(NdotV, avgAlpha, fd);\n' +
+        '    float edge = min(min(mx_ssrUv.x, 1.0 - mx_ssrUv.x), min(mx_ssrUv.y, 1.0 - mx_ssrUv.y));\n' +
+        '    float confidence = mx_ssrHit ? smoothstep(0.0, 0.1, edge) * (1.0 - smoothstep(0.0, u_ssrMaxRoughness, avgAlpha)) : 0.0;\n' +
         '    float lod = clamp(avgAlpha * u_opaqueColorLevels, 0.0, u_opaqueColorLevels);\n' +
-        '    return mix(ibl, textureLod(u_opaqueColor, uv, lod).rgb * FG, clamp(confidence * u_ssrStrength, 0.0, 1.0));\n' +
+        '    return mix(ibl, textureLod(u_opaqueColor, mx_ssrUv, lod).rgb * FG, clamp(confidence * u_ssrStrength, 0.0, 1.0));\n' +
         '}\n';
     const mainIdx = out.indexOf('void main');
     if (mainIdx === -1) return out;
     out = out.slice(0, mainIdx) + wrapper + out.slice(mainIdx);
+
+    // Single call site: right after the primary shading N/V, so the trace
+    // runs at most once per fragment regardless of how many closures call
+    // mx_environment_radiance. Bump-mapped closures still reflect along
+    // this geometric-ish N; only FG and the confidence fade use their own.
+    const nvAnchorRe = /vec3 N = normalize\(normalWorld\);[ \t]*\r?\n[ \t]*vec3 V = normalize\(u_viewPosition - positionWorld\);/;
+    const nvMatch = nvAnchorRe.exec(out);
+    if (nvMatch) {
+        const at = nvMatch.index + nvMatch[0].length;
+        out = out.slice(0, at) + '\n        if (u_ssrEnabled != 0) mx_ssr_trace(N, V);' + out.slice(at);
+    } else if (notices) {
+        notices.push('screen-space reflection: shading normal/view anchor not found; reflections stay image based');
+    }
     return out;
 };
 

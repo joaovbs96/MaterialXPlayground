@@ -79,9 +79,18 @@ const ssrBody = [
     'vec3 mx_surface_transmission(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd, vec3 tint) {',
     '    return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;',
     '}',
+    // A second closure call site, so the single-trace-call assertion below
+    // actually proves something (matches the real shader's several lobes).
+    'vec3 mx_second_closure(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd) {',
+    '    return mx_environment_radiance(N, V, X, alpha, distribution, fd);',
+    '}',
     'out vec4 outColor;',
     'void main() {',
     '    surfaceshader surf;',
+    '    {',
+    '        vec3 N = normalize(normalWorld);',
+    '        vec3 V = normalize(u_viewPosition - positionWorld);',
+    '    }',
     '    // Calculate the BSDF transmission for viewing direction',
     '    surf.color += surf.response;',
     '    // Compute and apply surface opacity',
@@ -94,6 +103,8 @@ const ssrBody = [
 const ssrOnce = patchScreenSpaceReflection(ssrBody);
 assert.notEqual(ssrOnce, ssrBody, 'patchScreenSpaceReflection must change a well-formed body');
 assert(ssrOnce.includes('mx_environment_radiance_ibl'), 'renamed IBL definition expected');
+assert.equal((ssrOnce.match(/void mx_ssr_trace\(/g) || []).length, 1, 'exactly one trace function definition expected');
+assert.equal((ssrOnce.match(/mx_ssr_trace\(N, V\);/g) || []).length, 1, 'exactly one trace call site expected');
 assert.equal(patchScreenSpaceReflection(ssrOnce), ssrOnce, 'patchScreenSpaceReflection is not idempotent');
 
 const ssrThenTransmission = patchTransmissionAlpha(ssrOnce);
