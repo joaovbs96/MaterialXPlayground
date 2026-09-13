@@ -2,6 +2,13 @@
  * All scene paths, including both peel compositors, must honor the caller's
  * render target and outputLinear contract. This module never shades materials
  * or recognizes asset names. The Material Viewer is not opted into this path.
+ *
+ * Transparent export: the final view premultiplies its output, and where the
+ * source alpha is below 1 it raises alpha to at least the glow's luminance
+ * fraction (clamped to 1). A premultiplied halo with unraised alpha would
+ * break the rgb<=alpha invariant and read wrong composited over white;
+ * raising alpha keeps it visible over both black and white. Fully opaque
+ * pixels (alpha 1) are unchanged. Debug views stay raw, unpremultiplied.
  */
 (function (root) {
     'use strict';
@@ -54,6 +61,24 @@
             o=vec4(sum*(1.0/16.0),1.0);
         }
     `;
+    const upShader = header + `
+        uniform sampler2D u_coarse, u_image; uniform vec2 u_texel; uniform float u_a, u_b;
+        void main() {
+            // Normalized 3x3 tent over the coarser accumulation, blended with
+            // this level's own extraction. Chaining level by level avoids one
+            // huge magnification jump spreading haze over dark props.
+            vec3 sum = texture(u_coarse, vUv).rgb * 4.0;
+            sum += (texture(u_coarse,vUv+vec2(u_texel.x,0.0)).rgb +
+                    texture(u_coarse,vUv-vec2(u_texel.x,0.0)).rgb +
+                    texture(u_coarse,vUv+vec2(0.0,u_texel.y)).rgb +
+                    texture(u_coarse,vUv-vec2(0.0,u_texel.y)).rgb) * 2.0;
+            sum += texture(u_coarse,vUv+u_texel).rgb + texture(u_coarse,vUv-u_texel).rgb +
+                   texture(u_coarse,vUv+vec2(u_texel.x,-u_texel.y)).rgb +
+                   texture(u_coarse,vUv+vec2(-u_texel.x,u_texel.y)).rgb;
+            vec3 up = sum * (1.0/16.0);
+            o = vec4(up * u_a + texture(u_image, vUv).rgb * u_b, 1.0);
+        }
+    `;
     const blurShader = header + `
         uniform sampler2D u_image; uniform vec2 u_step;
         void main(){
@@ -88,6 +113,21 @@
             float bl=luma(b);o=vec4((bl<low||bl>high)?a:b,center.a);
         }
     `;
+    // Level weights w_i = r^i / sum r^k, r = mix(0.35, 0.85, radius), sum 1.
+    // Returns the four upsample blend factors (coarsest first) so that the
+    // finished level-0 result equals sum_i w_i * up^i(bloom_i).
+    function reconstructionBlend(radius) {
+        const r = 0.35 + 0.5 * Math.max(0, Math.min(1, radius));
+        const w = [0, 1, 2, 3, 4].map(i => Math.pow(r, i));
+        const total = w.reduce((a, b) => a + b, 0);
+        for (let i = 0; i < 5; i++) w[i] /= total;
+        const remaining = [0, 0, 0, 0, 0]; remaining[4] = w[4];
+        for (let i = 3; i >= 0; i--) remaining[i] = remaining[i + 1] + w[i];
+        const passes = [];
+        for (let level = 3; level >= 0; level--)
+            passes.push({ level, a: remaining[level + 1] / remaining[level], b: w[level] / remaining[level] });
+        return { weights: w, passes };
+    }
     function sanitize(value) {
         const s = Object.assign({}, DEFAULTS);
         for (const key of ['enabled','bloom','antialias']) if (typeof value?.[key] === 'boolean') s[key] = value[key];
@@ -117,38 +157,41 @@
         const brightMat=material(brightShader,{u_image:{value:null},u_exposure:{value:1},u_threshold:{value:1},u_knee:{value:0.5}});
         const downMat=material(downShader,{u_image:{value:null},u_texel:{value:new THREE.Vector2(1,1)}});
         const blurMat=material(blurShader,{u_image:{value:null},u_step:{value:new THREE.Vector2(1,0)}});
+        const upMat=material(upShader,{u_coarse:{value:null},u_image:{value:null},u_texel:{value:new THREE.Vector2(1,1)},u_a:{value:1},u_b:{value:0}});
         const combineMat=material(header+`
-            uniform sampler2D u_image,u_b0,u_b1,u_b2,u_b3,u_b4;
-            uniform float u_exposure,u_strength,u_threshold,u_knee,u_radius;
+            uniform sampler2D u_image,u_glow;
+            uniform float u_exposure,u_strength,u_threshold,u_knee;
             uniform int u_displayTransform,u_debugView;
             ${brightFunction}
             void main(){
                 vec4 hdr=texture(u_image,vUv);
                 vec3 color=max(hdr.rgb,vec3(0.0))*u_exposure;
-                vec3 glow=texture(u_b0,vUv).rgb*mix(0.50,0.10,u_radius)+
-                          texture(u_b1,vUv).rgb*mix(0.25,0.15,u_radius)+
-                          texture(u_b2,vUv).rgb*mix(0.15,0.20,u_radius)+
-                          texture(u_b3,vUv).rgb*mix(0.07,0.25,u_radius)+
-                          texture(u_b4,vUv).rgb*mix(0.03,0.30,u_radius);
+                // The five levels are already reconstructed into one
+                // level-0 buffer by the progressive tent-upsample chain, so
+                // the composite needs only this single full-res sample.
+                vec3 glow=texture(u_glow,vUv).rgb;
                 // Redistribute a fraction of highlight energy rather than
                 // adding arbitrary brightness to every pixel. Exposure has
                 // already been applied once to both source and bloom.
                 vec3 scattered=max(vec3(0.0),color+u_strength*(glow-bright(color)));
-                // Debug outputs deliberately stay scene-linear. This gives
-                // Float32 callers an unambiguous probe boundary and avoids
-                // hiding an HDR/exposure error behind a second OETF.
+                // Debug outputs stay scene-linear and unpremultiplied: an
+                // unambiguous Float32 probe boundary that hides no HDR or
+                // exposure error behind a second OETF or the export policy.
                 if(u_debugView==1){o=vec4(max(hdr.rgb,vec3(0.0)),hdr.a);return;}
                 if(u_debugView==2){o=vec4(color,hdr.a);return;}
                 if(u_debugView==3){o=vec4(bright(color),hdr.a);return;}
                 if(u_debugView==4){o=vec4(u_strength*glow,hdr.a);return;}
                 if(u_debugView==5){o=vec4(scattered,hdr.a);return;}
                 ${root.sceneDisplayTransformGLSL('scattered','encoded','u_displayTransform',null)}
-                // Keep the source coverage. Optical glow can also be saved
-                // over an opaque backdrop; it does not invent alpha coverage.
-                o=vec4(encoded,hdr.a);
+                // Transparent export: premultiply, and raise alpha below 1 to at
+                // least the glow luminance so a halo survives compositing over
+                // black and white. Opaque pixels are unchanged.
+                float haloLuma=clamp(dot(u_strength*glow,vec3(0.299,0.587,0.114)),0.0,1.0);
+                float outAlpha=max(hdr.a,haloLuma);
+                o=vec4(encoded*outAlpha,outAlpha);
             }
-        `,{u_image:{value:null},u_b0:{value:null},u_b1:{value:null},u_b2:{value:null},u_b3:{value:null},u_b4:{value:null},
-            u_exposure:{value:1},u_strength:{value:0},u_threshold:{value:1},u_knee:{value:0.5},u_radius:{value:0.65},u_displayTransform:{value:3},u_debugView:{value:0}});
+        `,{u_image:{value:null},u_glow:{value:null},
+            u_exposure:{value:1},u_strength:{value:0},u_threshold:{value:1},u_knee:{value:0.5},u_displayTransform:{value:3},u_debugView:{value:0}});
         const fxaaMat=material(fxaaShader,{u_image:{value:null},u_texel:{value:new THREE.Vector2(1,1)}});
         const black=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat);black.needsUpdate=true;
         const free = () => {
@@ -260,13 +303,25 @@
                         blurMat.uniforms.u_image.value=level.texture;blurMat.uniforms.u_step.value.set(1/level.width,0);pass(blurMat,tmp);
                         blurMat.uniforms.u_image.value=tmp.texture;blurMat.uniforms.u_step.value.set(0,1/level.height);pass(blurMat,level);
                     }
+                    // Fold the coarsest level down to level 0 with four tent
+                    // upsample passes; the blur[] ping targets are free scratch
+                    // here, so no extra render targets are allocated.
+                    let coarse=resources.bloom[resources.bloom.length-1];
+                    for(const {level,a,b} of reconstructionBlend(settings.radius).passes){
+                        const target=resources.blur[level];
+                        upMat.uniforms.u_coarse.value=coarse.texture;upMat.uniforms.u_image.value=resources.bloom[level].texture;
+                        upMat.uniforms.u_texel.value.set(1/coarse.width,1/coarse.height);
+                        upMat.uniforms.u_a.value=a;upMat.uniforms.u_b.value=b;
+                        pass(upMat,target);coarse=target;
+                    }
+                    resources.glow=coarse;
                 }
                 const u=combineMat.uniforms;u.u_image.value=resources.hdr.texture;u.u_exposure.value=exposure;
-                u.u_threshold.value=settings.threshold;u.u_knee.value=settings.knee;u.u_radius.value=settings.radius;
+                u.u_threshold.value=settings.threshold;u.u_knee.value=settings.knee;
                 u.u_strength.value=settings.bloom?settings.strength:0;
                 u.u_debugView.value=Math.max(0,debugView);
                 u.u_displayTransform.value=root.displayTransformId(options.getDisplayTransform?.()||'neutral');
-                for(let i=0;i<5;i++)u['u_b'+i].value=needsBloom?resources.bloom[i].texture:black;
+                u.u_glow.value=needsBloom?resources.glow.texture:black;
                 // Inspection readbacks must not be spatially filtered by a
                 // display-referred antialiaser. This also preserves >1 HDR.
                 const aa=settings.antialias && debugView===0 && u.u_displayTransform.value!==2;
@@ -298,8 +353,12 @@
                 return getSettings();
             },
             debug:()=>({settings:getSettings(),frames,lastPasses,size:resources?[resources.w,resources.h]:null,
-                hdrTarget:resources?.hdr||null,bloomTargets:resources?.bloom||[],presentTarget:resources?.present||null,rendering}),
-            dispose(){free();[brightMat,downMat,blurMat,combineMat,fxaaMat].forEach(m=>m.dispose());black.dispose();quad.geometry.dispose();},
+                hdrTarget:resources?.hdr||null,bloomTargets:resources?.bloom||[],presentTarget:resources?.present||null,
+                // The four upsample reconstruction passes reuse the blur[]
+                // ping targets as accumulation scratch; no extra targets are
+                // allocated. resources.glow is the finished level-0 result.
+                reconstructTargets:resources?.blur||[],glowTarget:resources?.glow||null,rendering}),
+            dispose(){free();[brightMat,downMat,blurMat,upMat,combineMat,fxaaMat].forEach(m=>m.dispose());black.dispose();quad.geometry.dispose();},
         };
     }
     root.UsdScenePost={VERSION,DEFAULTS,create};
