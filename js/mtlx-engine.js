@@ -484,6 +484,22 @@ const parseUniforms = (src) => {
     return out;
 };
 
+// Counts sampler declarations that cost a texture image unit, including
+// precision-qualified ones that parseUniforms misses; arrays count by
+// their length. Enforces the MAX_TEXTURE_IMAGE_UNITS budget.
+const countFragmentSamplers = (fs) => {
+    const re = /uniform\s+(?:(?:low|medium|high)p\s+)?(sampler2D|sampler3D|samplerCube)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;/g;
+    const names = [];
+    let count = 0;
+    let m;
+    while ((m = re.exec(fs)) !== null) {
+        const size = m[3] ? parseInt(m[3], 10) : 1;
+        count += size;
+        names.push(m[3] ? m[2] + '[' + m[3] + ']' : m[2]);
+    }
+    return { count, names };
+};
+
 // three.js RawShaderMaterial + glslVersion:GLSL3 prepends its own
 // "#version 300 es"; MaterialX ESSL output already has one. Strip the
 // generated version line to avoid a duplicate-directive compile error.
@@ -1380,12 +1396,14 @@ const patchAreaLightSourceCosine = (fs) => {
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
-const patchAmbientOcclusion = (fs) => {
+const patchAmbientOcclusion = (fs, { skipSkyVis = false } = {}) => {
     const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
     if (!anchor.test(fs)) return fs;
     // Sky visibility needs the world position; without that varying only the
     // screen space term is available and the volume lookup is skipped.
-    const hasWorldPos = /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
+    // skipSkyVis is the sampler-budget drop: forces the ssao-only path so
+    // u_skyVisMap (a sampler3D) is never declared.
+    const hasWorldPos = !skipSkyVis && /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
         && /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
     const out = fs.replace(anchor, hasWorldPos
         ? '$1occlusion = mx_ssao_occlusion() * mx_sky_visibility();'
@@ -1549,15 +1567,24 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
 // The path length comes from a back-face distance map: how far the ray still
 // has to travel inside the object. Nothing bound means zero thickness, which
 // reads as clear rather than black, so an unbound material is safe.
-const patchTransmissionThickness = (fs) => {
+const patchTransmissionThickness = (fs, { dropThicknessMap = false } = {}) => {
     const anchor = 'vdf.throughput = exp(-absorption);';
     if (fs.indexOf(anchor) === -1) return fs;
     // Needs the standard HW varyings to locate the fragment along the ray.
-    const hasVars = /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
-        && /uniform\s+vec3\s+u_viewPosition\s*;/.test(fs);
+    const hasVars = dropThicknessMap || (/\bin\s+vec3\s+positionWorld\s*;/.test(fs)
+        && /uniform\s+vec3\s+u_viewPosition\s*;/.test(fs));
     if (!hasVars) return fs;
     let out = fs.replace(anchor, 'vdf.throughput = exp(-absorption * mx_transmission_path_length());');
-    const decls = [
+    // Sampler-budget drop: no u_thicknessMap declared at all, always the
+    // authored reference distance (createMtlxSceneUniforms seeds it from
+    // transmission_depth). Same fallback the target-budget overflow path uses.
+    const decls = dropThicknessMap ? [
+        'uniform float u_thicknessReferencePath;',
+        'float mx_transmission_path_length() {',
+        '    return max(u_thicknessReferencePath, 0.0);',
+        '}',
+        '',
+    ].join('\n') : [
         'uniform sampler2D u_thicknessMap;',
         'uniform vec2 u_thicknessTexel;',
         // The renderer's sceneRoot has converted positions to metres. The
@@ -5462,7 +5489,11 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null }) => {
+    // Sampler-budget drops, requested only by compileMtlxSceneMaterial's
+    // recompile loop; every other caller keeps the full feature set.
+    const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
+    const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -5614,8 +5645,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     fs = patchShadowLightScope(fs);
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
-    fs = patchAmbientOcclusion(fs);
-    fs = patchTransmissionThickness(fs);
+    fs = patchAmbientOcclusion(fs, { skipSkyVis });
+    fs = patchTransmissionThickness(fs, { dropThicknessMap });
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
     // injectPeelDiscard's header comment above for why this keeps
@@ -5653,15 +5684,46 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
 // generatePreviewSourcesUnlocked directly, to avoid overlapping wasm ops.
 const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
 
+// ANGLE D3D11 reports 16 texture image units; a Scene material bakes nine
+// fixed samplers plus one per texture, so nine textures already exceed it.
+// Fallback default only: real callers pass gl.MAX_TEXTURE_IMAGE_UNITS.
+const DEFAULT_SAMPLER_BUDGET = 16;
+
+// Drop order when a program exceeds the sampler budget; each { key, label }
+// is a sceneFeatureOptions flag of generatePreviewSourcesUnlocked. Append
+// future samplers here (transmittance records, refraction colour mips).
+const SAMPLER_BUDGET_DROP_ORDER = [
+    { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)' },
+    { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)' },
+];
+
 // Scene-view material compiler. This deliberately exposes the preview shader
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
 // instances for each object that uses that source.
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
-    const srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport });
-    if (!srcs) return null;
+    // Test-only override wins over the caller's live GL limit, so a headless
+    // spec can force a tight budget without a real ANGLE context.
+    const overrideBudget = typeof window !== 'undefined' ? window.__mtlxSamplerBudgetOverride : undefined;
+    const budget = Number.isFinite(overrideBudget) ? overrideBudget
+        : (Number.isFinite(samplerBudget) ? samplerBudget : DEFAULT_SAMPLER_BUDGET);
+
+    const dropped = [];
+    let srcs = null;
+    let samplerInfo = null;
+    for (let attempt = 0; ; attempt++) {
+        const sceneFeatureOptions = {};
+        for (const d of dropped) sceneFeatureOptions[d.key] = true;
+        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions });
+        if (!srcs) return null;
+        samplerInfo = countFragmentSamplers(srcs.fs);
+        if (samplerInfo.count <= budget) break;
+        if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break; // hooks exhausted, still over
+        dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
+    }
     const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
+    const overBudget = samplerInfo.count > budget;
     return {
         ...srcs,
         declared,
@@ -5673,6 +5735,10 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         lightTransportSupported: !!srcs.lightTransportSupported,
         payloadSupported: !!srcs.payloadSupported,
         label,
+        samplerCount: samplerInfo.count,
+        samplerNames: samplerInfo.names,
+        samplerBudget: { limit: budget, count: samplerInfo.count, dropped: dropped.map((d) => d.label) },
+        samplerOverBudget: overBudget,
     };
 };
 
@@ -5798,7 +5864,14 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_thicknessTexel')) uniforms.u_thicknessTexel = { value: thicknessTexel ? thicknessTexel.clone() : new THREE.Vector2() };
     if (has('u_thicknessScale')) uniforms.u_thicknessScale = { value: thicknessMap ? thicknessScale : 0 };
     if (has('u_thicknessTargetValid')) uniforms.u_thicknessTargetValid = { value: thicknessMap ? 1 : 0 };
-    if (has('u_thicknessReferencePath')) uniforms.u_thicknessReferencePath = { value: 0 };
+    if (has('u_thicknessReferencePath')) {
+        // With u_thicknessMap dropped for the budget the per-frame target
+        // update never runs, so seed the authored transmission_depth as the
+        // permanent fallback path rather than a lit-as-clear 0.
+        const authored = Number(uniforms.transmission_depth && uniforms.transmission_depth.value);
+        uniforms.u_thicknessReferencePath = { value: has('u_thicknessMap') ? 0
+            : (Number.isFinite(authored) && authored > 0 ? authored : 0) };
+    }
     // Squares the tint for a closed solid, where the ray crosses the surface
     // twice. MaterialXView sets this from the geometry; a USD stage's
     // transmissive props are solids, so this follows the peel state.
@@ -9295,7 +9368,7 @@ Object.assign(window, {
     MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
     getHeightToNormalTexel, setHeightToNormalTexel,
-    parseUniforms, parseVertexInputs, stripVersion, encodeDisplay,
+    parseUniforms, parseVertexInputs, stripVersion, encodeDisplay, countFragmentSamplers,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,

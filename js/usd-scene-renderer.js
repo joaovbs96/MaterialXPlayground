@@ -1766,15 +1766,25 @@ const createMtlxSceneView = async ({
             const loaded = await loadRenderable(record);
             const renderable = loaded.node;
             sourceDocument = loaded.document;
+            let samplerBudget = null;
+            try { const gl = renderer.getContext(); samplerBudget = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS); } catch (e) { /* keep the engine's fallback default */ }
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true,
+                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget,
             });
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
             // standard_surface/OpenPBR input from a nested layer closure.
             // Keep source-node qualification beside the detached shader data.
             compiled.mtlxSceneSurfaceMetadata = sceneMaterialSurfaceMetadata(renderable);
+            if (compiled.samplerBudget && compiled.samplerBudget.dropped.length) {
+                warnings.push('Sampler budget: ' + label + ' dropped ' + compiled.samplerBudget.dropped.join(', ')
+                    + ' to fit ' + compiled.samplerBudget.count + '/' + compiled.samplerBudget.limit + ' texture image units');
+            }
+            if (compiled.samplerOverBudget) {
+                warnings.push('Sampler budget exceeded for ' + label + ': ' + compiled.samplerBudget.count
+                    + ' samplers over the ' + compiled.samplerBudget.limit + '-unit limit; material kept as compiled (may not draw on this GPU)');
+            }
             // Reuse the engine's hidden KHR warm context before this
             // scene's display WebGL context submits the same source.
             if (window.prewarmShaderCompile) {
@@ -4814,10 +4824,9 @@ const createMtlxSceneView = async ({
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
                 linearScopeActive: !!sceneLinearState }),
-            // Reads the RGB-T pipeline's opaque depth at one canvas pixel (top-
-            // left origin), normalized to [0, 1]. Blits the depth texture
-            // through a tiny quad shader rather than reading it directly,
-            // since depth textures cannot be read back with readRenderTargetPixels.
+            // Reads the RGB-T pipeline's opaque depth at one canvas pixel (top
+            // left origin) in [0, 1], blitted through a quad shader because a
+            // depth texture cannot be read back directly.
             __opaqueDepthAt: (x, y) => {
                 if (sceneRgbtState.mode !== 'rgbt' || !peelPipeline || typeof peelPipeline.debug !== 'function') {
                     return { supported: false, reason: 'RGB-T pipeline is not active (mode=' + sceneRgbtState.mode + ')' };
