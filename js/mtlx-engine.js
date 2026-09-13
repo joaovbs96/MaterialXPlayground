@@ -1496,16 +1496,18 @@ const patchSceneThinWalledTransmission = (fs, enabled, notices) => {
     return out;
 };
 
-// Transport-only record payload. Values are captured at the generated
-// OpenPBR terminal after connected/image inputs have been evaluated. Each
-// record is a separate compile-time variant: returning immediately after the
-// terminal call prevents the display shader's lighting/environment work from
-// surviving in the detached transport program.
+// Transport-only "transfer" record. Captures B/D/opacity/thin at the
+// generated OpenPBR terminal, then folds coverage and sampled solid
+// thickness into one vec4 so a single render target carries the transfer.
 const patchLightTransportPayload = (fs, notices, requestedMode) => {
     if (fs.indexOf('/* MX_LIGHT_TRANSPORT */') !== -1) return fs;
-    const mode = requestedMode === true ? 1 : Number(requestedMode);
-    if (![1, 2, 3].includes(mode)) {
-        if (notices) notices.push('Light transport unavailable: select record B, C, or D.');
+    const isTransfer = requestedMode === 4 || requestedMode === 'transfer' || requestedMode === true;
+    if (!isTransfer) {
+        if (notices) notices.push('Light transport unavailable: only the transfer record is supported.');
+        return fs;
+    }
+    if (!/\bin\s+vec3\s+positionWorld\s*;/.test(fs)) {
+        if (notices) notices.push('Light transport unavailable: generated shader has no world position varying.');
         return fs;
     }
     let seen = 0;
@@ -1532,14 +1534,19 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
     const first = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
     const om = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
     if (first < 0 || !om) { if (notices) notices.push('Light transport unavailable: generated output contract changed'); return fs; }
-    const decl='vec3 mx_transportB=vec3(1.0), mx_transportD=vec3(0.0); float mx_transportOpacity=0.0, mx_transportThin=0.0;\n';
-    out=out.slice(0,first)+decl+out.slice(first);
+    const decl = 'vec3 mx_transportB=vec3(1.0), mx_transportD=vec3(0.0); float mx_transportOpacity=0.0, mx_transportThin=0.0;\n'
+        // Record-only uniforms. u_recordDepthPlane matches the shadow atlas
+        // convention (dot(vec4(P,1), plane) -> normalized linear depth);
+        // u_recordUnitScale mirrors u_thicknessScale's scene-unit conversion.
+        + 'uniform vec4 u_recordDepthPlane;\n'
+        + 'uniform sampler2D u_recordEntryDepth;\n'
+        + 'uniform vec2 u_recordTexel;\n'
+        + 'uniform float u_recordDepthSpan;\n'
+        + 'uniform float u_recordUnitScale;\n';
+    out = out.slice(0, first) + decl + out.slice(first);
     const main = out.search(/\bvoid\s+main\s*\(\s*\)\s*\{/);
     const call = main < 0 || !terminal ? null : out.slice(main).match(new RegExp('\\b' + terminal + '\\s*\\([\\s\\S]*?\\);'));
     if (!call) { if (notices) notices.push('Light transport unavailable: generated terminal call contract changed'); return fs; }
-    const payload = mode === 1 ? 'vec4(mx_transportB,mx_transportOpacity)'
-        : mode === 2 ? 'vec4(vec3(1.0),mx_transportThin)'
-            : 'vec4(mx_transportD,mx_transportOpacity)';
     const at = main + call.index + call[0].length;
     const mainOpen = out.indexOf('{', main);
     let depth = 0, mainEnd = -1;
@@ -1548,10 +1555,19 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
         else if (out[i] === '}' && --depth === 0) { mainEnd = i; break; }
     }
     if (mainEnd < 0) { if (notices) notices.push('Light transport unavailable: generated main contract changed'); return fs; }
+    // zExit reads the current back face's own depth; zEntry reads the
+    // matching front-face depth the consumer prepassed into the scratch
+    // target. Solid thickness is their gap; thin transfer ignores it.
+    const transfer = '\n    float mx_recordZExit = dot(vec4(positionWorld, 1.0), u_recordDepthPlane);\n'
+        + '    float mx_recordZEntry = texture(u_recordEntryDepth, gl_FragCoord.xy * u_recordTexel).r;\n'
+        + '    float mx_recordThickness = max(mx_recordZExit - mx_recordZEntry, 0.0) * u_recordDepthSpan * u_recordUnitScale;\n'
+        + '    vec3 mx_recordT = mx_transportThin > 0.5 ? mx_transportB : mx_transportB * exp(-mx_transportD * mx_recordThickness);\n'
+        + '    vec3 mx_recordTrecord = clamp((1.0 - mx_transportOpacity) + mx_transportOpacity * mx_recordT, 0.0, 1.0);\n'
+        + '    ' + om[1] + '=vec4(mx_recordTrecord, 1.0); return;\n';
     // Physically remove the post-terminal main body rather than relying on
     // a runtime branch for dead-code elimination. This lets linkers drop
     // lighting/environment sampler paths that the terminal does not need.
-    return out.slice(0,at) + '\n    /* MX_LIGHT_TRANSPORT_EARLY_RETURN MX_LIGHT_TRANSPORT_TAIL_PRUNED */\n    ' + om[1] + '=' + payload + '; return;\n' + out.slice(mainEnd);
+    return out.slice(0, at) + '\n    /* MX_LIGHT_TRANSPORT_EARLY_RETURN MX_LIGHT_TRANSPORT_TAIL_PRUNED */' + transfer + out.slice(mainEnd);
 };
 
 // Gives MaterialX's volume absorption the path length it is missing.
@@ -5731,7 +5747,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         // text is already fully adapted by generatePreviewSources.
         programKey: srcs.vs + '\\n/* scene-fs */\\n' + srcs.fs,
         sceneRgbt,
-        lightTransport: lightTransport === true ? 1 : Number(lightTransport) || 0,
+        lightTransport: (lightTransport === true || lightTransport === 4 || lightTransport === 'transfer') ? 4 : 0,
         lightTransportSupported: !!srcs.lightTransportSupported,
         payloadSupported: !!srcs.payloadSupported,
         label,
@@ -5884,6 +5900,33 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         uniforms.u_lightData = { value: entries };
     }
     if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights) };
+    return uniforms;
+};
+
+// Uniform map for a transfer light-transport variant: texture uniforms are
+// shared by reference with the display map so later texture loads reach
+// both; record and transform uniforms are seeded fresh.
+const createLightTransportUniforms = ({ compiled, displayUniforms }) => {
+    if (!compiled) throw new Error('Cannot create light transport uniforms without compiled MaterialX source.');
+    const names = new Set();
+    const declRe = /uniform\s+(?:(?:low|medium|high)p\s+)?\w+\s+(\w+)\s*(?:\[\s*\w+\s*\])?\s*;/g;
+    let m;
+    while ((m = declRe.exec(compiled.fs || '')) !== null) names.add(m[1]);
+    const uniforms = {};
+    if (displayUniforms) {
+        for (const name of names) {
+            if (Object.prototype.hasOwnProperty.call(displayUniforms, name)) uniforms[name] = displayUniforms[name];
+        }
+    }
+    uniforms.u_recordEntryDepth = { value: getDummyTexWhite() };
+    uniforms.u_recordDepthPlane = { value: new THREE.Vector4(0, 0, 0, 0) };
+    uniforms.u_recordTexel = { value: new THREE.Vector2() };
+    uniforms.u_recordDepthSpan = { value: 1 };
+    uniforms.u_recordUnitScale = { value: 1 };
+    uniforms.u_worldMatrix = { value: new THREE.Matrix4() };
+    uniforms.u_viewProjectionMatrix = { value: new THREE.Matrix4() };
+    uniforms.u_worldInverseTransposeMatrix = { value: new THREE.Matrix4() };
+    uniforms.u_viewPosition = { value: new THREE.Vector3() };
     return uniforms;
 };
 
@@ -9395,7 +9438,7 @@ Object.assign(window, {
     loadEnvironmentFromFile, loadEnvironmentFromBuffer, makeFlatEnvironment,
     setEnvOverride, getEnvOverride,
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
-    createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms,
+    createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms, createLightTransportUniforms,
     ensurePrefilteredEnv, getSpecularEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
