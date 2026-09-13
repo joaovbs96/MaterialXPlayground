@@ -56,11 +56,13 @@ jobs:
         timeout-minutes: 5
         shell: bash
         run: |
-          # Fallback if the Linux leg fails on sandbox errors: prefix the
-          # xvfb-run command with ELECTRON_DISABLE_SANDBOX=1. Not applied by
-          # default; only add it if this step starts failing on ubuntu-latest.
+          # ubuntu-24.04 runners restrict unprivileged user namespaces, so
+          # Electron falls back to its SUID helper and aborts unless that
+          # binary is root-owned with mode 4755 (the message it prints).
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -y && sudo apt-get install -y xvfb
+            SANDBOX=electron/node_modules/electron/dist/chrome-sandbox
+            sudo chown root:root "$SANDBOX" && sudo chmod 4755 "$SANDBOX"
             xvfb-run -a node electron/scripts/dev.mjs --smoke --skip-gallery
           else
             node electron/scripts/dev.mjs --smoke --skip-gallery
