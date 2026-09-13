@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { startServer } from '../embed/lib/server.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const HELP = `Usage: node tests/raster/run-scene.mjs --asset-root <dir> --stage <relative-path> --cameras <comma-names|first> --out <dir> [--backend d3d11|swiftshader] [--viewport WxH] [--chromium <path>] [--capture-script <module.mjs>]
+const HELP = `Usage: node tests/raster/run-scene.mjs --asset-root <dir> --stage <relative-path> --cameras <comma-names|first> --out <dir> [--backend d3d11|swiftshader] [--viewport WxH] [--dpr <n>] [--chromium <path>] [--capture-script <module.mjs>]
 Optional capture scripts run after each stock camera capture. Their default export receives (page, {outDir, requestedCamera, camera, handleExpr}); it must restore any changed settings, camera, or destination in finally.`;
 const productSources = ['js/mtlx-engine.js', 'embed/gen/mtlx-engine.js', 'index.html', 'js/usd-scene-lights.js', 'js/usd/usd-stage-loader.js', 'js/usd/usd-stage-worker.js', 'js/usd-scene-app.jsx', 'js/usd-scene-renderer.js', 'js/usd-scene-post.js', 'tests/embed/lib/server.mjs', 'tests/raster/run-scene.mjs'];
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -26,7 +26,7 @@ function parse(argv) {
   let i = 0;
   while (i < argv.length) {
     const k = argv[i++];
-    if (k === '--asset-root') a.assetRoot = need(k);else if (k === '--stage') a.stage = need(k);else if (k === '--cameras') a.cameras = need(k).split(',').map(x => x.trim()).filter(Boolean);else if (k === '--out') a.out = need(k);else if (k === '--backend') a.backend = need(k);else if (k === '--viewport') a.viewport = need(k).split('x').map(Number);else if (k === '--chromium') a.chromium = need(k);else if (k === '--capture-script') a.captureScript = need(k);else if (k === '--help' || k === '-h') {
+    if (k === '--asset-root') a.assetRoot = need(k);else if (k === '--stage') a.stage = need(k);else if (k === '--cameras') a.cameras = need(k).split(',').map(x => x.trim()).filter(Boolean);else if (k === '--out') a.out = need(k);else if (k === '--backend') a.backend = need(k);else if (k === '--viewport') a.viewport = need(k).split('x').map(Number);else if (k === '--dpr') a.dpr = Number(need(k));else if (k === '--chromium') a.chromium = need(k);else if (k === '--capture-script') a.captureScript = need(k);else if (k === '--help' || k === '-h') {
       console.log(HELP);
       process.exit(0);
     } else throw new Error(`Unknown argument: ${k}`);
@@ -155,7 +155,8 @@ async function main() {
         viewport: {
           width: args.viewport[0],
           height: args.viewport[1]
-        }
+        },
+        deviceScaleFactor: args.dpr > 0 ? args.dpr : 1
       });
       page.on('pageerror', e => report.errors.push({
         type: 'pageerror',
