@@ -71,11 +71,19 @@
         }
         report.tinyHaloPixels=tinyHalo;report.tinyHaloEnergy=tinyEnergy;
         assert(tinyHalo>30&&tinyEnergy>0.05,'tiny emitter lost its halo');
-        // The unassociated coverage buffer is unchanged by optical scattering.
+        // Transparent export policy (js/usd-scene-post.js header): alpha below 1 is
+        // raised to at least the glow luminance, never lowered, and opaque stays 1;
+        // the faint far tail leaves the background alpha below one 8-bit step.
         r.setClearColor(0,0);handle.setPresentation({bloom:false,persist:false});const alphaOff=pixels(handle);
         handle.setPresentation({bloom:true,persist:false});const alphaOn=pixels(handle);
-        let alphaError=0;for(let i=3;i<alphaOn.length;i+=4)alphaError=Math.max(alphaError,Math.abs(alphaOn[i]-alphaOff[i]));
-        report.alpha={...metrics(alphaOn),error:alphaError};assert(alphaError===0&&report.alpha.alphaMin===0&&report.alpha.alphaMax===1,'alpha was not preserved');
+        let alphaDrop=0,alphaRaised=0,opaqueChanged=0,raisedWithoutGlow=0;
+        for(let i=0;i<alphaOn.length;i+=4){const off=alphaOff[i+3],on=alphaOn[i+3];
+            if(on<off-1e-6)alphaDrop++;if(off>=1-1e-6&&Math.abs(on-off)>1e-6)opaqueChanged++;
+            const glowEnergy=alphaOn[i]+alphaOn[i+1]+alphaOn[i+2]-(alphaOff[i]+alphaOff[i+1]+alphaOff[i+2]);
+            if(on>off+1e-6){alphaRaised++;if(glowEnergy<=0)raisedWithoutGlow++;}}
+        report.alpha={...metrics(alphaOn),alphaDrop,alphaRaised,opaqueChanged,raisedWithoutGlow};
+        assert(alphaDrop===0&&opaqueChanged===0&&raisedWithoutGlow===0,'alpha policy violated '+JSON.stringify(report.alpha));
+        assert(alphaRaised>100&&report.alpha.alphaMin<1/512&&report.alpha.alphaMax===1,'halo alpha not raised '+JSON.stringify(report.alpha));
         r.setClearColor(0,1);
         handle.setPresentation({bloom:false,persist:false});handle.setSceneDisplayTransform('neutral');
         const hdrNeutral=pixels(handle,THREE.UnsignedByteType);
