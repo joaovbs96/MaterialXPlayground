@@ -504,6 +504,9 @@ out=out.replace(site,site+'\n            {'+'\n                int mx_slotFace =
 '    vec2 e = min(sc.xy, vec2(1.0) - sc.xy);','    return mix(1.0, lit, smoothstep(0.0, 0.04, min(e.x, e.y)));','}']).concat(skipTransmittance?[]:[// Orders the receiver's biased depth against the two stacked records:
 // nearer than both is lit, past R1 only applies its tint, past both
 // applies the full product. An empty cell's clear color reads as lit.
+// Bounded by design: with three or more stacked transmitters the middle
+// one is folded into the product for every receiver past the last one,
+// and a receiver inside a solid sees that solid's full product.
 'vec3 mx_shadow_transmittance(int caster, vec3 P, vec3 Ng) {','    if (caster < 0) return vec3(1.0);','    vec4 cell = u_shadowRecordCells[caster];','    if (cell.z <= 0.0 || cell.w <= 0.0) return vec3(1.0);','    vec4 depthPlane = u_shadowDepthPlanes[caster];','    vec2 depthRange = u_shadowDepthRanges[caster];','    float nearDepth = depthRange.x;','    float depthSpan = max(depthRange.y, 1e-9);','    vec2 projectionScale = u_shadowSourceRadii[caster].zw;','    bool perspective = projectionScale.x > 0.0 || projectionScale.y > 0.0;','    float texelBase = u_shadowTexelWorldSize[caster];','    float rawDepth = dot(vec4(P, 1.0), depthPlane);','    float rawZ = max(nearDepth + depthSpan * rawDepth, 0.0);','    float texelWorld = texelBase * (perspective ? rawZ : 1.0);','    vec3 offsetP = P + Ng * (texelWorld * SHADOW_NORMAL_OFFSET_TEXELS);','    vec4 c4 = u_shadowMatrices[caster] * vec4(offsetP, 1.0);','    if (c4.w <= 0.0) return vec3(1.0);','    vec3 sc = c4.xyz / c4.w * 0.5 + 0.5;','    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return vec3(1.0);','    float z = dot(vec4(offsetP, 1.0), depthPlane) - SHADOW_DEPTH_BIAS_TEXELS * texelWorld / depthSpan;','    vec2 r1uv = cell.xy + sc.xy * cell.zw;','    vec2 r2uv = r1uv + vec2(0.0, 0.5);','    vec4 rec1 = texture(u_shadowTransmittance, r1uv);','    vec4 rec2 = texture(u_shadowTransmittance, r2uv);',// Alpha stores 1 - depth: an untouched cell (alpha 1) reads as depth
 // 0, and the product plane keeps its farthest depth through MIN.
 '    if (z > 1.0 - rec2.a) return rec2.rgb;','    if (z > 1.0 - rec1.a) return rec1.rgb;','    return vec3(1.0);','}']).concat(['']).join('\n');// Must land before the FIRST global function, not before main(): the light
@@ -610,7 +613,7 @@ return out.slice(0,at)+'\n    /* MX_LIGHT_TRANSPORT_EARLY_RETURN MX_LIGHT_TRANSP
 // NO distance term, so Beer-Lambert is evaluated as though every ray
 // travelled exactly one unit. The absorption coefficient is
 // -ln(transmission_color) / transmission_depth, which for a shallow depth is
-// enormous: the Playground's bottle authors color (0.50, 1, 0.05) at depth
+// enormous: a stage may author a color of (0.50, 1, 0.05) at a depth of
 // 0.001, giving a coefficient near 700 and a throughput of exactly zero. The
 // transmission lobe is extinguished instead of tinted green.
 //
@@ -635,7 +638,8 @@ const decls=dropThicknessMap?['uniform float u_thicknessReferencePath;','float m
 // return; refraction also needs the same HW varyings as the Fresnel rim
 // above plus the volumetric absorption anchor patchTransmissionThickness
 // keys off, so it shares both gates.
-const patchTransmissionAlpha=(fs,{skipRefraction=false}={})=>{let weightName=null;if(/uniform\s+float\s+transmission_weight\s*;/.test(fs))weightName='transmission_weight';else if(/uniform\s+float\s+transmission\s*;/.test(fs))weightName='transmission';if(!weightName)return fs;const colorExpr=/uniform\s+vec3\s+transmission_color\s*;/.test(fs)?'transmission_color':'vec3(1.0)';const transFnIdx=fs.indexOf('vec3 mx_surface_transmission');if(transFnIdx===-1)return fs;const returnAnchor='return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;';const returnIdx=fs.indexOf(returnAnchor,transFnIdx);if(returnIdx===-1)return fs;const outAlphaMatch=fs.match(/float outAlpha = clamp\([^;]*\.transparency,\s*vec3\(0\.3333\)\),\s*0\.0,\s*1\.0\);/);if(!outAlphaMatch||outAlphaMatch.index<=returnIdx)return fs;const alphaInsertAt=outAlphaMatch.index+outAlphaMatch[0].length;// Measured: raw outAlpha barely varies by view angle on its own, so a
+const patchTransmissionAlpha=(fs,{skipRefraction=false}={})=>{// Already patched: the peel mode uniform only exists after this pass.
+if(fs.indexOf('uniform int u_peelMode;')!==-1)return fs;let weightName=null;if(/uniform\s+float\s+transmission_weight\s*;/.test(fs))weightName='transmission_weight';else if(/uniform\s+float\s+transmission\s*;/.test(fs))weightName='transmission';if(!weightName)return fs;const colorExpr=/uniform\s+vec3\s+transmission_color\s*;/.test(fs)?'transmission_color':'vec3(1.0)';const transFnIdx=fs.indexOf('vec3 mx_surface_transmission');if(transFnIdx===-1)return fs;const returnAnchor='return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;';const returnIdx=fs.indexOf(returnAnchor,transFnIdx);if(returnIdx===-1)return fs;const outAlphaMatch=fs.match(/float outAlpha = clamp\([^;]*\.transparency,\s*vec3\(0\.3333\)\),\s*0\.0,\s*1\.0\);/);if(!outAlphaMatch||outAlphaMatch.index<=returnIdx)return fs;const alphaInsertAt=outAlphaMatch.index+outAlphaMatch[0].length;// Measured: raw outAlpha barely varies by view angle on its own, so a
 // rim term needs the standard HW normal/position/eye varyings below.
 // Fall back to the flat fold (still floored) when any is missing.
 const hasFresnelVars=/\bin\s+vec3\s+normalWorld\s*;/.test(fs)&&/\bin\s+vec3\s+positionWorld\s*;/.test(fs)&&/uniform\s+vec3\s+u_viewPosition\s*;/.test(fs);// Base fold: alpha' = a*(1-tT) (T = (1-a)+a*tT), floored at 0.05 for
@@ -664,7 +668,8 @@ declIfAbsent('uniform sampler2D u_opaqueColor;')+declIfAbsent('uniform float u_o
 // surfaceshader.transparency lets the existing opacity block apply coverage
 // exactly once while keeping reflected/emissive C additive. The old scalar
 // transmission patch is intentionally bypassed for this mode.
-const patchRgbtPayload=fs=>{const original=fs;let supported=true;let out=fs;const transFnIdx=out.indexOf('vec3 mx_surface_transmission');if(transFnIdx!==-1){const bodyIdx=out.indexOf('{',transFnIdx);if(bodyIdx===-1)supported=false;else if(out.indexOf('u_peelRgbt',transFnIdx)===-1){// RGB-T mode returns tint directly; a refracting material
+const patchRgbtPayload=fs=>{// Already patched: the RGB-T uniform only exists after this pass.
+if(fs.indexOf('uniform int u_peelRgbt;')!==-1)return fs;const original=fs;let supported=true;let out=fs;const transFnIdx=out.indexOf('vec3 mx_surface_transmission');if(transFnIdx!==-1){const bodyIdx=out.indexOf('{',transFnIdx);if(bodyIdx===-1)supported=false;else if(out.indexOf('u_peelRgbt',transFnIdx)===-1){// RGB-T mode returns tint directly; a refracting material
 // instead samples the opaque colour buffer along its bent ray
 // here, ahead of that short circuit.
 const hasRefraction=out.lastIndexOf('vec3 mx_scene_refraction',transFnIdx)!==-1;const rgbtReturn=hasRefraction?'if (u_peelRgbt != 0) { if (u_peelRefractsScene != 0) return mx_scene_refraction(N, V, alpha, fd, tint, tint); return tint; }':'if (u_peelRgbt != 0) return tint;';out=out.slice(0,bodyIdx+1)+'\n    '+rgbtReturn+'\n'+out.slice(bodyIdx+1);}}// Restrict the replacement to the generated viewing-transmission section
@@ -1581,12 +1586,9 @@ if(/irradiance|diffuse/i.test(u.name))uniforms[u.name]={value:irradiance};else i
 // reproduces the authored orientation exactly.
 if(has('u_envMatrix')){const m=new THREE.Matrix4().makeRotationY(Math.PI/2+envRotationRad);uniforms.u_envMatrix={value:envTilt?m.multiply(envTilt):m};}if(has('u_envRadianceMips'))uniforms.u_envRadianceMips={value:mips};if(has('u_envRadianceSamples'))uniforms.u_envRadianceSamples={value:16};if(has('u_envLightIntensity'))uniforms.u_envLightIntensity={value:envExposure*Math.max(0,Number(environmentIndirectScale)||0)};// White moments read as fully lit, so materials are unaffected until a
 // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
-// matrix here is a raw world-to-light-clip transform.
-// White map at strength 0 is an exact no-op, so a view with no AO pass
-// is byte-identical to one generated before AO existed.
-// Opaque white default: an empty cell's clear color already reads as
-// fully lit (see mx_shadow_transmittance), so "no transmitters" and
-// "feature unavailable" both fall back safely without a caller check.
+// matrix here is a raw world-to-light-clip transform. A white AO map at
+// strength 0 and a white transmittance record (an empty cell's clear
+// color, see mx_shadow_transmittance) are exact no-ops the same way.
 if(has('u_shadowTransmittance'))uniforms.u_shadowTransmittance={value:shadowTransmittance||getDummyTexWhite()};if(has('u_shadowRecordCells')){uniforms.u_shadowRecordCells={value:shadowRecordCells&&shadowRecordCells.length===SHADOW_FACE_SLOTS?shadowRecordCells:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,0))};}if(has('u_ssaoMap'))uniforms.u_ssaoMap={value:ssaoMap||getDummyTexWhite()};if(has('u_ssaoTexel'))uniforms.u_ssaoTexel={value:ssaoTexel?ssaoTexel.clone():new THREE.Vector2()};if(has('u_ssaoStrength'))uniforms.u_ssaoStrength={value:ssaoMap?ssaoStrength:0};// Zero scale means zero path length, which is clear glass: the safe
 // reading when no back-face pass has run.
 if(has('u_thicknessMap'))uniforms.u_thicknessMap={value:thicknessMap||getDummyTex()};if(has('u_thicknessTexel'))uniforms.u_thicknessTexel={value:thicknessTexel?thicknessTexel.clone():new THREE.Vector2()};if(has('u_thicknessScale'))uniforms.u_thicknessScale={value:thicknessMap?thicknessScale:0};if(has('u_thicknessTargetValid'))uniforms.u_thicknessTargetValid={value:thicknessMap?1:0};if(has('u_thicknessReferencePath')){// With u_thicknessMap dropped for the budget the per-frame target

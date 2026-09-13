@@ -565,6 +565,8 @@ const PROBE_DEPTH_BIAS_TEXELS = (typeof window !== 'undefined' && Number(window.
 // Shadow transmittance records: one 256px cell per face, two planes (R1
 // nearest, R2 product) stacked vertically in one texture. R2's cell is
 // always R1's offset by half the height; see mx_shadow_transmittance.
+// Two records bound the design: stacked solids share the nearest entry
+// depth and a third transmitter is only present in the product record.
 const SHADOW_RECORD_CELL_SIZE = 256;
 const SHADOW_RECORD_COLS = 8;
 const SHADOW_RECORD_ROWS = Math.ceil(SHADOW_ATLAS_FACE_SLOTS / SHADOW_RECORD_COLS);
@@ -2706,7 +2708,7 @@ const createMtlxSceneView = async ({
             let far = 0;
             for (const iv of intervals) far = Math.max(far, iv.upper);
             far = Math.max(minFloor * 2, far * 1.05);
-            // A box that contains the emitter (a lamp shade around its bulb)
+            // A box that contains the emitter (a mesh enclosing its light)
             // must pull near down to the floor, or its geometry is clipped
             // out of the map and light streaks through it.
             let minPositiveLower = Infinity, straddles = false;

@@ -1362,6 +1362,9 @@ const patchShadowLightScope = (fs, { skipTransmittance = false } = {}) => {
         // Orders the receiver's biased depth against the two stacked records:
         // nearer than both is lit, past R1 only applies its tint, past both
         // applies the full product. An empty cell's clear color reads as lit.
+        // Bounded by design: with three or more stacked transmitters the middle
+        // one is folded into the product for every receiver past the last one,
+        // and a receiver inside a solid sees that solid's full product.
         'vec3 mx_shadow_transmittance(int caster, vec3 P, vec3 Ng) {',
         '    if (caster < 0) return vec3(1.0);',
         '    vec4 cell = u_shadowRecordCells[caster];',
@@ -1643,7 +1646,7 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
 // NO distance term, so Beer-Lambert is evaluated as though every ray
 // travelled exactly one unit. The absorption coefficient is
 // -ln(transmission_color) / transmission_depth, which for a shallow depth is
-// enormous: the Playground's bottle authors color (0.50, 1, 0.05) at depth
+// enormous: a stage may author a color of (0.50, 1, 0.05) at a depth of
 // 0.001, giving a coefficient near 700 and a throughput of exactly zero. The
 // transmission lobe is extinguished instead of tinted green.
 //
@@ -1702,6 +1705,8 @@ const patchTransmissionThickness = (fs, { dropThicknessMap = false } = {}) => {
 // above plus the volumetric absorption anchor patchTransmissionThickness
 // keys off, so it shares both gates.
 const patchTransmissionAlpha = (fs, { skipRefraction = false } = {}) => {
+    // Already patched: the peel mode uniform only exists after this pass.
+    if (fs.indexOf('uniform int u_peelMode;') !== -1) return fs;
     let weightName = null;
     if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';
     else if (/uniform\s+float\s+transmission\s*;/.test(fs)) weightName = 'transmission';
@@ -1832,6 +1837,8 @@ const patchTransmissionAlpha = (fs, { skipRefraction = false } = {}) => {
 // exactly once while keeping reflected/emissive C additive. The old scalar
 // transmission patch is intentionally bypassed for this mode.
 const patchRgbtPayload = (fs) => {
+    // Already patched: the RGB-T uniform only exists after this pass.
+    if (fs.indexOf('uniform int u_peelRgbt;') !== -1) return fs;
     const original = fs;
     let supported = true;
     let out = fs;
@@ -6041,12 +6048,9 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure * Math.max(0, Number(environmentIndirectScale) || 0) };
     // White moments read as fully lit, so materials are unaffected until a
     // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
-    // matrix here is a raw world-to-light-clip transform.
-    // White map at strength 0 is an exact no-op, so a view with no AO pass
-    // is byte-identical to one generated before AO existed.
-    // Opaque white default: an empty cell's clear color already reads as
-    // fully lit (see mx_shadow_transmittance), so "no transmitters" and
-    // "feature unavailable" both fall back safely without a caller check.
+    // matrix here is a raw world-to-light-clip transform. A white AO map at
+    // strength 0 and a white transmittance record (an empty cell's clear
+    // color, see mx_shadow_transmittance) are exact no-ops the same way.
     if (has('u_shadowTransmittance')) uniforms.u_shadowTransmittance = { value: shadowTransmittance || getDummyTexWhite() };
     if (has('u_shadowRecordCells')) {
         uniforms.u_shadowRecordCells = { value: shadowRecordCells && shadowRecordCells.length === SHADOW_FACE_SLOTS
