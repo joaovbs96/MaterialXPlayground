@@ -78,14 +78,10 @@
                     }
                 }
                 if (!catalog) return synth;
-                const rank = (c) => {
-                    if (!s) return 2;
-                    const n = c.category.toLowerCase();
-                    if (n === s) return 0;
-                    if (n.indexOf(s) === 0) return 1;
-                    if (n.indexOf(s) !== -1) return 2;
-                    return 3; // matched on the group only
-                };
+                // Rank on category first, group second (see catalog.jsx's
+                // searchFilter comment): a group-only match still shows,
+                // just demoted below every category match.
+                const keysOf = (c) => [c.category, c.group || ''];
                 // Same typeFilter + text match applied to both pools, so
                 // document-local definitions rank identically to stdlib
                 // ones; only their placement (first) differs, below.
@@ -101,10 +97,7 @@
                             // must produce that type as its OUTPUT.
                             : p.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
                     }
-                    const matched = s ? p.filter((c) =>
-                        c.category.toLowerCase().indexOf(s) !== -1 ||
-                        (c.group || '').toLowerCase().indexOf(s) !== -1) : p;
-                    return matched.slice().sort((a, b) => rank(a) - rank(b) || a.category.localeCompare(b.category));
+                    return searchFilter(p, s, keysOf);
                 };
                 const docItems = (docCatalog && docCatalog.length) ? filterPool(docCatalog) : [];
                 const stdlibItems = filterPool(catalog);
@@ -422,16 +415,17 @@
         // Small blur/Enter-committing text field for the Interface metadata
         // group (params panel, i: nodes) and the Definition panel, mirroring
         // ParamRow's textField commit pattern since that pattern isn't exported standalone.
-        function IfaceMetaField({ value, placeholder, onCommit, readOnly }) {
+        function IfaceMetaField({ value, placeholder, onCommit, readOnly, className, title }) {
             const [draft, setDraft] = React.useState(value || '');
             React.useEffect(() => { setDraft(value || ''); }, [value]);
             const commit = () => { if (draft !== (value || '')) onCommit(draft); };
             return (
                 <input
-                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
-                        + (readOnly ? ' opacity-60' : '')}
+                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
+                        + (readOnly ? ' opacity-60' : '') + (className ? ' ' + className : '')}
                     value={draft}
                     placeholder={placeholder}
+                    title={title}
                     spellCheck={false}
                     readOnly={!!readOnly}
                     onChange={(e) => setDraft(e.target.value)}
@@ -440,6 +434,41 @@
                         if (e.key === 'Enter') { commit(); e.target.blur(); }
                         if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); }
                     }}
+                />
+            );
+        }
+
+        // Type-picker dropdown: swatch-dotted, mono-font MtlxSelect over
+        // a type list (defaults to IFACE_VALUE_TYPES). Forwards onChange
+        // as the plain string value, not an event.
+        function TypeSelect({ value, onChange, disabled, title, className, types, emptyOption }) {
+            const typeList = types || IFACE_VALUE_TYPES;
+            const labels = React.useMemo(() => {
+                const m = {};
+                typeList.forEach((t) => { m[t] = <span style={{ color: typeColor(t) }}>{t}</span>; });
+                return m;
+            }, [typeList]);
+            const dots = React.useMemo(() => {
+                const m = {};
+                typeList.forEach((t) => { m[t] = typeColor(t); });
+                return m;
+            }, [typeList]);
+            return (
+                <MtlxSelect
+                    value={value}
+                    onChange={(v) => onChange(v)}
+                    options={typeList}
+                    labels={labels}
+                    dots={dots}
+                    defValue={null}
+                    disabled={disabled}
+                    title={title}
+                    emptyOption={emptyOption}
+                    size="sm"
+                    variant="field"
+                    font="mono"
+                    align="left"
+                    className={className || 'flex-none w-28'}
                 />
             );
         }
@@ -470,7 +499,7 @@
         // One row per param: connected inputs jump to their source node;
         // unconnected ones edit the value, debounced (each commit writes
         // the doc and recompiles); onLive fires per tick for a live preview.
-        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
+        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
             // A ref (not state): blurring alone must never re-trigger the
             // re-seed effects below, only an actual value change should.
             const focusedRef = React.useRef(false);
@@ -822,6 +851,26 @@
                 return <div className="flex items-center gap-1.5">{textField()}</div>;
             };
 
+            const body = inp.connected ? (
+                sourceId ? (
+                    <button
+                        onClick={() => onJump(sourceId)}
+                        title="Select and show the node this input is connected to"
+                        className={(hideHeader ? '' : 'mt-1 ') + 'max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate'}
+                    ><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> from {sourceId.slice(2)}</button>
+                ) : (
+                    <div className={(hideHeader ? '' : 'mt-1 ') + 'inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono'}><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
+                )
+            ) : readOnly ? (
+                <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-gray-400 font-mono truncate'} title={inp.value}>
+                    {inp.value !== '' ? inp.value : '\u2014'}
+                </div>
+            ) : (
+                hideHeader ? control() : <div className="mt-1">{control()}</div>
+            );
+
+            if (hideHeader) return <div className="flex-1 min-w-0">{body}</div>;
+
             return (
                 <div className="py-1.5 border-b border-gray-700/60 last:border-b-0">
                     <div className="flex items-center gap-1.5 text-[11px] font-mono">
@@ -829,25 +878,9 @@
                         <span className="text-gray-300 truncate text-[11px] font-mono" title={inp.uiname ? inp.name : undefined}>{inp.uiname || inp.name}</span>
                         <span className="ml-auto flex-none text-[9px] font-mono" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
                     </div>
-                    {inp.connected ? (
-                        sourceId ? (
-                            <button
-                                onClick={() => onJump(sourceId)}
-                                title="Select and show the node this input is connected to"
-                                className="mt-1 max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate"
-                            ><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> from {sourceId.slice(2)}</button>
-                        ) : (
-                            <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono"><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
-                        )
-                    ) : readOnly ? (
-                        <div className="mt-1 text-[11px] text-gray-400 font-mono truncate" title={inp.value}>
-                            {inp.value !== '' ? inp.value : '\u2014'}
-                        </div>
-                    ) : (
-                        <div className="mt-1">{control()}</div>
-                    )}
+                    {body}
                 </div>
             );
         }
 
-Object.assign(window, { AddNodeSearch, ParamRow, VEC_SIZE, IfaceMetaField, IFACE_VALUE_TYPES });
+Object.assign(window, { AddNodeSearch, ParamRow, VEC_SIZE, IfaceMetaField, IFACE_VALUE_TYPES, TypeSelect });
