@@ -320,6 +320,11 @@
             var scale = scaleOf(pose.matrix);
             var rad = radianceOf(record, scale, warn, metersPerUnit);
             if (!rad || !(rad.intensity > 0)) continue;
+            // A positive scalar with zero RGB contributes nothing, yet it would
+            // take a bounded slot from a real light in the brightest-first list.
+            // Drop it before the budget and sampler allocation.
+            var colorEnergy = rad.color && rad.color.lengthSq ? rad.color.lengthSq() : 0;
+            if (!(Number.isFinite(colorEnergy) && colorEnergy > 0)) continue;
 
             var entry = {
                 primPath: record.primPath,

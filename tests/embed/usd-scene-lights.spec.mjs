@@ -100,6 +100,12 @@ test('@scene area-light conversion preserves lights for shader-side source cosin
     const invalidRect = convert([{ ...base, primPath: '/InvalidRect', width: -1, height: 2 }], {
       limit: 16, warn: (message) => areaWarnings.push(message),
     });
+    const brightBudget = Array.from({ length: 16 }, (_, index) => ({
+      ...base, primPath: '/Bright' + index, type: 'PointLight', width: undefined, height: undefined,
+    }));
+    const blackBudget = convert([...brightBudget, {
+      ...base, primPath: '/Black', type: 'PointLight', width: undefined, height: undefined, color: [0, 0, 0],
+    }], { limit: 16 });
     const source = front[0];
     const sourceCosine = (receiver) => Math.max(0, source.direction.dot(
       receiver.clone().sub(source.position).normalize()));
@@ -117,6 +123,9 @@ test('@scene area-light conversion preserves lights for shader-side source cosin
       zeroRectCount: zeroRect.length,
       zeroSphereNormalizedIntensity: zeroSphereNormalized[0] && zeroSphereNormalized[0].intensity,
       invalidRectCount: invalidRect.length,
+      blackBudgetCount: blackBudget.length,
+      blackBudgetBrightCount: blackBudget.filter((light) => /^\/Bright/.test(light.emitter?.primPath || light.primPath || '')).length,
+      blackBudgetBlackCount: blackBudget.filter((light) => (light.emitter?.primPath || light.primPath) === '/Black').length,
       areaWarnings,
       diskSourceKind: disk[0].sourceKind, cylinderSourceKind: cylinder[0].sourceKind,
       frontCosine: sourceCosine(frontReceiver), backCosine: sourceCosine(backReceiver),
@@ -143,6 +152,9 @@ test('@scene area-light conversion preserves lights for shader-side source cosin
   expect(result.zeroRectCount).toBe(0);
   expect(result.zeroSphereNormalizedIntensity).toBeCloseTo(0.25, 6);
   expect(result.invalidRectCount).toBe(0);
+  expect(result.blackBudgetCount).toBe(16);
+  expect(result.blackBudgetBrightCount).toBe(16);
+  expect(result.blackBudgetBlackCount).toBe(0);
   expect(result.areaWarnings.some((warning) => /invalid width.*skipped/i.test(warning))).toBe(true);
   expect(result.diskSourceKind).toBe(1);
   expect(result.cylinderSourceKind).toBe(0);

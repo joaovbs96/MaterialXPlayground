@@ -1181,6 +1181,11 @@ const patchShadowLightScope = (fs) => {
         + '\n                    }'
         + '\n                }'
         + shadowPerCaster
+        // Thin translucent and subsurface closures ignore ClosureData.occlusion,
+        // so scale the source radiance once and clear the closure term: every
+        // direct closure then sees exactly one factor of visibility.
+        + '\n                lightShader.intensity *= occlusion * u_shadowDiagnosticVisibilityScale;'
+        + '\n                occlusion = 1.0;'
         + '\n            }');
     if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
     const decl = [
@@ -1217,6 +1222,10 @@ const patchShadowLightScope = (fs) => {
         // consecutive faces it spans (1 for directional, 6 for a cube group).
         'uniform int u_shadowSlotFace[' + SHADOW_LIGHT_SLOTS_MAX + '];',
         'uniform int u_shadowSlotFaceCount[' + SHADOW_LIGHT_SLOTS_MAX + '];',
+        // Test-only multiplier for direct incoming visibility. Normal
+        // rendering always binds one; keeping it in the compiled shader lets
+        // a diagnostic prove D(V)=V*D(1) without modifying scene lights.
+        'uniform float u_shadowDiagnosticVisibilityScale;',
         '#define SHADOW_NORMAL_OFFSET_TEXELS ' + SHADOW_NORMAL_OFFSET_TEXELS.toFixed(4),
         '#define SHADOW_DEPTH_BIAS_TEXELS ' + SHADOW_DEPTH_BIAS_TEXELS.toFixed(4),
         'float mx_shadow_vsm(vec2 moments, float receiverDepth) {',
@@ -4528,8 +4537,11 @@ const extractKeyLight = (tex) => {
         const W = img.width, H = img.height;
         const stride = img.data.length / (W * H);
         const isHalf = img.data.constructor === Uint16Array;
+        if (!Number.isInteger(W) || !Number.isInteger(H) || W < 1 || H < 1
+            || !Number.isInteger(stride) || (stride !== 3 && stride !== 4)
+            || (isHalf ? !(img.data instanceof Uint16Array) : !(img.data instanceof Float32Array))) return null;
         const rd = (i) => (isHalf ? halfToFloat(img.data[i]) : img.data[i]);
-        const wr = (i, v) => { img.data[i] = isHalf ? floatToHalf(v) : v; };
+        const quantize = (v) => isHalf ? halfToFloat(floatToHalf(v)) : Math.fround(v);
 
         // Pass 1: per-texel luminance + solid-angle weight -> mean + peak.
         const lum = new Float32Array(W * H);
@@ -4539,11 +4551,15 @@ const extractKeyLight = (tex) => {
             const dOmega = Math.sin(theta) * (2 * Math.PI / W) * (Math.PI / H);
             for (let x = 0; x < W; x++) {
                 const idx = (y * W + x) * stride;
-                const Lraw = 0.2126 * rd(idx) + 0.7152 * rd(idx + 1) + 0.0722 * rd(idx + 2);
-                const finiteL = Number.isFinite(Lraw); const L = finiteL ? Lraw : 0; // stray non-finite texel: 0 for sums, never the peak
+                const r = rd(idx), g = rd(idx + 1), b = rd(idx + 2);
+                // A failed extraction must leave the texture byte-identical.
+                // Reject invalid radiance before either the cluster or annulus
+                // can turn it into a partially-mutated environment.
+                if (![r, g, b].every(v => Number.isFinite(v) && v >= 0)) return null;
+                const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
                 lum[y * W + x] = L;
                 sumW += dOmega; sumLW += L * dOmega;
-                if (finiteL && L > peakL) { peakL = L; peakX = x; peakY = y; }
+                if (L > peakL) { peakL = L; peakX = x; peakY = y; }
             }
         }
         const meanL = sumW > 0 ? sumLW / sumW : 0;
@@ -4553,12 +4569,11 @@ const extractKeyLight = (tex) => {
         const pTheta = Math.PI * (peakY + 0.5) / H, pPhi = 2 * Math.PI * (peakX + 0.5) / W;
         const pDir = [Math.sin(pTheta) * Math.cos(pPhi), Math.cos(pTheta), Math.sin(pTheta) * Math.sin(pPhi)];
 
-        // Pass 2: cluster around the peak (angle + luminance-floor gated),
-        // accumulating per-channel energy + an L*dOmega-weighted centroid;
-        // also averages the surrounding annulus color, used by the clamp below.
+        // Pass 2: cluster around the peak (angle + luminance-floor gated).
+        // The annulus is solid-angle weighted: equirect texels do not have
+        // equal area, particularly near the poles.
         const Lfloor = Math.max(8 * meanL, 0.02 * peakL);
-        let Er = 0, Eg = 0, Eb = 0, cxW = 0, cyW = 0, cW = 0;
-        let annR = 0, annG = 0, annB = 0, annN = 0;
+        let annR = 0, annG = 0, annB = 0, annW = 0;
         const clusterIdx = [];
         for (let y = 0; y < H; y++) {
             const theta = Math.PI * (y + 0.5) / H;
@@ -4571,33 +4586,46 @@ const extractKeyLight = (tex) => {
                 const ang = Math.acos(Math.min(1, Math.max(-1, cosAng)));
                 const idx = (y * W + x) * stride;
                 const L = lum[y * W + x];
-                if (!Number.isFinite(L)) continue; // stray non-finite texel: excluded from cluster and annulus
                 if (ang <= KEYLIGHT_RADIUS_RAD && L >= Lfloor) {
                     const r = rd(idx), g = rd(idx + 1), b = rd(idx + 2);
-                    Er += r * dOmega; Eg += g * dOmega; Eb += b * dOmega;
-                    cxW += x * (L * dOmega); cyW += y * (L * dOmega); cW += L * dOmega;
-                    clusterIdx.push(idx);
+                    clusterIdx.push({ idx, x, y, dOmega, rgb: [r, g, b] });
                 } else if (ang > KEYLIGHT_RADIUS_RAD && ang <= 2 * KEYLIGHT_RADIUS_RAD) {
-                    annR += rd(idx); annG += rd(idx + 1); annB += rd(idx + 2); annN++;
+                    annR += rd(idx) * dOmega; annG += rd(idx + 1) * dOmega; annB += rd(idx + 2) * dOmega; annW += dOmega;
                 }
             }
         }
-        if (!clusterIdx.length || cW <= 0) return null;
-        const cx = cxW / cW, cy = cyW / cW;
+        if (!clusterIdx.length || !(annW > 0) || !Number.isFinite(annW)) return null;
+        const annColor = [annR / annW, annG / annW, annB / annW];
+        if (!annColor.every(v => Number.isFinite(v) && v >= 0)) return null;
 
-        // Direction: data-coord centroid -> world, via the shared helper
-        // above (also used by extractSoftKeyDir).
-        const direction = dataDirToWorld(tex, cx, cy, W, H);
-
-        // Clamp: overwrite the cluster with the annulus's mean color, the
-        // "split" that removes the sun from radiance/irradiance/backdrop.
-        const aN = annN || 1;
-        const annColor = [annR / aN, annG / aN, annB / aN];
-        for (const idx of clusterIdx) {
-            wr(idx, annColor[0]); wr(idx + 1, annColor[1]); wr(idx + 2, annColor[2]);
+        // Quantize the replacement before measuring removed energy, so the
+        // analytic light receives exactly what the texture no longer
+        // contains, including Float32/half storage conversion.
+        let Er = 0, Eg = 0, Eb = 0;
+        const moment = new THREE.Vector3();
+        const writes = [];
+        for (const entry of clusterIdx) {
+            const retained = entry.rgb.map((value, channel) => quantize(Math.min(value, annColor[channel])));
+            const removed = entry.rgb.map((value, channel) => value - retained[channel]);
+            if (!retained.every(v => Number.isFinite(v) && v >= 0) || !removed.every(v => Number.isFinite(v) && v >= 0)) return null;
+            Er += removed[0] * entry.dOmega; Eg += removed[1] * entry.dOmega; Eb += removed[2] * entry.dOmega;
+            const Y = 0.2126 * removed[0] + 0.7152 * removed[1] + 0.0722 * removed[2];
+            moment.addScaledVector(dataDirToWorld(tex, entry.x, entry.y, W, H), Y * entry.dOmega);
+            writes.push({ idx: entry.idx, retained });
         }
+        const maxE = Math.max(Er, Eg, Eb);
+        if (!(maxE > 0) || !Number.isFinite(maxE) || ![Er, Eg, Eb].every(Number.isFinite)
+            || !(moment.lengthSq() > 0) || !Number.isFinite(moment.lengthSq())) return null;
+        const direction = moment.normalize();
+        if (![direction.x, direction.y, direction.z].every(Number.isFinite)) return null;
 
-        const maxE = Math.max(Er, Eg, Eb, 1e-8);
+        // Direction: removed-energy luminance moment, not the raw cluster
+        // centroid, so a partially clamped edge texel weighs in proportion.
+        for (const { idx, retained } of writes) {
+            img.data[idx] = isHalf ? floatToHalf(retained[0]) : retained[0];
+            img.data[idx + 1] = isHalf ? floatToHalf(retained[1]) : retained[1];
+            img.data[idx + 2] = isHalf ? floatToHalf(retained[2]) : retained[2];
+        }
         return { direction, color: [Er / maxE, Eg / maxE, Eb / maxE], intensity: maxE };
     } catch (e) {
         console.warn('key-light extraction failed:', e);
@@ -4675,7 +4703,7 @@ const makeLightEntry = (over) => Object.assign({
 // mean), so it has to carry the same gain as the map it came from; without it
 // the sun and the sky drift apart by exactly the dome's intensity whenever
 // that is not 1, which reads as one blown highlight over a correct scene.
-const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale) => {
+const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, lightScales = null) => {
     const rig = rigLights || [];
     const stage = (stageLights || []).slice(0, STAGE_LIGHT_SLOTS);
     const out = rig.map((l) => makeLightEntry({
@@ -4695,6 +4723,14 @@ const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale) => {
     // The array length must equal MAX_LIGHT_SOURCES exactly; three walks
     // every declared index and an absent element throws.
     while (out.length < rig.length + 1 + STAGE_LIGHT_SLOTS) out.push(makeLightEntry());
+    // Scene diagnostics may isolate one direct source without changing the
+    // fixed slot layout. Absent scales preserve the ordinary lighting path.
+    if (lightScales) {
+        for (let i = 0; i < out.length; i++) {
+            const scale = Number(lightScales[i]);
+            out[i].intensity *= Number.isFinite(scale) ? Math.max(0, scale) : 1;
+        }
+    }
     return out;
 };
 // Slots actually evaluated. Stage lights sit past the key slot, so reaching
@@ -5643,7 +5679,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5690,10 +5726,15 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
             ? shadowFaceBasisY : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 1, 0)) },
         u_shadowFaceBasisZ: { value: shadowFaceBasisZ && shadowFaceBasisZ.length === SHADOW_FACE_SLOTS
             ? shadowFaceBasisZ : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 0, 1)) },
+        // Cloned, not aliased: applyShadowMatrix() writes into this uniform's
+        // own array in place, and a diagnostic swap must never corrupt the
+        // renderer's live shadowSlotFace/shadowSlotFaceCount state.
         u_shadowSlotFace: { value: shadowSlotFace && shadowSlotFace.length === SHADOW_LIGHT_SLOTS_MAX
-            ? shadowSlotFace : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
+            ? new Int32Array(shadowSlotFace) : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
         u_shadowSlotFaceCount: { value: shadowSlotFaceCount && shadowSlotFaceCount.length === SHADOW_LIGHT_SLOTS_MAX
-            ? shadowSlotFaceCount : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
+            ? new Int32Array(shadowSlotFaceCount) : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
+        u_shadowDiagnosticVisibilityScale: { value: Number.isFinite(Number(shadowDiagnosticVisibilityScale))
+            ? Math.max(0, Number(shadowDiagnosticVisibilityScale)) : 1 },
         // Baked sky visibility. Seeded unconditionally, NOT through has():
         // parseUniforms' regex has no room for a precision qualifier, so
         // `uniform highp sampler3D` is invisible to it just as
@@ -5742,7 +5783,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     }
     if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
     if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
-    if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure };
+    if (has('u_envLightIntensity')) uniforms.u_envLightIntensity = { value: envExposure * Math.max(0, Number(environmentIndirectScale) || 0) };
     // White moments read as fully lit, so materials are unaffected until a
     // real shadow map is bound. MaterialX applies the *0.5+0.5 itself, so the
     // matrix here is a raw world-to-light-clip transform.
@@ -5765,7 +5806,8 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_shadowMap')) uniforms.u_shadowMap = { value: shadowMap || getDummyTexWhite() };
     if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = { value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix() };
     if (has('u_lightData')) {
-        const entries = currentLights(lightData, env && env.keyLight, envRotationRad, stageLights, envExposure);
+        const entries = currentLights(lightData, env && env.keyLight, envRotationRad, stageLights,
+            envExposure * Math.max(0, Number(environmentKeyScale) || 0), lightScales);
         uniforms.u_lightData = { value: entries };
     }
     if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights) };
@@ -8310,6 +8352,7 @@ const createMtlxRenderView = async ({
                         u_shadowFaceBasisZ: { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 0, 1)) },
                         u_shadowSlotFace: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
                         u_shadowSlotFaceCount: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
+                        u_shadowDiagnosticVisibilityScale: { value: 1 },
                         // Same sampler-unit hazard as the Scene: see
                         // createMtlxSceneUniforms. No stage volume here, so
                         // the white 1x1x1 dummy at strength 0 is the value.

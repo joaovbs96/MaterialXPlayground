@@ -1342,6 +1342,70 @@ const createMtlxSceneView = async ({
     let stageLights = [];
     let stageLightsEnabled = storedSceneStageLights();
     let stageLightsEv = storedSceneStageLightsEv();
+    // Scratch-only direct-light diagnostic state. It is never read from or
+    // written to storage, and null is the normal production lighting path.
+    let shadowDiagnostic = null;
+    const unshadowedSlotFace = new Int32Array(window.SHADOW_LIGHT_SLOTS_MAX || 32).fill(-1);
+    const unshadowedSlotFaceCount = new Int32Array(window.SHADOW_LIGHT_SLOTS_MAX || 32).fill(0);
+    const shadowDiagnosticLights = () => {
+        const rig = (mxEnv && mxEnv.lightData) || [];
+        const out = rig.map((light, index) => ({ id: 'rig:' + index, slot: index, kind: 'rig', label: 'rig light ' + index,
+            intensity: Number(light.intensity) || 0 }));
+        const keySlot = rig.length;
+        if (env && env.keyLight) out.push({ id: 'environment-key', slot: keySlot, kind: 'environment-key', label: 'extracted environment key',
+            intensity: Number(env.keyLight.intensity) || 0 });
+        const authoredGroups = new Map();
+        for (let i = 0; i < stageLights.length; i++) {
+            const light = stageLights[i];
+            const source = light.emitter || light;
+            const slot = keySlot + 1 + i;
+            const sourceId = source.primPath || null;
+            out.push({ id: 'stage:' + i, slot, kind: 'stage-sample', sampleIndex: i, sourceId,
+                label: source.primPath || ('stage light ' + i), primPath: source.primPath || null,
+                intensity: Number(light.intensity) || 0 });
+            if (sourceId) {
+                let group = authoredGroups.get(sourceId);
+                if (!group) {
+                    group = { id: 'stage-source:' + sourceId, slots: [], kind: 'stage-source', sourceId,
+                        label: sourceId, primPath: sourceId, intensity: 0 };
+                    authoredGroups.set(sourceId, group);
+                }
+                group.slots.push(slot);
+                group.intensity += Number(light.intensity) || 0;
+            }
+        }
+        out.push(...authoredGroups.values());
+        return out;
+    };
+    const shadowDiagnosticState = () => shadowDiagnostic ? Object.assign({}, shadowDiagnostic, {
+        scope: 'MaterialX scene materials only; builtin backdrop and studio materials are not light-isolated.',
+        availableLights: shadowDiagnosticLights(),
+    }) : { enabled: false, scope: 'MaterialX scene materials only; builtin backdrop and studio materials are not light-isolated.', availableLights: shadowDiagnosticLights() };
+    const diagnosticLightScales = () => {
+        if (!shadowDiagnostic || shadowDiagnostic.directLightId == null) return null;
+        const lights = shadowDiagnosticLights();
+        const maxSlot = Math.max(0, ...lights.filter((light) => Number.isInteger(light.slot)).map((light) => light.slot));
+        const scales = new Array(maxSlot + 1).fill(0);
+        const selected = lights.find((light) => light.id === shadowDiagnostic.directLightId);
+        for (const slot of selected ? (selected.slots || [selected.slot]) : []) if (Number.isInteger(slot)) scales[slot] = 1;
+        return scales;
+    };
+    const diagnosticStageLights = () => {
+        const active = activeStageLights();
+        if (!active || !shadowDiagnostic || shadowDiagnostic.directLightId == null) return active;
+        const selected = shadowDiagnosticLights().find((light) => light.id === shadowDiagnostic.directLightId);
+        const selectedSlots = new Set(selected ? (selected.slots || [selected.slot]) : []);
+        const keySlot = ((mxEnv && mxEnv.lightData) || []).length;
+        return active.map((light, index) => Object.assign({}, light, {
+            intensity: selectedSlots.has(keySlot + 1 + index) ? light.intensity : 0,
+        }));
+    };
+    // Swaps in an all -1 slot-to-face map: the same fixed light layout with
+    // every caster lookup disabled, so a lit-but-unoccluded frame can be
+    // captured without touching the atlas or its per-face uniforms.
+    const diagnosticShadowSlots = () => shadowDiagnostic && shadowDiagnostic.shadowMode === 'unoccluded'
+        ? { shadowSlotFace: unshadowedSlotFace, shadowSlotFaceCount: unshadowedSlotFaceCount }
+        : { shadowSlotFace, shadowSlotFaceCount };
     const sceneOptions = {
         udimTileSize: Math.max(128, Number(udimTileSize) || 512),
         udimMaxTiles: Math.max(1, Number(udimMaxTiles) || 1024),
@@ -1736,13 +1800,17 @@ const createMtlxSceneView = async ({
         // uniform builder below picks it over the FIS chain when the
         // shaders were generated for the prefilter path.
         if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
+        const diagnosticSlots = diagnosticShadowSlots();
         const uniforms = window.createMtlxSceneUniforms({
-            compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
+            compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
-            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace, shadowSlotFaceCount,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             envTilt,
             thicknessScale, refractionTwoSided: true,
+            environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
+            environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
+            lightScales: diagnosticLightScales(),
         });
         // USD value overrides (record.overrides) are applied onto the
         // MaterialX document itself in loadRenderable/applyUsdOverrides,
@@ -3475,8 +3543,9 @@ const createMtlxSceneView = async ({
                     const src = shadowCasterFaceBasisZ();
                     for (let i = 0; i < src.length; i++) u.u_shadowFaceBasisZ.value[i].copy(src[i]);
                 }
-                if (u.u_shadowSlotFace) u.u_shadowSlotFace.value.set(shadowSlotFace);
-                if (u.u_shadowSlotFaceCount) u.u_shadowSlotFaceCount.value.set(shadowSlotFaceCount);
+                const diagnosticSlots = diagnosticShadowSlots();
+                if (u.u_shadowSlotFace) u.u_shadowSlotFace.value.set(diagnosticSlots.shadowSlotFace);
+                if (u.u_shadowSlotFaceCount) u.u_shadowSlotFaceCount.value.set(diagnosticSlots.shadowSlotFaceCount);
             }
         };
         const applyMaterialEnvironment = () => {
@@ -3491,14 +3560,18 @@ const createMtlxSceneView = async ({
             for (const material of materials) {
                 const compiled = material.userData && material.userData.mtlxSceneCompiled;
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
+                const diagnosticSlots = diagnosticShadowSlots();
                 const next = window.createMtlxSceneUniforms({
-                    compiled, env, lightData: mxEnv.lightData || [], stageLights: activeStageLights(), displayTransform: sceneDisplayTransform,
+                    compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
-            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace, shadowSlotFaceCount,
+            shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
                     envTilt,
                     thicknessScale, refractionTwoSided: true,
                     envRotationRad, envExposure,
+                    environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
+                    environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
+                    lightScales: diagnosticLightScales(),
                 });
                 for (const [name, slot] of Object.entries(next)) {
                     if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$)/).test(name) || !material.uniforms[name]) continue;
@@ -4348,6 +4421,38 @@ const createMtlxSceneView = async ({
             return shadowsEnabled;
         };
         const getShadows = () => ({ enabled: shadowsEnabled, ready: !!shadowTarget });
+        // Test/debug-only lighting split. It deliberately never touches the
+        // persisted scene controls or shadow atlas; callers can capture a
+        // direct-only, unoccluded or filtered frame and reset with null.
+        const setShadowDiagnostic = (options = null) => {
+            if (!options || options.enabled === false) {
+                shadowDiagnostic = null;
+            } else {
+                const directLightId = options.directLightId == null ? null : String(options.directLightId);
+                if (directLightId && directLightId !== 'none' && !shadowDiagnosticLights().some((light) => light.id === directLightId)) {
+                    throw new Error('Unknown shadow diagnostic directLightId: ' + directLightId);
+                }
+                const scale = (value, fallback) => {
+                    const number = Number(value);
+                    return Number.isFinite(number) ? Math.max(0, Math.min(16, number)) : fallback;
+                };
+                const shadowMode = options.shadowMode == null ? 'filtered' : String(options.shadowMode);
+                if (shadowMode !== 'filtered' && shadowMode !== 'unoccluded') {
+                    throw new Error('Unknown shadow diagnostic shadowMode: ' + shadowMode);
+                }
+                shadowDiagnostic = {
+                    enabled: true,
+                    directLightId,
+                    environmentIndirectScale: scale(options.environmentIndirectScale, 1),
+                    environmentKeyScale: scale(options.environmentKeyScale, 1),
+                    shadowMode,
+                };
+            }
+            applyShadowMatrix();
+            applyMaterialEnvironment();
+            return shadowDiagnosticState();
+        };
+        const getShadowDiagnostic = () => shadowDiagnosticState();
         // AO is a pure screen-space pass, so turning it off just stops
         // running it and resets the uniform: no recompile, no rebuild.
         // The Scene's own view transform. A uniform, so switching costs one
@@ -4497,7 +4602,7 @@ const createMtlxSceneView = async ({
             resize, frameAll,
             getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
             setStageLightsEnabled, setStageLightsEv, getStageLights,
-            setShadowsEnabled, getShadows, getTransparentPrims,
+            setShadowsEnabled, getShadows, setShadowDiagnostic, getShadowDiagnostic, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
             getSceneDisplayTransform, setSceneDisplayTransform,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
@@ -4719,8 +4824,9 @@ const createMtlxSceneView = async ({
             __shadowDebug: () => {
                 if (!shadowTarget) return { ready: false };
                 const w = 160;
-                const prev = renderer.getRenderTarget();
+                const prev = snapshotRendererDestination();
                 const tiles = [];
+                const rigCount = ((mxEnv && mxEnv.lightData) || []).length;
                 try {
                     renderer.setRenderTarget(shadowTarget);
                     for (let c = 0; c < SHADOW_ATLAS_FACE_SLOTS; c++) {
@@ -4763,6 +4869,12 @@ const createMtlxSceneView = async ({
                                 ? Number(face.rec.source.sourceKind || 0) : null,
                             sourceExtent: face ? face.sourceExtent : null,
                             sourceRadius: face ? face.sourceRadius : null,
+                            score: face && face.rec ? face.rec.score : null,
+                            lightSlots: face && face.rec && face.rec.slots ? face.rec.slots.map((stageIndex) => {
+                                const slot = stageIndex < 0 ? rigCount : rigCount + 1 + stageIndex;
+                                const light = shadowDiagnosticLights().find((entry) => entry.slot === slot);
+                                return { slot, id: light ? light.id : null, label: light ? light.label : null };
+                            }) : [],
                             projectionScale: face ? face.projectionScale : null,
                             receiverDepth: face ? face.receiverDepth : null,
                             projectedStageSpanPixels: face ? face.projectedStageSpanPixels : null,
@@ -4775,10 +4887,10 @@ const createMtlxSceneView = async ({
                         });
                     }
                 } catch (e) {
-                    renderer.setRenderTarget(prev);
+                    restoreRendererDestination(prev);
                     return { ready: true, error: String(e && e.message || e) };
                 }
-                renderer.setRenderTarget(prev);
+                restoreRendererDestination(prev);
                 const prepass = { opaque: 0, partial: 0, clear: 0, unknown: 0 };
                 const seenMaterials = new Set();
                 scene.traverse((object) => {
@@ -4794,6 +4906,50 @@ const createMtlxSceneView = async ({
                         else prepass.opaque++;
                     });
                 });
+                const atlas = {
+                    requestedDimensions: {
+                        width: shadowTarget.width,
+                        height: shadowTarget.height,
+                        format: shadowTarget.texture.format,
+                        type: shadowTarget.texture.type,
+                    },
+                };
+                try {
+                    const gl = renderer.getContext();
+                    if (gl) {
+                        try {
+                            renderer.setRenderTarget(shadowTarget);
+                            const attachment = gl.COLOR_ATTACHMENT0;
+                            const bits = ['FRAMEBUFFER_ATTACHMENT_RED_SIZE', 'FRAMEBUFFER_ATTACHMENT_GREEN_SIZE', 'FRAMEBUFFER_ATTACHMENT_BLUE_SIZE', 'FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE']
+                                .map((name) => gl.getFramebufferAttachmentParameter(gl.FRAMEBUFFER, attachment, gl[name]));
+                            const bitsPerPixel = bits.reduce((sum, value) => sum + (Number(value) || 0), 0);
+                            const framebufferStatus = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+                            const componentType = gl.getFramebufferAttachmentParameter(gl.FRAMEBUFFER, attachment, gl.FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE);
+                            const queryGlError = gl.getError();
+                            if (framebufferStatus === gl.FRAMEBUFFER_COMPLETE && queryGlError === gl.NO_ERROR && bitsPerPixel > 0) {
+                                atlas.verifiedAttachment = { framebufferStatus, componentType, componentBits: bits, bitsPerPixel,
+                                    bytesPerPixel: bitsPerPixel / 8, bytes: shadowTarget.width * shadowTarget.height * bitsPerPixel / 8 };
+                            } else atlas.attachmentError = { framebufferStatus, componentType, componentBits: bits, queryGlError };
+                            const depthAttachment = gl.getFramebufferAttachmentParameter(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+                            const depthType = gl.getFramebufferAttachmentParameter(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE);
+                            if (depthAttachment && depthType === gl.RENDERBUFFER) {
+                                const previousDepth = gl.getParameter(gl.RENDERBUFFER_BINDING);
+                                try {
+                                    gl.bindRenderbuffer(gl.RENDERBUFFER, depthAttachment);
+                                    atlas.depthAttachment = { objectType: depthType,
+                                        internalFormat: gl.getRenderbufferParameter(gl.RENDERBUFFER, gl.RENDERBUFFER_INTERNAL_FORMAT),
+                                        width: gl.getRenderbufferParameter(gl.RENDERBUFFER, gl.RENDERBUFFER_WIDTH),
+                                        height: gl.getRenderbufferParameter(gl.RENDERBUFFER, gl.RENDERBUFFER_HEIGHT),
+                                        samples: gl.getRenderbufferParameter(gl.RENDERBUFFER, gl.RENDERBUFFER_SAMPLES) };
+                                } finally { gl.bindRenderbuffer(gl.RENDERBUFFER, previousDepth); }
+                            } else atlas.depthAttachment = { objectType: depthType || null, allocated: false };
+                        } finally {
+                            restoreRendererDestination(prev);
+                        }
+                    } else atlas.attachmentError = 'WebGL unavailable';
+                } catch (e) {
+                    atlas.attachmentError = String(e && e.message || e);
+                }
                 return {
                     ready: true,
                     tiles,
@@ -4803,6 +4959,7 @@ const createMtlxSceneView = async ({
                     droppedCasters: shadowDroppedCasters.slice(),
                     droppedFaces: shadowDroppedFaces.slice(),
                     shadowedSlots: Array.from(shadowSlotFace).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
+                    atlas,
                     prepass,
                 };
             },
@@ -4865,7 +5022,7 @@ const createMtlxSceneView = async ({
                 const filteredAtlas = !!(shadowTarget && shadowTarget.texture
                     && shadowTarget.texture.minFilter === THREE.LinearFilter);
 
-                const prev = renderer.getRenderTarget();
+                const prev = snapshotRendererDestination();
                 const tap = new Float32Array(4);
                 const readTexel = (px, py) => {
                     const x = Math.max(0, Math.min(SHADOW_ATLAS_WIDTH - 1, px));
@@ -4981,7 +5138,7 @@ const createMtlxSceneView = async ({
                 } catch (e) {
                     result = { ready: true, inside: true, error: String(e && e.message || e), face: c, kind: b.kind, caster: b.rec.key };
                 } finally {
-                    renderer.setRenderTarget(prev);
+                    restoreRendererDestination(prev);
                 }
                 return result;
             },

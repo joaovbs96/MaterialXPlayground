@@ -252,6 +252,45 @@ async function sampleVisibility(page, vis, points) {
   return projected.map((p) => ({ ...p, ...visibilityAt(vis, p.nx, p.ny) }));
 }
 
+// The canvas screenshot is useful visual evidence, but it is not a stable
+// linear-buffer oracle. This samples the actual compiled material at a
+// caller-owned Float32 target, isolated to one direct light source via
+// setShadowDiagnostic, under the loaded USD camera/light/atlas state.
+async function sampleNativeDirect(page, points) {
+  return page.evaluate((points) => {
+    const h = window.__mtlxUsdSceneHandle, THREE = window.THREE;
+    const { renderer, camera, scene } = h.__debug();
+    const gl = renderer.getContext();
+    const width = renderer.domElement.width, height = renderer.domElement.height;
+    const debug = h.__shadowDebug();
+    const light = debug?.tiles?.[0]?.lightSlots?.[0];
+    if (!light?.id) throw new Error('native direct control missing caster light');
+    const target = new THREE.WebGLRenderTarget(width, height, { type: THREE.FloatType, format: THREE.RGBAFormat,
+      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false });
+    const luma = p => .2126 * p[0] + .7152 * p[1] + .0722 * p[2];
+    const capture = shadows => {
+      h.setShadowsEnabled(shadows); h.renderNow(); renderer.setRenderTarget(target); renderer.clear(); renderer.render(scene, camera);
+      return point => {
+        const ndc = new THREE.Vector3(point.x, point.y, point.z).project(camera);
+        if (ndc.x < -1 || ndc.x > 1 || ndc.y < -1 || ndc.y > 1) throw new Error('native control off screen');
+        const x = Math.max(0, Math.min(width - 1, Math.floor((ndc.x * .5 + .5) * width)));
+        const y = Math.max(0, Math.min(height - 1, Math.floor((ndc.y * .5 + .5) * height)));
+        const pixel = new Float32Array(4); renderer.readRenderTargetPixels(target, x, y, 1, 1, pixel);
+        return { pixel: Array.from(pixel), x, y };
+      };
+    };
+    h.setShadowDiagnostic({ directLightId: light.id, environmentIndirectScale: 0, environmentKeyScale: 0, shadowMode: 'filtered' });
+    try {
+      const offAt = capture(false), off = points.map(offAt);
+      const onAt = capture(true), on = points.map(onAt);
+      const rows = points.map((point, index) => ({ point, off: off[index], on: on[index],
+        ratio: luma(on[index].pixel) / Math.max(luma(off[index].pixel), 1e-12) }));
+      const error = gl.getError(); if (error !== gl.NO_ERROR) throw new Error('native direct GL error ' + error);
+      return { rows, light, glError: error };
+    } finally { h.setShadowDiagnostic(null); renderer.setRenderTarget(null); target.dispose(); }
+  }, points);
+}
+
 // The occluder's own rendered silhouette (its real 3D corners, not the
 // ground-projected footprint) in screen space, dilated a few px. Ground
 // sample points that land inside it would read the wing/body's own pixels,
@@ -587,6 +626,72 @@ test.describe('@scene wing shadow gate', () => {
     const err = Math.hypot(measuredOffset.x - predictedOffset.x, measuredOffset.z - predictedOffset.z);
     console.log('[wing-shadow-tilt-move]', JSON.stringify({ predictedOffset, measuredOffset, offsetLen, err }));
     expect(err).toBeLessThan(Math.max(0.15 * offsetLen, 1e-6));
+  });
+
+  // Independent of the centroid measurement above (still open): analytic
+  // ray-plane intersection predicts one point the wing blocks from the
+  // light and one point outside its footprint, and the native Float32
+  // readback (isolated to this one light) confirms which is actually dark.
+  function rayPlaneY(origin, direction, y) {
+    if (Math.abs(direction.y) < 1e-7) return null;
+    const t = (y - origin.y) / direction.y;
+    if (t <= 1e-7) return null;
+    return { t, x: origin.x + t * direction.x, y, z: origin.z + t * direction.z };
+  }
+  function insideWing(point, center, half) {
+    return point && Math.abs(point.x - center.x) <= half.x + 1e-7
+      && Math.abs(point.z - center.z) <= half.z + 1e-7;
+  }
+  function groundProjection(wingPoint, lightDirection) {
+    const hit = rayPlaneY(wingPoint, lightDirection, 0);
+    if (!hit) throw new Error('distant-light control does not reach ground');
+    return { x: hit.x, y: 0.01, z: hit.z };
+  }
+  function geometricControls(direction, wingCenter) {
+    const half = WING_HALF;
+    const receiver = groundProjection({ ...wingCenter }, direction);
+    const toLight = { x: -direction.x, y: -direction.y, z: -direction.z };
+    const wingHit = rayPlaneY(receiver, toLight, wingCenter.y);
+    const exterior = { x: receiver.x + half.x * 2.5, y: 0.01, z: receiver.z + half.z * 2.5 };
+    const exteriorHit = rayPlaneY(exterior, toLight, wingCenter.y);
+    return {
+      blocked: { ...receiver, expected: !!wingHit && insideWing(wingHit, wingCenter, half) },
+      exterior: { ...exterior, expected: !(exteriorHit && insideWing(exteriorHit, wingCenter, half)) },
+    };
+  }
+  async function sampleGeometricControls(page, embedURL, fixtureName, direction, wingCenter) {
+    await loadAndFrame(page, embedURL, fixtureName);
+    const vis = await captureVisibility(page);
+    const controls = geometricControls(direction, wingCenter);
+    const sampled = await sampleVisibility(page, vis, [
+      { ...controls.blocked, tag: 'analytic-blocked' },
+      { ...controls.exterior, tag: 'analytic-exterior' },
+    ]);
+    const blocked = sampled.find((sample) => sample.tag === 'analytic-blocked');
+    const exterior = sampled.find((sample) => sample.tag === 'analytic-exterior');
+    if (!blocked?.onScreen || !exterior?.onScreen) throw new Error(`analytic controls off-screen: ${JSON.stringify(sampled)}`);
+    const native = await sampleNativeDirect(page, [
+      { x: controls.blocked.x, y: controls.blocked.y, z: controls.blocked.z },
+      { x: controls.exterior.x, y: controls.exterior.y, z: controls.exterior.z },
+    ]);
+    return { controls, blocked, exterior, native };
+  }
+  test('moving the distant light tilt changes analytic blocked and exterior receiver visibility', async ({ page, embedURL }) => {
+    const base = await sampleGeometricControls(page, embedURL, 'shadow-wing-distant.usda', DISTANT_DIR, WING_CENTER_BASE);
+    const moved = await sampleGeometricControls(page, embedURL, 'shadow-wing-distant-moved.usda', DISTANT_MOVED_DIR, WING_CENTER_BASE);
+    console.log('[wing-shadow-geometric-tilt-controls]', JSON.stringify({ base, moved }));
+    expect(base.controls.blocked.expected).toBe(true);
+    expect(base.controls.exterior.expected).toBe(true);
+    expect(moved.controls.blocked.expected).toBe(true);
+    expect(moved.controls.exterior.expected).toBe(true);
+    expect(base.native.glError).toBe(0);
+    expect(moved.native.glError).toBe(0);
+    expect(base.native.rows[0].ratio).toBeLessThan(0.05);
+    expect(base.native.rows[1].ratio).toBeGreaterThan(0.9);
+    expect(moved.native.rows[0].ratio).toBeLessThan(0.05);
+    expect(moved.native.rows[1].ratio).toBeGreaterThan(0.9);
+    const offset = { x: moved.blocked.x - base.blocked.x, z: moved.blocked.z - base.blocked.z };
+    expect(Math.hypot(offset.x, offset.z)).toBeGreaterThan(0.25);
   });
 
   test('moving the wing moves the measured shadow centroid by the predicted offset', async ({ page, embedURL }) => {
