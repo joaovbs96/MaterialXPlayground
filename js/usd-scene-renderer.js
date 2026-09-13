@@ -1360,6 +1360,9 @@ const createMtlxSceneView = async ({
     // transmission_depth is still in source scene units; convert the measured
     // world-space path back to those units before applying absorption.
     let thicknessScale = 1;
+    // Soft clamp bound for mx_scene_refraction's reach heuristic (u_sceneRadius),
+    // set from the stage's real bounds once geometry is loaded.
+    let sceneRadius = 1;
     let aoEnabled = storedSceneAo();
     let aoStrength = storedSceneAoStrength();
     const disposeThicknessResources = () => {
@@ -1825,9 +1828,10 @@ const createMtlxSceneView = async ({
         camera.updateMatrixWorld(true);
         camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
         if (u.u_worldMatrix) u.u_worldMatrix.value.copy(object.matrixWorld);
-        if (u.u_viewProjectionMatrix) {
+        if (u.u_viewProjectionMatrix || u.u_viewProjectionInverseMatrix) {
             const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-            u.u_viewProjectionMatrix.value.copy(vp);
+            if (u.u_viewProjectionMatrix) u.u_viewProjectionMatrix.value.copy(vp);
+            if (u.u_viewProjectionInverseMatrix) u.u_viewProjectionInverseMatrix.value.copy(vp).invert();
         }
         if (u.u_worldInverseTransposeMatrix) u.u_worldInverseTransposeMatrix.value.copy(object.matrixWorld).invert().transpose();
         if (u.u_viewPosition) camera.getWorldPosition(u.u_viewPosition.value);
@@ -1951,7 +1955,7 @@ const createMtlxSceneView = async ({
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             envTilt,
-            thicknessScale, refractionTwoSided: true,
+            thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
             environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
             lightScales: diagnosticLightScales(),
@@ -2576,6 +2580,7 @@ const createMtlxSceneView = async ({
                 // automatic built-ins, and several objects can share one
                 // transfer material, so uniforms are pushed right before each render() call.
                 const shadowVp = new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+                const shadowVpInverse = new THREE.Matrix4().copy(shadowVp).invert();
                 const shadowEye = new THREE.Vector3();
                 shadowCamera.getWorldPosition(shadowEye);
                 active.forEach(({ object, transfer }) => {
@@ -2590,6 +2595,7 @@ const createMtlxSceneView = async ({
                     if (u.u_recordPass) u.u_recordPass.value = recordPass;
                     u.u_worldMatrix.value.copy(object.matrixWorld);
                     u.u_viewProjectionMatrix.value.copy(shadowVp);
+                    if (u.u_viewProjectionInverseMatrix) u.u_viewProjectionInverseMatrix.value.copy(shadowVpInverse);
                     u.u_worldInverseTransposeMatrix.value.copy(object.matrixWorld).invert().transpose();
                     u.u_viewPosition.value.copy(shadowEye);
                     u.u_recordDepthPlane.value.copy(depthPlane);
@@ -3774,9 +3780,19 @@ const createMtlxSceneView = async ({
         const applyThickness = (state, width, height) => {
             const dummy = (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
             const setMaterial = (material, target) => {
-                if (!material || !material.uniforms || !material.uniforms.u_thicknessMap) return;
+                if (!material || !material.uniforms) return;
                 const reference = Number(material.uniforms.transmission_depth && material.uniforms.transmission_depth.value);
                 const referencePath = target ? 0 : (Number.isFinite(reference) && reference > 0 ? reference : 0);
+                // A classified volume with a real thickness source; require
+                // u_opaqueColor too since the sampler budget can drop the
+                // feature from the shader independently of thickness.
+                if (material.uniforms.u_peelRefractsScene) {
+                    const validThickness = !!target || referencePath > 0;
+                    const wantsRefraction = !!material.uniforms.u_opaqueColor
+                        && !!(material.userData && material.userData.mtlxSceneVolume) && validThickness;
+                    material.uniforms.u_peelRefractsScene.value = wantsRefraction ? 1 : 0;
+                }
+                if (!material.uniforms.u_thicknessMap) return;
                 material.uniforms.u_thicknessMap.value = target ? target.texture : dummy;
                 if (material.uniforms.u_thicknessTexel && width && height) {
                     material.uniforms.u_thicknessTexel.value.set(1 / width, 1 / height);
@@ -3970,7 +3986,7 @@ const createMtlxSceneView = async ({
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
                     envTilt,
-                    thicknessScale, refractionTwoSided: true,
+                    thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,
                     environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
                     environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
@@ -4223,6 +4239,15 @@ const createMtlxSceneView = async ({
         await awaitTextureJobs(pendingTextures);
         if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
         const stageBox = new THREE.Box3().setFromObject(sceneRoot);
+        if (!stageBox.isEmpty()) {
+            sceneRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
+            // Materials were built during the geometry pass, before real
+            // bounds existed; applyMaterialEnvironment's copy filter does not
+            // reach this uniform, so push it onto every material directly.
+            for (const material of materials) {
+                if (material.uniforms && material.uniforms.u_sceneRadius) material.uniforms.u_sceneRadius.value = sceneRadius;
+            }
+        }
         if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
             environmentBridge.updateBounds(stageBox);
         }

@@ -3,10 +3,11 @@ import { test, expect } from './lib/test-base.mjs';
 // Nine distinct image nodes feed base_color, specular_roughness,
 // base_metalness, geometry_normal (via normalmap), emission_color,
 // coat_weight, subsurface_color, geometry_opacity and specular_color.
-// A Scene material also bakes ten fixed samplers (env radiance/irradiance,
+// A Scene material also bakes eleven fixed samplers (env radiance/irradiance,
 // shadow atlas, shadow transmittance, SSAO, sky vis, thickness,
-// peel-prev-depth, opaque depth), so this material alone exceeds
-// MAX_TEXTURE_IMAGE_UNITS=16.
+// peel-prev-depth, opaque depth, opaque colour), so this material alone
+// exceeds MAX_TEXTURE_IMAGE_UNITS=16; at budget 16 all four droppable
+// samplers (sky vis, thickness, transmittance, refraction) end up dropped.
 const TEXTURE_ROLES = [
   { name: 'base_color', file: 'tex0.png', type: 'color3', color: [230, 230, 230] },
   { name: 'specular_roughness', file: 'tex1.png', type: 'float', color: [70, 70, 70] },

@@ -1697,7 +1697,11 @@ const patchTransmissionThickness = (fs, { dropThicknessMap = false } = {}) => {
 // Folds transmission into peel-pass alpha (ESSL only writes it to RGB),
 // then mixes toward a Schlick NdotV rim so grazing angles read as
 // reflective glass instead of a flat, view-independent haze. Fail-soft.
-const patchTransmissionAlpha = (fs) => {
+// skipRefraction (sampler-budget drop) keeps the plain environment-term
+// return; refraction also needs the same HW varyings as the Fresnel rim
+// above plus the volumetric absorption anchor patchTransmissionThickness
+// keys off, so it shares both gates.
+const patchTransmissionAlpha = (fs, { skipRefraction = false } = {}) => {
     let weightName = null;
     if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';
     else if (/uniform\s+float\s+transmission\s*;/.test(fs)) weightName = 'transmission';
@@ -1742,12 +1746,82 @@ const patchTransmissionAlpha = (fs) => {
           '    }';
     let out = fs.slice(0, alphaInsertAt) + alphaFold + fs.slice(alphaInsertAt);
 
-    const gatedReturn =
-        'if (u_peelMode != 0) {\n' +
-        '        return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * ' + PEEL_REFRACTION_SCALE + ';\n' +
-        '    }\n    ' + returnAnchor;
+    // Camera-visible refraction through a solid transmitter, gated on the
+    // same varyings as the Fresnel rim plus the volumetric absorption
+    // anchor patchTransmissionThickness needs for mx_transmission_path_length().
+    const canRefract = !skipRefraction && hasFresnelVars
+        && fs.indexOf('vdf.throughput = exp(-absorption);') !== -1;
+
+    let refractionDecls = '';
+    let gatedReturn;
+    if (canRefract) {
+        const declIfAbsent = (line) => (out.indexOf(line) === -1 ? line + '\n' : '');
+        refractionDecls =
+            declIfAbsent('uniform int u_peelRefractsScene;') +
+            declIfAbsent('uniform highp sampler2D u_opaqueDepth;') +
+            // No precision qualifier: parseUniforms' regex cannot see one
+            // (same blind spot as u_peelPrevDepth/u_skyVisMap), and unlike
+            // u_opaqueDepth this uniform IS seeded through has() below.
+            declIfAbsent('uniform sampler2D u_opaqueColor;') +
+            declIfAbsent('uniform float u_opaqueColorLevels;') +
+            declIfAbsent('uniform float u_sceneRadius;') +
+            declIfAbsent('uniform mat4 u_viewProjectionMatrix;') +
+            declIfAbsent('uniform mat4 u_viewProjectionInverseMatrix;') +
+            declIfAbsent('bool mx_sceneRefractionMiss = false;') +
+            'float mx_transmission_path_length();\n' +
+            'vec3 mx_scene_refraction(vec3 N, vec3 V, vec2 alpha, FresnelData fd, vec3 tint, vec3 envTerm)\n' +
+            '{\n' +
+            '    if (u_peelRefractsScene == 0) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    float eta = 1.0 / max(fd.ior.x, 1.0);\n' +
+            '    vec3 dirIn = refract(-V, N, eta);\n' +
+            '    if (dot(dirIn, dirIn) == 0.0) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    float t = mx_transmission_path_length();\n' +
+            '    if (t <= 0.0) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    vec3 Pexit = positionWorld + dirIn * t;\n' +
+            '    vec4 exitClip = u_viewProjectionMatrix * vec4(Pexit, 1.0);\n' +
+            '    if (exitClip.w <= 0.0) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    vec2 exitUv = (exitClip.xy / exitClip.w) * 0.5 + 0.5;\n' +
+            // Reach: distance from the exit point to the opaque background,
+            // via unprojecting that background sample and comparing camera
+            // distances. A thin slab has no reach; a thick one shifts more.
+            '    float exitOpaqueRaw = texture(u_opaqueDepth, exitUv).r;\n' +
+            '    vec4 exitOpaqueClip = vec4(exitUv * 2.0 - 1.0, exitOpaqueRaw * 2.0 - 1.0, 1.0);\n' +
+            '    vec4 exitOpaqueWorldH = u_viewProjectionInverseMatrix * exitOpaqueClip;\n' +
+            '    if (abs(exitOpaqueWorldH.w) < 1e-8) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    vec3 exitOpaqueWorld = exitOpaqueWorldH.xyz / exitOpaqueWorldH.w;\n' +
+            '    float reach = max(distance(exitOpaqueWorld, u_viewPosition) - distance(Pexit, u_viewPosition), 0.0);\n' +
+            '    reach = clamp(reach, 0.0, 4.0 * t + 0.1 * u_sceneRadius);\n' +
+            // refract() needs dot(normal, incident) <= 0; dirIn already
+            // satisfies that against N (not -N) at this second interface,
+            // so reusing N is what keeps the eta=1 case an exact identity.
+            '    vec3 dirOut = refract(dirIn, N, 1.0 / eta);\n' +
+            '    if (dot(dirOut, dirOut) == 0.0) dirOut = dirIn;\n' + // TIR on exit: bounded, no internal bounce
+            '    vec3 Ps = Pexit + dirOut * reach;\n' +
+            '    vec4 sampleClip = u_viewProjectionMatrix * vec4(Ps, 1.0);\n' +
+            '    if (sampleClip.w <= 0.0) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    vec2 uvS = (sampleClip.xy / sampleClip.w) * 0.5 + 0.5;\n' +
+            '    if (uvS.x < 0.0 || uvS.x > 1.0 || uvS.y < 0.0 || uvS.y > 1.0) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            // Disocclusion: a nearer opaque sample than this fragment's own
+            // depth is a foreground object, not the true background.
+            '    float zS = texture(u_opaqueDepth, uvS).r;\n' +
+            '    if (zS < gl_FragCoord.z) { mx_sceneRefractionMiss = true; return envTerm; }\n' +
+            '    float lod = clamp(alpha.x * u_opaqueColorLevels, 0.0, u_opaqueColorLevels);\n' +
+            '    return textureLod(u_opaqueColor, uvS, lod).rgb * tint;\n' +
+            '}\n';
+        gatedReturn =
+            'if (u_peelMode != 0) {\n' +
+            '        vec3 envTerm = mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * ' + PEEL_REFRACTION_SCALE + ';\n' +
+            '        if (u_peelRefractsScene == 0) return envTerm;\n' +
+            '        return mx_scene_refraction(N, V, alpha, fd, tint, envTerm);\n' +
+            '    }\n    ' + returnAnchor;
+    } else {
+        gatedReturn =
+            'if (u_peelMode != 0) {\n' +
+            '        return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * ' + PEEL_REFRACTION_SCALE + ';\n' +
+            '    }\n    ' + returnAnchor;
+    }
     out = out.slice(0, returnIdx) + gatedReturn + out.slice(returnIdx + returnAnchor.length);
-    out = out.slice(0, transFnIdx) + 'uniform int u_peelMode;\n' + out.slice(transFnIdx);
+    out = out.slice(0, transFnIdx) + refractionDecls + 'uniform int u_peelMode;\n' + out.slice(transFnIdx);
 
     return out;
 };
@@ -1766,8 +1840,15 @@ const patchRgbtPayload = (fs) => {
         const bodyIdx = out.indexOf('{', transFnIdx);
         if (bodyIdx === -1) supported = false;
         else if (out.indexOf('u_peelRgbt', transFnIdx) === -1) {
+            // RGB-T mode returns tint directly; a refracting material
+            // instead samples the opaque colour buffer along its bent ray
+            // here, ahead of that short circuit.
+            const hasRefraction = out.lastIndexOf('vec3 mx_scene_refraction', transFnIdx) !== -1;
+            const rgbtReturn = hasRefraction
+                ? 'if (u_peelRgbt != 0) { if (u_peelRefractsScene != 0) return mx_scene_refraction(N, V, alpha, fd, tint, tint); return tint; }'
+                : 'if (u_peelRgbt != 0) return tint;';
             out = out.slice(0, bodyIdx + 1) +
-                '\n    if (u_peelRgbt != 0) return tint;\n' + out.slice(bodyIdx + 1);
+                '\n    ' + rgbtReturn + '\n' + out.slice(bodyIdx + 1);
         }
     }
     // Restrict the replacement to the generated viewing-transmission section
@@ -1795,7 +1876,10 @@ const patchRgbtPayload = (fs) => {
         const terminal = match[0];
         const lhs = match[1];
         const rhs = match[2];
-        const routed = 'if (u_peelRgbt != 0) ' + lhs + '.transparency = clamp(' + rhs + '.response, vec3(0.0), vec3(1.0));\n' +
+        // A refracting hit's response is a real colour sample, not a tint;
+        // it belongs in C like an ordinary BSDF term. A miss (flag set
+        // inside mx_scene_refraction) still routes to T as usual.
+        const routed = 'if (u_peelRgbt != 0 && (u_peelRefractsScene == 0 || mx_sceneRefractionMiss)) ' + lhs + '.transparency = clamp(' + rhs + '.response, vec3(0.0), vec3(1.0));\n' +
             '    else ' + terminal;
         const at = begin + match.index;
         out = out.slice(0, at) + routed + out.slice(at + terminal.length);
@@ -1825,8 +1909,12 @@ const patchRgbtPayload = (fs) => {
             if (!surfaceMatch) supported = false;
             const surfaceVar = surfaceMatch ? surfaceMatch[1] : '';
             const injectAt = om.index + om[0].length;
+            // A refracting hit's colour already landed in C above; writing
+            // it into T too would double it via the compositor's t*opaque
+            // term, so T is zeroed there. A miss still writes T normally.
             out = out.slice(0, injectAt) +
-                '\n    if (u_peelRgbt != 0 && u_peelRgbtPass == 1) ' + v + ' = vec4(' + surfaceVar + '.transparency, 1.0);' +
+                '\n    if (u_peelRgbt != 0 && u_peelRgbtPass == 1) ' + v +
+                ' = (u_peelRefractsScene != 0 && !mx_sceneRefractionMiss) ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(' + surfaceVar + '.transparency, 1.0);' +
                 out.slice(injectAt);
         }
         // Clear transmissive emission has outAlpha=0 but still contributes C;
@@ -1847,6 +1935,15 @@ const patchRgbtPayload = (fs) => {
     if (firstFn === -1) return original;
     if (out.indexOf('uniform int u_peelRgbt;') === -1) {
         out = out.slice(0, firstFn) + decl + out.slice(firstFn);
+    }
+    // The T-zero gate above always needs these; patchTransmissionAlpha may
+    // already have declared them (refraction path) or may not have run at
+    // all for this shading model, so guard separately here too.
+    if (out.indexOf('uniform int u_peelRefractsScene;') === -1) {
+        out = out.slice(0, firstFn) + 'uniform int u_peelRefractsScene;\n' + out.slice(firstFn);
+    }
+    if (out.indexOf('bool mx_sceneRefractionMiss') === -1) {
+        out = out.slice(0, firstFn) + 'bool mx_sceneRefractionMiss = false;\n' + out.slice(firstFn);
     }
     // patchTransmissionAlpha runs first to preserve the complete legacy
     // source; its scalar floor is disabled only while RGB-T is active.
@@ -5583,6 +5680,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
     const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
     const skipTransmittance = !!(sceneFeatureOptions && sceneFeatureOptions.skipTransmittance);
+    const skipRefraction = !!(sceneFeatureOptions && sceneFeatureOptions.skipRefraction);
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -5719,7 +5817,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         fs = encodeDisplay(fs);
     }
     // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
-    fs = patchTransmissionAlpha(fs);
+    fs = patchTransmissionAlpha(fs, { skipRefraction });
     let payloadSupported = false;
     if (sceneRgbt) {
         fs = patchRgbtPayload(fs);
@@ -5773,18 +5871,19 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
 // generatePreviewSourcesUnlocked directly, to avoid overlapping wasm ops.
 const generatePreviewSources = (...args) => mxExclusive(() => generatePreviewSourcesUnlocked(...args));
 
-// ANGLE D3D11 reports 16 texture image units; a Scene material bakes nine
-// fixed samplers plus one per texture, so nine textures already exceed it.
+// ANGLE D3D11 reports 16 texture image units; a Scene material bakes eleven
+// fixed samplers plus one per texture, so eleven textures already exceed it.
 // Fallback default only: real callers pass gl.MAX_TEXTURE_IMAGE_UNITS.
 const DEFAULT_SAMPLER_BUDGET = 16;
 
 // Drop order when a program exceeds the sampler budget; each { key, label }
 // is a sceneFeatureOptions flag of generatePreviewSourcesUnlocked. Append
-// future samplers here (transmittance records, refraction colour mips).
+// future samplers here.
 const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)' },
     { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)' },
     { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)' },
+    { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)' },
 ];
 
 // Scene-view material compiler. This deliberately exposes the preview shader
@@ -5835,7 +5934,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5974,6 +6073,14 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     // twice. MaterialXView sets this from the geometry; a USD stage's
     // transmissive props are solids, so this follows the peel state.
     if (has('u_refractionTwoSided')) uniforms.u_refractionTwoSided = { value: !!refractionTwoSided };
+    // mx_scene_refraction: u_opaqueColor/Levels bind per peel pass like
+    // u_opaqueDepth (white default is an inert no-op); u_peelRefractsScene
+    // starts off until applyThickness classifies a real thickness source.
+    if (has('u_opaqueColor')) uniforms.u_opaqueColor = { value: getDummyTexWhite() };
+    if (has('u_opaqueColorLevels')) uniforms.u_opaqueColorLevels = { value: 0 };
+    if (has('u_peelRefractsScene')) uniforms.u_peelRefractsScene = { value: 0 };
+    if (has('u_sceneRadius')) uniforms.u_sceneRadius = { value: Math.max(0, Number(sceneRadius) || 0) };
+    if (has('u_viewProjectionInverseMatrix')) uniforms.u_viewProjectionInverseMatrix = { value: new THREE.Matrix4() };
     if (has('u_shadowMap')) uniforms.u_shadowMap = { value: shadowMap || getDummyTexWhite() };
     if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = { value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix() };
     if (has('u_lightData')) {
@@ -6759,10 +6866,11 @@ const createRgbtPeelPipeline = (renderer, {
         if (!resources) return;
         [resources.opaque, resources.layerC0, resources.layerC1, resources.layerT,
             resources.tail, resources.c0, resources.c1,
-            resources.t0, resources.t1].forEach(disposeTarget);
+            resources.t0, resources.t1, resources.opaqueMips].forEach(disposeTarget);
         if (resources.quad && resources.quad.geometry) resources.quad.geometry.dispose();
         [resources.initMat, resources.updateCMat, resources.updateTMat,
-            resources.tailFoldMat, resources.tailTMat, resources.finalMat].forEach((m) => { if (m) m.dispose(); });
+            resources.tailFoldMat, resources.tailTMat, resources.finalMat,
+            resources.copyOpaqueMat].forEach((m) => { if (m) m.dispose(); });
         if (opaqueDiscardMaterial) { opaqueDiscardMaterial.dispose(); opaqueDiscardMaterial = null; }
         resources = null;
     };
@@ -6794,6 +6902,20 @@ const createRgbtPeelPipeline = (renderer, {
         const tail = target(w, h, false);
         const c0 = target(w, h), c1 = target(w, h);
         const t0 = target(w, h), t1 = target(w, h);
+        // Opaque colour mips for mx_scene_refraction. No half-float-linear
+        // means nearest-across-levels instead (still real LOD blur, just
+        // blockier); refractionLod in debug() reports which one.
+        const halfLinearOk = !!renderer.extensions.get('OES_texture_half_float_linear');
+        const opaqueMips = new THREE.WebGLRenderTarget(w, h, {
+            minFilter: halfLinearOk ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter,
+            magFilter: THREE.LinearFilter,
+            format: THREE.RGBAFormat,
+            type: THREE.HalfFloatType,
+            depthBuffer: false,
+            stencilBuffer: false,
+            generateMipmaps: true,
+        });
+        const opaqueColorLevels = Math.floor(Math.log2(Math.max(w, h, 1)));
         const quadScene = new THREE.Scene();
         const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
         const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
@@ -6875,9 +6997,19 @@ const createRgbtPeelPipeline = (renderer, {
             blending: THREE.NoBlending,
             depthTest: false, depthWrite: false,
         });
+        // Fullscreen copy of the opaque colour target into its mip chain,
+        // run once per render() after the opaque pass (see render() below).
+        const copyOpaqueMat = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: quadVertex,
+            fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D u_src; void main(){o=texture(u_src,vUv);}\n',
+            uniforms: { u_src: { value: null } },
+            depthTest: false, depthWrite: false,
+        });
         resources = { w, h, opaque, layerC0, layerC1, layerT, tail, c0, c1, t0, t1,
+            opaqueMips, opaqueColorLevels, halfLinearOk,
             quadScene, quadCam, quad, initMat, updateCMat, updateTMat,
-            tailFoldMat, tailTMat, finalMat };
+            tailFoldMat, tailTMat, finalMat, copyOpaqueMat };
         quad.material = initMat;
         renderer.compile(quadScene, quadCam);
         quad.material = updateCMat;
@@ -6889,6 +7021,8 @@ const createRgbtPeelPipeline = (renderer, {
         quad.material = tailTMat;
         renderer.compile(quadScene, quadCam);
         quad.material = finalMat;
+        renderer.compile(quadScene, quadCam);
+        quad.material = copyOpaqueMat;
         renderer.compile(quadScene, quadCam);
     };
     const renderQuad = (material, targetRT, face = 0, mip = 0) => {
@@ -7041,6 +7175,21 @@ const createRgbtPeelPipeline = (renderer, {
             renderer.setClearColor(oldClearColor, opts.outputLinear ? oldClearAlpha : 0);
             renderer.clear(true, true, true);
             renderer.render(scene, camera);
+            // A raw quad blit is not a path three.js always regenerates
+            // mips for, so call gl.generateMipmap() explicitly: an
+            // incomplete mip chain reads as a solid colour, not an error.
+            resources.copyOpaqueMat.uniforms.u_src.value = resources.opaque.texture;
+            renderQuad(resources.copyOpaqueMat, resources.opaqueMips);
+            {
+                const gl = renderer.getContext();
+                const glTex = renderer.properties.get(resources.opaqueMips.texture).__webglTexture;
+                if (glTex) {
+                    const prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D);
+                    gl.bindTexture(gl.TEXTURE_2D, glTex);
+                    gl.generateMipmap(gl.TEXTURE_2D);
+                    gl.bindTexture(gl.TEXTURE_2D, prevTex);
+                }
+            }
             setPayloadSubmaterials(false);
             hideOtherMeshes();
             // C starts at zero; T starts at one.  C/T are kept in distinct
@@ -7062,6 +7211,8 @@ const createRgbtPeelPipeline = (renderer, {
                 if (mu.u_peelHasPrev) mu.u_peelHasPrev.value = prevDepth ? 1 : 0;
                 if (mu.u_peelPrevDepth) mu.u_peelPrevDepth.value = prevDepth || getDummyTex();
                 if (mu.u_opaqueDepth) mu.u_opaqueDepth.value = resources.opaque.depthTexture;
+                if (mu.u_opaqueColor) mu.u_opaqueColor.value = resources.opaqueMips.texture;
+                if (mu.u_opaqueColorLevels) mu.u_opaqueColorLevels.value = resources.opaqueColorLevels;
                 if (mu.u_peelRgbtLayer) mu.u_peelRgbtLayer.value = i;
                 });
             setPass(0);
@@ -7165,7 +7316,9 @@ const createRgbtPeelPipeline = (renderer, {
     // depthTexture) for a headed diagnosis harness. Null before the
     // first render() call has allocated resources.
     return { render, supported: halfOk, dispose: free,
-        debug: () => ({ opaque: resources ? resources.opaque : null }) };
+        debug: () => ({ opaque: resources ? resources.opaque : null,
+            opaqueMips: resources ? resources.opaqueMips : null,
+            refractionLod: resources ? (resources.halfLinearOk ? 'hardware' : 'manual') : null }) };
 };
 
 // createPeelPipeline(renderer, { getDisplayTransform, getDisplayExposure }): reusable depth-
