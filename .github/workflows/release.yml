@@ -333,6 +333,9 @@ jobs:
           # binary is root-owned with mode 4755 (the message it prints).
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -y && sudo apt-get install -y xvfb
+            # The binary is fetched lazily on first launch, so fetch it now
+            # (idempotent) before fixing the helper's owner and mode.
+            (cd electron && node node_modules/electron/install.js)
             SANDBOX=electron/node_modules/electron/dist/chrome-sandbox
             sudo chown root:root "$SANDBOX" && sudo chmod 4755 "$SANDBOX"
             xvfb-run -a node electron/scripts/dev.mjs --smoke --skip-gallery
