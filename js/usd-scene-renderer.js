@@ -1695,7 +1695,9 @@ const createMtlxSceneView = async ({
             return candidates.find((candidate) => fileMap[candidate]) || candidates[0];
         }
         if (/^\(.*\)$/.test(raw)) return raw.slice(1, -1).split(',').map((v) => v.trim()).join(', ');
-        return raw; // bool/number/plain string, verbatim
+        // USD writes bools as 1/0 or true/false; MaterialX parses only the words.
+        if (declaredType === 'boolean') return /^(1|true)$/i.test(raw) ? 'true' : 'false';
+        return raw; // number/plain string, verbatim
     };
     // Applies one material record's overrides onto its freshly parsed
     // document, before generation. `matchedNode` is the surface shader
