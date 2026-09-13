@@ -291,6 +291,9 @@
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
+        const [ssrOn, setSsrOn] = React.useState(true);
+        const [ssrStrength, setSsrStrength] = React.useState(1);
+        const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
         const [skyVisOn, setSkyVisOn] = React.useState(true);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
         const [transparentPrims, setTransparentPrims] = React.useState([]);
@@ -509,6 +512,12 @@
                         setAoOn(ao.enabled);
                         setAoStrength(ao.strength);
                     }
+                    if (nextHandle.getScreenSpaceReflections) {
+                        const ssr = nextHandle.getScreenSpaceReflections();
+                        setSsrOn(ssr.enabled);
+                        setSsrStrength(ssr.strength);
+                        setSsrMaxRoughness(ssr.maxRoughness);
+                    }
                     const transparencyEnabled = typeof window.getUsdSceneTransparency === 'function'
                         ? !!window.getUsdSceneTransparency() : sceneTransparency;
                     if (nextHandle.getTransparentPrims && transparencyEnabled) {
@@ -639,6 +648,18 @@
             if (!Number.isFinite(value)) return;
             setAoStrength(value);
             callHandle('setAmbientOcclusionStrength', value);
+        };
+        const applySsrStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setSsrStrength(value);
+            callHandle('setScreenSpaceReflectionStrength', value);
+        };
+        const applySsrMaxRoughness = (raw) => {
+            const value = Math.max(0.05, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setSsrMaxRoughness(value);
+            callHandle('setScreenSpaceReflectionMaxRoughness', value);
         };
         const applySkyVisStrength = (raw) => {
             const value = Math.max(0, Math.min(1, Number(raw)));
@@ -1152,6 +1173,44 @@
                                     onSlider={(v) => applyAoStrength(v)}
                                     onNumber={(v) => applyAoStrength(v)}
                                 />
+                            ) : null}
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Screen-space reflections
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={ssrOn}
+                                    onChange={(next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Traces a screen-space ray through last frame's colour buffer for a reflection, falling back to the environment when it misses. Screen space, so it only knows about geometry on screen.
+                            </div>
+                            {ssrOn ? (
+                                <React.Fragment>
+                                    <SliderField
+                                        label="Reflection strength"
+                                        value={ssrStrength}
+                                        min={0}
+                                        max={1}
+                                        step={0.05}
+                                        onSlider={(v) => applySsrStrength(v)}
+                                        onNumber={(v) => applySsrStrength(v)}
+                                    />
+                                    <SliderField
+                                        label="Reflection max roughness"
+                                        value={ssrMaxRoughness}
+                                        min={0.05}
+                                        max={1}
+                                        step={0.05}
+                                        onSlider={(v) => applySsrMaxRoughness(v)}
+                                        onNumber={(v) => applySsrMaxRoughness(v)}
+                                    />
+                                </React.Fragment>
                             ) : null}
                             {stageLightsOn ? (
                                 <SliderField

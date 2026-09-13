@@ -128,6 +128,9 @@ test('@scene weights blocker coverage in the GPU AO buffer without weighting the
     window.localStorage.setItem('mtlx_scene_ao', '1');
     window.localStorage.setItem('mtlx_scene_skyvis', '0');
     window.localStorage.setItem('mtlx_scene_shadows', '0');
+    // SSR forces the shared prepass to full resolution; keep it off so the
+    // AO buffer stays at its own half-resolution size, as asserted below.
+    window.localStorage.setItem('mtlx_scene_ssr', '0');
     const env = await window.getMxEnv();
     const makeXml = (transmission) => `<materialx version="1.39">
       <standard_surface name="surface" type="surfaceshader">

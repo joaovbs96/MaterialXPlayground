@@ -97,6 +97,34 @@ const storedSceneAoStrength = () => {
     } catch (e) { return 0.7; }
 };
 
+// Screen-space reflections: a history-reprojected trace for opaque
+// surfaces, image based (IBL) as the fallback. Default on.
+const SCENE_SSR_KEY = 'mtlx_scene_ssr';
+const SCENE_SSR_STRENGTH_KEY = 'mtlx_scene_ssr_strength';
+const SCENE_SSR_MAX_ROUGHNESS_KEY = 'mtlx_scene_ssr_max_roughness';
+const storedSceneSsr = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SSR_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneSsrStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const raw = localStorage.getItem(SCENE_SSR_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
+};
+const storedSceneSsrMaxRoughness = () => {
+    if (window.top !== window) return 0.5;
+    try {
+        const raw = localStorage.getItem(SCENE_SSR_MAX_ROUGHNESS_KEY);
+        if (raw == null || raw === '') return 0.5;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0.05, Math.min(1, value)) : 0.5;
+    } catch (e) { return 0.5; }
+};
+
 // Default on. Shadows are what makes objects sit in a scene rather than float
 // in it, and the cost is bounded: the atlas is redrawn only when the camera
 // actually moves, and the caster count drops on very large stages.
@@ -1390,12 +1418,37 @@ const createMtlxSceneView = async ({
     // every frame the camera moves, because the whole term is screen space.
     let aoTarget = null;
     let aoBlurTarget = null;
-    let aoPrepassTarget = null;
+    // Depth/normal prepass, shared by AO and SSR. Ping-ponged: the slot NOT
+    // rendered this frame still holds last frame's data, the opaque depth
+    // source SSR reprojects a reflection ray against.
+    let prepassTargets = [null, null];
+    let prepassIndex = 0;
+    // captureSsrHistory swaps prepassIndex at the END of the frame, so a
+    // debug caller reading __debug() AFTER renderNow() returns would see
+    // the NEXT slot to render into, not the one just rendered. Track the
+    // just-rendered slot separately for that external read.
+    let debugPrepassIndex = 0;
     let aoPrepassMaterial = null;
     let aoMaterial = null;
     let aoBlurMaterial = null;
     let aoQuadScene = null;
     let aoQuadCamera = null;
+    // Screen-space reflections: a scene-linear history buffer (previous
+    // frame's presented colour) reprojected along the reflection ray.
+    let ssrEnabled = storedSceneSsr();
+    let ssrStrength = storedSceneSsrStrength();
+    let ssrMaxRoughness = storedSceneSsrMaxRoughness();
+    let ssrHistoryTarget = null;
+    let ssrHistoryLevels = 0;
+    let ssrCopyMaterial = null;
+    let ssrQuadScene = null;
+    let ssrQuadCamera = null;
+    let ssrQuad = null;
+    let historyValid = false;
+    let historyViewProjection = new THREE.Matrix4();
+    let historyViewProjectionInverse = new THREE.Matrix4();
+    let historyEye = new THREE.Vector3();
+    let ssrHistoryWarned = false;
     // `thicknessTarget` remains the first allocated target for the existing
     // diagnostic hook. Rendering and binding use the per-object map below.
     let thicknessTarget = null;
@@ -1460,10 +1513,29 @@ const createMtlxSceneView = async ({
         if (thicknessDiscardMaterial) { thicknessDiscardMaterial.dispose(); thicknessDiscardMaterial = null; }
         thicknessCamera = null;
     };
+    const disposePrepassResources = () => {
+        prepassTargets.forEach((rt, i) => {
+            if (!rt) return;
+            if (rt.depthTexture) rt.depthTexture.dispose();
+            rt.dispose();
+            prepassTargets[i] = null;
+        });
+        prepassIndex = 0;
+    };
+    const disposeSsrHistoryResources = () => {
+        if (ssrHistoryTarget) { ssrHistoryTarget.dispose(); ssrHistoryTarget = null; }
+        if (ssrCopyMaterial) { ssrCopyMaterial.dispose(); ssrCopyMaterial = null; }
+        if (ssrQuad && ssrQuad.geometry) ssrQuad.geometry.dispose();
+        ssrQuad = null;
+        ssrQuadScene = null;
+        ssrQuadCamera = null;
+        historyValid = false;
+    };
     const disposeAoResources = () => {
         if (aoTarget) { aoTarget.dispose(); aoTarget = null; }
         if (aoBlurTarget) { aoBlurTarget.dispose(); aoBlurTarget = null; }
-        if (aoPrepassTarget) { aoPrepassTarget.dispose(); aoPrepassTarget = null; }
+        disposePrepassResources();
+        disposeSsrHistoryResources();
         if (aoPrepassMaterial) { aoPrepassMaterial.dispose(); aoPrepassMaterial = null; }
         if (aoMaterial) { aoMaterial.dispose(); aoMaterial = null; }
         if (aoBlurMaterial) { aoBlurMaterial.dispose(); aoBlurMaterial = null; }
@@ -3422,51 +3494,46 @@ const createMtlxSceneView = async ({
         // Renders the AO buffer for the current camera. Cheap enough to run
         // per frame at half resolution, and it has to: the term is screen
         // space, so it is invalid the moment the camera moves.
-        const updateAmbientOcclusion = (outputSize = null) => {
-            if (!aoEnabled || !sceneRoot) return null;
+        // Shared view-depth/normal prepass: AO's own hemisphere sampling reads
+        // this frame's slot, SSR's opaque-depth reprojection reads the OTHER
+        // (previous frame's, untouched this frame) slot. See prepassTargets.
+        const updateDepthPrepass = (outputSize = null) => {
+            if (!sceneRoot) return null;
             // gl_FragCoord is in the final caller destination's pixel space.
             // The HDR presenter can render into an offscreen target whose
-            // dimensions differ from the canvas drawing buffer, so AO must be
-            // allocated and sampled against that destination, not the canvas.
+            // dimensions differ from the canvas drawing buffer, so this must
+            // be allocated and sampled against that destination, not the canvas.
             const size = outputSize || renderer.getDrawingBufferSize(new THREE.Vector2());
-            const aw = Math.max(1, Math.floor(size.x * AO_SCALE));
-            const ah = Math.max(1, Math.floor(size.y * AO_SCALE));
-            if (aoTarget && (aoTarget.width !== aw || aoTarget.height !== ah)) disposeAoResources();
-            if (!aoTarget) {
+            const scale = ssrEnabled ? 1.0 : AO_SCALE;
+            const pw = Math.max(1, Math.floor(size.x * scale));
+            const ph = Math.max(1, Math.floor(size.y * scale));
+            const existing = prepassTargets[0] || prepassTargets[1];
+            if (existing && (existing.width !== pw || existing.height !== ph)) disposePrepassResources();
+            if (!prepassTargets[0]) {
                 const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
                     && !!renderer.extensions.get('EXT_color_buffer_float');
-                // The prepass packs a real view depth into alpha, so it needs
-                // more range than 8 bits; AO itself is a single [0,1] factor.
-                aoPrepassTarget = new THREE.WebGLRenderTarget(aw, ah, {
-                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-                    format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
-                    depthBuffer: true, stencilBuffer: false,
-                });
-                const plain = {
-                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
-                    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-                    depthBuffer: false, stencilBuffer: false,
-                    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
-                };
-                aoTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
-                aoBlurTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+                for (let i = 0; i < 2; i++) {
+                    // The prepass packs a real view depth into alpha, so it
+                    // needs more range than 8 bits; AO itself is [0,1].
+                    const rt = new THREE.WebGLRenderTarget(pw, ph, {
+                        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                        format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                        depthBuffer: true, stencilBuffer: false,
+                    });
+                    // NDC depth, same convention as the RGB-T opaque depth
+                    // texture: SSR's ray march samples it directly.
+                    rt.depthTexture = new THREE.DepthTexture(pw, ph, THREE.UnsignedIntType);
+                    rt.depthTexture.minFilter = THREE.NearestFilter;
+                    rt.depthTexture.magFilter = THREE.NearestFilter;
+                    prepassTargets[i] = rt;
+                }
+            }
+            if (!aoPrepassMaterial) {
                 aoPrepassMaterial = createAoPrepassMaterial();
                 aoPrepassMaterial.uniforms = { uCoverage: { value: 1 } };
-                aoMaterial = createAoMaterial();
-                aoMaterial.uniforms = {
-                    tPrepass: { value: null }, uProjection: { value: new THREE.Matrix4() },
-                    uInverseProjection: { value: new THREE.Matrix4() }, uSize: { value: new THREE.Vector2() },
-                    uRadius: { value: 1 }, uBias: { value: 0.01 }, uOrthographic: { value: 0 },
-                };
-                aoBlurMaterial = createAoBlurMaterial();
-                aoBlurMaterial.uniforms = {
-                    tAo: { value: null }, tPrepass: { value: null }, uTexel: { value: new THREE.Vector2() },
-                    uDepthThreshold: { value: 0.01 }, uNormalExponent: { value: 8 },
-                };
-                aoQuadScene = new THREE.Scene();
-                aoQuadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial));
-                aoQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
             }
+            const target = prepassTargets[prepassIndex];
+            debugPrepassIndex = prepassIndex;
             // Backdrop and shadow catcher would occlude the whole stage. Keep
             // partial/unknown transmission in this prepass so its static
             // opaque contribution still participates in contact AO.
@@ -3493,7 +3560,7 @@ const createMtlxSceneView = async ({
             const previousOverrideMaterial = scene.overrideMaterial;
             try {
                 scene.overrideMaterial = aoPrepassMaterial;
-                renderer.setRenderTarget(aoPrepassTarget);
+                renderer.setRenderTarget(target);
                 renderer.setClearColor(0x000000, 0); // alpha 0 marks "no geometry"
                 renderer.clear();
                 renderer.render(scene, camera);
@@ -3505,13 +3572,60 @@ const createMtlxSceneView = async ({
                 restoreRendererDestination(previousDestination);
                 renderer.setClearColor(previousClearColor, previousClearAlpha);
             }
-
+            return target.texture;
+        };
+        const updateAmbientOcclusion = (outputSize = null) => {
+            if (!aoEnabled || !sceneRoot) return null;
+            const prepass = prepassTargets[prepassIndex];
+            if (!prepass) return null;
+            const size = outputSize || renderer.getDrawingBufferSize(new THREE.Vector2());
+            const aw = Math.max(1, Math.floor(size.x * AO_SCALE));
+            const ah = Math.max(1, Math.floor(size.y * AO_SCALE));
+            // AO's own targets stay at AO_SCALE regardless of the shared
+            // prepass's resolution; both are sampled by normalised uv.
+            if (aoTarget && (aoTarget.width !== aw || aoTarget.height !== ah)) {
+                aoTarget.dispose(); aoTarget = null;
+                if (aoBlurTarget) { aoBlurTarget.dispose(); aoBlurTarget = null; }
+            }
+            if (!aoTarget) {
+                const plain = {
+                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+                    depthBuffer: false, stencilBuffer: false,
+                    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+                };
+                aoTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+                aoBlurTarget = new THREE.WebGLRenderTarget(aw, ah, plain);
+            }
+            if (!aoMaterial) {
+                aoMaterial = createAoMaterial();
+                aoMaterial.uniforms = {
+                    tPrepass: { value: null }, uProjection: { value: new THREE.Matrix4() },
+                    uInverseProjection: { value: new THREE.Matrix4() }, uSize: { value: new THREE.Vector2() },
+                    uRadius: { value: 1 }, uBias: { value: 0.01 }, uOrthographic: { value: 0 },
+                };
+            }
+            if (!aoBlurMaterial) {
+                aoBlurMaterial = createAoBlurMaterial();
+                aoBlurMaterial.uniforms = {
+                    tAo: { value: null }, tPrepass: { value: null }, uTexel: { value: new THREE.Vector2() },
+                    uDepthThreshold: { value: 0.01 }, uNormalExponent: { value: 8 },
+                };
+            }
+            if (!aoQuadScene) {
+                aoQuadScene = new THREE.Scene();
+                aoQuadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial));
+                aoQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            }
+            const previousDestination = snapshotRendererDestination();
+            const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
+            const previousClearAlpha = renderer.getClearAlpha();
             try {
             // Radius in world units, scaled to the stage so one setting works
             // for a teapot and for a room.
             const box = new THREE.Box3().setFromObject(sceneRoot);
             const radius = box.isEmpty() ? 1 : Math.max(1e-6, box.getSize(new THREE.Vector3()).length() * 0.5);
-            aoMaterial.uniforms.tPrepass.value = aoPrepassTarget.texture;
+            aoMaterial.uniforms.tPrepass.value = prepass.texture;
             aoMaterial.uniforms.uProjection.value.copy(camera.projectionMatrix);
             aoMaterial.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
             aoMaterial.uniforms.uSize.value.set(aw, ah);
@@ -3534,7 +3648,7 @@ const createMtlxSceneView = async ({
             renderer.render(aoQuadScene, aoQuadCamera);
 
             aoBlurMaterial.uniforms.tAo.value = aoTarget.texture;
-            aoBlurMaterial.uniforms.tPrepass.value = aoPrepassTarget.texture;
+            aoBlurMaterial.uniforms.tPrepass.value = prepass.texture;
             aoBlurMaterial.uniforms.uTexel.value.set(1 / aw, 1 / ah);
             aoBlurMaterial.uniforms.uDepthThreshold.value = Math.max(1e-6, aoMaterial.uniforms.uRadius.value * 0.25);
             aoBlurMaterial.uniforms.uNormalExponent.value = 8;
@@ -3564,6 +3678,116 @@ const createMtlxSceneView = async ({
                     material.uniforms.u_ssaoStrength.value = texture ? aoStrength : 0;
                 }
             }
+        };
+        // Feeds every material this frame's SSR uniforms: the PREVIOUS
+        // frame's history colour/depth for opaque surfaces (peel layers get
+        // the current frame instead, see mtlx-engine.js's per-pass binding).
+        const applySsrHistory = () => {
+            const prevTarget = prepassTargets[1 - prepassIndex];
+            const on = ssrEnabled && historyValid && !!prevTarget && !!ssrHistoryTarget;
+            const dummy = (window.getDummyTexWhite && window.getDummyTexWhite()) || null;
+            for (const material of materials) {
+                const mu = material.uniforms;
+                if (!mu || !mu.u_ssrEnabled) continue;
+                mu.u_ssrEnabled.value = on ? 1 : 0;
+                if (mu.u_ssrStrength) mu.u_ssrStrength.value = ssrStrength;
+                if (mu.u_ssrMaxRoughness) mu.u_ssrMaxRoughness.value = ssrMaxRoughness;
+                if (on) {
+                    if (mu.u_historyViewProjectionMatrix) mu.u_historyViewProjectionMatrix.value.copy(historyViewProjection);
+                    if (mu.u_historyViewProjectionInverseMatrix) mu.u_historyViewProjectionInverseMatrix.value.copy(historyViewProjectionInverse);
+                    if (mu.u_historyViewPosition) mu.u_historyViewPosition.value.copy(historyEye);
+                    if (mu.u_opaqueColor) mu.u_opaqueColor.value = ssrHistoryTarget.texture;
+                    if (mu.u_opaqueColorLevels) mu.u_opaqueColorLevels.value = ssrHistoryLevels;
+                    if (mu.u_opaqueDepth) mu.u_opaqueDepth.value = prevTarget.depthTexture;
+                } else {
+                    if (mu.u_opaqueColor) mu.u_opaqueColor.value = dummy;
+                    if (mu.u_opaqueDepth) mu.u_opaqueDepth.value = dummy;
+                }
+            }
+        };
+        // Blits the presentation pipeline's scene-linear buffer into the SSR
+        // history target and records this frame's camera, for NEXT frame's
+        // applySsrHistory to reproject against. Also swaps prepassIndex, so
+        // the depth/normal prepass just rendered becomes NEXT frame's
+        // "previous" (opaque-depth) slot.
+        const captureSsrHistory = () => {
+            const src = presentationPipeline && presentationPipeline.getSceneLinearTexture();
+            if (!src) {
+                historyValid = false;
+                if (!ssrHistoryWarned) {
+                    ssrHistoryWarned = true;
+                    warnings.push('[info] Screen-space reflections: no scene-linear texture available; reflections stay image based');
+                }
+                return;
+            }
+            const callerTarget = renderer.getRenderTarget();
+            const size = callerTarget
+                ? new THREE.Vector2(callerTarget.width, callerTarget.height)
+                : renderer.getDrawingBufferSize(new THREE.Vector2());
+            const w = Math.max(1, Math.floor(size.x));
+            const h = Math.max(1, Math.floor(size.y));
+            if (ssrHistoryTarget && (ssrHistoryTarget.width !== w || ssrHistoryTarget.height !== h)) {
+                ssrHistoryTarget.dispose();
+                ssrHistoryTarget = null;
+            }
+            if (!ssrHistoryTarget) {
+                const halfLinearOk = !!renderer.extensions.get('OES_texture_half_float_linear');
+                ssrHistoryTarget = new THREE.WebGLRenderTarget(w, h, {
+                    minFilter: halfLinearOk ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter,
+                    magFilter: THREE.LinearFilter,
+                    format: THREE.RGBAFormat, type: THREE.HalfFloatType,
+                    depthBuffer: false, stencilBuffer: false, generateMipmaps: true,
+                });
+                ssrHistoryLevels = Math.floor(Math.log2(Math.max(w, h, 1)));
+            }
+            if (!ssrQuadScene) {
+                ssrQuadScene = new THREE.Scene();
+                ssrQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+                ssrQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+                ssrQuadScene.add(ssrQuad);
+            }
+            if (!ssrCopyMaterial) {
+                ssrCopyMaterial = new THREE.RawShaderMaterial({
+                    glslVersion: THREE.GLSL3,
+                    vertexShader: 'in vec3 position;\nin vec2 uv;\nout vec2 vUv;\nvoid main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}\n',
+                    fragmentShader: 'precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D u_src; void main(){o=texture(u_src,vUv);}\n',
+                    uniforms: { u_src: { value: null } },
+                    depthTest: false, depthWrite: false,
+                });
+            }
+            const previousDestination = snapshotRendererDestination();
+            const previousClearColor = renderer.getClearColor(new THREE.Color()).clone();
+            const previousClearAlpha = renderer.getClearAlpha();
+            try {
+                ssrQuad.material = ssrCopyMaterial;
+                ssrCopyMaterial.uniforms.u_src.value = src;
+                renderer.setRenderTarget(ssrHistoryTarget);
+                renderer.render(ssrQuadScene, ssrQuadCamera);
+                // A raw quad blit is not a path three.js regenerates mips
+                // for; call gl.generateMipmap() explicitly (see the RGB-T
+                // opaque colour mips in js/mtlx-engine.js for the same fix).
+                const gl = renderer.getContext();
+                const glTex = renderer.properties.get(ssrHistoryTarget.texture).__webglTexture;
+                if (glTex) {
+                    const prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D);
+                    gl.bindTexture(gl.TEXTURE_2D, glTex);
+                    gl.generateMipmap(gl.TEXTURE_2D);
+                    gl.bindTexture(gl.TEXTURE_2D, prevTex);
+                }
+            } finally {
+                restoreRendererDestination(previousDestination);
+                renderer.setClearColor(previousClearColor, previousClearAlpha);
+            }
+            camera.updateMatrixWorld();
+            camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+            historyViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            historyViewProjectionInverse.copy(historyViewProjection).invert();
+            camera.getWorldPosition(historyEye);
+            historyValid = true;
+            // Only ping-pong while SSR actually consumes the "previous"
+            // slot: with SSR off, AO is the sole reader and expects the
+            // same slot to keep holding its latest render across frames.
+            if (ssrEnabled) prepassIndex = 1 - prepassIndex;
         };
         // Determines whether this mesh can safely use one nearest-exit map.
         // Coordinate welding is intentional: BufferGeometry commonly splits
@@ -4895,8 +5119,9 @@ const createMtlxSceneView = async ({
             const outputSize = callerTarget
                 ? new THREE.Vector2(callerTarget.width, callerTarget.height)
                 : renderer.getDrawingBufferSize(new THREE.Vector2());
-            // AO first: the materials sample its buffer, so it has to be
-            // valid for THIS camera before any of them draw.
+            // AO/SSR prepass first: both sample it, so it has to be valid
+            // for THIS camera before any material draws.
+            if (aoEnabled || ssrEnabled) updateDepthPrepass(outputSize);
             if (aoEnabled) {
                 const aoTexture = updateAmbientOcclusion(outputSize);
                 applyAmbientOcclusion(aoTexture, outputSize.x, outputSize.y);
@@ -4972,12 +5197,14 @@ const createMtlxSceneView = async ({
                 renderer.render(scene, camera);
             }
             };
+            applySsrHistory();
             if (presentationPipeline) {
                 presentationPipeline.render((linear) => {
                     const release = linear ? beginSceneLinear() : null;
                     try { drawSceneColor(linear); }
                     finally { if (release) release(); }
                 });
+                captureSsrHistory();
             } else {
                 drawSceneColor(false);
             }
@@ -5172,6 +5399,37 @@ const createMtlxSceneView = async ({
                 ms: aoVolumeInfo ? aoVolumeInfo.ms : null,
             },
         });
+        const setScreenSpaceReflections = (on) => {
+            ssrEnabled = !!on;
+            try { if (window.top === window) localStorage.setItem(SCENE_SSR_KEY, ssrEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            if (!ssrEnabled) { applySsrHistory(); disposeSsrHistoryResources(); }
+            return ssrEnabled;
+        };
+        const setScreenSpaceReflectionStrength = (value) => {
+            const next = Number(value);
+            ssrStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
+            try { if (window.top === window) localStorage.setItem(SCENE_SSR_STRENGTH_KEY, String(ssrStrength)); } catch (e) { /* privacy mode */ }
+            return ssrStrength;
+        };
+        const setScreenSpaceReflectionMaxRoughness = (value) => {
+            const next = Number(value);
+            ssrMaxRoughness = Number.isFinite(next) ? Math.max(0.05, Math.min(1, next)) : 0.5;
+            try { if (window.top === window) localStorage.setItem(SCENE_SSR_MAX_ROUGHNESS_KEY, String(ssrMaxRoughness)); } catch (e) { /* privacy mode */ }
+            return ssrMaxRoughness;
+        };
+        // reason names the case where SSR cannot be ready at all: no HDR
+        // scene-linear presentation buffer, so it stays image based.
+        const getScreenSpaceReflections = () => {
+            const mode = presentationPipeline ? presentationPipeline.getSettings().mode : 'disabled';
+            const encodedFallback = mode === 'encoded-fallback' || mode === 'disabled';
+            return {
+                enabled: ssrEnabled,
+                strength: ssrStrength,
+                maxRoughness: ssrMaxRoughness,
+                ready: historyValid,
+                reason: (!historyValid && encodedFallback) ? 'encoded-fallback: scene-linear presentation is unavailable' : null,
+            };
+        };
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -5267,6 +5525,7 @@ const createMtlxSceneView = async ({
             setStageLightsEnabled, setStageLightsEv, getStageLights,
             setShadowsEnabled, getShadows, setShadowDiagnostic, getShadowDiagnostic, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
+            setScreenSpaceReflections, setScreenSpaceReflectionStrength, setScreenSpaceReflectionMaxRoughness, getScreenSpaceReflections,
             getSceneDisplayTransform, setSceneDisplayTransform,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
             setEnvironment, setEnvRotation, setEnvExposure,
@@ -5421,6 +5680,8 @@ const createMtlxSceneView = async ({
                 stopped = true;
                 disposeShadowResources();
                 disposeAoResources();
+                disposePrepassResources();
+                disposeSsrHistoryResources();
                 disposeThicknessResources();
                 disposeOpaqueDepthProbe();
                 if (displayTransformListener) {
@@ -5462,10 +5723,11 @@ const createMtlxSceneView = async ({
                 transmittanceTarget: shadowTransmittanceTarget, transmittanceScratch: shadowTransmittanceScratch, transmittanceScratchExit: shadowTransmittanceScratchExit,
                 shadowTransmittanceTarget, shadowTransmittanceScratch,
                 thickness: Object.assign({}, thicknessInfo),
-                ao: { rawTarget: aoTarget, blurTarget: aoBlurTarget, prepassTarget: aoPrepassTarget,
+                ao: { rawTarget: aoTarget, blurTarget: aoBlurTarget, prepassTarget: prepassTargets[debugPrepassIndex],
                     blurMaterial: aoBlurMaterial, quadScene: aoQuadScene, quadCamera: aoQuadCamera,
                     depthThreshold: aoBlurMaterial ? aoBlurMaterial.uniforms.uDepthThreshold.value : null,
                     normalExponent: aoBlurMaterial ? aoBlurMaterial.uniforms.uNormalExponent.value : null },
+                ssr: { historyTarget: ssrHistoryTarget, historyValid, prepassTargets: prepassTargets.slice(), prepassIndex },
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
                 linearScopeActive: !!sceneLinearState }),

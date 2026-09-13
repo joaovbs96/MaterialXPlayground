@@ -49,6 +49,10 @@ test('@scene AO bilateral blur rejects normal/depth edges while retaining same-s
     window.localStorage.setItem('mtlx_scene_ao', '1');
     window.localStorage.setItem('mtlx_scene_skyvis', '0');
     window.localStorage.setItem('mtlx_scene_shadows', '0');
+    // SSR promotes the shared depth/normal prepass to full resolution; keep
+    // it off so the prepass stays sized like the AO target, matching this
+    // fixture's raw/blur/prepass same-size readback.
+    window.localStorage.setItem('mtlx_scene_ssr', '0');
     const env = await window.getMxEnv();
     const doc = env.mx.createDocument();
     await window.mxExclusive(() => env.mx.readFromXmlString(doc, xml));

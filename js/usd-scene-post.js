@@ -341,6 +341,9 @@
             reason:permanentFailure||reason,mode:!settings.enabled?'disabled':!hasHDR||permanentFailure?'encoded-fallback':resources?.samples?'hdr-msaa'+resources.samples:'hdr-single'});
         return {
             render,getSettings,
+            // Scene-linear HDR colour for this frame, before bloom/tonemap.
+            // Never cached across frames: a resize replaces resources.hdr.
+            getSceneLinearTexture(){return (settings.enabled&&hasHDR&&!permanentFailure&&resources)?resources.hdr.texture:null;},
             setSettings(next={}){
                 const oldSamples=settings.samples;
                 settings=sanitize(Object.assign({},next.reset===true?DEFAULTS:settings,next));

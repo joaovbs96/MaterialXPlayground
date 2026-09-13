@@ -150,6 +150,10 @@ test('@scene sampler budget drops sky visibility to fit a nine-texture OpenPBR m
   expect(result.samplerBudget?.dropped.some((d) => /sky/i.test(d))).toBe(true);
   expect(result.samplerBudget?.dropped.some((d) => /thickness/i.test(d))).toBe(true);
   expect(result.samplerBudget?.dropped.some((d) => /transmittance/i.test(d))).toBe(true);
+  // This material already refracts, so u_opaqueColor/u_opaqueDepth are
+  // already declared; dropping SSR first does not change the sampler count,
+  // but it still lands in the dropped list as the loop tries it first.
+  expect(result.samplerBudget?.dropped.some((d) => /reflection/i.test(d))).toBe(true);
   expect(result.warnings.some((w) => /[Ss]ampler budget/.test(w) && /sky/i.test(w))).toBe(true);
   expect(result.warnings.some((w) => /[Ss]ampler budget/.test(w) && /transmittance/i.test(w))).toBe(true);
   expect(result.glError).toBe(0);

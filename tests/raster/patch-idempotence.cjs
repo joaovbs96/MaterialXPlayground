@@ -19,6 +19,7 @@ const scale = src.match(/const PEEL_REFRACTION_SCALE\s*=\s*[^;]+;/);
 assert(scale, 'PEEL_REFRACTION_SCALE not found');
 const patchTransmissionAlpha = vm.runInNewContext(scale[0] + '\n' + extract('patchTransmissionAlpha') + ';\npatchTransmissionAlpha;');
 const patchRgbtPayload = vm.runInNewContext('const mtlxWarn = () => {};\n' + extract('patchRgbtPayload') + ';\npatchRgbtPayload;');
+const patchScreenSpaceReflection = vm.runInNewContext(extract('patchScreenSpaceReflection') + ';\npatchScreenSpaceReflection;');
 
 // Synthetic fragment carrying every anchor the two patches look for,
 // including the refraction prerequisites (HW varyings, absorption anchor).
@@ -58,4 +59,45 @@ assert.equal((rgbtOnce.match(/\.transparency = clamp\(/g) || []).length, 1);
 assert.equal(patchRgbtPayload(rgbtOnce), rgbtOnce, 'patchRgbtPayload is not idempotent');
 assert.equal(patchTransmissionAlpha(rgbtOnce), rgbtOnce, 'patchTransmissionAlpha must leave an RGB-T patched body alone');
 
-console.log(JSON.stringify({ patchTransmissionAlpha: 'idempotent', patchRgbtPayload: 'idempotent' }));
+// Synthetic body carrying the real multi-line mx_environment_radiance
+// definition (the anchor patchScreenSpaceReflection looks for), the
+// positionWorld varying, a void main, and the transmission anchors so it
+// can be chained into patchTransmissionAlpha afterward.
+const ssrBody = [
+    'uniform float transmission_weight;',
+    'uniform vec3 transmission_color;',
+    'in vec3 normalWorld;',
+    'in vec3 positionWorld;',
+    'uniform vec3 u_viewPosition;',
+    'void mx_anisotropic_vdf(float absorption) {',
+    '    vdf.throughput = exp(-absorption);',
+    '}',
+    'vec3 mx_environment_radiance(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd)',
+    '{',
+    '    return vec3(0.0);',
+    '}',
+    'vec3 mx_surface_transmission(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd, vec3 tint) {',
+    '    return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;',
+    '}',
+    'out vec4 outColor;',
+    'void main() {',
+    '    surfaceshader surf;',
+    '    // Calculate the BSDF transmission for viewing direction',
+    '    surf.color += surf.response;',
+    '    // Compute and apply surface opacity',
+    '    float outAlpha = clamp(dot(surf.transparency, vec3(0.3333)), 0.0, 1.0);',
+    '    if (outAlpha < u_alphaThreshold) { discard; }',
+    '    outColor = vec4(surf.color, outAlpha);',
+    '}',
+].join('\n') + '\n';
+
+const ssrOnce = patchScreenSpaceReflection(ssrBody);
+assert.notEqual(ssrOnce, ssrBody, 'patchScreenSpaceReflection must change a well-formed body');
+assert(ssrOnce.includes('mx_environment_radiance_ibl'), 'renamed IBL definition expected');
+assert.equal(patchScreenSpaceReflection(ssrOnce), ssrOnce, 'patchScreenSpaceReflection is not idempotent');
+
+const ssrThenTransmission = patchTransmissionAlpha(ssrOnce);
+assert.equal((ssrThenTransmission.match(/uniform int u_peelMode;/g) || []).length, 1);
+assert.equal((ssrThenTransmission.match(/uniform sampler2D u_opaqueColor;/g) || []).length, 1);
+
+console.log(JSON.stringify({ patchTransmissionAlpha: 'idempotent', patchRgbtPayload: 'idempotent', patchScreenSpaceReflection: 'idempotent' }));
