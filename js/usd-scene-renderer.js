@@ -2136,18 +2136,29 @@ const createMtlxSceneView = async ({
         // it just hits compiledByPath) so the ordinary-texture size tier can
         // be planned from the full reference count before any texture binds.
         const precompiled = [];
-        for (const record of sceneArray(stage.materials)) {
+        const materialList = sceneArray(stage.materials);
+        for (let i = 0; i < materialList.length; i += 1) {
+            const record = materialList[i];
+            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+            report({ phase: 'material', status: 'start', index: i + 1, total: materialList.length, label });
             const ensured = await ensureCompiledMaterial(record);
+            report({ phase: 'material', status: (ensured && ensured.compiled) ? 'ready' : 'error', index: i + 1, total: materialList.length, label });
             if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
+            // Yield one macrotask so the overlay can paint between compiles;
+            // this is the only behaviour change in this instrumentation pass.
+            await new Promise((resolve) => setTimeout(resolve, 0));
         }
         await planTextureSize(precompiled);
-        for (const record of sceneArray(stage.materials)) {
+        for (let i = 0; i < materialList.length; i += 1) {
+            const record = materialList[i];
+            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
             const result = await makeMtlxMaterial(record);
             if (result) {
                 byPath.set(String(record.path || ''), result);
                 materialRecords.set(String(record.path || ''), record);
                 pendingTextures.push(...(result.pendingTextures || []));
             }
+            report({ phase: 'material-bind', index: i + 1, total: materialList.length, label });
         }
         await awaitTextureJobs(pendingTextures);
         // These jobs have settled; only variant jobs created during mesh
@@ -4234,7 +4245,8 @@ const createMtlxSceneView = async ({
                     prims.push(object);
                 });
             });
-            report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || '') });
+            const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
+            report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
         }
         await awaitTextureJobs(pendingTextures);
         if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
@@ -4259,9 +4271,16 @@ const createMtlxSceneView = async ({
         // first frame rather than leaving the opening frames unshadowed.
         // Materials were built during the geometry pass, before the volume
         // existed, so push it onto them once it does.
+        const rendererStepTotal = 3 + (shadowsEnabled ? 1 : 0);
+        let rendererStepIndex = 0;
+        const reportRendererStep = (step) => {
+            rendererStepIndex += 1;
+            report({ phase: 'renderer', status: 'step', step, index: rendererStepIndex, total: rendererStepTotal });
+        };
+        reportRendererStep('sky-visibility');
         buildSkyVisibilityVolume(stageBox);
         applySkyVisibility();
-        if (shadowsEnabled) updateShadowMap();
+        if (shadowsEnabled) { reportRendererStep('shadow-atlas'); updateShadowMap(); }
         applyMaterialEnvironment();
         const resize = () => {
             if (!renderer || !container || resizeSuspended) return;
@@ -4555,6 +4574,7 @@ const createMtlxSceneView = async ({
         // console and leave no public exception, so turn missing material
         // program handles into per-material diagnostics.
         try {
+            reportRendererStep('gpu-program');
             renderer.compile(scene, camera);
             reportBadPrograms(materials, '');
         } catch (error) {
@@ -4582,6 +4602,7 @@ const createMtlxSceneView = async ({
             console.warn('MaterialX sampler defaults:', samplerReport);
         }
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
+        reportRendererStep('first-frame');
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
         // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
         // engine.js:4804-4819): the orbit target sits above the floor, so a

@@ -196,15 +196,49 @@
     // readDroppedItems, which preserves nested directory paths); flatten it
     // to the same { path, data } shape readFiles() produces.
     const filesFromMap = (map) => Object.keys(map || {}).map((path) => ({ path: String(path).replace(/\\/g, '/'), data: map[path] }));
-    const progressValue = (value) => {
-        if (typeof value === 'number') return { phase: 'Loading', fraction: Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null, done: 0, total: 0, message: '' };
+    // Whole-load segment table: each phase owns a slice of the bar so it
+    // fills once across the whole load instead of restarting per phase.
+    const USD_SCENE_PROGRESS_SEGMENTS = {
+        worker: [0.00, 0.08],
+        parse: [0.08, 0.12],
+        material: [0.12, 0.52],
+        'material-bind': [0.52, 0.56],
+        texture: [0.56, 0.74],
+        geometry: [0.74, 0.88],
+        renderer: [0.88, 0.99],
+    };
+    // Pure: maps one progress event plus the previous whole-load fraction to
+    // the next whole-load fraction. Never moves backwards inside one load.
+    const usdSceneProgressFraction = (event, previous) => {
+        const prev = Number.isFinite(previous) ? previous : 0;
+        const clamp01 = (v) => Math.max(0, Math.min(1, v));
+        const p = event && typeof event === 'object' ? event : {};
+        const phase = String(p.phase || '');
+        if (phase === 'renderer' && String(p.status || '') === 'ready') return 1;
+        const segment = USD_SCENE_PROGRESS_SEGMENTS[phase];
+        if (!segment) return prev;
+        const [start, end] = segment;
+        const explicitFraction = p.fraction != null ? Number(p.fraction) : (p.progress != null ? Number(p.progress) : null);
+        const total = Number(p.total || 0);
+        const done = Number(p.done != null ? p.done : (p.index != null ? p.index : 0));
+        const local = Number.isFinite(explicitFraction) ? clamp01(explicitFraction) : (total > 0 ? clamp01(done / total) : 0);
+        return Math.max(prev, start + local * (end - start));
+    };
+    window.usdSceneProgressFraction = usdSceneProgressFraction;
+    const progressValue = (value, wholeFraction) => {
+        if (typeof value === 'number') {
+            const numberFraction = Number.isFinite(wholeFraction) ? wholeFraction : (Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null);
+            return { phase: 'Loading', fraction: numberFraction, done: 0, total: 0, message: '', label: '', step: '' };
+        }
         const p = value && typeof value === 'object' ? value : { message: String(value || '') };
         const done = Number(p.done || p.index || 0);
         const total = Number(p.total || 0);
-        const explicitFraction = p.fraction != null ? Number(p.fraction) : null;
-        const explicitProgress = p.progress != null ? Number(p.progress) : null;
-        const fraction = Number.isFinite(explicitFraction) ? Math.max(0, Math.min(1, explicitFraction)) : Number.isFinite(explicitProgress) ? Math.max(0, Math.min(1, explicitProgress)) : total > 0 ? Math.max(0, Math.min(1, done / total)) : null;
-        return { phase: String(p.phase || ''), fraction, done, total, message: String(p.message || p.status || '') };
+        const fraction = Number.isFinite(wholeFraction) ? wholeFraction : null;
+        return {
+            phase: String(p.phase || ''), fraction, done, total,
+            message: String(p.message || p.status || ''),
+            label: String(p.label || ''), step: String(p.step || ''),
+        };
     };
     const apiFunction = (name) => {
         const candidates = [window[name], window.MtlxUsd && window.MtlxUsd[name], window.UsdSceneRuntime && window.UsdSceneRuntime[name]];
@@ -296,10 +330,21 @@
         const handleRef = React.useRef(null);
         const generationRef = React.useRef(0);
         const environmentGenerationRef = React.useRef(0);
+        // Tracks the whole-load fraction across both the worker and renderer
+        // phases of one load (they share a generation id); a new generation
+        // resets it to 0 so the bar never carries over from a prior load.
+        const progressFractionGenRef = React.useRef(null);
+        const progressFractionRef = React.useRef(0);
         const [rotating, toggleRotating] = useViewToggle(handleRef, 'setAutoRotate', false);
         filesRef.current = files;
         envSettingsRef.current = { rotation: envRotation, exposureLinear: envExposureLinear, backdrop, autoRotate: rotating };
-        const updateProgress = (value, generation) => { if (mountedRef.current && (generation == null || generation === generationRef.current)) setProgress(progressValue(value)); };
+        const updateProgress = (value, generation) => {
+            if (!mountedRef.current || (generation != null && generation !== generationRef.current)) return;
+            if (progressFractionGenRef.current !== generation) { progressFractionGenRef.current = generation; progressFractionRef.current = 0; }
+            const wholeFraction = usdSceneProgressFraction(value, progressFractionRef.current);
+            progressFractionRef.current = wholeFraction;
+            setProgress(progressValue(value, wholeFraction));
+        };
 
         React.useEffect(() => () => {
             mountedRef.current = false;
@@ -731,9 +776,12 @@
         void textureSizeTick;
 
         const fraction = progress.fraction;
-        const phaseLabels = { worker: 'Loading stage', parse: 'Composing stage', geometry: 'Preparing geometry', material: 'Compiling materials', texture: 'Loading textures', renderer: 'Preparing viewport', 'gpu-program': 'Checking GPU programs' };
+        const phaseLabels = { worker: 'Loading stage', parse: 'Composing stage', geometry: 'Preparing geometry', material: 'Compiling materials', 'material-bind': 'Binding materials', texture: 'Loading textures', renderer: 'Preparing viewport', 'gpu-program': 'Checking GPU programs' };
         const progressLabel = phaseLabels[progress.phase] || (progress.phase ? progress.phase.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : (status === 'rendered' ? 'Ready' : 'Loading'));
         const progressText = progress.total ? (progress.done + '/' + progress.total) : (/texture|material/i.test(progress.phase) ? '' : progress.message);
+        // Second, dimmer overlay line: the current item within the phase.
+        const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
+        const progressDetail = progress.phase === 'renderer' ? (RENDERER_STEP_LABELS[progress.step] || '') : (progress.label || '');
         const busy = status === 'loading' || status === 'loading-example' || status === 'loaded';
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';
         const envSummary = (envRotation === 0 && envExposureLinear === 1)
@@ -1270,6 +1318,12 @@
                         labelClassName="text-sm text-gray-300 animate-pulse"
                         barWidthClass="w-56"
                     >
+                        {progressDetail && (
+                            <span
+                                data-testid="usd-scene-progress-detail"
+                                className="text-xs text-gray-500 truncate w-56 text-center"
+                            >{progressDetail}</span>
+                        )}
                         <button type="button" onClick={cancel} className={HUD_PILL + ' pointer-events-auto'}>Cancel</button>
                     </LoadingOverlay>
 
