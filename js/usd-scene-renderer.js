@@ -2332,10 +2332,14 @@ const createMtlxSceneView = async ({
             let far = 0;
             for (const iv of intervals) far = Math.max(far, iv.upper);
             far = Math.max(minFloor * 2, far * 1.05);
-            let minPositiveLower = Infinity;
-            for (const iv of intervals) { if (iv.lower > 0) minPositiveLower = Math.min(minPositiveLower, iv.lower); }
-            const nearBase = Number.isFinite(minPositiveLower) ? 0.9 * minPositiveLower : far * 1e-3;
-            const near = Math.min(far * 0.99, Math.max(nearBase, sourceRadius, minFloor));
+            // A box that contains the emitter (a lamp shade around its bulb)
+            // must pull near down to the floor, or its geometry is clipped
+            // out of the map and light streaks through it.
+            let minPositiveLower = Infinity, straddles = false;
+            for (const iv of intervals) { if (iv.lower > 0) minPositiveLower = Math.min(minPositiveLower, iv.lower); else straddles = true; }
+            const floor = Math.max(minFloor, far * 1e-3, sourceRadius * 0.1);
+            const nearBase = (!straddles && Number.isFinite(minPositiveLower)) ? 0.9 * minPositiveLower : floor;
+            const near = Math.min(far * 0.99, Math.max(nearBase, floor));
             return { near, far };
         };
         // Decides whether a perspective face needs a cell, and fits its
