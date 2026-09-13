@@ -135,6 +135,12 @@
                     portMode: nodeMode,
                     onOpen: (d.kind === 'nodegraph' && o.onOpenScope)
                         ? () => o.onOpenScope(d.name) : undefined,
+                    // A data node whose nodedef is backed by a library
+                    // nodegraph (e.g. standard_surface -> NG_standard_
+                    // surface_surfaceshader) can jump straight to it, view only.
+                    onOpenImpl: (d.implGraph && o.onOpenImpl)
+                        ? () => o.onOpenImpl(d.implGraph, d.id) : undefined,
+                    implGraph: d.implGraph,
                     onTogglePorts: o.onTogglePorts ? () => o.onTogglePorts(d.id) : undefined,
                     onPortAdd: o.onPortAdd,
                     // Inline rename on the card. The `renaming` flag itself is

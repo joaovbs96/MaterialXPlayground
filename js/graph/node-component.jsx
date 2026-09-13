@@ -184,7 +184,18 @@
                                     title="Open this nodegraph"
                                     className={'mtlx-node-open flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors'
                                         + (isDef ? '' : ' ml-auto')}
-                                >open <MtlxIcon name="corner-down-left" className="w-2.5 h-2.5" /></button>
+                                >open <MtlxIcon name="pencil" className="w-2.5 h-2.5" /></button>
+                            )}
+                            {/* A data node backed by a library implementation
+                                nodegraph, pill-navigates in view only, same
+                                inert-on-preview contract as onOpen above. */}
+                            {data.onOpenImpl && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
+                                    onDoubleClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
+                                    title="Explore the implementation nodegraph (view only)"
+                                    className="mtlx-node-open flex-none ml-auto inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
+                                >open (view only) <MtlxIcon name="eye" className="w-2.5 h-2.5" /></button>
                             )}
                         </div>
                         <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-gray-600 italic' : 'text-gray-500')}>

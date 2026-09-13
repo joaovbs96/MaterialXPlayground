@@ -312,15 +312,8 @@
             );
         }
 
-        // Collapsible parameter-group header (folders + Downstream
-        // Connections). Negative margins matching the panel's own px-2.5
-        // pull the border edge-to-edge instead of sitting inset.
-        // A <button> sizes to its content even as a flex container, so the width
-        // must exceed 100% by the -mx-2.5 pair (20px) for the rule to reach both
-        // padding edges of the scroll body.
-        const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
-            + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
-            + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
+        // GROUP_HEADER_CLASS now lives in js/shared/mtlx-ui.jsx (shared
+        // with definition-panel.jsx); this file keeps using the global.
 
         // Right sidebar resize range and localStorage key. Max also never
         // exceeds ~70% of the editor width (see clampSidebarWidth).
@@ -334,6 +327,21 @@
             if (max < SIDEBAR_MIN_WIDTH) max = SIDEBAR_MIN_WIDTH;
             const n = isFinite(w) ? w : SIDEBAR_DEFAULT_WIDTH;
             return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, n));
+        };
+
+        // Left sidebar (the node list): same resize/persistence shape as
+        // the right one, its own range and storage keys.
+        const LEFT_SIDEBAR_MIN_WIDTH = 220;
+        const LEFT_SIDEBAR_MAX_WIDTH = 480;
+        const LEFT_SIDEBAR_DEFAULT_WIDTH = 260;
+        const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'mtlxGraphLeftSidebarWidth';
+        const LEFT_SIDEBAR_OPEN_STORAGE_KEY = 'mtlxGraphLeftSidebarOpen';
+        const clampLeftSidebarWidth = (w, editorWidth) => {
+            let max = LEFT_SIDEBAR_MAX_WIDTH;
+            if (editorWidth) max = Math.min(max, Math.round(editorWidth * 0.4));
+            if (max < LEFT_SIDEBAR_MIN_WIDTH) max = LEFT_SIDEBAR_MIN_WIDTH;
+            const n = isFinite(w) ? w : LEFT_SIDEBAR_DEFAULT_WIDTH;
+            return Math.min(max, Math.max(LEFT_SIDEBAR_MIN_WIDTH, n));
         };
 
         // Relative-age copy for the crash-recovery modal (item 14),
@@ -445,6 +453,32 @@
                 } catch (e) { /* private mode / storage disabled */ }
                 return clampSidebarWidth(stored);
             });
+            // Left sidebar (node list): open state and width, both seeded
+            // from localStorage the same way the right sidebar is.
+            const [leftOpen, setLeftOpen] = React.useState(() => {
+                try {
+                    const stored = window.localStorage.getItem(LEFT_SIDEBAR_OPEN_STORAGE_KEY);
+                    if (stored === 'true') return true;
+                    if (stored === 'false') return false;
+                } catch (e) { /* private mode / storage disabled */ }
+                return !narrow;
+            });
+            const [leftWidth, setLeftWidth] = React.useState(() => {
+                let stored = NaN;
+                try {
+                    stored = parseFloat(window.localStorage.getItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY));
+                } catch (e) { /* private mode / storage disabled */ }
+                return clampLeftSidebarWidth(stored);
+            });
+            React.useEffect(() => {
+                try { window.localStorage.setItem(LEFT_SIDEBAR_OPEN_STORAGE_KEY, String(leftOpen)); } catch (e) { /* private mode */ }
+            }, [leftOpen]);
+            // Node list (left sidebar) filter/sort state.
+            const [scopeListQuery, setScopeListQuery] = React.useState('');
+            const [scopeListType, setScopeListType] = React.useState('');
+            const [scopeListSort, setScopeListSort] = React.useState('graph');
+            const [scopeListDir, setScopeListDir] = React.useState('asc');
+
             // The LAST node the preview showed — { scope, id } — so the
             // preview stays on it when the selection is cleared. Reset per
             // document.
@@ -615,6 +649,10 @@
             // stale-closure sidebar-reserve calc).
             const legendOpenRef = React.useRef(legendOpen);
             legendOpenRef.current = legendOpen;
+            // Same idiom, read by the 'L' keydown handler registered once
+            // on mount and by the narrow-mode stash effect below.
+            const leftOpenRef = React.useRef(leftOpen);
+            leftOpenRef.current = leftOpen;
             const narrowRef = React.useRef(narrow);
             narrowRef.current = narrow;
             // Lets background work (render loop, keydown/drag-drop) pause
@@ -632,6 +670,14 @@
             // the nodegraph just left) so the flow-rebuild effect can
             // select/highlight it instead of wiping the selection.
             const pendingScopeSelectRef = React.useRef(null);
+            // Set alongside pendingScopeSelectRef when a specific node (not
+            // just a selection) should be framed once the rebuilt flow has
+            // measured it, the library-implementation-graph return path.
+            const pendingFrameRef = React.useRef(null);
+            // { id, scope } of the node whose "Explore Node Graph" pill/menu
+            // opened the CURRENT scope, so leaving a library implementation
+            // graph returns to (and frames) that node instead of scope root.
+            const scopeOriginRef = React.useRef(null);
             // Single entry point for every scope transition (dblclick-enter,
             // Backspace exit, breadcrumb, scope dropdown) so the overlay-
             // flash-then-deferred-setScope dance isn't duplicated per site.
@@ -663,10 +709,31 @@
             // the breadcrumb root, the context menu, and the leave-nodegraph
             // pill so the pending-selection dance stays in one place.
             const goUpScope = () => {
-                if (scopeRef.current) {
+                if (!scopeRef.current) return;
+                const origin = scopeOriginRef.current;
+                // origin.graph is the library graph it was recorded for ,
+                // must match the scope we're CURRENTLY leaving, not the
+                // scope we're returning to (origin.scope).
+                if (origin && origin.graph === scopeRef.current) {
+                    // Leaving a library implementation graph opened from
+                    // inside origin.scope: return there and frame the node
+                    // the user came from, not the scope root.
+                    scopeOriginRef.current = null;
+                    pendingScopeSelectRef.current = origin.id;
+                    pendingFrameRef.current = origin.id;
+                    changeScope(origin.scope);
+                } else {
                     pendingScopeSelectRef.current = 'g:' + scopeRef.current;
+                    pendingFrameRef.current = 'g:' + scopeRef.current;
                     changeScope('');
                 }
+            };
+            // Enters a library implementation graph from node fromId,
+            // remembering where to return on Backspace/breadcrumb-up.
+            const openImplGraph = (graphName, fromId) => {
+                if (!graphName) return;
+                scopeOriginRef.current = { id: fromId, scope: scopeRef.current, graph: graphName };
+                changeScope(graphName);
             };
             // { stack: [{xml, scope, tag}], index, savedIndex }. index === -1
             // means an empty stack (no document loaded yet).
@@ -913,6 +980,74 @@
                 return () => ro.disconnect();
             }, []);
 
+            // Left sidebar resize (drag its right edge), mirrors the right
+            // sidebar's drag handling above, with the delta sign flipped
+            // since the handle sits on the OPPOSITE edge of its panel.
+            const leftWidthRef = React.useRef(leftWidth);
+            leftWidthRef.current = leftWidth;
+            const leftDragRef = React.useRef(null); // { startX, startWidth, lastWidth } while dragging
+            const [leftDragging, setLeftDragging] = React.useState(false);
+            const persistLeftWidth = (w) => {
+                try { window.localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(w))); } catch (e) { /* private mode / storage disabled */ }
+            };
+            const onLeftHandleMouseDown = (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                leftDragRef.current = { startX: e.clientX, startWidth: leftWidthRef.current, lastWidth: leftWidthRef.current };
+                setLeftDragging(true);
+            };
+            React.useEffect(() => {
+                if (!leftDragging) return;
+                let rafId = null;
+                const applyPending = () => {
+                    rafId = null;
+                    const drag = leftDragRef.current;
+                    if (drag) setLeftWidth(drag.lastWidth);
+                };
+                const onMove = (e) => {
+                    const drag = leftDragRef.current;
+                    if (!drag) return;
+                    const editorWidth = panelRef.current ? panelRef.current.getBoundingClientRect().width : 0;
+                    // Sidebar is docked on the left: dragging the handle
+                    // RIGHT (clientX increasing) grows it.
+                    drag.lastWidth = clampLeftSidebarWidth(drag.startWidth + (e.clientX - drag.startX), editorWidth);
+                    if (rafId == null) rafId = requestAnimationFrame(applyPending);
+                };
+                const onUp = () => {
+                    if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+                    const drag = leftDragRef.current;
+                    if (drag) {
+                        setLeftWidth(drag.lastWidth);
+                        persistLeftWidth(drag.lastWidth);
+                    }
+                    leftDragRef.current = null;
+                    setLeftDragging(false);
+                };
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+                return () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                    if (rafId != null) cancelAnimationFrame(rafId);
+                };
+            }, [leftDragging]);
+            React.useEffect(() => {
+                const host = panelRef.current;
+                if (!host) return;
+                const measure = () => {
+                    const rect = host.getBoundingClientRect();
+                    if (!rect.width) return;
+                    setLeftWidth((w) => {
+                        const c = clampLeftSidebarWidth(w, rect.width);
+                        return c === w ? w : c;
+                    });
+                };
+                measure();
+                const ro = new ResizeObserver(measure);
+                ro.observe(host);
+                return () => ro.disconnect();
+            }, []);
+
             // Top toolbar clusters: measured 3-tier collapse (labels ->
             // icons -> wrapped), via classList (not state) to avoid a
             // measure loop; needs a real width constraint (the menu bar's grid column) so RO detects overflow.
@@ -985,17 +1120,18 @@
             // collapses params/legend to chips; narrow->wide restores the
             // stash. A manual re-open while narrow sticks until next crossing.
             const prevNarrowRef = React.useRef(narrow);
-            const preNarrowOpenRef = React.useRef({ params: true, legend: true });
+            const preNarrowOpenRef = React.useRef({ params: true, legend: true, left: true });
             React.useEffect(() => {
                 const was = prevNarrowRef.current;
                 prevNarrowRef.current = narrow;
                 if (narrow === was) return;
                 if (narrow) {
-                    preNarrowOpenRef.current = { params: paramsOpenRef.current, legend: legendOpenRef.current };
-                    setParamsOpen(false); setLegendOpen(false);
+                    preNarrowOpenRef.current = { params: paramsOpenRef.current, legend: legendOpenRef.current, left: leftOpenRef.current };
+                    setParamsOpen(false); setLegendOpen(false); setLeftOpen(false);
                 } else {
                     setParamsOpen(preNarrowOpenRef.current.params);
                     setLegendOpen(preNarrowOpenRef.current.legend);
+                    setLeftOpen(preNarrowOpenRef.current.left);
                 }
             }, [narrow]);
 
@@ -1033,6 +1169,7 @@
             // Open the quick-add palette (also kicks off the catalog load
             // the first time).
             const openAddSearch = () => {
+                if (guardLocked()) return;
                 setAddOpen(true);
                 buildNodeCatalog().then(setCatalog).catch((e) => {
                     setAddOpen(false);
@@ -1051,6 +1188,7 @@
             const pendingConnRef = React.useRef(null);
             const openPortAdd = (info) => {
                 if (!info || !info.nodeId || !info.port || !info.portType) return;
+                if (scopeLockedRef.current) return;
                 pendingConnRef.current = info;
                 setPortAddFilter({ mode: info.dir, type: info.portType });
                 openAddRef.current();
@@ -1095,7 +1233,14 @@
                     const nodeEl = t.closest('.react-flow__node');
                     if (!nodeEl) return;
                     const id = nodeEl.getAttribute('data-id') || '';
-                    if (id.indexOf('g:') === 0) changeScope(id.slice(2));
+                    if (id.indexOf('g:') === 0) { changeScope(id.slice(2)); return; }
+                    // A data node backed by a library implementation graph
+                    // (e.g. standard_surface) opens it, view only.
+                    if (id.indexOf('n:') === 0) {
+                        const n = (flowRef.current.nodes || []).find((n2) => n2.id === id);
+                        const implGraph = n && n.data && n.data.implGraph;
+                        if (implGraph) openImplGraph(implGraph, id);
+                    }
                 };
                 host.addEventListener('dblclick', onDbl);
                 return () => host.removeEventListener('dblclick', onDbl);
@@ -1124,6 +1269,7 @@
                         e.preventDefault();
                         return;
                     }
+                    if (scopeLockedRef.current) return;
                     if (deleteSelectionRef.current()) e.preventDefault();
                 };
                 window.addEventListener('keydown', onKey);
@@ -1697,17 +1843,7 @@
                 restorePortModesRef.current = null;
                 try {
                     const { descs, edges } = buildScope(parsed, scope);
-                    const built = toFlow(descs, edges, {
-                        portMode: globalPortsRef.current,
-                        portModes: restoredModes || undefined,
-                        onOpenScope: changeScope,
-                        onTogglePorts: (id) => togglePortsRef.current(id),
-                        onPortAdd: (info) => onPortAddRef.current(info),
-                        onRenameStart: (id) => inlineRenameStartRef.current(id),
-onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
-                        onRenameCancel: () => inlineRenameCancelRef.current(),
-                        renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
-                    });
+                    const built = toFlow(descs, edges, flowOpts(restoredModes || undefined));
                     setFlow(pendingSelect ? {
                         edges: built.edges,
                         nodes: built.nodes.map((n) =>
@@ -1715,8 +1851,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     } : built);
                     setError(null);
                     // Queued after the setFlow above, so it acts on the flow
-                    // we just built.
-                    if (switchedScope) fitViewSoon({ padding: 0.15, duration: 350 });
+                    // we just built. A pending frame target (set by
+                    // goUpScope when returning to a specific node) wins over
+                    // the plain whole-scope fit.
+                    const frameId = pendingFrameRef.current;
+                    pendingFrameRef.current = null;
+                    if (frameId && built.nodes.some((n) => n.id === frameId)) {
+                        focusNode(frameId, false);
+                        scheduleViewSettle(() => fitViewSoon({ nodes: [{ id: frameId }], duration: 400, padding: 0.4, maxZoom: 1.2 }));
+                    } else if (switchedScope) {
+                        scheduleViewSettle(() => fitViewSoon({ padding: 0.15, duration: 350 }));
+                    }
                 } catch (e) {
                     setFlow({ nodes: [], edges: [] });
                     setError(errMsg(e));
@@ -1770,6 +1915,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // collapse/drag), and snapshot the new positions as xpos/ypos
             // so the layout survives reload/export and marks unsaved.
             const reorganize = () => {
+                if (scopeLockedRef.current) return;
                 const descsLike = flow.nodes.map((n) => ({
                     id: n.id,
                     inputs: (n.data && n.data.inputs) || [],
@@ -1777,6 +1923,17 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     pos: null, // ignore stored editor positions: full re-layout
                 }));
                 const posOf = layoutScope(descsLike, flow.edges);
+
+                // Re-stack i:/o: pseudo-nodes so their vertical order
+                // follows descriptor (declaration) order instead of
+                // dagre's own layout order. x stays whatever dagre picked.
+                const restackByPrefix = (prefix) => {
+                    const ids = flow.nodes.filter((n) => n.id.indexOf(prefix) === 0).map((n) => n.id).filter((id) => posOf[id]);
+                    const ys = ids.map((id) => posOf[id].y).sort((a, b) => a - b);
+                    ids.forEach((id, i) => { posOf[id] = Object.assign({}, posOf[id], { y: ys[i] }); });
+                };
+                restackByPrefix('i:');
+                restackByPrefix('o:');
 
                 const c = scopeContainer();
                 if (c && parsed) {
@@ -1831,6 +1988,26 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     if (!inStage) return;
                     e.preventDefault();
                     reorganizeRef.current();
+                };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, []);
+
+            // L: toggle the node list sidebar. Same focus/guard rules as A.
+            React.useEffect(() => {
+                const onKey = (e) => {
+                    if (!activeRef.current) return;
+                    if ((e.key !== 'l' && e.key !== 'L')
+                        || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+                    const t = e.target;
+                    const tag = ((t && t.tagName) || '').toLowerCase();
+                    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+                    if (t && t.isContentEditable) return;
+                    const inStage = t === document.body
+                        || (panelRef.current && t instanceof Node && panelRef.current.contains(t));
+                    if (!inStage) return;
+                    e.preventDefault();
+                    setLeftOpen(!leftOpenRef.current);
                 };
                 window.addEventListener('keydown', onKey);
                 return () => window.removeEventListener('keydown', onKey);
@@ -1997,11 +2174,26 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 requestAnimationFrame(() => attempt(tries));
             };
 
+            // Retries a view-settling call (a fit or a frame) after 400ms
+            // and 1500ms on top of its own immediate rAF retries, covers a
+            // slow first preview compile blocking the main thread long
+            // enough for fitViewSoon's own retry budget to run out before
+            // React Flow has measured the freshly built nodes. A generation
+            // counter drops stale retries once a newer scope change starts.
+            const viewSettleGenRef = React.useRef(0);
+            const scheduleViewSettle = (fn) => {
+                const gen = ++viewSettleGenRef.current;
+                fn();
+                setTimeout(() => { if (viewSettleGenRef.current === gen) fn(); }, 400);
+                setTimeout(() => { if (viewSettleGenRef.current === gen) fn(); }, 1500);
+            };
+
             const onNodeDoubleClick = (evt, node) => {
                 // Fires for the same double-click the native host listener
                 // already handles — routed through changeScope (not
                 // setScope) so this can't beat the overlay's rebuild.
-                if (node.data && node.data.kind === 'nodegraph') changeScope(node.data.name);
+                if (node.data && node.data.kind === 'nodegraph') { changeScope(node.data.name); return; }
+                if (node.data && node.data.implGraph) openImplGraph(node.data.implGraph, node.id);
             };
 
             // Select a node (panel + ring) and, for jump links, glide the
@@ -2230,6 +2422,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // when bindings allow it, always into the on-screen flow. The
             // flow is patched IN PLACE so layout/positions survive.
             const applyParamEdit = (nodeId, inputName, newValue) => {
+                if (guardLocked()) return;
                 // An edit that RESTORES the nodedef default un-sets the
                 // input (element removed, row stops counting as "set");
                 // interface-input pseudo nodes always keep their element.
@@ -2328,6 +2521,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // but must be passed for color3/color4 inputs to avoid a mismatch.
             const applyColorspace = (nodeId, inputName, cs, inputType) => {
                 if (!parsed) return;
+                if (guardLocked()) return;
                 const type = inputType || 'filename';
                 const name = nodeId.slice(2);
                 const container = scopeContainer();
@@ -2391,6 +2585,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // setDocRev; markDirty still runs to push an undo snapshot.
             const applyInterfaceMeta = (nodeId, patch) => {
                 if (!parsed || nodeId.indexOf('i:') !== 0) return;
+                if (guardLocked()) return;
                 const name = nodeId.slice(2);
                 const o = ifaceOwner();
                 if (o && o.functional && !o.local) {
@@ -2431,17 +2626,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 markDirty('def:' + nodedefName);
                 setDocRev((r) => r + 1);
                 const { descs, edges } = buildScope(parsed, scope);
-                const rebuilt = toFlow(descs, edges, {
-                    portMode: globalPortsRef.current,
-                    portModes: capturePortModes(),
-                    onOpenScope: changeScope,
-                    onTogglePorts: (id2) => togglePortsRef.current(id2),
-                    onPortAdd: (info) => onPortAddRef.current(info),
-                    onRenameStart: (id2) => inlineRenameStartRef.current(id2),
-                    onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
-                    onRenameCancel: () => inlineRenameCancelRef.current(),
-                    renameIssueFor: (id2, nm) => renameIssueRef.current(id2, nm),
-                });
+                const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
                 setFlow(rebuilt);
             };
 
@@ -2619,6 +2804,25 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 refreshAfterDefEdit(nodedefName);
             };
 
+            // Reorders `name` among `siblingNames` to land at `toIndex`
+            // (clamped), via setChildIndex against the current occupant
+            // of that slot. False when there's nothing to do.
+            const moveChildAmong = (parent, siblingNames, name, toIndex) => {
+                const clamped = Math.max(0, Math.min(toIndex, siblingNames.length - 1));
+                const idx = siblingNames.indexOf(name);
+                if (idx === -1 || idx === clamped) return false;
+                return mxSafe(() => { parent.setChildIndex(name, parent.getChildIndex(siblingNames[clamped])); return true; }, false);
+            };
+
+            const moveDefinitionInputTo = (nodedefName, name, toIndex) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const names = vecToArray(mxSafe(() => def.getInputs(), [])).map(mxElName);
+                if (!moveChildAmong(def, names, name, toIndex)) return;
+                refreshAfterDefEdit(nodedefName);
+            };
+
             // Reorder a declared input using swap semantics: this child's
             // index becomes its neighbour's, shifting the rest along.
             const moveDefinitionInput = (nodedefName, name, delta) => {
@@ -2628,11 +2832,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const names = vecToArray(mxSafe(() => def.getInputs(), [])).map(mxElName);
                 const idx = names.indexOf(name);
                 if (idx === -1) return;
-                const targetIdx = idx + delta;
-                if (targetIdx < 0 || targetIdx >= names.length) return;
-                const neighbourName = names[targetIdx];
-                mxSafe(() => { def.setChildIndex(name, def.getChildIndex(neighbourName)); return true; }, false);
-                refreshAfterDefEdit(nodedefName);
+                moveDefinitionInputTo(nodedefName, name, idx + delta);
             };
 
             const setDefinitionInputValue = (nodedefName, name, value) => {
@@ -2759,6 +2959,35 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     }
                 }
                 refreshAfterDefEdit(nodedefName);
+            };
+
+            // Reorders a declared output on the nodedef AND mirrors the
+            // same move on every implementing graph (same enumeration as
+            // renameDefinitionOutput above), since both name the same pin.
+            const moveDefinitionOutputTo = (nodedefName, name, toIndex) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const names = vecToArray(mxSafe(() => def.getOutputs(), [])).map(mxElName);
+                moveChildAmong(def, names, name, toIndex);
+                const entry = (parsed.definitions || []).find((e) => e.nodedef === nodedefName);
+                for (const gName of (entry && entry.graphs) || []) {
+                    const g = docChild(parsed.doc, gName) || mxSafe(() => parsed.doc.getNodeGraph(gName), null);
+                    if (!g) continue;
+                    const gNames = vecToArray(mxSafe(() => g.getOutputs(), [])).map(mxElName);
+                    moveChildAmong(g, gNames, name, toIndex);
+                }
+                refreshAfterDefEdit(nodedefName);
+            };
+
+            const moveDefinitionOutput = (nodedefName, name, delta) => {
+                if (!parsed) return;
+                const def = docChild(parsed.doc, nodedefName);
+                if (!def) { setError('Definition "' + nodedefName + '" is not in this document.'); return; }
+                const names = vecToArray(mxSafe(() => def.getOutputs(), [])).map(mxElName);
+                const idx = names.indexOf(name);
+                if (idx === -1) return;
+                moveDefinitionOutputTo(nodedefName, name, idx + delta);
             };
 
             const setDefinitionOutputType = (nodedefName, name, type) => {
@@ -3403,9 +3632,50 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 if (!parsed || !scope) return null;
                 const g = graphByName(scope);
                 if (!g) return null;
-                const functional = !!(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(scope) !== -1);
+                // Mirrors buildScope's isFunctionalScope: a library graph's
+                // own nodedef= attribute makes it functional even though
+                // parsed.functionalGraphs only lists doc-local graphs.
+                const functional = !!(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(scope) !== -1)
+                    || !!mxSafe(() => g.getNodeDef(), null);
                 const def = functional ? resolveNodedefFor(parsed.doc, g) : null;
-                return { graph: g, functional, def, owner: functional ? def : g, local: functional ? isDocLocal(def) : true };
+                return { graph: g, functional, def, owner: functional ? def : g, local: functional ? isDocLocal(def) : isDocLocal(g) };
+            };
+
+            // True when the current scope's underlying graph isn't
+            // doc-local, a standard-library nodegraph opened for viewing,
+            // e.g. NG_standard_surface_surfaceshader. Every mutating action
+            // in this scope must bail when this is true.
+            const scopeLocked = React.useMemo(() => {
+                if (!scope || !parsed) return false;
+                return !isDocLocal(graphByName(scope));
+            }, [parsed, scope, docRev]);
+            const scopeLockedRef = React.useRef(false);
+            scopeLockedRef.current = scopeLocked;
+            // Shared guard for every writer below: tells the caller to bail.
+            // Silent, since the amber "View only" strip already explains the lock.
+            const guardLocked = () => scopeLockedRef.current;
+
+            // Shared toFlow() options, built fresh for every rebuild site
+            // (7 of them) so a locked (library) scope always renders inert
+            // cards: no rename affordance, no port-add popover. Navigation
+            // (onOpenScope/onOpenImpl) stays live, viewing is still allowed.
+            const flowOpts = (portModes) => {
+                const locked = scopeLockedRef.current;
+                const base = {
+                    portMode: globalPortsRef.current,
+                    portModes,
+                    onOpenScope: changeScope,
+                    onOpenImpl: openImplGraph,
+                    onTogglePorts: (id) => togglePortsRef.current(id),
+                };
+                if (locked) return base;
+                return Object.assign(base, {
+                    onPortAdd: (info) => onPortAddRef.current(info),
+                    onRenameStart: (id) => inlineRenameStartRef.current(id),
+                    onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
+                    onRenameCancel: () => inlineRenameCancelRef.current(),
+                    renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
+                });
             };
 
             // Other local graphs implementing the same nodedef as the
@@ -3415,6 +3685,61 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const ndName = mxElName(o.def);
                 return docChildren(parsed.doc).filter((el) => mxElCat(el) === 'nodegraph'
                     && mxElName(el) !== scope && mxSafe(() => el.getNodeDefString(), '') === ndName);
+            };
+
+            // Rebuilds the current scope's flow from the document, same
+            // tail renameElement runs after a non-rename mutation: no
+            // definitions-inventory refresh, unlike refreshAfterDefEdit.
+            const rebuildScopeFlow = () => {
+                markDirty();
+                setDocRev((r) => r + 1);
+                const { descs, edges } = buildScope(parsed, scope);
+                const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
+                setFlow(rebuilt);
+            };
+
+            // Reorders an 'i:'/'o:' pseudo-node in the CURRENT scope. Inputs
+            // live on the interface owner (graph or, for a functional scope,
+            // its nodedef); outputs live on the graph and, for a functional
+            // scope, mirror onto the nodedef and every sibling impl graph.
+            const moveInterfacePinTo = (id, toIndex) => {
+                if (!parsed) return;
+                const o = ifaceOwner();
+                if (!o) return;
+                if (!o.local) { setError('This interface belongs to a library definition and cannot be reordered.'); return; }
+                const kind = id.slice(0, 2);
+                const name = id.slice(2);
+                if (kind === 'i:') {
+                    const names = vecToArray(mxSafe(() => o.owner.getInputs(), [])).map(mxElName);
+                    moveChildAmong(o.owner, names, name, toIndex);
+                } else if (kind === 'o:') {
+                    const gNames = vecToArray(mxSafe(() => o.graph.getOutputs(), [])).map(mxElName);
+                    moveChildAmong(o.graph, gNames, name, toIndex);
+                    if (o.functional && o.def) {
+                        const dNames = vecToArray(mxSafe(() => o.def.getOutputs(), [])).map(mxElName);
+                        moveChildAmong(o.def, dNames, name, toIndex);
+                        for (const sib of siblingImplGraphs(o)) {
+                            const sNames = vecToArray(mxSafe(() => sib.getOutputs(), [])).map(mxElName);
+                            moveChildAmong(sib, sNames, name, toIndex);
+                        }
+                    }
+                } else return;
+                if (o.functional && o.def) refreshAfterDefEdit(mxElName(o.def));
+                else rebuildScopeFlow();
+            };
+
+            const moveInterfacePin = (id, delta) => {
+                if (!parsed) return;
+                const o = ifaceOwner();
+                if (!o) return;
+                const kind = id.slice(0, 2);
+                const name = id.slice(2);
+                const names = kind === 'i:'
+                    ? vecToArray(mxSafe(() => o.owner.getInputs(), [])).map(mxElName)
+                    : vecToArray(mxSafe(() => o.graph.getOutputs(), [])).map(mxElName);
+                const idx = names.indexOf(name);
+                if (idx === -1) return;
+                moveInterfacePinTo(id, idx + delta);
             };
 
             // The document ELEMENT that carries a connection's attributes
@@ -3516,6 +3841,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // (ports whose type is still unresolved act as wildcards).
             // Interface inputs are sources only; a node can't feed itself.
             const isValidConnection = (c) => {
+                if (scopeLockedRef.current) return false;
                 if (!c || !c.source || !c.target || !c.targetHandle) return false;
                 if (c.source === c.target) return false;
                 if (c.target.indexOf('i:') === 0) return false;
@@ -3556,6 +3882,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // keep values unless untouched (still at the OLD default).
             const applySignature = (flowId, group) => {
                 if (!parsed || !group || String(flowId).indexOf('n:') !== 0) return;
+                if (guardLocked()) return;
                 const c = scopeContainer();
                 const el = c && mxSafe(() => c.getNode(flowId.slice(2)), null);
                 if (!el) return;
@@ -3665,6 +3992,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // signature key), so only the version attribute changes.
             const applyVersion = (flowId, versionDef) => {
                 if (!parsed || !versionDef || String(flowId).indexOf('n:') !== 0) return;
+                if (guardLocked()) return;
                 const c = scopeContainer();
                 const el = c && mxSafe(() => c.getNode(flowId.slice(2)), null);
                 if (!el) return;
@@ -3741,6 +4069,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 // resolved to a handle — mark the gesture as "connected" so
                 // onConnectEnd skips the port-picker/add-search popup.
                 connectDidRunRef.current = true;
+                if (guardLocked()) return;
                 if (!isValidConnection(params)) return;
                 const { source, sourceHandle, target, targetHandle } = params;
                 const inputName = String(targetHandle || '').replace(/^in:/, '');
@@ -3786,6 +4115,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // input in the document, and the edge in the flow.
             const disconnectEdge = (edge) => {
                 if (!edge) return;
+                if (guardLocked()) return;
                 let restored = null; // a stashed literal severConnection brought back (item 4c)
                 if (parsed) {
                     const point = connectionPoint(edge.target, edge.targetHandle, false);
@@ -4062,6 +4392,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // update referrers (nodename/nodegraph/interfacename/output).
             const renameElement = (flowId, newName) => {
                 if (!parsed || !flowId) return false;
+                if (guardLocked()) return false;
                 if (renameIssue(flowId, newName)) return false;
                 const kind = flowId.slice(0, 2);
                 const oldName = flowId.slice(2);
@@ -4159,17 +4490,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     keptModes[kind + newName] = keptModes[flowId];
                     delete keptModes[flowId];
                 }
-                const rebuilt = toFlow(descs, edges, {
-                    portMode: globalPortsRef.current,
-                    portModes: keptModes,
-                    onOpenScope: changeScope,
-                    onTogglePorts: (id2) => togglePortsRef.current(id2),
-                    onPortAdd: (info) => onPortAddRef.current(info),
-                    onRenameStart: (id2) => inlineRenameStartRef.current(id2),
-onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
-                    onRenameCancel: () => inlineRenameCancelRef.current(),
-                    renameIssueFor: (id2, nm) => renameIssueRef.current(id2, nm),
-                });
+                const rebuilt = toFlow(descs, edges, flowOpts(keptModes));
                 setFlow(rebuilt);
                 focusNode(kind + newName, false);
                 return true;
@@ -4191,7 +4512,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                     }),
                 }));
             };
-            const startInlineRename = (id) => setRenamingNode(id);
+            const startInlineRename = (id) => { if (!scopeLockedRef.current) setRenamingNode(id); };
             const cancelInlineRename = () => setRenamingNode(null);
             const commitInlineRename = (id, name) => {
                 // Leave edit mode first: renameElement rebuilds and drops the
@@ -4212,6 +4533,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             // it fed lose their connection attrs to avoid dangling refs.
             const deleteNode = (id) => {
                 if (!id) return;
+                if (guardLocked()) return;
                 // [mtlx-perf] timing (item 3) — off unless MTLX_PERF_LOG.
                 const __perfStart = MTLX_PERF_LOG ? performance.now() : 0;
                 const name = id.slice(2);
@@ -4375,6 +4697,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 setAddOpen(false);
                 setAddInitialMode(null);
                 if (!parsed) return null;
+                if (guardLocked()) return null;
                 const doc = parsed.doc;
                 const container = scope ? (docChild(doc, scope) || mxSafe(() => doc.getNodeGraph(scope), null)) : doc;
                 if (!container) { setError('Cannot add a node: scope "' + scope + '" was not found.'); return null; }
@@ -4600,8 +4923,10 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 if (!parsed || !scope) return;
                 const o = ifaceOwner();
                 if (!o || !o.owner) { setError('Cannot add an interface pin: scope "' + scope + '" was not found.'); return; }
-                if (o.functional && !o.local) {
-                    setError('This definition comes from the library. Copy it into the document to edit its interface.');
+                if (!o.local) {
+                    setError(o.functional
+                        ? 'This definition comes from the library. Copy it into the document to edit its interface.'
+                        : 'This nodegraph is part of the standard library and is view only.');
                     return;
                 }
                 if (rawName && rawName.trim() && !isValidMtlxName(rawName.trim())) {
@@ -4780,6 +5105,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
             };
 
             const pasteClipboard = () => {
+                if (guardLocked()) return;
                 const clip = clipboardRef.current;
                 if (!clip || !clip.nodes.length || !parsed) return;
                 const container = scopeContainer();
@@ -4887,17 +5213,7 @@ onRenameCommit: (id2, nm) => inlineRenameCommitRef.current(id2, nm),
                 // correct way to pick up the new nodes AND any internal
                 // edges between them without hand-crafting edge ids.
                 const { descs, edges } = buildScope(parsed, scope);
-                const rebuilt = toFlow(descs, edges, {
-                    portMode: globalPortsRef.current,
-                    portModes: capturePortModes(),
-                    onOpenScope: changeScope,
-                    onTogglePorts: (id) => togglePortsRef.current(id),
-                    onPortAdd: (info) => onPortAddRef.current(info),
-                    onRenameStart: (id) => inlineRenameStartRef.current(id),
-onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
-                    onRenameCancel: () => inlineRenameCancelRef.current(),
-                    renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
-                });
+                const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
                 const pastedIds = new Set(created.map((c) => 'n:' + c.newName)
                     .concat(createdGraphs.map((c) => 'g:' + c.newName)));
                 setFlow({
@@ -5101,17 +5417,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     // up the new nodegraph and every rewritten reference
                     // (same reason pasteClipboard/renameElement do this).
                     const { descs, edges } = buildScope(parsed, scope);
-                    const rebuilt = toFlow(descs, edges, {
-                        portMode: globalPortsRef.current,
-                        portModes: capturePortModes(),
-                        onOpenScope: changeScope,
-                        onTogglePorts: (id) => togglePortsRef.current(id),
-                        onPortAdd: (info) => onPortAddRef.current(info),
-                        onRenameStart: (id) => inlineRenameStartRef.current(id),
-onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
-                        onRenameCancel: () => inlineRenameCancelRef.current(),
-                        renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
-                    });
+                    const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
                     const newId = 'g:' + gName;
                     setFlow({
                         edges: rebuilt.edges,
@@ -5385,17 +5691,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         // pasteClipboard/renameElement do this: simplest
                         // correct way to pick up every recreated/rewritten reference.
                         const { descs, edges } = buildScope(parsed, scope);
-                        const rebuilt = toFlow(descs, edges, {
-                            portMode: globalPortsRef.current,
-                            portModes: capturePortModes(),
-                            onOpenScope: changeScope,
-                            onTogglePorts: (id) => togglePortsRef.current(id),
-                            onPortAdd: (info) => onPortAddRef.current(info),
-                            onRenameStart: (id) => inlineRenameStartRef.current(id),
-onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
-                            onRenameCancel: () => inlineRenameCancelRef.current(),
-                            renameIssueFor: (id, nm) => renameIssueRef.current(id, nm),
-                        });
+                        const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
                         const recreatedIds = Object.keys(created).map((old) => 'n:' + nameMap[old]);
                         const recreatedIdSet = new Set(recreatedIds);
                         setFlow({
@@ -5720,8 +6016,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const functionalGraphs = (parsed && parsed.functionalGraphs) || [];
             // Scope dropdown options: instance graphs plus functional
             // graphs (definitions), labeled so the two read apart.
-            const scopeOptions = nodegraphs.map((n) => ({ value: n, label: n }))
+            const scopeOptionsBase = nodegraphs.map((n) => ({ value: n, label: n }))
                 .concat(functionalGraphs.map((n) => ({ value: n, label: n + ' (definition)' })));
+            // A locked (library) scope isn't in either list above (both are
+            // doc-local inventories), append it so the dropdown can still
+            // show where the user currently is.
+            const scopeOptions = (scopeLocked && scope && !scopeOptionsBase.some((o) => o.value === scope))
+                ? scopeOptionsBase.concat([{ value: scope, label: scope + ' (library)' }])
+                : scopeOptionsBase;
             // Remounting on this key re-runs fitView for every new graph.
             const graphKey = (parsed ? parsed.label : 'empty') + '\u241F' + scope;
             // Centered hint while nothing is loaded (and nothing loading):
@@ -6091,6 +6393,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // the document as xpos/ypos (1 unit = 240px). Purely spatial —
             // no docRev bump, but it changes Export's output, so it marks dirty.
             const onNodeDragStop = () => {
+                if (scopeLockedRef.current) return;
                 const c = scopeContainer();
                 if (!c || !parsed) return;
                 let wrote = false;
@@ -6146,8 +6449,18 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const previewTarget = React.useMemo(() => {
                 if (!previewTargetKey) return null;
                 const i = previewTargetKey.indexOf('\u241F');
-                return { scope: previewTargetKey.slice(0, i), id: previewTargetKey.slice(i + 1) };
-            }, [previewTargetKey]);
+                // A library implementation graph opened from a node instance
+                // (scopeOriginRef.graph === this scope) carries that node's
+                // id/scope so previews can pull the instance's own values.
+                const origin = scopeOriginRef.current;
+                const hasOrigin = !!(origin && origin.graph === scope);
+                return {
+                    scope: previewTargetKey.slice(0, i),
+                    id: previewTargetKey.slice(i + 1),
+                    originId: hasOrigin ? origin.id : null,
+                    originScope: hasOrigin ? origin.scope : null,
+                };
+            }, [previewTargetKey, scope]);
 
             // Idle-warm: once a build settles, silently pre-compile OTHER
             // nodes' preview shaders in the background (~0.3s warm vs ~3s
@@ -6259,14 +6572,20 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             const env = await getMxEnv();
                             const { mx, gen } = env;
                             // Compound implementations cache by graph name
-                            // per context, so a document with local
-                            // definitions needs its own fresh context.
-                            const genContext = (parsed && parsed.hasDefinitions && typeof env.createGenContext === 'function')
+                            // per context: local definitions and compound taps
+                            // inside a nodegraph scope need a fresh context.
+                            const genContext = (parsed && (parsed.hasDefinitions || scope) && typeof env.createGenContext === 'function')
                                 ? env.createGenContext() : env.genContext;
                             if (token.cancelled) return;
+                            const origin = scopeOriginRef.current;
+                            const hasOrigin = !!(origin && origin.graph === scope);
                             await window.prewarmPreviewTarget({
                                 mx, gen, genContext,
-                                buildRenderable: () => window.buildPreviewRenderable(parsed, { scope, id }),
+                                buildRenderable: () => window.buildPreviewRenderable(parsed, {
+                                    scope, id,
+                                    originId: hasOrigin ? origin.id : null,
+                                    originScope: hasOrigin ? origin.scope : null,
+                                }),
                                 label: 'idle:' + id,
                                 isMounted: () => !token.cancelled,
                             });
@@ -6310,8 +6629,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             // A different element is now displayed (or none) — drop any
             // in-progress rename edit rather than let it re-target.
             React.useEffect(() => { setNameEditing(false); }, [displayNode && displayNode.id]);
-            const panelReadOnly = !!displayNode && (displayNode.id.indexOf('o:') === 0
-                || !!displayNode.data.readOnly || !!displayNode.data.functional || displayNode.data.kind === 'nodedef');
+            const panelReadOnly = scopeLocked || (!!displayNode && (displayNode.id.indexOf('o:') === 0
+                || !!displayNode.data.readOnly || !!displayNode.data.functional || displayNode.data.kind === 'nodedef'));
             // A definition card (functional graph or bare nodedef): the
             // Definition panel replaces the plain param-row list for these.
             const isDefinitionCard = !!displayNode && (displayNode.data.functional || displayNode.data.kind === 'nodedef');
@@ -6328,11 +6647,45 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             };
             const definitionActions = {
                 renameDefinition, setDefinitionNode, applyDefinitionMeta,
-                addDefinitionInput, removeDefinitionInput, renameDefinitionInput, moveDefinitionInput,
+                addDefinitionInput, removeDefinitionInput, renameDefinitionInput, moveDefinitionInput, moveDefinitionInputTo,
                 setDefinitionInputValue, applyDefinitionInputMeta, setDefinitionInputType,
                 addDefinitionOutput, removeDefinitionOutput, renameDefinitionOutput, setDefinitionOutputType,
+                moveDefinitionOutput, moveDefinitionOutputTo,
                 createImplementationGraph, copyLibraryDefinition, openGraph,
             };
+            const interfaceActions = { moveInterfacePin, moveInterfacePinTo };
+
+            // Left sidebar's node list: one row per current-scope card, in
+            // document order (flow.nodes' own order). kind/type/color read
+            // the same fields toFlow/buildScope already put on data.
+            const scopeRows = React.useMemo(() => flow.nodes.map((n) => {
+                const d = n.data || {};
+                const prefix = n.id.slice(0, 2);
+                const kind = prefix === 'i:' ? 'input'
+                    : prefix === 'o:' ? 'output'
+                    : (prefix === 'g:' || prefix === 'd:') ? (d.functional || prefix === 'd:' ? 'def' : 'graph')
+                    : 'node';
+                const outTypes = (d.outputs || []).map((o) => o.type).filter(Boolean);
+                const type = kind === 'input' || kind === 'output' ? (d.type || '')
+                    : (d.outputs && d.outputs[0] && d.outputs[0].type) || d.type || '';
+                const color = (kind === 'input' || kind === 'output') ? typeColor(type) : getNodeColor(d);
+                return {
+                    id: n.id, kind, name: n.id.slice(2), category: d.category || '',
+                    type, outTypes, color, implGraph: d.implGraph || null,
+                };
+            }), [flow.nodes]);
+            const functional = !!(parsed && parsed.functionalGraphs && parsed.functionalGraphs.indexOf(scope) !== -1);
+            // This pin's position among its siblings of the same kind, in
+            // document child order (== flow.nodes' array order): drives the
+            // Interface group's order row for both 'i:' and 'o:' pseudo-nodes.
+            const ifacePinPos = (() => {
+                if (!displayNode) return null;
+                const kind = displayNode.id.indexOf('i:') === 0 ? 'i:' : (displayNode.id.indexOf('o:') === 0 ? 'o:' : null);
+                if (!kind) return null;
+                const ids = flow.nodes.filter((n) => n.id.indexOf(kind) === 0).map((n) => n.id);
+                const idx = ids.indexOf(displayNode.id);
+                return idx === -1 ? null : { pos: idx, count: ids.length };
+            })();
             const panelInputs = !displayNode ? [] :
                 (displayNode.id.indexOf('i:') === 0
                     ? (ifaceLiteralType(displayNode.data.type)
@@ -6493,7 +6846,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
 
             // Header name editing — only real document elements (nodes,
             // nodegraphs, interface inputs, outputs) can be renamed.
-            const nameEditable = !!displayNode && ['n:', 'g:', 'i:', 'o:'].indexOf(displayNode.id.slice(0, 2)) !== -1;
+            const nameEditable = !scopeLocked && !!displayNode && ['n:', 'g:', 'i:', 'o:'].indexOf(displayNode.id.slice(0, 2)) !== -1;
             const nameIssue = nameEditable ? renameIssue(displayNode.id, nameDraft) : null;
             const startNameEdit = () => {
                 if (!nameEditable) return;
@@ -6610,8 +6963,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 && !!displayNode && displayNode.data.kind === 'nodegraph' && !displayNode.data.functional;
 
             const editMenuItems = [
-                { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
-                { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
+                { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc, disabled: scopeLocked },
+                { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc, disabled: scopeLocked },
                 { separator: true },
                 {
                     label: 'Copy', icon: 'copy', keys: 'Ctrl+C', onSelect: () => copySelectionRef.current(),
@@ -6620,12 +6973,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 },
                 {
                     label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', onSelect: pasteClipboard,
-                    disabled: !parsed || !clipboardFilled,
+                    disabled: !parsed || !clipboardFilled || scopeLocked,
                     title: 'Paste the copied nodes into the current scope',
                 },
                 { separator: true },
                 {
-                    label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed, onSelect: () => reorganize(),
+                    label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed || scopeLocked, onSelect: () => reorganize(),
                     title: 'Re-run the automatic layout once',
                 },
                 {
@@ -6635,24 +6988,31 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 },
                 { separator: true },
                 {
-                    label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection,
+                    label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection || scopeLocked,
                     onSelect: encapsulateSelection,
                     title: 'Collapse the selected nodes into a new nodegraph',
                 },
                 {
-                    label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G', disabled: !canUngroupSelection,
+                    label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G', disabled: !canUngroupSelection || scopeLocked,
                     onSelect: () => { if (canUngroupSelection) ungroupNodegraph(displayNode.data.name); },
                     title: 'Dissolve the selected nodegraph back into its nodes, keeping every connection',
                 },
                 {
-                    label: 'Convert to Node Definition', icon: 'cube', disabled: !canUngroupSelection,
+                    label: 'Convert to Node Definition', icon: 'cube', disabled: !canUngroupSelection || scopeLocked,
                     onSelect: () => promoteNodegraph(displayNode.data.name, defaultDefinitionNodeName(displayNode.data.name)),
                     title: 'Turn the selected nodegraph into a nodedef plus implementation graph and replace it with an instance',
                 },
                 {
-                    label: 'New Node Definition' + '\u2026', icon: 'plus', disabled: !parsed || scope !== '',
+                    label: 'New Node Definition' + '\u2026', icon: 'plus', disabled: !parsed || scope !== '' || scopeLocked,
                     onSelect: () => { setAddInitialMode('definition'); openAddSearch(); },
                     title: 'Create a nodedef and its implementation nodegraph',
+                },
+            ];
+
+            const viewMenuItems = [
+                {
+                    label: 'Node List', icon: 'list-details', keys: 'L', checked: leftOpen,
+                    onSelect: () => setLeftOpen((o) => !o),
                 },
             ];
 
@@ -6686,14 +7046,14 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             const ctxRowsForNode = () => (selectedIds.length > 1 ? [
                 { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
                     onSelect: () => copySelectionRef.current() },
-                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
+                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled || scopeLocked,
                     onSelect: () => pasteClipboard() },
-                { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete,
+                { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete || scopeLocked,
                     onSelect: () => deleteSelectionRef.current() },
                 { separator: true },
                 // Disabled rather than omitted: inside a nodegraph the title
                 // explains why grouping is unavailable.
-                { label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection,
+                { label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection || scopeLocked,
                     title: canGroupSelection ? undefined : 'Grouping is only available at the document root',
                     onSelect: encapsulateSelection },
                 { separator: true },
@@ -6703,24 +7063,27 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 ctxNode && ctxNode.data.kind === 'nodegraph' && {
                     label: 'Open Nodegraph', icon: 'cube',
                     onSelect: () => changeScope(ctxNode.data.name) },
+                ctxNode && ctxNode.data.implGraph && {
+                    label: 'Explore Node Graph (view only)', icon: 'lock',
+                    onSelect: () => openImplGraph(ctxNode.data.implGraph, ctxNode.id) },
                 { label: 'Rename…', icon: 'id', disabled: !ctxNode || !nameEditable,
                     onSelect: () => startInlineRename(ctxNode.id) },
                 { separator: true },
                 { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
                     onSelect: () => copySelectionRef.current() },
-                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
+                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled || scopeLocked,
                     onSelect: () => pasteClipboard() },
-                { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete,
+                { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete || scopeLocked,
                     onSelect: () => deleteSelectionRef.current() },
                 (ctxHasDefaults || canUngroupSelection) && { separator: true },
                 ctxHasDefaults && {
                     label: 'Show All Inputs', icon: 'code', checked: ctxNode.data.portMode === 'all',
                     onSelect: () => togglePortsRef.current(ctxNode.id) },
                 canUngroupSelection && {
-                    label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G',
+                    label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G', disabled: scopeLocked,
                     onSelect: () => ungroupNodegraph(displayNode.data.name) },
                 canUngroupSelection && {
-                    label: 'Convert to Node Definition', icon: 'cube',
+                    label: 'Convert to Node Definition', icon: 'cube', disabled: scopeLocked,
                     onSelect: () => promoteNodegraph(displayNode.data.name, defaultDefinitionNodeName(displayNode.data.name)) },
                 { separator: true },
                 ctxNode && { label: 'Frame Node', icon: 'zoom-in-area',
@@ -6730,7 +7093,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
 
             const ctxRowsForEdge = () => [
                 { label: ctxEdgeIds.length > 1 ? 'Disconnect ' + ctxEdgeIds.length + ' Edges' : 'Disconnect',
-                    icon: 'plug', keys: 'Del', disabled: !ctxEdge,
+                    icon: 'plug', keys: 'Del', disabled: !ctxEdge || scopeLocked,
                     // Edge-only by construction: deleteSelectionRef would also
                     // delete selected NODES caught by the same box-select.
                     onSelect: () => {
@@ -6745,28 +7108,28 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
             ];
 
             const ctxRowsForPane = () => [
-                { label: 'Add Node…', icon: 'share', keys: 'Tab', disabled: !parsed,
+                { label: 'Add Node…', icon: 'share', keys: 'Tab', disabled: !parsed || scopeLocked,
                     onSelect: () => {
                         addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
                         openAddSearch();
                     } },
                 scope === '' && {
-                    label: 'New Node Definition…', icon: 'plus', disabled: !parsed,
+                    label: 'New Node Definition…', icon: 'plus', disabled: !parsed || scopeLocked,
                     onSelect: () => {
                         addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
                         setAddInitialMode('definition');
                         openAddSearch();
                     } },
-                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled,
+                { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled || scopeLocked,
                     onSelect: () => pasteClipboard() },
                 scope !== '' && {
-                    label: 'Add Interface Input/Output…', icon: 'plus', disabled: !parsed,
+                    label: 'Add Interface Input/Output…', icon: 'plus', disabled: !parsed || scopeLocked,
                     onSelect: () => {
                         addAtPointRef.current = { x: ctxMenu.x, y: ctxMenu.y };
                         openAddSearch();
                     } },
                 { separator: true },
-                { label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed,
+                { label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed || scopeLocked,
                     onSelect: () => reorganize() },
                 { label: 'Show All Inputs', icon: 'code', checked: globalPorts === 'all', disabled: !parsed,
                     onSelect: () => setAllPorts(globalPorts === 'all' ? 'authored' : 'all') },
@@ -6777,8 +7140,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                     label: 'Exit Nodegraph', icon: 'chevrons-left', keys: 'Backspace',
                     onSelect: goUpScope },
                 { separator: true },
-                { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc },
-                { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc },
+                { label: 'Undo', icon: 'arrow-back-up', keys: 'Ctrl+Z', onSelect: undoDoc, disabled: scopeLocked },
+                { label: 'Redo', icon: 'arrow-forward-up', keys: 'Ctrl+Shift+Z', onSelect: redoDoc, disabled: scopeLocked },
             ];
 
             const ctxMenuItems = !ctxMenu ? []
@@ -6828,6 +7191,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             <MtlxMenuBar className="shrink-0">
                                 <MtlxMenu label="File" items={fileMenuItems} title="Document actions" />
                                 <MtlxMenu label="Edit" items={editMenuItems} title="Editing actions" />
+                                <MtlxMenu label="View" items={viewMenuItems} title="View options" />
                             </MtlxMenuBar>
                             <div className="w-px h-5 bg-gray-700 shrink-0" aria-hidden="true" />
                             {/* Icon-only on purpose: these two are also in
@@ -6862,6 +7226,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     </button>
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
                                     {scope && <span className="text-blue-300">{scope}</span>}
+                                    {scope && scopeLocked && <span className="text-amber-300"> (library, view only)</span>}
                                 </div>
                             </div>
                         ) : <div />}
@@ -6957,6 +7322,50 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                         </div>
                     </div>
                     <div className="relative flex-1 min-h-0 flex">
+                        {parsed && leftOpen && (
+                        <React.Fragment>
+                            <aside
+                                style={{ width: leftWidth }}
+                                className="flex-none flex flex-col bg-gray-800/95 border-r border-gray-600 overflow-hidden font-mono">
+                                <ScopeList
+                                    rows={scopeRows}
+                                    scope={scope}
+                                    functional={functional}
+                                    selectedIds={selectedIds}
+                                    query={scopeListQuery}
+                                    setQuery={setScopeListQuery}
+                                    typeFilter={scopeListType}
+                                    setTypeFilter={setScopeListType}
+                                    sortKey={scopeListSort}
+                                    setSortKey={setScopeListSort}
+                                    sortDir={scopeListDir}
+                                    setSortDir={setScopeListDir}
+                                    onSelect={(id) => focusNode(id, true)}
+                                    onOpen={(name) => changeScope(name)}
+                                    onOpenImpl={(implGraph, id) => openImplGraph(implGraph, id)}
+                                    onCollapse={() => setLeftOpen(false)}
+                                />
+                                <MtlxTypeLegend
+                                    embedded
+                                    types={legendTypes}
+                                    displayTypes={legendDisplayTypes}
+                                    open={legendOpen}
+                                    showAll={legendShowAll}
+                                    setOpen={setLegendOpen}
+                                    setShowAll={setLegendShowAll}
+                                    nodeCount={flow.nodes.length}
+                                    connectionCount={flow.edges.length}
+                                    showCounts={!!parsed}
+                                />
+                            </aside>
+                            <div
+                                onMouseDown={onLeftHandleMouseDown}
+                                title="Drag to resize"
+                                className={'flex-none w-1.5 cursor-col-resize transition-colors '
+                                    + (leftDragging ? 'bg-blue-500/70' : 'bg-transparent hover:bg-blue-500/50')}
+                            />
+                        </React.Fragment>
+                        )}
                         {/* One contextmenu suppression point for the whole
                             canvas: React Flow only preventDefaults when
                             panOnDrag includes button 2, and ours is [1]. As an
@@ -7001,8 +7410,8 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     edgeUpdaterRadius={12}
                                     minZoom={0.05}
                                     zoomOnDoubleClick={false}
-                                    nodesConnectable={true}
-                                    nodesDraggable={true}
+                                    nodesConnectable={!scopeLocked}
+                                    nodesDraggable={!scopeLocked}
                                     elementsSelectable={true}
                                     deleteKeyCode={null}
                                     panOnDrag={[1]}
@@ -7088,29 +7497,57 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 </ReactFlowComp>
                             </div>
 
-                            {/* Scope select: floats at the canvas host's
-                                top-left. Only rendered when there's more
-                                than one entry (root + a nodegraph to pick). */}
-                            {scopeOptions.length > 0 && (
-                                <MtlxSelect
-                                    value={scope}
-                                    options={scopeOptions}
-                                    emptyOption="(document root)"
-                                    onChange={changeScope}
-                                    defValue={null}
-                                    // Keyboard shortcuts like Backspace must go back to
-                                    // the canvas, not the control, once a scope is picked.
-                                    commitFocus="none"
-                                    title="Scope: the document root, or step inside a nodegraph"
-                                    size="md"
-                                    font="mono"
-                                    className="absolute top-2 left-2 z-30 max-w-[14rem]"
-                                />
+                            {/* Explicit view-only notice: a full-width strip
+                                pinned above every other HUD element (which
+                                shift down to top-9 while this is showing). */}
+                            {scopeLocked && (
+                                <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1 bg-amber-900/40 border-b border-amber-700/50 text-[11px] text-amber-200 backdrop-blur">
+                                    <MtlxIcon name="lock" className="w-3.5 h-3.5" />
+                                    <span>View only: {scope} is part of the standard library and cannot be edited.</span>
+                                </div>
+                            )}
+
+                            {/* Top-left HUD: the collapsed node-list chip and
+                                the scope select share one anchored row so
+                                they never stack on top of each other. */}
+                            {parsed && (!leftOpen || scopeOptions.length > 0) && (
+                                <div className={'absolute left-2 z-30 flex items-center gap-2 ' + (scopeLocked ? 'top-9' : 'top-2')}>
+                                    {!leftOpen && (
+                                        <button
+                                            onClick={() => setLeftOpen(true)}
+                                            title="Show the node list (L)"
+                                            className={HUD_PILL}
+                                        >
+                                            <span>Explore Nodegraph</span>
+                                            <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
+                                    {scopeOptions.length > 0 && (
+                                        <MtlxSelect
+                                            value={scope}
+                                            options={scopeOptions}
+                                            emptyOption="(document root)"
+                                            onChange={changeScope}
+                                            defValue={null}
+                                            // Keyboard shortcuts like Backspace must go back to
+                                            // the canvas, not the control, once a scope is picked.
+                                            commitFocus="none"
+                                            title="Scope: the document root, or step inside a nodegraph"
+                                            size="md"
+                                            font="mono"
+                                            className="max-w-[20rem]"
+                                            popWidth={320}
+                                            // Full name per option, so a truncated
+                                            // row (long graph names) still has a tooltip.
+                                            titles={Object.fromEntries(scopeOptions.map((o) => [o.value, o.label]))}
+                                        />
+                                    )}
+                                </div>
                             )}
 
                             {/* Error banner, centered along the top */}
                             {error && (
-                                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">
+                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg ' + (scopeLocked ? 'top-9' : 'top-2')}>
                                     {error}
                                 </div>
                             )}
@@ -7122,7 +7559,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 <button
                                     onClick={goUpScope}
                                     title={scope + ' (Backspace)'}
-                                    className={HUD_PILL + ' absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[16rem]'}
+                                    className={HUD_PILL + ' absolute left-1/2 -translate-x-1/2 z-30 max-w-[16rem] ' + (scopeLocked ? 'top-9' : 'top-2')}
                                 >
                                     <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
                                     <span className="truncate">Leave {scope}</span>
@@ -7152,7 +7589,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                 </div>
                                 {/* Wrapped so the geometry effect above can
                                     measure legendBoxRef regardless of which branch
-                                    (open card or chip) is currently rendered inside. */}
+                                    (open card or chip) is currently rendered inside.
+                                    Only when the sidebar is closed: open, it's
+                                    embedded there instead (see the <aside> above). */}
+                                {!leftOpen && (
                                 <div ref={legendBoxRef}>
                                     <MtlxTypeLegend
                                         types={legendTypes}
@@ -7166,6 +7606,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                         showCounts={!!parsed}
                                     />
                                 </div>
+                                )}
                             </div>
 
                             {/* Top-right corner, directly under the menu bar
@@ -7175,12 +7616,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                             <button
                                 onClick={() => setParamsOpen(true)}
                                 title="Expand the preview panel"
-                                className="absolute top-2 right-2 z-30 h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                className={HUD_PILL + ' absolute right-2 z-30 ' + (scopeLocked ? 'top-9' : 'top-2')}
                             >
-                                <MtlxIcon name="chevrons-left" className="w-4 h-4" />
-                                <span className="font-mono max-w-[5rem] md:max-w-[8rem] truncate">
-                                    {displayNode ? displayNode.data.name : 'Preview'}
-                                </span>
+                                <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
+                                <span>Preview Panel</span>
                             </button>
                             )}
                         </div>
@@ -7235,7 +7674,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                                 markDirty();
                                             }}
                                             commitFocus="none"
-                                            title="Document colorspace -- fallback for inputs without an explicit colorspace"
+                                            title="MaterialX Document Colorspace"
                                             icon="palette"
                                             size="sm"
                                             block
@@ -7277,6 +7716,11 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     28px button + 16px padding + the 1px border-b that
                                     border-box min-height counts. */}
                                 <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-800">
+                                    {scopeLocked && (
+                                        <span className="flex-none" title="View only">
+                                            <MtlxIcon name="lock" className="w-3.5 h-3.5 text-amber-300" />
+                                        </span>
+                                    )}
                                     {selectedIds.length > 1 ? (
                                         <span className="w-2 h-2 rounded-full flex-none bg-blue-400" />
                                     ) : displayNode ? (
@@ -7341,7 +7785,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     <div className="mx-3 mb-1.5 -mt-1 px-2 py-1 rounded border border-red-800/60 bg-red-950/60 text-red-300 text-[11px]">{nameIssue}</div>
                                 )}
 
-                                <div className="overflow-hidden pb-1.5">
+                                <div className={'overflow-hidden' + (isDefinitionCard ? '' : ' pb-1.5')}>
                                     {selectedIds.length <= 1 && displayNode ? (
                                         <div className="flex items-center gap-2 px-3 py-1">
                                             <div className="text-[10px] text-gray-500 truncate font-mono flex-1">
@@ -7421,7 +7865,7 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     ) : null}
                                 </div>
                             </div>
-                            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2.5 py-1">
+                            <div className={'flex-1 min-h-0 overflow-y-auto custom-scrollbar py-1' + (isDefinitionCard ? ' px-0 [scrollbar-gutter:auto]' : ' px-2.5')}>
                                 {selectedIds.length > 1 ? (
                                     <div className="text-[11px] text-gray-400 py-2 space-y-1.5">
                                         <div>{selectedIds.length} nodes selected.</div>
@@ -7443,12 +7887,12 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                     // param-row list for a functional-graph
                                     // or bare-nodedef card (see js/graph/definition-panel.jsx).
                                     isDefinitionCard && (
-                                        <div key="definition">
+                                        <div key="definition" className="-mt-1">
                                             <DefinitionPanel
                                                 parsed={parsed}
                                                 docRev={docRev}
                                                 entry={definitionEntryFor(displayNode)}
-                                                readOnly={!displayNode.data.nodedefLocal}
+                                                readOnly={!displayNode.data.nodedefLocal || scopeLocked}
                                                 actions={definitionActions}
                                             />
                                         </div>
@@ -7483,9 +7927,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             </div>
                                         </div>
                                     ),
-                                    // Interface metadata (i: nodes only): uiname/uifolder/
-                                    // uimin/uimax/uiadvanced, shown above the value row.
-                                    displayNode.id.indexOf('i:') === 0 && (
+                                    // Interface metadata: an order row for both 'i:' and 'o:'
+                                    // pseudo-nodes, plus uiname/uifolder/uimin/uimax/uiadvanced
+                                    // for 'i:' nodes only (that metadata lives on inputs).
+                                    (displayNode.id.indexOf('i:') === 0 || displayNode.id.indexOf('o:') === 0) && (
                                         <div key="ifacemeta" className="-mt-1">
                                             <button
                                                 type="button"
@@ -7497,56 +7942,78 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                                             </button>
                                             {ifaceMetaOpen && (
                                                 <div className="pt-1.5 space-y-1.5">
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uiname</span>
-                                                        <IfaceMetaField
-                                                            value={displayNode.data.uiname}
-                                                            placeholder="(none)"
-                                                            readOnly={displayNode.data.readOnly}
-                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uiname: v })}
-                                                        />
-                                                    </div>
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uifolder</span>
-                                                        <IfaceMetaField
-                                                            value={displayNode.data.uifolder}
-                                                            placeholder="(none)"
-                                                            readOnly={displayNode.data.readOnly}
-                                                            onCommit={(v) => applyInterfaceMeta(displayNode.id, { uifolder: v })}
-                                                        />
-                                                    </div>
-                                                    {ifaceNumericType(displayNode.data.type) && (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimin</span>
-                                                            <IfaceMetaField
-                                                                value={displayNode.data.uimin}
-                                                                placeholder="(none)"
-                                                                readOnly={displayNode.data.readOnly}
-                                                                onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
-                                                            />
-                                                        </div>
+                                                    {ifacePinPos && (() => {
+                                                        const isOutput = displayNode.id.indexOf('o:') === 0;
+                                                        const pinReadOnly = scopeLocked || (isOutput
+                                                            ? (() => { const o = ifaceOwner(); return !!o && o.local === false; })()
+                                                            : !!displayNode.data.readOnly);
+                                                        return (
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">order</span>
+                                                                <MoveStack
+                                                                    upDisabled={pinReadOnly || ifacePinPos.pos === 0}
+                                                                    downDisabled={pinReadOnly || ifacePinPos.pos === ifacePinPos.count - 1}
+                                                                    onUp={() => interfaceActions.moveInterfacePin(displayNode.id, -1)}
+                                                                    onDown={() => interfaceActions.moveInterfacePin(displayNode.id, 1)}
+                                                                />
+                                                                <span className="text-[10px] text-gray-500 font-mono">{ifacePinPos.pos + 1} of {ifacePinPos.count}</span>
+                                                            </div>
+                                                        );
+                                                    })()}
+                                                    {displayNode.id.indexOf('i:') === 0 && (
+                                                        <React.Fragment>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uiname</span>
+                                                                <IfaceMetaField
+                                                                    value={displayNode.data.uiname}
+                                                                    placeholder="(none)"
+                                                                    readOnly={displayNode.data.readOnly}
+                                                                    onCommit={(v) => applyInterfaceMeta(displayNode.id, { uiname: v })}
+                                                                />
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uifolder</span>
+                                                                <IfaceMetaField
+                                                                    value={displayNode.data.uifolder}
+                                                                    placeholder="(none)"
+                                                                    readOnly={displayNode.data.readOnly}
+                                                                    onCommit={(v) => applyInterfaceMeta(displayNode.id, { uifolder: v })}
+                                                                />
+                                                            </div>
+                                                            {ifaceNumericType(displayNode.data.type) && (
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uimin</span>
+                                                                    <IfaceMetaField
+                                                                        value={displayNode.data.uimin}
+                                                                        placeholder="(none)"
+                                                                        readOnly={displayNode.data.readOnly}
+                                                                        onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimin: v })}
+                                                                    />
+                                                                </div>
+                                                            )}
+                                                            {ifaceNumericType(displayNode.data.type) && (
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uimax</span>
+                                                                    <IfaceMetaField
+                                                                        value={displayNode.data.uimax}
+                                                                        placeholder="(none)"
+                                                                        readOnly={displayNode.data.readOnly}
+                                                                        onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
+                                                                    />
+                                                                </div>
+                                                            )}
+                                                            <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    className="h-3.5 w-3.5 accent-blue-500"
+                                                                    checked={!!displayNode.data.uiadvanced}
+                                                                    disabled={!!displayNode.data.readOnly}
+                                                                    onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}
+                                                                />
+                                                                uiadvanced
+                                                            </label>
+                                                        </React.Fragment>
                                                     )}
-                                                    {ifaceNumericType(displayNode.data.type) && (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="w-14 flex-none text-[10px] text-gray-500 font-mono">uimax</span>
-                                                            <IfaceMetaField
-                                                                value={displayNode.data.uimax}
-                                                                placeholder="(none)"
-                                                                readOnly={displayNode.data.readOnly}
-                                                                onCommit={(v) => applyInterfaceMeta(displayNode.id, { uimax: v })}
-                                                            />
-                                                        </div>
-                                                    )}
-                                                    <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
-                                                        <input
-                                                            type="checkbox"
-                                                            className="h-3.5 w-3.5 accent-blue-500"
-                                                            checked={!!displayNode.data.uiadvanced}
-                                                            disabled={!!displayNode.data.readOnly}
-                                                            onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}
-                                                        />
-                                                        uiadvanced
-                                                    </label>
                                                 </div>
                                             )}
                                         </div>

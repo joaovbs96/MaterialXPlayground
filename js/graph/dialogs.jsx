@@ -35,6 +35,7 @@
             { keys: 'Esc', desc: 'Close the open search, picker, or dialog (browsers also exit full screen)', group: 'keyboard' },
             { keys: 'F', desc: 'Fit the whole graph in view', group: 'keyboard' },
             { keys: 'A', desc: 'Re-run the automatic layout once', group: 'keyboard' },
+            { keys: 'L', desc: 'Toggle the node list sidebar', group: 'keyboard' },
             { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs; at the root: also a new node definition)', group: 'keyboard' },
             { keys: '↑ ↓ / Enter', desc: 'Navigate / choose inside the add-node search and port pickers', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)', group: 'keyboard' },
