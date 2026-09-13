@@ -546,6 +546,11 @@ const SHADOW_ATLAS_HEIGHT = SHADOW_CELL_SIZE * SHADOW_CELL_ROWS;
 // Compile-time GLSL array size for shadow faces, set by mtlx-engine.js and
 // read here so the two files cannot drift out of sync.
 const SHADOW_ATLAS_FACE_SLOTS = (typeof window !== 'undefined' && Number(window.SHADOW_FACE_SLOTS)) || 24;
+// Same bias policy constants mx_shadow_atlas uses (js/mtlx-engine.js), read
+// from window so __shadowProbe below is an exact CPU mirror, not a
+// second copy that can drift out of sync.
+const PROBE_NORMAL_OFFSET_TEXELS = (typeof window !== 'undefined' && Number(window.SHADOW_NORMAL_OFFSET_TEXELS)) || 1.0;
+const PROBE_DEPTH_BIAS_TEXELS = (typeof window !== 'undefined' && Number(window.SHADOW_DEPTH_BIAS_TEXELS)) || 1.0;
 // Variance shadow maps are meant to be blurred: filtering the moments is what
 // turns the hard per-texel test into a soft edge. Without it an orthographic
 // frustum covering a whole room stair-steps every silhouette.
@@ -4801,47 +4806,184 @@ const createMtlxSceneView = async ({
                     prepass,
                 };
             },
-            // Scratch diagnostics can probe the exact moments lookup at a
-            // receiver hit. This is intentionally read-only and unavailable
-            // to the product UI; it makes an atlas-coverage claim testable by
-            // reporting the projected UV, linear receiver depth, sampled
-            // moments and Chebyshev visibility for one world-space point.
-            __shadowProbe: (point, casterIndex = 0) => {
+            // CPU mirror of mx_shadow_atlas (mtlx-engine.js): same bias
+            // policy, tile mapping, VSM Chebyshev and PCSS radii, plus a 5x5
+            // hard-depth reference grid to check the atlas against geometry.
+            __shadowProbe: (point, casterIndex = 0, normal = null) => {
                 const c = Math.floor(Number(casterIndex));
                 const b = shadowCasters[c];
                 if (!b || !point || !Array.isArray(point) || point.length < 3) return { ready: false };
-                const p = new THREE.Vector3(Number(point[0]), Number(point[1]), Number(point[2]));
-                const c4 = new THREE.Vector4(p.x, p.y, p.z, 1).applyMatrix4(b.matrix);
-                if (!Number.isFinite(c4.w) || c4.w <= 0) return { ready: true, inside: false, reason: 'behind', clip: [c4.x, c4.y, c4.z, c4.w] };
+                const P = new THREE.Vector3(Number(point[0]), Number(point[1]), Number(point[2]));
+                const Ng = (Array.isArray(normal) && normal.length >= 3)
+                    ? new THREE.Vector3(Number(normal[0]), Number(normal[1]), Number(normal[2])).normalize()
+                    : new THREE.Vector3(0, 1, 0);
+                const depthPlane = b.depthPlane;
+                const dotDepthPlane = (v) => v.x * depthPlane.x + v.y * depthPlane.y + v.z * depthPlane.z + depthPlane.w;
+                const nearDepth = Number(b.near) || 0;
+                const depthSpan = Math.max(1e-9, Number(b.far) - nearDepth);
+                const projectionScale = Array.isArray(b.projectionScale)
+                    ? [Math.abs(Number(b.projectionScale[0]) || 0), Math.abs(Number(b.projectionScale[1]) || 0)]
+                    : [0, 0];
+                const perspective = projectionScale[0] > 0 || projectionScale[1] > 0;
+                const sourceRadius = Math.max(0, Number(b.sourceRadius) || 0);
+
+                // Same normal-offset and depth-bias policy as mx_shadow_atlas:
+                // both scale off the world size of one atlas texel at the
+                // receiver, computed from the raw (pre-offset) point.
+                const texelBase = Number(b.texelWorldSize) || 0;
+                const rawDepth = dotDepthPlane(P);
+                const rawZ = Math.max(nearDepth + depthSpan * rawDepth, 0);
+                const texelWorld = texelBase * (perspective ? rawZ : 1);
+                const normalOffset = texelWorld * PROBE_NORMAL_OFFSET_TEXELS;
+                const offsetP = P.clone().addScaledVector(Ng, normalOffset);
+
+                const c4 = new THREE.Vector4(offsetP.x, offsetP.y, offsetP.z, 1).applyMatrix4(b.matrix);
+                if (!Number.isFinite(c4.w) || c4.w <= 0) {
+                    return { ready: true, inside: false, reason: 'behind', clip: [c4.x, c4.y, c4.z, c4.w],
+                        face: c, kind: b.kind, caster: b.rec.key };
+                }
                 const sc = c4.multiplyScalar(1 / c4.w).multiplyScalar(0.5).addScalar(0.5);
                 const inside = sc.x >= 0 && sc.x <= 1 && sc.y >= 0 && sc.y <= 1 && sc.z >= 0 && sc.z <= 1;
-                if (!inside) return { ready: true, inside: false, projected: [sc.x, sc.y, sc.z] };
-                const uv = b.tileRect.clone();
-                // Clamp the local (0..1) tile coordinate by half a texel, the
-                // same clamp mx_shadow_atlas applies in mtlx-engine.js, so a
-                // probe at the tile edge reads the same texel the shader does.
-                const atlasTexelX = 1 / SHADOW_ATLAS_WIDTH; const atlasTexelY = 1 / SHADOW_ATLAS_HEIGHT;
-                const tileTexelX = atlasTexelX / Math.max(uv.z, 1e-9);
-                const tileTexelY = atlasTexelY / Math.max(uv.w, 1e-9);
-                const localX = Math.min(Math.max(sc.x, tileTexelX * 0.5), 1 - tileTexelX * 0.5);
-                const localY = Math.min(Math.max(sc.y, tileTexelY * 0.5), 1 - tileTexelY * 0.5);
-                const px = Math.max(0, Math.min(SHADOW_ATLAS_WIDTH - 1, Math.floor((uv.x + localX * uv.z) * SHADOW_ATLAS_WIDTH)));
-                const py = Math.max(0, Math.min(SHADOW_ATLAS_HEIGHT - 1, Math.floor((uv.y + localY * uv.w) * SHADOW_ATLAS_HEIGHT)));
-                const buf = new Float32Array(4);
-                const prev = renderer.getRenderTarget();
-                try {
-                    renderer.readRenderTargetPixels(shadowTarget, px, py, 1, 1, buf);
-                } catch (e) {
-                    renderer.setRenderTarget(prev);
-                    return { ready: true, inside: true, error: String(e && e.message || e) };
+                if (!inside) {
+                    return { ready: true, inside: false, projected: [sc.x, sc.y, sc.z],
+                        face: c, kind: b.kind, caster: b.rec.key };
                 }
-                renderer.setRenderTarget(prev);
-                const receiverDepth = p.x * b.depthPlane.x + p.y * b.depthPlane.y + p.z * b.depthPlane.z + b.depthPlane.w;
-                const variance = Math.max(2e-7, buf[1] - buf[0] * buf[0]);
-                const delta = receiverDepth - buf[0];
-                const lit = Math.max(receiverDepth <= buf[0] ? 1 : 0, variance / (variance + delta * delta));
-                return { ready: true, inside: true, projected: [sc.x, sc.y, sc.z], atlasPixel: [px, py], receiverDepth,
-                    moments: [buf[0], buf[1]], variance, delta, visibility: lit, caster: b.rec.key };
+                const tile = b.tileRect;
+                // Clamp the local (0..1) tile coordinate by half a texel, the
+                // same clamp mx_shadow_atlas applies, so a probe at the tile
+                // edge reads the same texel the shader does.
+                const atlasTexelX = 1 / SHADOW_ATLAS_WIDTH; const atlasTexelY = 1 / SHADOW_ATLAS_HEIGHT;
+                const tileTexelX = atlasTexelX / Math.max(tile.z, 1e-9);
+                const tileTexelY = atlasTexelY / Math.max(tile.w, 1e-9);
+                const clampLocal = (u, v) => [
+                    Math.min(Math.max(u, tileTexelX * 0.5), 1 - tileTexelX * 0.5),
+                    Math.min(Math.max(v, tileTexelY * 0.5), 1 - tileTexelY * 0.5),
+                ];
+                const [localX, localY] = clampLocal(sc.x, sc.y);
+                const atlasU = tile.x + localX * tile.z;
+                const atlasV = tile.y + localY * tile.w;
+                const filteredAtlas = !!(shadowTarget && shadowTarget.texture
+                    && shadowTarget.texture.minFilter === THREE.LinearFilter);
+
+                const prev = renderer.getRenderTarget();
+                const tap = new Float32Array(4);
+                const readTexel = (px, py) => {
+                    const x = Math.max(0, Math.min(SHADOW_ATLAS_WIDTH - 1, px));
+                    const y = Math.max(0, Math.min(SHADOW_ATLAS_HEIGHT - 1, py));
+                    renderer.readRenderTargetPixels(shadowTarget, x, y, 1, 1, tap);
+                    return [tap[0], tap[1]];
+                };
+                // Nearest: whichever texel WebGL's own NearestFilter would
+                // select. Bilinear: the same four-tap blend a LinearFilter
+                // texture() call performs, texel centers at integer + 0.5.
+                const sampleNearest = (u, v) => readTexel(Math.floor(u * SHADOW_ATLAS_WIDTH), Math.floor(v * SHADOW_ATLAS_HEIGHT));
+                const sampleBilinear = (u, v) => {
+                    const fx = u * SHADOW_ATLAS_WIDTH - 0.5; const fy = v * SHADOW_ATLAS_HEIGHT - 0.5;
+                    const x0 = Math.floor(fx); const y0 = Math.floor(fy);
+                    const tx = fx - x0; const ty = fy - y0;
+                    const m00 = readTexel(x0, y0); const m10 = readTexel(x0 + 1, y0);
+                    const m01 = readTexel(x0, y0 + 1); const m11 = readTexel(x0 + 1, y0 + 1);
+                    const top0 = m00[0] + (m10[0] - m00[0]) * tx; const top1 = m00[1] + (m10[1] - m00[1]) * tx;
+                    const bot0 = m01[0] + (m11[0] - m01[0]) * tx; const bot1 = m01[1] + (m11[1] - m01[1]) * tx;
+                    return [top0 + (bot0 - top0) * ty, top1 + (bot1 - top1) * ty];
+                };
+                const sampleMoments = filteredAtlas ? sampleBilinear : sampleNearest;
+                const smoothstep = (edge0, edge1, x) => {
+                    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+                    return t * t * (3 - 2 * t);
+                };
+                const shadowVsm = (m, d) => {
+                    const variance = Math.max(2e-7, m[1] - m[0] * m[0]);
+                    const delta = d - m[0];
+                    const lit = Math.max(d <= m[0] ? 1 : 0, variance / (variance + delta * delta));
+                    return smoothstep(0.3, 1.0, lit);
+                };
+
+                let result;
+                try {
+                    const moments = sampleMoments(atlasU, atlasV);
+                    const rawReceiverDepth = dotDepthPlane(offsetP);
+                    const biasedDepth = rawReceiverDepth - PROBE_DEPTH_BIAS_TEXELS * texelWorld / depthSpan;
+                    const receiverZ = nearDepth + depthSpan * biasedDepth;
+                    const visibility = shadowVsm(moments, biasedDepth);
+
+                    let filteredVisibility;
+                    if (sourceRadius <= 0) {
+                        const ex = Math.min(sc.x, 1 - sc.x); const ey = Math.min(sc.y, 1 - sc.y);
+                        filteredVisibility = 1 + (visibility - 1) * smoothstep(0, 0.04, Math.min(ex, ey));
+                    } else {
+                        const pcssCap = 2 / 1024;
+                        const searchRadius = [0, 1].map((axis) => Math.min(pcssCap,
+                            sourceRadius * projectionScale[axis] * 0.5 / Math.max(nearDepth, 1e-9)
+                                * Math.max(receiverZ - nearDepth, 0) / Math.max(receiverZ, 1e-6)));
+                        let blockerSum = 0; let blockerCount = 0;
+                        for (let oy = -1; oy <= 1; oy++) {
+                            for (let ox = -1; ox <= 1; ox++) {
+                                const [lx, ly] = clampLocal(sc.x + ox * searchRadius[0], sc.y + oy * searchRadius[1]);
+                                const sm = sampleMoments(tile.x + lx * tile.z, tile.y + ly * tile.w);
+                                if (sm[0] < biasedDepth) { blockerSum += sm[0]; blockerCount += 1; }
+                            }
+                        }
+                        const blockerDepth = blockerCount > 0 ? blockerSum / blockerCount : moments[0];
+                        const blockerZ = nearDepth + depthSpan * blockerDepth;
+                        const filterRadius = [0, 1].map((axis) => Math.min(pcssCap,
+                            sourceRadius * projectionScale[axis] * 0.5
+                                * Math.max(receiverZ - blockerZ, 0) / Math.max(blockerZ, 1e-6) / Math.max(receiverZ, 1e-6)));
+                        let filtered = 0;
+                        for (let oy = -1; oy <= 1; oy++) {
+                            for (let ox = -1; ox <= 1; ox++) {
+                                const [lx, ly] = clampLocal(sc.x + ox * filterRadius[0], sc.y + oy * filterRadius[1]);
+                                const sm = sampleMoments(tile.x + lx * tile.z, tile.y + ly * tile.w);
+                                filtered += shadowVsm(sm, biasedDepth);
+                            }
+                        }
+                        const lit = filtered / 9;
+                        const ex = Math.min(sc.x, 1 - sc.x); const ey = Math.min(sc.y, 1 - sc.y);
+                        filteredVisibility = 1 + (lit - 1) * smoothstep(0, 0.04, Math.min(ex, ey));
+                    }
+
+                    // Ground-truth oracle: 5x5 hard texelFetch taps against
+                    // the receiver plane (P, Ng) hit by each tap's own
+                    // unprojected light ray; works for either projection.
+                    const invMatrix = b.matrix.clone().invert();
+                    const unproject = (ndcX, ndcY, ndcZ) => new THREE.Vector3(ndcX, ndcY, ndcZ).applyMatrix4(invMatrix);
+                    const REF_N = 5;
+                    const referenceTaps = [];
+                    for (let ry = 0; ry < REF_N; ry++) {
+                        for (let rx = 0; rx < REF_N; rx++) {
+                            const offsetX = (rx - (REF_N - 1) / 2) * tileTexelX;
+                            const offsetY = (ry - (REF_N - 1) / 2) * tileTexelY;
+                            const [lx, ly] = clampLocal(sc.x + offsetX, sc.y + offsetY);
+                            const rayA = unproject(lx * 2 - 1, ly * 2 - 1, -1);
+                            const rayB = unproject(lx * 2 - 1, ly * 2 - 1, 1);
+                            const dir = rayB.clone().sub(rayA);
+                            const denom = Ng.dot(dir);
+                            let tapVisibility = 1;
+                            if (Math.abs(denom) > 1e-9) {
+                                const t = Ng.dot(P.clone().sub(rayA)) / denom;
+                                const hit = rayA.clone().addScaledVector(dir, t);
+                                const planeDepth = dotDepthPlane(hit);
+                                const stored = sampleNearest(tile.x + lx * tile.z, tile.y + ly * tile.w)[0];
+                                tapVisibility = stored < planeDepth - 1e-5 ? 0 : 1;
+                            }
+                            referenceTaps.push(tapVisibility);
+                        }
+                    }
+                    const meanVisibility = referenceTaps.reduce((a, v) => a + v, 0) / referenceTaps.length;
+                    const classification = meanVisibility >= 0.9 ? 'lit' : (meanVisibility <= 0.1 ? 'deep-umbra' : 'penumbra-mixed');
+
+                    result = { ready: true, inside: true, projected: [sc.x, sc.y, sc.z], atlasUv: [atlasU, atlasV],
+                        receiverDepth: rawReceiverDepth, biasedDepth,
+                        moments, variance: Math.max(2e-7, moments[1] - moments[0] * moments[0]),
+                        visibility, filteredVisibility, normalOffset, texelWorld,
+                        face: c, kind: b.kind, caster: b.rec.key,
+                        reference: { taps: referenceTaps, meanVisibility, classification } };
+                } catch (e) {
+                    result = { ready: true, inside: true, error: String(e && e.message || e), face: c, kind: b.kind, caster: b.rec.key };
+                } finally {
+                    renderer.setRenderTarget(prev);
+                }
+                return result;
             },
             // Reads the occupied fraction of a projected world-space bounds
             // rectangle from one atlas tile. This is a diagnostic for Bayer

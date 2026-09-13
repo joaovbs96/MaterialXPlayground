@@ -1112,6 +1112,11 @@ const patchShadowBounds = (fs) => {
 // the light slots the per-light lookup can address. Must match the renderer.
 const SHADOW_FACE_SLOTS = 24;
 const SHADOW_LIGHT_SLOTS_MAX = 32;
+// One bias policy for every caster kind: a normal offset off the surface
+// and a depth bias on the comparison, both measured in atlas texels so
+// they scale with the per-face texel footprint. Injected as #define below.
+const SHADOW_NORMAL_OFFSET_TEXELS = 1.0;
+const SHADOW_DEPTH_BIAS_TEXELS = 1.0;
 
 const patchShadowLightScope = (fs) => {
     const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
@@ -1193,9 +1198,9 @@ const patchShadowLightScope = (fs) => {
         // perspective projection scale. Directional casters use all zeroes.
         'uniform vec4 u_shadowSourceRadii[' + SHADOW_FACE_SLOTS + '];',
         // World-space size of one atlas texel at the caster's near plane
-        // (perspective) or across the whole frustum (orthographic). Used
-        // only to push the receiver test point off the surface before the
-        // lookup; zero disables the offset for that slot.
+        // (perspective) or across the whole frustum (orthographic). Feeds
+        // both the normal-offset and the depth bias below; zero disables
+        // both for that slot.
         'uniform float u_shadowTexelWorldSize[' + SHADOW_FACE_SLOTS + '];',
         // Light position for an omni caster's face, used to pick which of
         // its six faces a shaded point falls into. Unused (zero) otherwise.
@@ -1212,6 +1217,8 @@ const patchShadowLightScope = (fs) => {
         // consecutive faces it spans (1 for directional, 6 for a cube group).
         'uniform int u_shadowSlotFace[' + SHADOW_LIGHT_SLOTS_MAX + '];',
         'uniform int u_shadowSlotFaceCount[' + SHADOW_LIGHT_SLOTS_MAX + '];',
+        '#define SHADOW_NORMAL_OFFSET_TEXELS ' + SHADOW_NORMAL_OFFSET_TEXELS.toFixed(4),
+        '#define SHADOW_DEPTH_BIAS_TEXELS ' + SHADOW_DEPTH_BIAS_TEXELS.toFixed(4),
         'float mx_shadow_vsm(vec2 moments, float receiverDepth) {',
         '    float p = (receiverDepth <= moments.x) ? 1.0 : 0.0;',
         '    float variance = max(moments.y - moments.x * moments.x, 2e-7);',
@@ -1227,38 +1234,15 @@ const patchShadowLightScope = (fs) => {
         '    float depthSpan = max(depthRange.y, 1e-9);',
         '    vec2 projectionScale = u_shadowSourceRadii[caster].zw;',
         '    bool perspective = projectionScale.x > 0.0 || projectionScale.y > 0.0;',
-        // Normal-offset receiver bias: move the test point about 1.5 caster
-        // texels off the surface along its own normal, scaled by distance
-        // for a perspective source so the offset tracks the texel footprint
-        // rather than a fixed world size. This is what removes the rect and
-        // distant light self-shadow acne/moire found in the M0 quality pass,
-        // without the light-leak a large constant depth bias would add.
-        // u_shadowTexelWorldSize carries world size PER UNIT of light-to-
-        // receiver distance for a perspective caster (so it is multiplied by
-        // the actual distance below), or the constant absolute texel size
-        // for an orthographic one. It must NOT be anchored to the caster
-        // camera near plane: that is an artificial epsilon unrelated to
-        // scene scale, and dividing by it here previously produced an
-        // offset many orders of magnitude too large.
         '    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',
-        // Offset an orthographic (directional) caster, or a perspective AREA
-        // source (never a point/spot one). A point light's centre lookup is
-        // a single hard tap: measured on a thin box blocker, even a small
-        // normal-offset moved that tap across the blocker's silhouette texel
-        // and leaked light through a valid shadow. An area source's nine-tap
-        // filtered average is far less sensitive to that one-texel boundary
-        // crossing, which is what lets it use the same offset to remove the
-        // rect-light moire the M0 quality pass measured (13.7 percent of lit
-        // pixels below 0.9 visibility) without losing contact darkening.
-        '    bool offsetEligible = !perspective || sourceRadius.x > 0.0 || sourceRadius.y > 0.0;',
-        '    float texelWorld = u_shadowTexelWorldSize[caster];',
-        '    vec3 offsetP = P;',
-        '    if (texelWorld > 0.0 && offsetEligible) {',
-        '        float rawDepth = dot(vec4(P, 1.0), depthPlane);',
-        '        float rawZ = max(nearDepth + depthSpan * rawDepth, 0.0);',
-        '        float scale = perspective ? rawZ : 1.0;',
-        '        offsetP = P + Ng * (texelWorld * scale * 0.25);',
-        '    }',
+        // Normal offset AND depth bias share one texel-world estimate,
+        // scaled by distance for a perspective caster (using the raw,
+        // unbiased point). Small enough now to apply to every caster kind.
+        '    float texelBase = u_shadowTexelWorldSize[caster];',
+        '    float rawDepth = dot(vec4(P, 1.0), depthPlane);',
+        '    float rawZ = max(nearDepth + depthSpan * rawDepth, 0.0);',
+        '    float texelWorld = texelBase * (perspective ? rawZ : 1.0);',
+        '    vec3 offsetP = P + Ng * (texelWorld * SHADOW_NORMAL_OFFSET_TEXELS);',
         '    vec4 c4 = u_shadowMatrices[caster] * vec4(offsetP, 1.0);',
         '    if (c4.w <= 0.0) return 1.0;',
         '    vec3 sc = c4.xyz / c4.w;',
@@ -1273,9 +1257,11 @@ const patchShadowLightScope = (fs) => {
         '    vec2 localUv = clamp(sc.xy, tileTexel * 0.5, vec2(1.0) - tileTexel * 0.5);',
         '    vec2 centerUv = tile.xy + localUv * tile.zw;',
         '    vec2 moments = texture(u_shadowAtlas, centerUv).xy;',
-        // Projected XY still comes from the real light camera, but moments
-        // use a linear light-view depth plane supplied by the renderer.
+        // Projected XY comes from the real light camera; moments use a
+        // linear light-view depth plane. One shared depth-bias margin here
+        // feeds the centre tap and both PCSS passes below identically.
         '    float receiverDepth = dot(vec4(offsetP, 1.0), depthPlane);',
+        '    receiverDepth -= SHADOW_DEPTH_BIAS_TEXELS * texelWorld / depthSpan;',
         '    float receiverZ = nearDepth + depthSpan * receiverDepth;',
         // A source with zero extent is a point/directional caster: retain the
         // centre lookup and avoid nine redundant filtered samples. For area
@@ -9292,6 +9278,7 @@ Object.assign(window, {
     ensurePrefilteredEnv, getSpecularEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
+    SHADOW_NORMAL_OFFSET_TEXELS, SHADOW_DEPTH_BIAS_TEXELS,
     createPeelPipeline, createRgbtPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
