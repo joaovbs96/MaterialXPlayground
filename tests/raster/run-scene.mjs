@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { startServer } from '../embed/lib/server.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const HELP = `Usage: node tests/raster/run-scene.mjs --asset-root <dir> --stage <relative-path> --cameras <comma-names|first> --out <dir> [--backend d3d11|swiftshader] [--viewport WxH] [--chromium <path>]`;
+const HELP = `Usage: node tests/raster/run-scene.mjs --asset-root <dir> --stage <relative-path> --cameras <comma-names|first> --out <dir> [--backend d3d11|swiftshader] [--viewport WxH] [--chromium <path>] [--capture-script <module.mjs>]
+Optional capture scripts run after each stock camera capture. Their default export receives (page, {outDir, requestedCamera, camera, handleExpr}); it must restore any changed settings, camera, or destination in finally.`;
 const productSources = ['js/mtlx-engine.js', 'embed/gen/mtlx-engine.js', 'index.html', 'js/usd-scene-lights.js', 'js/usd/usd-stage-loader.js', 'js/usd/usd-stage-worker.js', 'js/usd-scene-app.jsx', 'js/usd-scene-renderer.js', 'js/usd-scene-post.js', 'tests/embed/lib/server.mjs', 'tests/raster/run-scene.mjs'];
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const sourceHashes = () => Object.fromEntries(productSources.filter(p => fs.existsSync(path.join(ROOT, p))).map(p => [p, hash(path.join(ROOT, p))]));
@@ -25,7 +26,7 @@ function parse(argv) {
   let i = 0;
   while (i < argv.length) {
     const k = argv[i++];
-    if (k === '--asset-root') a.assetRoot = need(k);else if (k === '--stage') a.stage = need(k);else if (k === '--cameras') a.cameras = need(k).split(',').map(x => x.trim()).filter(Boolean);else if (k === '--out') a.out = need(k);else if (k === '--backend') a.backend = need(k);else if (k === '--viewport') a.viewport = need(k).split('x').map(Number);else if (k === '--chromium') a.chromium = need(k);else if (k === '--help' || k === '-h') {
+    if (k === '--asset-root') a.assetRoot = need(k);else if (k === '--stage') a.stage = need(k);else if (k === '--cameras') a.cameras = need(k).split(',').map(x => x.trim()).filter(Boolean);else if (k === '--out') a.out = need(k);else if (k === '--backend') a.backend = need(k);else if (k === '--viewport') a.viewport = need(k).split('x').map(Number);else if (k === '--chromium') a.chromium = need(k);else if (k === '--capture-script') a.captureScript = need(k);else if (k === '--help' || k === '-h') {
       console.log(HELP);
       process.exit(0);
     } else throw new Error(`Unknown argument: ${k}`);
@@ -96,6 +97,12 @@ async function main() {
   const root = path.resolve(args.assetRoot);
   const out = path.resolve(ROOT, args.out);
   if (out === root || out.startsWith(root + path.sep)) throw new Error('--out must be outside the read-only asset root');
+  let captureScript = null;
+  let captureHook = null;
+  let captureScriptHashBefore = null;
+  if (args.captureScript) {
+    captureScript = path.resolve(args.captureScript);
+  }
   const report = {
     schemaVersion: 1,
     command: process.argv.slice(2),
@@ -110,7 +117,8 @@ async function main() {
     // Optional fetches (version manifests, GitHub metadata) land here and
     // never flip the run status; real render failures stay in errors.
     warnings: [],
-    cameras: []
+    cameras: [],
+    captureScript: captureScript ? { path: captureScript, hashBefore: captureScriptHashBefore } : null
   };
   const save = () => {
     fs.mkdirSync(out, {
@@ -119,6 +127,15 @@ async function main() {
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(report, null, 2));
   };
   try {
+    if (captureScript) {
+      if (!fs.existsSync(captureScript) || !fs.statSync(captureScript).isFile()) throw new Error('--capture-script must resolve to an existing file');
+      captureScriptHashBefore = hash(captureScript);
+      report.captureScript.hashBefore = captureScriptHashBefore;
+      save();
+      const captureModule = await import(pathToFileURL(captureScript).href);
+      if (typeof captureModule.default !== 'function') throw new Error('--capture-script must provide a default function export');
+      captureHook = captureModule.default;
+    }
     report.preflight = preflight(root, args.stage);
     fs.mkdirSync(out, {
       recursive: true
@@ -364,6 +381,31 @@ async function main() {
           })
         });
         save();
+        if (captureHook) {
+          const hookOut = path.join(out, `${name.replaceAll(/[^A-Za-z0-9_.-]/g, '_')}-${report.cameras.length}`);
+          fs.mkdirSync(hookOut, { recursive: true });
+          const cameraRecord = JSON.parse(JSON.stringify(report.cameras.at(-1)));
+          const hookRecord = { outDir: hookOut, status: 'running' };
+          report.cameras.at(-1).captureScript = hookRecord;
+          save();
+          try {
+            const hookResult = await captureHook(page, {
+              outDir: hookOut,
+              requestedCamera: name,
+              camera: cameraRecord,
+              handleExpr: 'globalThis.__mtlxUsdSceneHandle'
+            });
+            const serialized = JSON.stringify(hookResult);
+            hookRecord.result = serialized === undefined ? null : JSON.parse(serialized);
+            hookRecord.status = 'passed';
+          } catch (e) {
+            hookRecord.status = 'failed';
+            hookRecord.error = String(e?.stack || e);
+            save();
+            throw e;
+          }
+          save();
+        }
       }
       report.backend = await page.evaluate(() => {
         const h = globalThis.__mtlxUsdSceneHandle,
@@ -395,6 +437,12 @@ async function main() {
     report.sourceHashesAfter = sourceHashes();
     report.sourceMutation = JSON.stringify(report.sourceHashesBefore) !== JSON.stringify(report.sourceHashesAfter);
     if (report.sourceMutation) throw new Error('product source changed during capture');
+    if (captureScript) {
+      if (!fs.existsSync(captureScript)) throw new Error('capture script was removed during capture');
+      report.captureScript.hashAfter = hash(captureScript);
+      report.captureScript.mutation = report.captureScript.hashBefore !== report.captureScript.hashAfter;
+      if (report.captureScript.mutation) throw new Error('capture script changed during capture');
+    }
     report.status = report.errors.length ? 'failed' : 'passed';
   } catch (e) {
     report.status = 'failed';
@@ -406,6 +454,10 @@ async function main() {
   } finally {
     report.sourceHashesAfter ??= sourceHashes();
     report.sourceMutation = JSON.stringify(report.sourceHashesBefore) !== JSON.stringify(report.sourceHashesAfter);
+    if (captureScript && report.captureScript && !report.captureScript.hashAfter) {
+      report.captureScript.hashAfter = fs.existsSync(captureScript) ? hash(captureScript) : null;
+      report.captureScript.mutation = report.captureScript.hashBefore !== report.captureScript.hashAfter;
+    }
     report.finishedAt = new Date().toISOString();
     fs.mkdirSync(out, {
       recursive: true
