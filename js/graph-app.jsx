@@ -2326,6 +2326,15 @@
                 let matches = (view.introspected || []).filter((u) =>
                     u.path && (u.path === path || u.path.slice(-(path.length + 1)) === '/' + path)
                     && view.uniforms[u.name]);
+                if (!matches.length && view.__compoundRoot && nodeId.indexOf('n:') === 0 && scope === '') {
+                    // The compound wrapper promotes this node's inputs onto
+                    // __pv_rootInst as <node>_<input>; match that flattened
+                    // name before falling back to the plain loose match.
+                    const promoted = (view.introspected || []).filter((u) =>
+                        u.path && u.path.split('/').pop() === name + '_' + inputName && view.uniforms[u.name]);
+                    const distinct = new Set(promoted.map((u) => u.name));
+                    if (distinct.size === 1) matches = promoted;
+                }
                 if (!matches.length
                         && nodeId.indexOf('i:') !== 0
                         && previewTarget && previewTarget.id === nodeId
@@ -6574,21 +6583,28 @@
                             // Compound implementations cache by graph name
                             // per context: local definitions and compound taps
                             // inside a nodegraph scope need a fresh context.
-                            const genContext = (parsed && (parsed.hasDefinitions || scope) && typeof env.createGenContext === 'function')
-                                ? env.createGenContext() : env.genContext;
-                            if (token.cancelled) return;
-                            const origin = scopeOriginRef.current;
-                            const hasOrigin = !!(origin && origin.graph === scope);
-                            await window.prewarmPreviewTarget({
-                                mx, gen, genContext,
-                                buildRenderable: () => window.buildPreviewRenderable(parsed, {
-                                    scope, id,
-                                    originId: hasOrigin ? origin.id : null,
-                                    originScope: hasOrigin ? origin.scope : null,
-                                }),
-                                label: 'idle:' + id,
-                                isMounted: () => !token.cancelled,
-                            });
+                            const needsFreshCtx = !!(parsed && (parsed.hasDefinitions || scope) && typeof env.createGenContext === 'function');
+                            const freshCtx = needsFreshCtx ? env.createGenContext() : null;
+                            const genContext = freshCtx || env.genContext;
+                            try {
+                                if (token.cancelled) return;
+                                const origin = scopeOriginRef.current;
+                                const hasOrigin = !!(origin && origin.graph === scope);
+                                await window.prewarmPreviewTarget({
+                                    mx, gen, genContext,
+                                    buildRenderable: () => window.buildPreviewRenderable(parsed, {
+                                        scope, id,
+                                        originId: hasOrigin ? origin.id : null,
+                                        originScope: hasOrigin ? origin.scope : null,
+                                    }),
+                                    label: 'idle:' + id,
+                                    isMounted: () => !token.cancelled,
+                                });
+                            } finally {
+                                // Fresh contexts are per-target here (compound
+                                // impls cache by name), never reused after this.
+                                if (freshCtx) mxSafe(() => { freshCtx.delete(); return true; }, false);
+                            }
                         } catch (e) {
                             // Defensive only — prewarmPreviewTarget is
                             // documented to never throw; this just keeps

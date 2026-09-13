@@ -367,10 +367,13 @@
             // compound function than inlined (measured 6x on a 108-node
             // network). Promotes external/baked inputs to live nodedef inputs.
             const compoundRoot = readGraphCompoundRoot();
-            const wrapRootNetwork = (shaderNode, label) => {
-                const seedName = mxElName(shaderNode);
+            // outType/outName are seedNode's own output: surfaceshader or
+            // any other COMPOUND_TAP_TYPES closure type, outName set only
+            // for a multi-output seed.
+            const wrapRootNetwork = (seedNode, label, outType, outName) => {
+                const seedName = mxElName(seedNode);
                 const closure = new Map(); // name -> node, ROOT nodes only
-                const stack = [shaderNode];
+                const stack = [seedNode];
                 while (stack.length) {
                     const n = stack.pop();
                     const nm = mxElName(n);
@@ -383,18 +386,24 @@
                         if (up) stack.push(up);
                     }
                 }
-                if (closure.size <= 1) return ok(shaderNode, label); // nothing upstream to gain
+                // Nothing upstream to gain: for surfaceshader the raw node
+                // is already a valid renderable; a closure type still needs
+                // the surface/material shell to be renderable at all.
+                if (closure.size <= 1) {
+                    return outType === 'surfaceshader' ? ok(seedNode, label)
+                        : wrapAsSurface({ nodename: seedName }, outType, label);
+                }
 
                 const inst = mxSafe(() => {
                     const defName = doc.createValidChildName('__pv_NDR');
                     const category = doc.createValidChildName('__pv_root');
-                    const defR = doc.addNodeDef(defName, 'surfaceshader', category);
+                    const defR = doc.addNodeDef(defName, outType, category);
                     if (!defR) return null;
                     temps.push({ container: doc, name: defName }); // FIRST: cleanup is LIFO
                     for (const o of vecToArray(mxSafe(() => defR.getOutputs(), []))) {
                         defR.removeOutput(mxElName(o));
                     }
-                    if (!defR.addOutput('out', 'surfaceshader')) return null;
+                    if (!defR.addOutput('out', outType)) return null;
 
                     const gR = doc.addNodeGraph(doc.createValidChildName('__pv_NGR'));
                     if (!gR) return null;
@@ -441,15 +450,22 @@
                             const ndIn = defR.addInput(pname, iType);
                             if (!ndIn) return null;
                             mxWriteValue(ndIn, val, iType);
+                            // Color and unit management follows the value, so
+                            // the promoted input must keep those attributes.
+                            for (const a of ['colorspace', 'unit', 'unittype']) {
+                                const av = mxElAttr(i, a);
+                                if (av) mxSetAttr(ndIn, a, av);
+                            }
                             mxRemoveAttr(i, 'value');
                             mxSetAttr(i, 'interfacename', pname);
                         }
                     }
-                    const oR = gR.addOutput('out', 'surfaceshader');
+                    const oR = gR.addOutput('out', outType);
                     if (!oR) return null;
                     mxSetAttr(oR, 'nodename', seedName);
+                    if (outName) mxSetAttr(oR, 'output', outName);
 
-                    const rootInst = addTempNode(category, '__pv_rootInst', 'surfaceshader');
+                    const rootInst = addTempNode(category, '__pv_rootInst', outType);
                     if (!rootInst) return null;
                     rootInst.setNodeDefString(defName);
                     for (const c of extConns) {
@@ -462,13 +478,19 @@
                     return rootInst;
                 }, null);
 
-                if (!inst) { cleanup(); return ok(shaderNode, label); }
-                return ok(inst, label);
+                if (!inst) {
+                    cleanup();
+                    return outType === 'surfaceshader' ? ok(seedNode, label)
+                        : wrapAsSurface({ nodename: seedName }, outType, label);
+                }
+                return outType === 'surfaceshader' ? ok(inst, label)
+                    : wrapAsSurface({ nodename: mxElName(inst) }, outType, label);
             };
-            // Only a root-level surfaceshader is worth wrapping, used at
-            // every ok()-of-a-root-surfaceshader site below.
+            // Only a root-level surfaceshader is worth wrapping this way,
+            // used at every ok()-of-a-root-surfaceshader site below; other
+            // COMPOUND_TAP_TYPES roots are routed in previewNode directly.
             const maybeWrapRoot = (el, label) => (compoundRoot && mxElType(el) === 'surfaceshader')
-                ? wrapRootNetwork(el, label) : ok(el, label);
+                ? wrapRootNetwork(el, label, 'surfaceshader', null) : ok(el, label);
 
             // Preview one node instance in `container` (the doc root when
             // containerName is '', else the nodegraph of that name).
@@ -489,6 +511,12 @@
                 if (t === 'surfaceshader' && !containerName) return maybeWrapRoot(el, name);
                 const out = nodeOutInfo(el);
                 if (!out.type) return fail('No preview for "' + name + '" \u2014 its output type is unknown.');
+                // A root-level closure output (BSDF/EDF/VDF/volumeshader/
+                // displacementshader) gets the same compound-compile
+                // wrapper as a root surfaceshader (maybeWrapRoot above).
+                if (!containerName && compoundRoot && COMPOUND_TAP_TYPES.indexOf(out.type) !== -1) {
+                    return wrapRootNetwork(el, name, out.type, out.name);
+                }
                 let srcRef;
                 const containerDef = containerName ? mxSafe(() => container.getNodeDef(), null) : null;
                 // Closure/shader taps compile far faster as a compound
@@ -1202,241 +1230,261 @@
                         // compoundRoot: compound root-network implementations
                         // are also cached by NAME per context, same reason.
                         const needsFreshCtx = !!(parsed && (parsed.hasDefinitions || (target && target.scope) || compoundRoot));
-                        const genContext = (needsFreshCtx && typeof env.createGenContext === 'function')
-                            ? env.createGenContext() : env.genContext;
-                        if (!mounted) return;
-                        // Let the graph paint before the heavy synchronous
-                        // regen below — without this yield it blocks the frame
-                        // a just-added/grouped node should first appear in.
-                        await nextFrame();
-                        await nextFrame();
-                        // Re-check staleness: another run may have started
-                        // (and this effect's cleanup set mounted = false)
-                        // while we were yielding across those two frames.
-                        if (!mounted) return;
-                        // Coalesce rapid triggers: docRev fires for the OLD
-                        // target before selection moves a frame later; the
-                        // newest run cancels stale compiles (~330ms-3s) first.
-                        await new Promise((r) => setTimeout(r, 120));
-                        if (!mounted) return;
-                        // [mtlx-perf] timing (item 3) — off unless
-                        // MTLX_PERF_LOG (bare window global, model.jsx
-                        // loads before this file).
-                        const __pvStart = MTLX_PERF_LOG ? performance.now() : 0;
-                        // buildPreviewRenderable mutates the LIVE document via
-                        // wasm, so serialize it against concurrent shader gen
-                        // (mxExclusive) — it's synchronous, so await-free here.
-                        const built = await window.mxExclusive(() => buildPreviewRenderable(parsed, target));
-                        if (MTLX_PERF_LOG) {
-                            console.log('[mtlx-perf] buildPreviewRenderable: '
-                                + (performance.now() - __pvStart).toFixed(1) + 'ms (target: '
-                                + ((target && target.id) || '(doc default)') + ')');
-                        }
-                        if (!built.renderable) {
-                            setLabel('');
-                            setNotice(built.notice || 'This document has nothing to preview.');
-                            setLoading(false);
-                            setUpdating(false);
-                            setResolvedGeom(null);
-                            if (liveViewRef.current) {
-                                try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                        const freshCtx = (needsFreshCtx && typeof env.createGenContext === 'function')
+                            ? env.createGenContext() : null;
+                        const genContext = freshCtx || env.genContext;
+                        // Every return below goes through this: a fresh
+                        // context is used only within this one run, never
+                        // retained by createMtlxRenderView/applyMaterial.
+                        const releaseCtx = () => {
+                            if (freshCtx) mxSafe(() => { freshCtx.delete(); return true; }, false);
+                        };
+                        if (!mounted) { releaseCtx(); return; }
+                        // Wraps every remaining path (including the early
+                        // returns below) so the fresh context above is
+                        // always released once this run is done with it.
+                        try {
+                            // Let the graph paint before the heavy synchronous
+                            // regen below, without this yield it blocks the frame
+                            // a just-added/grouped node should first appear in.
+                            await nextFrame();
+                            await nextFrame();
+                            // Re-check staleness: another run may have started
+                            // (and this effect's cleanup set mounted = false)
+                            // while we were yielding across those two frames.
+                            if (!mounted) return;
+                            // Coalesce rapid triggers: docRev fires for the OLD
+                            // target before selection moves a frame later; the
+                            // newest run cancels stale compiles (~330ms-3s) first.
+                            await new Promise((r) => setTimeout(r, 120));
+                            if (!mounted) return;
+                            // [mtlx-perf] timing (item 3), off unless
+                            // MTLX_PERF_LOG (bare window global, model.jsx
+                            // loads before this file).
+                            const __pvStart = MTLX_PERF_LOG ? performance.now() : 0;
+                            // buildPreviewRenderable mutates the LIVE document via
+                            // wasm, so serialize it against concurrent shader gen
+                            // (mxExclusive), it's synchronous, so await-free here.
+                            const built = await window.mxExclusive(() => buildPreviewRenderable(parsed, target));
+                            if (MTLX_PERF_LOG) {
+                                console.log('[mtlx-perf] buildPreviewRenderable: '
+                                    + (performance.now() - __pvStart).toFixed(1) + 'ms (target: '
+                                    + ((target && target.id) || '(doc default)') + ')');
                             }
-                            liveViewRef.current = null;
-                            liveGeomRef.current = null;
-                            if (viewRef) viewRef.current = null;
-                            if (canvasRef.current) {
-                                const c = canvasRef.current;
-                                const w = c.width, h = c.height;
-                                c.width = 0; c.height = 0;
-                                c.width = w; c.height = h;
-                            }
-                            return;
-                        }
-
-                        // Geometry is baked into the render-view shell at creation
-                        // (createMtlxRenderView has no setGeometry handle), so when the
-                        // new target's default geometry differs from the live shell's,
-                        // dispose it here and fall through to the FIRST-BUILD path
-                        // below. Same-geometry target/doc changes keep taking the
-                        // cheap refresh/apply paths.
-                        // Mode resolution: the per-node tags computed by buildPreviewRenderable
-                        // are only consulted in 'pernode' mode; the two fixed modes apply to
-                        // every target uniformly.
-                        let wantGeom = geomMode === 'pernode'
-                            ? (built.defaultGeom || 'shaderball-scene')
-                            : geomMode;
-                        // The registry can empty out from under an
-                        // already-selected 'custom' before this effect
-                        // runs; fall back rather than resolving to nothing.
-                        if (wantGeom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) {
-                            wantGeom = 'shaderball-scene';
-                        }
-                        setResolvedGeom(wantGeom);
-                        // IDENTITY KEY: unlike other modes, 'custom' needs
-                        // its epoch folded in to tell a model REPLACEMENT
-                        // apart from the same model staying selected.
-                        const wantGeomKey = wantGeom === 'custom' ? 'custom:' + (customGeom ? customGeom.epoch : 0) : wantGeom;
-                        if (liveViewRef.current && liveGeomRef.current !== wantGeomKey) {
-                            try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
-                            liveViewRef.current = null;
-                            liveGeomRef.current = null;
-                            if (viewRef) viewRef.current = null;
-                        }
-
-                        // FAST PATH (item F3c): before any teardown, try
-                        // refreshing the EXISTING compiled view in place —
-                        // the scene is fixed, so any live view is eligible.
-                        const live = liveViewRef.current;
-                        if (live) {
-                            let res = { refreshed: false };
-                            try {
-                                // Async since the shared-wasm serialization
-                                // (mxExclusive, js/mtlx-engine.js): its shader
-                                // regen now waits its turn on the wasm queue.
-                                res = await tryRefreshRenderView({
-                                    view: live, mx, gen, genContext,
-                                    renderable: built.renderable,
-                                    label: built.label || parsed.label,
-                                    isMounted: () => mounted,
-                                });
-                            } finally {
-                                // Remove '__pv_*' wrappers before anything
-                                // rebuilds the graph (only when the refresh
-                                // took) — a wasm mutation; mxExclusive is fine.
-                                if (res.refreshed) window.mxExclusive(() => built.cleanup());
-                            }
-                            // Staleness re-check: a superseded run must not
-                            // setState or fall into the APPLY path for a
-                            // no-longer-relevant target; cleanup() is idempotent.
-                            if (!mounted) { window.mxExclusive(() => built.cleanup()); return; }
-                            if (res.refreshed) {
-                                // Bind any dropped texture files onto the shader's
-                                // filename uniforms (same pass as the viewer/apply
-                                // path); missing refs keep the node default color.
-                                const rep = bindDroppedTextures(live, fileMap || {});
-                                if (rep.missing.length) {
-                                    mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
-                                }
-                                setLabel(built.label || '');
+                            if (!built.renderable) {
+                                setLabel('');
+                                setNotice(built.notice || 'This document has nothing to preview.');
                                 setLoading(false);
-                                // Clear any outdated flag a superseded apply left
-                                // set (read by graph-app.jsx's tryFastUniformUpdate
-                                // H1 guard); a pure uniform refresh needs neither.
-                                live.__outdated = false;
                                 setUpdating(false);
+                                setResolvedGeom(null);
+                                if (liveViewRef.current) {
+                                    try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                                }
+                                liveViewRef.current = null;
+                                liveGeomRef.current = null;
+                                if (viewRef) viewRef.current = null;
+                                if (canvasRef.current) {
+                                    const c = canvasRef.current;
+                                    const w = c.width, h = c.height;
+                                    c.width = 0; c.height = 0;
+                                    c.width = w; c.height = h;
+                                }
                                 return;
                             }
-
-                            // APPLY PATH: source/texture changed (or generation
-                            // bailed) — swap a fresh material onto this SAME
-                            // shell; __outdated flags the swap for the H1 guard.
-                            live.__outdated = true;
-                            setUpdating(true);
-                            setLabel(built.label || '');
-                            let applied = null;
-                            if (res.srcs) {
-                                // tryRefreshRenderView already generated fresh
-                                // sources (threaded via `srcs`) — clean up the
-                                // '__pv_*' wrappers NOW, before applyMaterial.
-                                window.mxExclusive(() => built.cleanup());
-                                applied = await live.applyMaterial({
-                                    mx, gen, genContext, renderable: built.renderable,
-                                    srcs: res.srcs,
-                                    label: built.label || parsed.label,
-                                    isMounted: () => mounted,
-                                });
-                            } else {
-                                // No pre-generated srcs — applyMaterial
-                                // regenerates from `built.renderable` itself, so
-                                // `built` stays alive until that call finishes.
+    
+                            // Geometry is baked into the render-view shell at creation
+                            // (createMtlxRenderView has no setGeometry handle), so when the
+                            // new target's default geometry differs from the live shell's,
+                            // dispose it here and fall through to the FIRST-BUILD path
+                            // below. Same-geometry target/doc changes keep taking the
+                            // cheap refresh/apply paths.
+                            // Mode resolution: the per-node tags computed by buildPreviewRenderable
+                            // are only consulted in 'pernode' mode; the two fixed modes apply to
+                            // every target uniformly.
+                            let wantGeom = geomMode === 'pernode'
+                                ? (built.defaultGeom || 'shaderball-scene')
+                                : geomMode;
+                            // The registry can empty out from under an
+                            // already-selected 'custom' before this effect
+                            // runs; fall back rather than resolving to nothing.
+                            if (wantGeom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) {
+                                wantGeom = 'shaderball-scene';
+                            }
+                            setResolvedGeom(wantGeom);
+                            // IDENTITY KEY: unlike other modes, 'custom' needs
+                            // its epoch folded in to tell a model REPLACEMENT
+                            // apart from the same model staying selected.
+                            const wantGeomKey = wantGeom === 'custom' ? 'custom:' + (customGeom ? customGeom.epoch : 0) : wantGeom;
+                            if (liveViewRef.current && liveGeomRef.current !== wantGeomKey) {
+                                try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                                liveViewRef.current = null;
+                                liveGeomRef.current = null;
+                                if (viewRef) viewRef.current = null;
+                            }
+    
+                            // FAST PATH (item F3c): before any teardown, try
+                            // refreshing the EXISTING compiled view in place ,
+                            // the scene is fixed, so any live view is eligible.
+                            const live = liveViewRef.current;
+                            if (live) {
+                                let res = { refreshed: false };
                                 try {
-                                    applied = await live.applyMaterial({
-                                        mx, gen, genContext, renderable: built.renderable,
+                                    // Async since the shared-wasm serialization
+                                    // (mxExclusive, js/mtlx-engine.js): its shader
+                                    // regen now waits its turn on the wasm queue.
+                                    res = await tryRefreshRenderView({
+                                        view: live, mx, gen, genContext,
+                                        renderable: built.renderable,
                                         label: built.label || parsed.label,
                                         isMounted: () => mounted,
                                     });
                                 } finally {
-                                    window.mxExclusive(() => built.cleanup());
+                                    // Remove '__pv_*' wrappers before anything
+                                    // rebuilds the graph (only when the refresh
+                                    // took), a wasm mutation; mxExclusive is fine.
+                                    if (res.refreshed) window.mxExclusive(() => built.cleanup());
                                 }
+                                // Staleness re-check: a superseded run must not
+                                // setState or fall into the APPLY path for a
+                                // no-longer-relevant target; cleanup() is idempotent.
+                                if (!mounted) { window.mxExclusive(() => built.cleanup()); return; }
+                                if (res.refreshed) {
+                                    // Bind any dropped texture files onto the shader's
+                                    // filename uniforms (same pass as the viewer/apply
+                                    // path); missing refs keep the node default color.
+                                    const rep = bindDroppedTextures(live, fileMap || {});
+                                    if (rep.missing.length) {
+                                        mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
+                                    }
+                                    setLabel(built.label || '');
+                                    setLoading(false);
+                                    // Clear any outdated flag a superseded apply left
+                                    // set (read by graph-app.jsx's tryFastUniformUpdate
+                                    // H1 guard); a pure uniform refresh needs neither.
+                                    live.__outdated = false;
+                                    setUpdating(false);
+                                    return;
+                                }
+    
+                                // APPLY PATH: source/texture changed (or generation
+                                // bailed), swap a fresh material onto this SAME
+                                // shell; __outdated flags the swap for the H1 guard.
+                                live.__outdated = true;
+                                setUpdating(true);
+                                setLabel(built.label || '');
+                                let applied = null;
+                                if (res.srcs) {
+                                    // tryRefreshRenderView already generated fresh
+                                    // sources (threaded via `srcs`), clean up the
+                                    // '__pv_*' wrappers NOW, before applyMaterial.
+                                    window.mxExclusive(() => built.cleanup());
+                                    applied = await live.applyMaterial({
+                                        mx, gen, genContext, renderable: built.renderable,
+                                        srcs: res.srcs,
+                                        label: built.label || parsed.label,
+                                        isMounted: () => mounted,
+                                    });
+                                } else {
+                                    // No pre-generated srcs, applyMaterial
+                                    // regenerates from `built.renderable` itself, so
+                                    // `built` stays alive until that call finishes.
+                                    try {
+                                        applied = await live.applyMaterial({
+                                            mx, gen, genContext, renderable: built.renderable,
+                                            label: built.label || parsed.label,
+                                            isMounted: () => mounted,
+                                        });
+                                    } finally {
+                                        window.mxExclusive(() => built.cleanup());
+                                    }
+                                }
+                                // null result or stale `mounted`: applyMaterial()
+                                // left the old material exactly as-is, the
+                                // superseding run owns badge/__outdated/label.
+                                if (!applied || !mounted) return;
+                                live.__outdated = false;
+                                // Read by graph-app.jsx's tryFastUniformUpdate to
+                                // match promoted-uniform paths under the wrapper.
+                                live.__compoundRoot = compoundRoot;
+                                const rep = bindDroppedTextures(live, fileMap || {});
+                                if (rep.missing.length) {
+                                    mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
+                                }
+                                setUpdating(false);
+                                return;
                             }
-                            // null result or stale `mounted`: applyMaterial()
-                            // left the old material exactly as-is — the
-                            // superseding run owns badge/__outdated/label.
-                            if (!applied || !mounted) return;
-                            live.__outdated = false;
-                            const rep = bindDroppedTextures(live, fileMap || {});
+    
+                            // FIRST-BUILD PATH: reached only when there's no live
+                            // view to apply onto, full teardown+recreate via
+                            // createMtlxRenderView (later edits take APPLY, above).
+                            setLoading(true);
+                            if (liveViewRef.current) {
+                                // Defensive only, normally unreachable, since every
+                                // path above that leaves a live view in place also
+                                // returns before falling through here.
+                                try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                                liveViewRef.current = null;
+                                liveGeomRef.current = null;
+                                if (viewRef) viewRef.current = null;
+                            }
+                            setLabel(built.label || '');
+                            // The canvas may need a frame to mount after a
+                            // notice/error row from the previous target.
+                            let canvas = canvasRef.current;
+                            if (!canvas) {
+                                await new Promise((r) => requestAnimationFrame(r));
+                                canvas = canvasRef.current;
+                                if (!canvas || !mounted) { window.mxExclusive(() => built.cleanup()); return; }
+                            }
+                            let view = null;
+                            try {
+                                view = await createMtlxRenderView({
+                                    canvas, mx, gen, genContext, renderable: built.renderable, lightData,
+                                    label: built.label || parsed.label,
+                                    needsLighting: true,
+                                    geomName: wantGeom,
+                                    // 3D geometries orbit by default; the full scene opts
+                                    // in via sceneOrbit (mirrors viewer-app.jsx). The 2D
+                                    // buffer stays fixed via the engine's flat2d gate.
+                                    sceneOrbit: wantGeom === 'shaderball-scene',
+                                    autoRotate: false,
+                                    backdrop,
+                                    isMounted: () => mounted,
+                                    isActive: () => activeRef.current,
+                                    // The shell this builds can outlive THIS run's
+                                    // `mounted`, a later docRev re-run reuses it via
+                                    // applyMaterial(), so its rAF loop needs isAlive.
+                                    isAlive: () => shellAliveRef.current,
+                                    debugKind: 'graph-preview',
+                                });
+                            } finally {
+                                // Remove the '__pv_*' wrappers before anything can
+                                // rebuild the graph from the live document ,
+                                // fire-and-forget mxExclusive (see finally above).
+                                window.mxExclusive(() => built.cleanup());
+                            }
+                            if (!view) return;
+                            if (!mounted) { view.dispose(); return; }
+                            liveViewRef.current = view;
+                            // Read by graph-app.jsx's tryFastUniformUpdate to
+                            // match promoted-uniform paths under the wrapper.
+                            view.__compoundRoot = compoundRoot;
+                            liveGeomRef.current = wantGeomKey;
+                            if (viewRef) viewRef.current = view;
+                            setViewEpoch((n) => n + 1);
+                            setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
+                            // Bind any dropped texture files onto the shader's
+                            // filename uniforms (same pass as the viewer). Missing
+                            // references keep the node default color.
+                            const rep = bindDroppedTextures(view, fileMap || {});
                             if (rep.missing.length) {
                                 mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
                             }
+                            setLoading(false);
                             setUpdating(false);
-                            return;
-                        }
-
-                        // FIRST-BUILD PATH: reached only when there's no live
-                        // view to apply onto — full teardown+recreate via
-                        // createMtlxRenderView (later edits take APPLY, above).
-                        setLoading(true);
-                        if (liveViewRef.current) {
-                            // Defensive only — normally unreachable, since every
-                            // path above that leaves a live view in place also
-                            // returns before falling through here.
-                            try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
-                            liveViewRef.current = null;
-                            liveGeomRef.current = null;
-                            if (viewRef) viewRef.current = null;
-                        }
-                        setLabel(built.label || '');
-                        // The canvas may need a frame to mount after a
-                        // notice/error row from the previous target.
-                        let canvas = canvasRef.current;
-                        if (!canvas) {
-                            await new Promise((r) => requestAnimationFrame(r));
-                            canvas = canvasRef.current;
-                            if (!canvas || !mounted) { window.mxExclusive(() => built.cleanup()); return; }
-                        }
-                        let view = null;
-                        try {
-                            view = await createMtlxRenderView({
-                                canvas, mx, gen, genContext, renderable: built.renderable, lightData,
-                                label: built.label || parsed.label,
-                                needsLighting: true,
-                                geomName: wantGeom,
-                                // 3D geometries orbit by default; the full scene opts
-                                // in via sceneOrbit (mirrors viewer-app.jsx). The 2D
-                                // buffer stays fixed via the engine's flat2d gate.
-                                sceneOrbit: wantGeom === 'shaderball-scene',
-                                autoRotate: false,
-                                backdrop,
-                                isMounted: () => mounted,
-                                isActive: () => activeRef.current,
-                                // The shell this builds can outlive THIS run's
-                                // `mounted` — a later docRev re-run reuses it via
-                                // applyMaterial(), so its rAF loop needs isAlive.
-                                isAlive: () => shellAliveRef.current,
-                                debugKind: 'graph-preview',
-                            });
                         } finally {
-                            // Remove the '__pv_*' wrappers before anything can
-                            // rebuild the graph from the live document —
-                            // fire-and-forget mxExclusive (see finally above).
-                            window.mxExclusive(() => built.cleanup());
+                            releaseCtx();
                         }
-                        if (!view) return;
-                        if (!mounted) { view.dispose(); return; }
-                        liveViewRef.current = view;
-                        liveGeomRef.current = wantGeomKey;
-                        if (viewRef) viewRef.current = view;
-                        setViewEpoch((n) => n + 1);
-                        setEnvAvail(!!(view.hasEnvBackground && view.hasEnvBackground()));
-                        // Bind any dropped texture files onto the shader's
-                        // filename uniforms (same pass as the viewer). Missing
-                        // references keep the node default color.
-                        const rep = bindDroppedTextures(view, fileMap || {});
-                        if (rep.missing.length) {
-                            mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
-                        }
-                        setLoading(false);
-                        setUpdating(false);
                     } catch (e) {
                         if (!mounted) return;
                         setLoading(false);
