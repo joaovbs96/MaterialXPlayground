@@ -318,6 +318,17 @@ const sceneObjectPrepassCoverage = (object, group = null) => {
     }, 0);
 };
 
+// A shadow-transmittance transmitter: static coverage that is not fully
+// opaque, and either a constant thin sheet or a solid (constant or default
+// thin-walled). Everything else stays a conservative VSM caster.
+const sceneMaterialIsStaticTransmitter = (material) => {
+    const coverage = material && material.userData && material.userData.mtlxScenePrepassCoverage;
+    const thinWalled = material && material.userData && material.userData.mtlxSceneThinWalled;
+    if (!coverage || coverage.mode !== 'static' || !thinWalled) return false;
+    if (Number(coverage.opacity) >= 0.999 && !(Number(coverage.transmission) > 0.001)) return false;
+    return thinWalled.reason === 'constant-thin' || thinWalled.reason === 'constant-solid' || thinWalled.reason === 'default-solid';
+};
+
 const storedSceneStageLights = () => {
     if (window.top !== window) return true;
     try { return localStorage.getItem(SCENE_STAGE_LIGHTS_KEY) !== '0'; } catch (e) { return true; }
@@ -551,6 +562,26 @@ const SHADOW_ATLAS_FACE_SLOTS = (typeof window !== 'undefined' && Number(window.
 // second copy that can drift out of sync.
 const PROBE_NORMAL_OFFSET_TEXELS = (typeof window !== 'undefined' && Number(window.SHADOW_NORMAL_OFFSET_TEXELS)) || 1.0;
 const PROBE_DEPTH_BIAS_TEXELS = (typeof window !== 'undefined' && Number(window.SHADOW_DEPTH_BIAS_TEXELS)) || 1.0;
+// Shadow transmittance records: one 256px cell per face, two planes (R1
+// nearest, R2 product) stacked vertically in one texture. R2's cell is
+// always R1's offset by half the height; see mx_shadow_transmittance.
+const SHADOW_RECORD_CELL_SIZE = 256;
+const SHADOW_RECORD_COLS = 8;
+const SHADOW_RECORD_ROWS = Math.ceil(SHADOW_ATLAS_FACE_SLOTS / SHADOW_RECORD_COLS);
+const SHADOW_RECORD_WIDTH = SHADOW_RECORD_CELL_SIZE * SHADOW_RECORD_COLS;
+const SHADOW_RECORD_HEIGHT = SHADOW_RECORD_CELL_SIZE * SHADOW_RECORD_ROWS * 2;
+const shadowRecordCellRect = (faceIndex) => ({
+    px: (faceIndex % SHADOW_RECORD_COLS) * SHADOW_RECORD_CELL_SIZE,
+    py: Math.floor(faceIndex / SHADOW_RECORD_COLS) * SHADOW_RECORD_CELL_SIZE,
+    size: SHADOW_RECORD_CELL_SIZE,
+});
+const shadowRecordCellUv = (faceIndex) => {
+    const rect = shadowRecordCellRect(faceIndex);
+    return new THREE.Vector4(
+        rect.px / SHADOW_RECORD_WIDTH, rect.py / SHADOW_RECORD_HEIGHT,
+        rect.size / SHADOW_RECORD_WIDTH, rect.size / SHADOW_RECORD_HEIGHT,
+    );
+};
 // Variance shadow maps are meant to be blurred: filtering the moments is what
 // turns the hard per-texel test into a soft edge. Without it an orthographic
 // frustum covering a whole room stair-steps every silhouette.
@@ -853,6 +884,31 @@ const createShadowDepthMaterial = () => new THREE.RawShaderMaterial({
     // derivative variance term. WebGL polygonOffset changes only the depth
     // buffer and cannot bias these color moments, so it is intentionally not
     // used as a false acne fix here.
+});
+// Shadow transmittance pass A: a solid transmitter's front-face entry depth
+// into the 256px scratch target, LESS depth test so the nearest front face
+// wins. Same linear light-view depth plane convention as the VSM writer.
+const createShadowEntryDepthMaterial = () => new THREE.RawShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: [
+        'in vec3 position;',
+        'uniform mat4 modelMatrix;',
+        'uniform mat4 modelViewMatrix;',
+        'uniform mat4 projectionMatrix;',
+        'out vec3 vWorld;',
+        'void main() { vWorld = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    ].join('\n'),
+    fragmentShader: [
+        'precision highp float;',
+        'in vec3 vWorld;',
+        'uniform vec4 uDepthPlane;',
+        'out vec4 fragColor;',
+        'void main() { float d = clamp(dot(vec4(vWorld, 1.0), uDepthPlane), 0.0, 1.0); fragColor = vec4(d, d, d, 1.0); }',
+    ].join('\n'),
+    uniforms: { uDepthPlane: { value: new THREE.Vector4(0, 0, 0, 1) } },
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: true,
 });
 
 // The same transform sceneRoot carries, needed before that group exists so
@@ -1164,6 +1220,16 @@ const createMtlxSceneView = async ({
     // is nowhere to put a second map.
     let shadowTarget = null;
     let shadowDepthMaterial = null;
+    // Shadow transmittance: the packed R1/R2 record texture, a 256px scratch
+    // target for a solid transmitter's entry depth, and the entry-depth
+    // material. Allocated lazily, only once a scene has a transmitter.
+    let shadowTransmittanceTarget = null;
+    let shadowTransmittanceScratch = null;
+    let shadowTransmittanceScratchExit = null;
+    let shadowTransmittanceMaterial = null;
+    // Diagnostics only: per-face transmitter counts from the most recent
+    // updateShadowMap, sparse (only faces that had at least one candidate).
+    let shadowTransmittanceInfo = [];
     // Flat list of shadow FACES: a directional/area caster contributes one
     // entry, an omni caster reserves six (one per cube face), some of
     // which may be unallocated.
@@ -1230,6 +1296,11 @@ const createMtlxSceneView = async ({
         (shadowCasters[i] && shadowCasters[i].basis ? shadowCasters[i].basis.y : new THREE.Vector3(0, 1, 0)));
     const shadowCasterFaceBasisZ = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
         (shadowCasters[i] && shadowCasters[i].basis ? shadowCasters[i].basis.z : new THREE.Vector3(0, 0, 1)));
+    // Static per-face record-plane rect, or a zero rect when the target
+    // does not exist yet. A face with no transmitters this frame still
+    // gets a real rect: its cell reads the clear color, which is lit.
+    const shadowCasterRecordCells = () => Array.from({ length: SHADOW_ATLAS_FACE_SLOTS }, (_, i) =>
+        (shadowTransmittanceTarget ? shadowRecordCellUv(i) : new THREE.Vector4(0, 0, 0, 0)));
     let shadowCasterLabel = null;
     // Baked coarse sky visibility (js/usd-scene-skyvis.js). Built once per
     // stage, never per frame: it depends only on geometry.
@@ -1334,6 +1405,11 @@ const createMtlxSceneView = async ({
     const disposeShadowResources = () => {
         if (shadowTarget) { shadowTarget.dispose(); shadowTarget = null; }
         if (shadowDepthMaterial) { shadowDepthMaterial.dispose(); shadowDepthMaterial = null; }
+        if (shadowTransmittanceTarget) { shadowTransmittanceTarget.dispose(); shadowTransmittanceTarget = null; }
+        if (shadowTransmittanceScratch) { shadowTransmittanceScratch.dispose(); shadowTransmittanceScratch = null; }
+        if (shadowTransmittanceScratchExit) { shadowTransmittanceScratchExit.dispose(); shadowTransmittanceScratchExit = null; }
+        if (shadowTransmittanceMaterial) { shadowTransmittanceMaterial.dispose(); shadowTransmittanceMaterial = null; }
+        shadowTransmittanceInfo = [];
     };
     // Applies the sidebar toggle and EV multiplier without rebuilding the
     // converted list, so both are live controls.
@@ -1568,6 +1644,10 @@ const createMtlxSceneView = async ({
     const udimWarnings = new Set();
     const compiledByPath = new Map();
     const programByKey = new Map();
+    // Compiled transfer (light-transport) variant per material, or null when
+    // the material is opaque, dynamic, or otherwise unsupported. Cached
+    // alongside the display compile since both share the same renderable.
+    const transferCompiledByPath = new Map();
     const sourceXmlByRecord = new WeakMap();
     const materialRecords = new Map();
 
@@ -1757,9 +1837,9 @@ const createMtlxSceneView = async ({
             return { compiled: null };
         }
         const cacheKey = String(record.path || record.sourceAsset || label) + '|' + String(record.subIdentifier || '') + '|' + String(version || '');
-        if (forceCompile) compiledByPath.delete(cacheKey);
+        if (forceCompile) { compiledByPath.delete(cacheKey); transferCompiledByPath.delete(cacheKey); }
         let compiled = compiledByPath.get(cacheKey);
-        if (compiled) return { compiled, cacheKey };
+        if (compiled) return { compiled, cacheKey, transferCompiled: transferCompiledByPath.get(cacheKey) || null };
         report({ phase: 'material', path: record.path, label, status: 'start' });
         let sourceDocument = null;
         try {
@@ -1785,6 +1865,35 @@ const createMtlxSceneView = async ({
                 warnings.push('Sampler budget exceeded for ' + label + ': ' + compiled.samplerBudget.count
                     + ' samplers over the ' + compiled.samplerBudget.limit + '-unit limit; material kept as compiled (may not draw on this GPU)');
             }
+            // Compile the transfer (light-transport) variant for a material
+            // that could qualify as a shadow transmittance caster. Per-object
+            // thin/solid gating happens later, in shadowCollectTransmitters.
+            let transferCompiled = transferCompiledByPath.get(cacheKey);
+            if (transferCompiled === undefined) {
+                transferCompiled = null;
+                const preClassification = sceneMaterialClassification(compiled, compiled.mtlxSceneSurfaceMetadata);
+                const preThinReason = preClassification.thinWalled && preClassification.thinWalled.reason;
+                const wantsTransfer = preClassification.coverage.mode === 'static'
+                    && (Number(preClassification.coverage.opacity) < 0.999 || Number(preClassification.coverage.transmission) > 0.001)
+                    && (preThinReason === 'constant-thin' || preThinReason === 'constant-solid' || preThinReason === 'default-solid');
+                if (wantsTransfer && window.createLightTransportUniforms) {
+                    try {
+                        const transferSrcs = await window.compileMtlxSceneMaterial({
+                            mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
+                            renderable, label: label + ' (transmittance)', isMounted, document: sourceDocument,
+                            lightTransport: 4, samplerBudget,
+                        });
+                        if (transferSrcs && transferSrcs.lightTransportSupported) {
+                            transferCompiled = transferSrcs;
+                        } else if (transferSrcs && transferSrcs.notices && transferSrcs.notices.length) {
+                            warnings.push('[info] Shadow transmittance record unavailable for ' + label + ': ' + transferSrcs.notices.join('; '));
+                        }
+                    } catch (e) {
+                        warnings.push('[info] Shadow transmittance record failed for ' + label + ': ' + String((e && e.message) || e));
+                    }
+                }
+                transferCompiledByPath.set(cacheKey, transferCompiled);
+            }
             // Reuse the engine's hidden KHR warm context before this
             // scene's display WebGL context submits the same source.
             if (window.prewarmShaderCompile) {
@@ -1793,7 +1902,7 @@ const createMtlxSceneView = async ({
             compiledByPath.set(cacheKey, compiled);
             if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
             report({ phase: 'material', path: record.path, label, status: 'ready' });
-            return { compiled, cacheKey };
+            return { compiled, cacheKey, transferCompiled };
         } catch (e) {
             const detail = window.mxErr ? window.mxErr(mxEnv && mxEnv.mx, e) : ((e && e.message) || e);
             warnings.push('MaterialX compile failed for ' + label + ': ' + detail);
@@ -1815,7 +1924,7 @@ const createMtlxSceneView = async ({
         const ensured = await ensureCompiledMaterial(record, forceCompile);
         if (!ensured) return null;
         if (!ensured.compiled) return { material: sceneNeutralMaterial(label), compiled: null };
-        const { compiled, cacheKey } = ensured;
+        const { compiled, cacheKey, transferCompiled } = ensured;
         // Builds the GGX-prefiltered radiance chain on first use; the
         // uniform builder below picks it over the FIS chain when the
         // shaders were generated for the prefilter path.
@@ -1825,6 +1934,7 @@ const createMtlxSceneView = async ({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
             shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
+            shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             envTilt,
             thicknessScale, refractionTwoSided: true,
@@ -1864,6 +1974,24 @@ const createMtlxSceneView = async ({
             }
         }
         material.userData.mtlxSceneFullyTransmissive = sceneMaterialIsFullyTransmissive(compiled);
+        // Per-object thin/solid-topology gating happens in
+        // shadowCollectTransmitters; a compiled transfer variant here only
+        // means the MATERIAL qualifies (static, not fully opaque).
+        if (transferCompiled && window.createLightTransportUniforms) {
+            const transferUniforms = window.createLightTransportUniforms({ compiled: transferCompiled, displayUniforms: uniforms });
+            const transferMaterial = new THREE.RawShaderMaterial({
+                vertexShader: transferCompiled.vs,
+                fragmentShader: transferCompiled.fs,
+                glslVersion: THREE.GLSL3,
+                uniforms: transferUniforms,
+                side: THREE.FrontSide,
+                transparent: false,
+                depthWrite: true,
+                depthTest: true,
+            });
+            transferMaterial.needsUpdate = true;
+            material.userData.mtlxSceneTransfer = { compiled: transferCompiled, material: transferMaterial, uniforms: transferUniforms };
+        }
         if (window.applyPeelMaterialMode) {
             window.applyPeelMaterialMode(material, material.userData.mtlxScenePeel && sceneTransparencyEnabled());
         }
@@ -2317,6 +2445,210 @@ const createMtlxSceneView = async ({
                 wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
             });
         };
+        // Allocated only once a scene actually has a qualifying transmitter
+        // (see shadowCollectTransmitters), so a stage without one pays
+        // nothing for this feature.
+        const ensureShadowTransmittanceTargets = () => {
+            if (shadowTransmittanceTarget) return;
+            const floatOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                && !!renderer.extensions.get('EXT_color_buffer_float');
+            const floatLinear = !floatOk || !!renderer.extensions.get('OES_texture_float_linear');
+            shadowTransmittanceTarget = new THREE.WebGLRenderTarget(SHADOW_RECORD_WIDTH, SHADOW_RECORD_HEIGHT, {
+                minFilter: floatLinear ? THREE.LinearFilter : THREE.NearestFilter,
+                magFilter: floatLinear ? THREE.LinearFilter : THREE.NearestFilter,
+                format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                depthBuffer: true,
+                wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+            });
+            shadowTransmittanceScratch = new THREE.WebGLRenderTarget(SHADOW_RECORD_CELL_SIZE, SHADOW_RECORD_CELL_SIZE, {
+                minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                depthBuffer: true,
+            });
+            shadowTransmittanceScratchExit = new THREE.WebGLRenderTarget(SHADOW_RECORD_CELL_SIZE, SHADOW_RECORD_CELL_SIZE, {
+                minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat, type: floatOk ? THREE.FloatType : THREE.HalfFloatType,
+                depthBuffer: false,
+            });
+        };
+        // Every visible mesh whose material is a verified static transmitter
+        // AND, for a solid, whose own geometry is a single watertight shell.
+        // A mixed-material mesh is decided by its first qualifying slot only.
+        const shadowCollectTransmitters = () => {
+            const out = [];
+            if (!sceneRoot) return out;
+            scene.traverse((object) => {
+                if (!object.isMesh || !object.visible || !object.geometry) return;
+                const mats = Array.isArray(object.material) ? object.material : [object.material];
+                for (const material of mats) {
+                    if (!sceneMaterialIsStaticTransmitter(material)) continue;
+                    const transfer = material.userData.mtlxSceneTransfer;
+                    if (!transfer || !transfer.material) continue;
+                    const thin = material.userData.mtlxSceneThinWalled.reason === 'constant-thin';
+                    if (!thin && !thicknessTopology(object).supported) continue;
+                    out.push({ object, thin, transfer });
+                    break;
+                }
+            });
+            return out;
+        };
+        // Renders the transmittance sub-passes for one shadow face, right
+        // after its VSM depth draw, for every transmitter intersecting the
+        // face's frustum (nearest cell R1, product cell R2, entry prepass).
+        const shadowRenderFaceTransmittance = (faceIndex, shadowCamera, depthPlane, depthRange, transmitters) => {
+            if (!transmitters.length || !shadowTransmittanceTarget) return;
+            const frustum = new THREE.Frustum().setFromProjectionMatrix(
+                new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse));
+            const active = transmitters.filter(({ object }) => frustum.intersectsBox(new THREE.Box3().setFromObject(object)));
+            if (!active.length) return;
+            shadowTransmittanceInfo[faceIndex] = {
+                face: faceIndex, transmitters: active.length,
+                thin: active.filter((t) => t.thin).length, solid: active.filter((t) => !t.thin).length,
+            };
+            const rect = shadowRecordCellRect(faceIndex);
+            const solids = active.filter((t) => !t.thin);
+            const materialState = new Map();
+            const visibleState = new Map();
+            const beforeRenderState = new Map();
+            // Every OTHER visible mesh (receivers included) must be hidden:
+            // a receiver's material samples u_shadowTransmittance, which IS
+            // the render target these sub-passes write into (feedback loop).
+            const allMeshes = [];
+            scene.traverse((o) => { if (o.isMesh) allMeshes.push(o); });
+            const showOnly = (keep) => {
+                allMeshes.forEach((object) => {
+                    if (!visibleState.has(object)) visibleState.set(object, object.visible);
+                    object.visible = keep.has(object);
+                });
+            };
+            // The caller's VSM loop keeps scene.overrideMaterial set; these
+            // sub-passes render each object's OWN material instead, so the
+            // override must be cleared here and restored before returning.
+            const previousOverride = scene.overrideMaterial;
+            scene.overrideMaterial = null;
+            // renderer.autoClear defaults true and would erase Pass B/C's
+            // blended baseline before every single render() call, so it
+            // is disabled for the duration of these sub-passes.
+            const previousAutoClear = renderer.autoClear;
+            renderer.autoClear = false;
+            // Every mesh carries a load-time onBeforeRender that re-pushes the
+            // MAIN camera's matrices into whatever material it holds; these
+            // sub-passes own that hook so the face camera stays in charge.
+            active.forEach(({ object }) => { beforeRenderState.set(object, object.onBeforeRender); object.onBeforeRender = () => {}; });
+            try {
+                if (solids.length) {
+                    if (!shadowTransmittanceMaterial) shadowTransmittanceMaterial = createShadowEntryDepthMaterial();
+                    shadowTransmittanceMaterial.uniforms.uDepthPlane.value.copy(depthPlane);
+                    shadowTransmittanceMaterial.uniformsNeedUpdate = true;
+                    showOnly(new Set(solids.map((t) => t.object)));
+                    solids.forEach(({ object }) => { materialState.set(object, object.material); object.material = shadowTransmittanceMaterial; });
+                    shadowTransmittanceScratch.viewport.set(0, 0, SHADOW_RECORD_CELL_SIZE, SHADOW_RECORD_CELL_SIZE);
+                    shadowTransmittanceScratch.scissorTest = false;
+                    renderer.setRenderTarget(shadowTransmittanceScratch);
+                    renderer.setClearColor(0xffffff, 1); // far: nothing found in front of anything
+                    renderer.clear(true, true);
+                    renderer.render(scene, shadowCamera);
+                    // Exit depth: farthest surface of the same solids through a MAX
+                    // blend, so entry and exit never depend on winding.
+                    const em = shadowTransmittanceMaterial;
+                    em.depthTest = false; em.depthWrite = false; em.blending = THREE.CustomBlending;
+                    em.blendEquation = THREE.MaxEquation; em.blendSrc = THREE.OneFactor; em.blendDst = THREE.OneFactor;
+                    em.blendEquationAlpha = THREE.MaxEquation; em.blendSrcAlpha = THREE.OneFactor; em.blendDstAlpha = THREE.OneFactor;
+                    shadowTransmittanceScratchExit.viewport.set(0, 0, SHADOW_RECORD_CELL_SIZE, SHADOW_RECORD_CELL_SIZE);
+                    shadowTransmittanceScratchExit.scissorTest = false;
+                    renderer.setRenderTarget(shadowTransmittanceScratchExit);
+                    renderer.setClearColor(0x000000, 1); // near: nothing found behind anything
+                    renderer.clear(true, false);
+                    renderer.render(scene, shadowCamera);
+                    em.depthTest = true; em.depthWrite = true; em.blending = THREE.NoBlending;
+                    solids.forEach(({ object }) => { object.material = materialState.get(object); });
+                    materialState.clear();
+                }
+                const entryDepthTexture = solids.length ? shadowTransmittanceScratch.texture
+                    : ((window.getDummyTexWhite && window.getDummyTexWhite()) || null);
+                const exitDepthTexture = solids.length ? shadowTransmittanceScratchExit.texture : entryDepthTexture;
+                // u_worldMatrix/u_viewProjectionMatrix/etc. are not three's
+                // automatic built-ins, and several objects can share one
+                // transfer material, so uniforms are pushed right before each render() call.
+                const shadowVp = new THREE.Matrix4().multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+                const shadowEye = new THREE.Vector3();
+                shadowCamera.getWorldPosition(shadowEye);
+                active.forEach(({ object, transfer }) => {
+                    materialState.set(object, object.material);
+                    object.material = transfer.material;
+                    object.onBeforeRender = () => pushRecordUniforms(object, transfer);
+                });
+                let recordPass = 1; let recordOriginY = rect.py;
+                const pushRecordUniforms = (object, transfer) => {
+                    const u = transfer.uniforms;
+                    if (u.u_recordCellOrigin) u.u_recordCellOrigin.value.set(rect.px, recordOriginY);
+                    if (u.u_recordPass) u.u_recordPass.value = recordPass;
+                    u.u_worldMatrix.value.copy(object.matrixWorld);
+                    u.u_viewProjectionMatrix.value.copy(shadowVp);
+                    u.u_worldInverseTransposeMatrix.value.copy(object.matrixWorld).invert().transpose();
+                    u.u_viewPosition.value.copy(shadowEye);
+                    u.u_recordDepthPlane.value.copy(depthPlane);
+                    if (entryDepthTexture) u.u_recordEntryDepth.value = entryDepthTexture;
+                    if (exitDepthTexture && u.u_recordExitDepth) u.u_recordExitDepth.value = exitDepthTexture;
+                    u.u_recordTexel.value.set(1 / SHADOW_RECORD_CELL_SIZE, 1 / SHADOW_RECORD_CELL_SIZE);
+                    u.u_recordDepthSpan.value = depthRange.y;
+                    u.u_recordUnitScale.value = thicknessScale;
+                    // A shared RawShaderMaterial uploads uniforms only when the
+                    // material or camera changes; force it for every object.
+                    transfer.material.uniformsNeedUpdate = true;
+                };
+                // Pass B: nearest record (R1). One render() per object, in any
+                // order: depth-tested draws onto a shared buffer already give
+                // nearest-wins across separate calls, exactly like opaque geometry.
+                shadowTransmittanceTarget.viewport.set(rect.px, rect.py, rect.size, rect.size);
+                shadowTransmittanceTarget.scissor.set(rect.px, rect.py, rect.size, rect.size);
+                shadowTransmittanceTarget.scissorTest = true;
+                renderer.setRenderTarget(shadowTransmittanceTarget);
+                for (const { object, thin, transfer } of active) {
+                    const m = transfer.material;
+                    // Nearest surface of every transmitter; a solid's thickness
+                    // comes from the entry and exit prepasses, not its winding.
+                    m.side = THREE.DoubleSide;
+                    m.depthTest = true; m.depthWrite = true; m.blending = THREE.NoBlending;
+                    pushRecordUniforms(object, transfer);
+                    showOnly(new Set([object]));
+                    renderer.render(scene, shadowCamera);
+                }
+                // Pass C: product record (R2), depth test off, additive-max
+                // blend so every active object multiplies into the same cell.
+                const r2py = rect.py + SHADOW_RECORD_HEIGHT / 2;
+                recordPass = 2; recordOriginY = r2py;
+                shadowTransmittanceTarget.viewport.set(rect.px, r2py, rect.size, rect.size);
+                shadowTransmittanceTarget.scissor.set(rect.px, r2py, rect.size, rect.size);
+                // Three applies a target's viewport and scissor only in
+                // setRenderTarget, so re-bind before the R2 draws.
+                renderer.setRenderTarget(shadowTransmittanceTarget);
+                for (const { object, transfer } of active) {
+                    const m = transfer.material;
+                    m.depthTest = false; m.depthWrite = false;
+                    m.blending = THREE.CustomBlending;
+                    // RGB multiplies (add equation with dst colour times src), alpha
+                    // keeps the farthest depth through MAX.
+                    m.blendEquation = THREE.AddEquation;
+                    m.blendSrc = THREE.DstColorFactor; m.blendDst = THREE.ZeroFactor;
+                    m.blendEquationAlpha = THREE.MinEquation; // alpha is 1 - depth: MIN keeps the farthest
+                    m.blendSrcAlpha = THREE.OneFactor; m.blendDstAlpha = THREE.OneFactor;
+                    pushRecordUniforms(object, transfer);
+                    showOnly(new Set([object]));
+                    renderer.render(scene, shadowCamera);
+                }
+            } finally {
+                scene.overrideMaterial = previousOverride;
+                renderer.autoClear = previousAutoClear;
+                materialState.forEach((material, object) => { object.material = material; });
+                visibleState.forEach((visible, object) => { object.visible = visible; });
+                beforeRenderState.forEach((previous, object) => { object.onBeforeRender = previous; });
+                active.forEach(({ transfer }) => {
+                    const m = transfer.material;
+                    m.depthTest = true; m.depthWrite = true; m.blending = THREE.NoBlending;
+                });
+            }
+        };
 
         // A directional caster gets one orthographic tile; an area/omni
         // source gets perspective cube faces, fitted from the mesh geometry
@@ -2629,6 +2961,7 @@ const createMtlxSceneView = async ({
                 shadowDroppedCasters = [];
                 shadowDroppedFaces = [];
                 shadowCasterLabel = null;
+                shadowTransmittanceInfo = [];
                 return;
             }
             const box = new THREE.Box3().setFromObject(sceneRoot);
@@ -2770,16 +3103,38 @@ const createMtlxSceneView = async ({
             ensureShadowTargets();
             if (!shadowDepthMaterial) shadowDepthMaterial = createShadowDepthMaterial();
 
+            // Transmitters are never a VSM caster (see the hide condition
+            // below): a supported one instead gets its own record in the
+            // shadow transmittance texture, rendered per face further down.
+            const transmitters = shadowCollectTransmitters();
+            shadowTransmittanceInfo = [];
+            if (transmitters.length) {
+                ensureShadowTransmittanceTargets();
+                const previousTarget = renderer.getRenderTarget();
+                shadowTransmittanceTarget.viewport.set(0, 0, SHADOW_RECORD_WIDTH, SHADOW_RECORD_HEIGHT);
+                shadowTransmittanceTarget.scissorTest = false;
+                renderer.setRenderTarget(shadowTransmittanceTarget);
+                // (1,1,1,1): a receiver's depth is never above 1, so an
+                // untouched cell reads as lit; alpha=0 would premultiply
+                // to black on this alpha:true renderer instead.
+                renderer.setClearColor(0xffffff, 1);
+                renderer.clear(true, true);
+                renderer.setRenderTarget(previousTarget);
+            }
+            const transmitterObjects = new Set(transmitters.map((t) => t.object));
+
             // The backdrop and catcher would wrap the scene and shadow
             // everything. A statically clear MaterialX surface has no blocker
             // coverage and is omitted. Partial and graph-connected transmission
             // stays in the caster set; the shadow writer can consume the same
             // per-material coverage metadata when it supports fractional depth.
+            // A supported transmitter is excluded too: it renders its own
+            // transmittance record instead of dithering into the VSM moments.
             const hidden = [];
             const shadowCallbacks = [];
             scene.traverse((object) => {
                 const clearTransmission = sceneObjectPrepassCoverage(object) === 0;
-                if (object.isMesh && object.visible && ((object.userData && object.userData.excludeFromFrame) || clearTransmission)) {
+                if (object.isMesh && object.visible && ((object.userData && object.userData.excludeFromFrame) || clearTransmission || transmitterObjects.has(object))) {
                     hidden.push({ object, visible: object.visible });
                     object.visible = false;
                 } else if (object.isMesh && object.visible) {
@@ -2827,6 +3182,7 @@ const createMtlxSceneView = async ({
                 shadowDepthMaterial.uniforms.uDepthPlane.value.copy(depthPlane);
                 shadowDepthMaterial.uniformsNeedUpdate = true;
                 renderer.render(scene, shadowCamera);
+                return depthPlane;
             };
             try {
             shadowTarget.viewport.set(0, 0, SHADOW_ATLAS_WIDTH, SHADOW_ATLAS_HEIGHT);
@@ -2847,7 +3203,11 @@ const createMtlxSceneView = async ({
                     if (!cellAlloc) cellAlloc = shadowAllocateCell(pool);
                     if (!cellAlloc) { dropped.push(rec.key); continue; }
                     const shadowCamera = shadowBuildDistantCamera(rec, box, center, radius);
-                    renderFace(shadowCamera, cellAlloc);
+                    const distantDepthPlane = renderFace(shadowCamera, cellAlloc);
+                    if (transmitters.length) {
+                        shadowRenderFaceTransmittance(facesUsed, shadowCamera, distantDepthPlane,
+                            new THREE.Vector2(shadowCamera.near, Math.max(1e-9, shadowCamera.far - shadowCamera.near)), transmitters);
+                    }
                     built.push(shadowFinalizeFace({
                         rec, kind, faceLabel: null, camera: shadowCamera, cellAlloc,
                         faceOrigin: null, basis: null, receiverTarget, box,
@@ -2882,7 +3242,11 @@ const createMtlxSceneView = async ({
                     shadowCamera.near = range.near;
                     shadowCamera.far = range.far;
                     shadowCamera.updateProjectionMatrix();
-                    renderFace(shadowCamera, cellAlloc);
+                    const faceDepthPlane = renderFace(shadowCamera, cellAlloc);
+                    if (transmitters.length) {
+                        shadowRenderFaceTransmittance(facesUsed + axisIndex, shadowCamera, faceDepthPlane,
+                            new THREE.Vector2(shadowCamera.near, Math.max(1e-9, shadowCamera.far - shadowCamera.near)), transmitters);
+                    }
                     faceEntries.push(shadowFinalizeFace({
                         rec, kind, faceLabel: SHADOW_OMNI_FACES[axisIndex].label, camera: shadowCamera, cellAlloc,
                         faceOrigin: position.clone(), basis, receiverTarget, box,
@@ -3567,6 +3931,15 @@ const createMtlxSceneView = async ({
                     const src = shadowCasterFaceBasisZ();
                     for (let i = 0; i < src.length; i++) u.u_shadowFaceBasisZ.value[i].copy(src[i]);
                 }
+                if (u.u_shadowTransmittance) {
+                    u.u_shadowTransmittance.value = (shadowsEnabled && shadowTransmittanceTarget)
+                        ? shadowTransmittanceTarget.texture
+                        : (window.getDummyTexWhite ? window.getDummyTexWhite() : u.u_shadowTransmittance.value);
+                }
+                if (u.u_shadowRecordCells) {
+                    const src = shadowCasterRecordCells();
+                    for (let i = 0; i < src.length; i++) u.u_shadowRecordCells.value[i].copy(src[i]);
+                }
                 const diagnosticSlots = diagnosticShadowSlots();
                 if (u.u_shadowSlotFace) u.u_shadowSlotFace.value.set(diagnosticSlots.shadowSlotFace);
                 if (u.u_shadowSlotFaceCount) u.u_shadowSlotFaceCount.value.set(diagnosticSlots.shadowSlotFaceCount);
@@ -3589,6 +3962,7 @@ const createMtlxSceneView = async ({
                     compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
             shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
+            shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
                     envTilt,
                     thicknessScale, refractionTwoSided: true,
@@ -4800,7 +5174,11 @@ const createMtlxSceneView = async ({
                 if (environmentBridge && environmentBridge.dispose) environmentBridge.dispose();
                 documents.forEach((d) => { try { d.delete && d.delete(); } catch (e) {} });
                 geometries.forEach((g) => { try { g.dispose(); } catch (e) {} });
-                materials.forEach((m) => { try { m.dispose(); } catch (e) {} });
+                materials.forEach((m) => {
+                    const transfer = m.userData && m.userData.mtlxSceneTransfer;
+                    if (transfer && transfer.material) { try { transfer.material.dispose(); } catch (e) {} }
+                    try { m.dispose(); } catch (e) {}
+                });
                 textureCache.forEach((t) => {
                     try { t.dispose && t.dispose(); } catch (e) {}
                     try { t.image && t.image.close && t.image.close(); } catch (e) {}
@@ -4816,6 +5194,8 @@ const createMtlxSceneView = async ({
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
             __debug: () => ({ renderer, scene, camera, materials: Array.from(materials), thicknessScale, thicknessTarget,
+                transmittanceTarget: shadowTransmittanceTarget, transmittanceScratch: shadowTransmittanceScratch, transmittanceScratchExit: shadowTransmittanceScratchExit,
+                shadowTransmittanceTarget, shadowTransmittanceScratch,
                 thickness: Object.assign({}, thicknessInfo),
                 ao: { rawTarget: aoTarget, blurTarget: aoBlurTarget, prepassTarget: aoPrepassTarget,
                     blurMaterial: aoBlurMaterial, quadScene: aoQuadScene, quadCamera: aoQuadCamera,
@@ -5037,6 +5417,13 @@ const createMtlxSceneView = async ({
                     shadowedSlots: Array.from(shadowSlotFace).map((c, i) => [i, c]).filter((e) => e[1] >= 0),
                     atlas,
                     prepass,
+                    transmittance: {
+                        cells: shadowTransmittanceInfo.filter(Boolean),
+                        texture: shadowTransmittanceTarget ? {
+                            width: shadowTransmittanceTarget.width, height: shadowTransmittanceTarget.height,
+                            type: shadowTransmittanceTarget.texture.type,
+                        } : null,
+                    },
                 };
             },
             // CPU mirror of mx_shadow_atlas (mtlx-engine.js): same bias
@@ -5205,12 +5592,35 @@ const createMtlxSceneView = async ({
                     const meanVisibility = referenceTaps.reduce((a, v) => a + v, 0) / referenceTaps.length;
                     const classification = meanVisibility >= 0.9 ? 'lit' : (meanVisibility <= 0.1 ? 'deep-umbra' : 'penumbra-mixed');
 
+                    // CPU mirror of mx_shadow_transmittance: same cell layout
+                    // and depth-order rule, read back from the render target.
+                    let transmittance = null;
+                    if (shadowTransmittanceTarget) {
+                        try {
+                            const cellUv = shadowRecordCellUv(c);
+                            const r1u = cellUv.x + sc.x * cellUv.z;
+                            const r1v = cellUv.y + sc.y * cellUv.w;
+                            const readAt = (u, v) => {
+                                const px = Math.max(0, Math.min(shadowTransmittanceTarget.width - 1, Math.floor(u * shadowTransmittanceTarget.width)));
+                                const py = Math.max(0, Math.min(shadowTransmittanceTarget.height - 1, Math.floor(v * shadowTransmittanceTarget.height)));
+                                const tap = new Float32Array(4);
+                                renderer.readRenderTargetPixels(shadowTransmittanceTarget, px, py, 1, 1, tap);
+                                return Array.from(tap);
+                            };
+                            const r1 = readAt(r1u, r1v);
+                            const r2 = readAt(r1u, r1v + 0.5);
+                            const T = biasedDepth > 1 - r2[3] ? r2.slice(0, 3) : (biasedDepth > 1 - r1[3] ? r1.slice(0, 3) : [1, 1, 1]);
+                            transmittance = { r1, r2, T };
+                        } catch (e) { transmittance = { error: String(e && e.message || e) }; }
+                    }
+
                     result = { ready: true, inside: true, projected: [sc.x, sc.y, sc.z], atlasUv: [atlasU, atlasV],
                         receiverDepth: rawReceiverDepth, biasedDepth,
                         moments, variance: Math.max(2e-7, moments[1] - moments[0] * moments[0]),
                         visibility, filteredVisibility, normalOffset, texelWorld,
                         face: c, kind: b.kind, caster: b.rec.key,
-                        reference: { taps: referenceTaps, meanVisibility, classification } };
+                        reference: { taps: referenceTaps, meanVisibility, classification },
+                        transmittance };
                 } catch (e) {
                     result = { ready: true, inside: true, error: String(e && e.message || e), face: c, kind: b.kind, caster: b.rec.key };
                 } finally {

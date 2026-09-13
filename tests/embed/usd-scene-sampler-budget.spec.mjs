@@ -3,9 +3,10 @@ import { test, expect } from './lib/test-base.mjs';
 // Nine distinct image nodes feed base_color, specular_roughness,
 // base_metalness, geometry_normal (via normalmap), emission_color,
 // coat_weight, subsurface_color, geometry_opacity and specular_color.
-// A Scene material also bakes eight fixed samplers (env radiance/
-// irradiance, shadow atlas, SSAO, sky vis, thickness, peel-prev-depth,
-// opaque depth), so this material alone exceeds MAX_TEXTURE_IMAGE_UNITS=16.
+// A Scene material also bakes ten fixed samplers (env radiance/irradiance,
+// shadow atlas, shadow transmittance, SSAO, sky vis, thickness,
+// peel-prev-depth, opaque depth), so this material alone exceeds
+// MAX_TEXTURE_IMAGE_UNITS=16.
 const TEXTURE_ROLES = [
   { name: 'base_color', file: 'tex0.png', type: 'color3', color: [230, 230, 230] },
   { name: 'specular_roughness', file: 'tex1.png', type: 'float', color: [70, 70, 70] },
@@ -144,7 +145,10 @@ test('@scene sampler budget drops sky visibility to fit a nine-texture OpenPBR m
   expect(result.samplerBudget?.limit).toBe(16);
   expect(result.samplerOverBudget).toBe(false);
   expect(result.samplerBudget?.dropped.some((d) => /sky/i.test(d))).toBe(true);
+  expect(result.samplerBudget?.dropped.some((d) => /thickness/i.test(d))).toBe(true);
+  expect(result.samplerBudget?.dropped.some((d) => /transmittance/i.test(d))).toBe(true);
   expect(result.warnings.some((w) => /[Ss]ampler budget/.test(w) && /sky/i.test(w))).toBe(true);
+  expect(result.warnings.some((w) => /[Ss]ampler budget/.test(w) && /transmittance/i.test(w))).toBe(true);
   expect(result.glError).toBe(0);
   expect(result.luminance).toBeGreaterThan(0.02);
 });
@@ -168,5 +172,6 @@ test('@scene sampler budget reports an over-budget material without throwing', a
   expect(result.samplerOverBudget).toBe(true);
   expect(result.samplerBudget?.limit).toBe(10);
   expect(result.samplerCount).toBeGreaterThan(10);
+  expect(result.samplerBudget?.dropped.some((d) => /transmittance/i.test(d))).toBe(true);
   expect(result.warnings.some((w) => /exceeded/i.test(w))).toBe(true);
 });

@@ -36,7 +36,10 @@ test('@scene OpenPBR direct visibility is applied once to incoming analytic radi
         compiled: !!compiled,
         hasTranslucent: /mx_translucent_bsdf/.test(fs),
         hasSubsurface: /mx_subsurface_bsdf/.test(fs),
-        incomingVisibility: /lightShader\.intensity \*= occlusion \* u_shadowDiagnosticVisibilityScale;\s*occlusion = 1\.0;/.test(fs),
+        // mx_transmit is the shadow-transmittance receiver term (see
+        // mx_shadow_transmittance in js/mtlx-engine.js): a vec3 folded into
+        // the same intensity multiply, still applied exactly once.
+        incomingVisibility: /lightShader\.intensity \*= occlusion \* (?:mx_transmit \* )?u_shadowDiagnosticVisibilityScale;\s*occlusion = 1\.0;/.test(fs),
         visibilityUniform: /uniform float u_shadowDiagnosticVisibilityScale;/.test(fs),
       });
       doc.delete();

@@ -72,8 +72,9 @@ test('@scene detached OpenPBR transfer record compiles and renders', async ({ pa
 
     // Compiles the transfer variant for one document, binds the record
     // uniforms, and samples the center pixel of a Float32 render target.
-    // depthPlaneW/entryDepth pick zExit/zEntry so callers control thickness.
-    const compileTransfer = async (name, xml, files, { depthPlaneW = 1, entryDepth = 0 } = {}) => {
+    // entryDepth/exitDepth feed the two prepass samplers so callers control
+    // thickness; depthPlaneW sets the fragment's own depth (alpha = 1 - it).
+    const compileTransfer = async (name, xml, files, { depthPlaneW = 1, entryDepth = 0, exitDepth = 0 } = {}) => {
       const doc = env.mx.createDocument();
       await window.mxExclusive(() => env.mx.readFromXmlString(doc, xml));
       if (doc.setDataLibrary) doc.setDataLibrary(env.stdlib);
@@ -89,11 +90,9 @@ test('@scene detached OpenPBR transfer record compiles and renders', async ({ pa
         const compiled = await window.compileMtlxSceneMaterial({ mx: env.mx, gen: env.gen, genContext: env.genContext, renderable: node, document: doc, label: 'transfer-' + name, lightTransport: 4 });
         const uniforms = window.createLightTransportUniforms({ compiled, displayUniforms: normal.uniforms });
         uniforms.u_recordDepthPlane.value.set(0, 0, 0, depthPlaneW);
-        const entryByte = Math.round(Math.max(0, Math.min(1, entryDepth)) * 255);
-        uniforms.u_recordEntryDepth.value = new THREE.DataTexture(new Uint8Array([entryByte, entryByte, entryByte, 255]), 1, 1, THREE.RGBAFormat);
-        uniforms.u_recordEntryDepth.value.minFilter = THREE.NearestFilter;
-        uniforms.u_recordEntryDepth.value.magFilter = THREE.NearestFilter;
-        uniforms.u_recordEntryDepth.value.needsUpdate = true;
+        const depthTex = (v) => { const t = new THREE.DataTexture(new Float32Array([v, v, v, 1]), 1, 1, THREE.RGBAFormat, THREE.FloatType); t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; };
+        uniforms.u_recordEntryDepth.value = depthTex(entryDepth);
+        uniforms.u_recordExitDepth.value = depthTex(exitDepth);
         uniforms.u_recordTexel.value.set(0, 0);
         uniforms.u_recordDepthSpan.value = 1;
         uniforms.u_recordUnitScale.value = 1;
@@ -111,7 +110,7 @@ test('@scene detached OpenPBR transfer record compiles and renders', async ({ pa
         const glError = gl.getError();
         const samplers = window.countFragmentSamplers(compiled.fs);
         const normalSamplers = window.countFragmentSamplers(normal.fragmentShader || '');
-        material.dispose(); target.dispose(); uniforms.u_recordEntryDepth.value.dispose();
+        material.dispose(); target.dispose(); uniforms.u_recordEntryDepth.value.dispose(); uniforms.u_recordExitDepth.value.dispose();
         return {
           name, pixel: Array.from(pixel), glError,
           marker: compiled.fs.includes('MX_LIGHT_TRANSPORT'),
@@ -133,9 +132,9 @@ test('@scene detached OpenPBR transfer record compiles and renders', async ({ pa
     const a = await compileTransfer('thin-opaque', thinOpaqueXml, []);
     const b = await compileTransfer('thin-half', thinHalfXml, []);
     // Same solid compile, two entry depths: thickness 1 then thickness 2
-    // (zExit fixed at 2 by u_recordDepthPlane.w, zEntry at 1 then 0).
-    const c1 = await compileTransfer('solid-thickness-1', solidXml, [], { depthPlaneW: 2, entryDepth: 1 });
-    const c2 = await compileTransfer('solid-thickness-2', solidXml, [], { depthPlaneW: 2, entryDepth: 0 });
+    // (exit prepass at 2, entry prepass at 1 then 0).
+    const c1 = await compileTransfer('solid-thickness-1', solidXml, [], { entryDepth: 1, exitDepth: 2 });
+    const c2 = await compileTransfer('solid-thickness-2', solidXml, [], { entryDepth: 0, exitDepth: 2 });
     const d = await compileTransfer('textured', texturedXml, [{ path: 'transport-tint.png', data: new Uint8Array(textureBytes).buffer }]);
 
     const unsupportedDoc = env.mx.createDocument();
@@ -160,7 +159,7 @@ test('@scene detached OpenPBR transfer record compiles and renders', async ({ pa
     return { a, b, c1, c2, d, unsupported, retired };
   }, { thinOpaqueXml: thinXml(1), thinHalfXml: thinXml(0.5), solidXml, texturedXml, unsupportedXml, textureBytes: Array.from(png([64,128,192])), plane });
 
-  const evidence = { schemaVersion: 1, command: 'npx playwright test tests/embed/usd-scene-light-transport.spec.mjs --project=chromium --reporter=list', sourceHashes: Object.fromEntries(['js/mtlx-engine.js', 'tests/embed/usd-scene-light-transport.spec.mjs'].map(file => [file, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')])), contract: { transfer: 'vec4(Trecord, 1.0); Trecord = (1-opacity) + opacity * Tmat; Tmat = thin ? B : B * exp(-D * thickness); thickness reads a light-space entry depth prepass.', scope: 'Validates coverage folding, solid absorption over a sampled thickness, texture sampling, and sampler-budget hygiene of the detached transfer variant. Does not exercise the consumer\'s per-face record-plane rendering.' }, ...result };
+  const evidence = { schemaVersion: 1, command: 'npx playwright test tests/embed/usd-scene-light-transport.spec.mjs --project=chromium --reporter=list', sourceHashes: Object.fromEntries(['js/mtlx-engine.js', 'tests/embed/usd-scene-light-transport.spec.mjs'].map(file => [file, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')])), contract: { transfer: 'vec4(Trecord, 1 - zExit); Trecord = (1-opacity) + opacity * Tmat; Tmat = thin ? B : B * exp(-D * thickness); zExit is the record\'s own normalized light-space depth, read back by a consuming receiver to order stacked records; thickness reads a light-space entry depth prepass.', scope: 'Validates coverage folding, solid absorption over a sampled thickness, texture sampling, and sampler-budget hygiene of the detached transfer variant. Does not exercise the consumer\'s per-face record-plane rendering (see usd-scene-light-transmittance.spec.mjs for that).' }, ...result };
   const evidencePath = testInfo.outputPath('detached-transfer.json'); fs.mkdirSync(path.dirname(evidencePath), { recursive: true }); fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2)); await testInfo.attach('detached-transfer', { path: evidencePath, contentType: 'application/json' });
 
   for (const row of [result.a, result.b, result.c1, result.c2, result.d]) {
@@ -175,18 +174,20 @@ test('@scene detached OpenPBR transfer record compiles and renders', async ({ pa
     expect(row.normalDifferent, row.name).toBe(true);
     expect(row.pixel.every(Number.isFinite), row.name).toBe(true);
     if (process.platform === 'win32') expect(row.backend, row.name).toMatch(/D3D11/i);
-    // Every scene material bakes the same 9 fixed samplers (env, shadow,
-    // AO, sky vis, thickness, peel) regardless of light transport, see the
-    // DEFAULT_SAMPLER_BUDGET comment; the transfer variant must bind
-    // nothing beyond that same set plus its own u_recordEntryDepth.
-    const allowed = new Set(row.normalSamplerNames.concat(['u_recordEntryDepth']));
+    // Every scene material bakes the same 10 fixed samplers (env, shadow,
+    // shadow transmittance, AO, sky vis, thickness, peel) regardless of
+    // light transport, see the DEFAULT_SAMPLER_BUDGET comment; the transfer
+    // variant must bind nothing beyond that same set plus its own
+    // u_recordEntryDepth.
+    const allowed = new Set(row.normalSamplerNames.concat(['u_recordEntryDepth', 'u_recordExitDepth']));
     expect(row.samplerNames.every((n) => allowed.has(n)), row.name + ': ' + row.samplerNames.join(',')).toBe(true);
-    expect(row.samplerCount, row.name).toBe(row.normalSamplerCount + 1);
+    expect(row.samplerCount, row.name).toBe(row.normalSamplerCount + 2);
   }
 
   // (a) thin, weight 1, tint (0.2,1,1), opacity 1: Trecord == B == tint.
   for (const [i, v] of [0.2, 1, 1].entries()) expect(result.a.pixel[i]).toBeCloseTo(v, 3);
-  expect(result.a.pixel[3]).toBeCloseTo(1, 3);
+  // Alpha carries 1 - zExit (zExit is 1 here), so the record's alpha is 0.
+  expect(result.a.pixel[3]).toBeCloseTo(0, 3);
   // (b) same, opacity 0.5: Trecord = 0.5*(1,1,1) + 0.5*(0.2,1,1).
   for (const [i, v] of [0.6, 1, 1].entries()) expect(result.b.pixel[i]).toBeCloseTo(v, 3);
 

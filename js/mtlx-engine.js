@@ -1134,7 +1134,7 @@ const SHADOW_LIGHT_SLOTS_MAX = 32;
 const SHADOW_NORMAL_OFFSET_TEXELS = 1.0;
 const SHADOW_DEPTH_BIAS_TEXELS = 1.0;
 
-const patchShadowLightScope = (fs) => {
+const patchShadowLightScope = (fs, { skipTransmittance = false } = {}) => {
     const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
     const site = 'L = lightShader.direction;';
     if (fs.indexOf(call) === -1 || fs.indexOf(site) === -1) return fs;
@@ -1152,10 +1152,15 @@ const patchShadowLightScope = (fs) => {
     // invocation (reset each main()), so light slots that share an omni
     // face reuse one lookup instead of repeating the atlas search.
     const lightLoop = '        // Light loop\n';
+    const transmitCacheInit = skipTransmittance ? '' : '        vec3 mx_shadowTransmit[' + SHADOW_FACE_SLOTS + '];\n'
+        + '        for (int mx_transmitIndex = 0; mx_transmitIndex < ' + SHADOW_FACE_SLOTS + '; ++mx_transmitIndex) {\n'
+        + '            mx_shadowTransmit[mx_transmitIndex] = vec3(-1.0);\n'
+        + '        }\n';
     const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_FACE_SLOTS + '];\n'
         + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_FACE_SLOTS + '; ++mx_shadowIndex) {\n'
         + '            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'
         + '        }\n'
+        + transmitCacheInit
         + '        vec3 mx_shadowNormal = ' + shadowNormalExpr + ';\n\n';
     if (out.indexOf(lightLoop) !== -1 && out.indexOf('mx_shadowVisibility[') === -1) {
         out = out.replace(lightLoop, cacheDecl + lightLoop);
@@ -1200,7 +1205,16 @@ const patchShadowLightScope = (fs) => {
         // Thin translucent and subsurface closures ignore ClosureData.occlusion,
         // so scale the source radiance once and clear the closure term: every
         // direct closure then sees exactly one factor of visibility.
-        + '\n                lightShader.intensity *= occlusion * u_shadowDiagnosticVisibilityScale;'
+        + (skipTransmittance ? '' : '\n                vec3 mx_transmit = vec3(1.0);'
+            + '\n                if (mx_face < 0) {'
+            + '\n                    mx_transmit = vec3(1.0);'
+            + '\n                } else if (mx_shadowTransmit[mx_face].x < -0.5) {'
+            + '\n                    mx_shadowTransmit[mx_face] = mx_shadow_transmittance(mx_face, positionWorld, mx_shadowNormal);'
+            + '\n                    mx_transmit = mx_shadowTransmit[mx_face];'
+            + '\n                } else {'
+            + '\n                    mx_transmit = mx_shadowTransmit[mx_face];'
+            + '\n                }')
+        + '\n                lightShader.intensity *= occlusion * ' + (skipTransmittance ? '' : 'mx_transmit * ') + 'u_shadowDiagnosticVisibilityScale;'
         + '\n                occlusion = 1.0;'
         + '\n            }');
     if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
@@ -1242,6 +1256,13 @@ const patchShadowLightScope = (fs) => {
         // rendering always binds one; keeping it in the compiled shader lets
         // a diagnostic prove D(V)=V*D(1) without modifying scene lights.
         'uniform float u_shadowDiagnosticVisibilityScale;',
+    ].concat(skipTransmittance ? [] : [
+        // Packed into one texture: R1 (nearest transmitter) cell origin/size,
+        // R2 (product of all) is the same rect offset by half the height.
+        // Zero size means no record for that face (dropped, or feature off).
+        'uniform sampler2D u_shadowTransmittance;',
+        'uniform vec4 u_shadowRecordCells[' + SHADOW_FACE_SLOTS + '];',
+    ]).concat([
         '#define SHADOW_NORMAL_OFFSET_TEXELS ' + SHADOW_NORMAL_OFFSET_TEXELS.toFixed(4),
         '#define SHADOW_DEPTH_BIAS_TEXELS ' + SHADOW_DEPTH_BIAS_TEXELS.toFixed(4),
         'float mx_shadow_vsm(vec2 moments, float receiverDepth) {',
@@ -1337,8 +1358,43 @@ const patchShadowLightScope = (fs) => {
         '    vec2 e = min(sc.xy, vec2(1.0) - sc.xy);',
         '    return mix(1.0, lit, smoothstep(0.0, 0.04, min(e.x, e.y)));',
         '}',
+    ]).concat(skipTransmittance ? [] : [
+        // Orders the receiver's biased depth against the two stacked records:
+        // nearer than both is lit, past R1 only applies its tint, past both
+        // applies the full product. An empty cell's clear color reads as lit.
+        'vec3 mx_shadow_transmittance(int caster, vec3 P, vec3 Ng) {',
+        '    if (caster < 0) return vec3(1.0);',
+        '    vec4 cell = u_shadowRecordCells[caster];',
+        '    if (cell.z <= 0.0 || cell.w <= 0.0) return vec3(1.0);',
+        '    vec4 depthPlane = u_shadowDepthPlanes[caster];',
+        '    vec2 depthRange = u_shadowDepthRanges[caster];',
+        '    float nearDepth = depthRange.x;',
+        '    float depthSpan = max(depthRange.y, 1e-9);',
+        '    vec2 projectionScale = u_shadowSourceRadii[caster].zw;',
+        '    bool perspective = projectionScale.x > 0.0 || projectionScale.y > 0.0;',
+        '    float texelBase = u_shadowTexelWorldSize[caster];',
+        '    float rawDepth = dot(vec4(P, 1.0), depthPlane);',
+        '    float rawZ = max(nearDepth + depthSpan * rawDepth, 0.0);',
+        '    float texelWorld = texelBase * (perspective ? rawZ : 1.0);',
+        '    vec3 offsetP = P + Ng * (texelWorld * SHADOW_NORMAL_OFFSET_TEXELS);',
+        '    vec4 c4 = u_shadowMatrices[caster] * vec4(offsetP, 1.0);',
+        '    if (c4.w <= 0.0) return vec3(1.0);',
+        '    vec3 sc = c4.xyz / c4.w * 0.5 + 0.5;',
+        '    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return vec3(1.0);',
+        '    float z = dot(vec4(offsetP, 1.0), depthPlane) - SHADOW_DEPTH_BIAS_TEXELS * texelWorld / depthSpan;',
+        '    vec2 r1uv = cell.xy + sc.xy * cell.zw;',
+        '    vec2 r2uv = r1uv + vec2(0.0, 0.5);',
+        '    vec4 rec1 = texture(u_shadowTransmittance, r1uv);',
+        '    vec4 rec2 = texture(u_shadowTransmittance, r2uv);',
+        // Alpha stores 1 - depth: an untouched cell (alpha 1) reads as depth
+        // 0, and the product plane keeps its farthest depth through MIN.
+        '    if (z > 1.0 - rec2.a) return rec2.rgb;',
+        '    if (z > 1.0 - rec1.a) return rec1.rgb;',
+        '    return vec3(1.0);',
+        '}',
+    ]).concat([
         '',
-    ].join('\n');
+    ]).join('\n');
     // Must land before the FIRST global function, not before main(): the light
     // loop lives in a surface evaluation function that precedes main, so
     // declaring any later leaves these used before declared and nothing
@@ -1527,6 +1583,10 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
             // The transport main body is pruned below, so no caller reads the
             // terminal out value. Return here after evaluating the inputs to
             // avoid the terminal's generated closure/light work as well.
+            // The out parameter is still assigned first: an ANGLE/D3D target
+            // can otherwise treat an unwritten "out" as leaving the whole
+            // call's other side effects undefined.
+            + '    ' + terminalOut[2] + ' = ' + terminalOut[1] + '(' + Array(terminalOut[1] === 'surfaceshader' ? 2 : 1).fill('vec3(0.0)').join(', ') + ');\n'
             + '    /* MX_LIGHT_TRANSPORT_TERMINAL_RETURN */\n'
             + '    return;\n';
     });
@@ -1540,6 +1600,9 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
         // u_recordUnitScale mirrors u_thicknessScale's scene-unit conversion.
         + 'uniform vec4 u_recordDepthPlane;\n'
         + 'uniform sampler2D u_recordEntryDepth;\n'
+        + 'uniform sampler2D u_recordExitDepth;\n'
+        + 'uniform vec2 u_recordCellOrigin;\n'
+        + 'uniform int u_recordPass;\n'
         + 'uniform vec2 u_recordTexel;\n'
         + 'uniform float u_recordDepthSpan;\n'
         + 'uniform float u_recordUnitScale;\n';
@@ -1555,15 +1618,19 @@ const patchLightTransportPayload = (fs, notices, requestedMode) => {
         else if (out[i] === '}' && --depth === 0) { mainEnd = i; break; }
     }
     if (mainEnd < 0) { if (notices) notices.push('Light transport unavailable: generated main contract changed'); return fs; }
-    // zExit reads the current back face's own depth; zEntry reads the
-    // matching front-face depth the consumer prepassed into the scratch
-    // target. Solid thickness is their gap; thin transfer ignores it.
-    const transfer = '\n    float mx_recordZExit = dot(vec4(positionWorld, 1.0), u_recordDepthPlane);\n'
-        + '    float mx_recordZEntry = texture(u_recordEntryDepth, gl_FragCoord.xy * u_recordTexel).r;\n'
+    // Entry/exit depths come from the consumer's nearest/farthest prepasses
+    // (winding independent); their gap is the solid thickness. Alpha carries
+    // 1 minus this fragment's own depth so a receiver can order records.
+    const transfer = '\n    float mx_recordZOwn = dot(vec4(positionWorld, 1.0), u_recordDepthPlane);\n'
+        + '    float mx_recordZEntry = texture(u_recordEntryDepth, (gl_FragCoord.xy - u_recordCellOrigin) * u_recordTexel).r;\n'
+        + '    float mx_recordZExit = texture(u_recordExitDepth, (gl_FragCoord.xy - u_recordCellOrigin) * u_recordTexel).r;\n'
+        // The product pass takes one surface per solid: the entry surface,
+        // matched by depth, so winding never decides how often it multiplies.
+        + '    if (u_recordPass == 2 && mx_transportThin < 0.5 && abs(mx_recordZOwn - mx_recordZEntry) > 2e-3) discard;\n'
         + '    float mx_recordThickness = max(mx_recordZExit - mx_recordZEntry, 0.0) * u_recordDepthSpan * u_recordUnitScale;\n'
         + '    vec3 mx_recordT = mx_transportThin > 0.5 ? mx_transportB : mx_transportB * exp(-mx_transportD * mx_recordThickness);\n'
         + '    vec3 mx_recordTrecord = clamp((1.0 - mx_transportOpacity) + mx_transportOpacity * mx_recordT, 0.0, 1.0);\n'
-        + '    ' + om[1] + '=vec4(mx_recordTrecord, 1.0); return;\n';
+        + '    ' + om[1] + '=vec4(mx_recordTrecord, 1.0 - mx_recordZOwn); return;\n';
     // Physically remove the post-terminal main body rather than relying on
     // a runtime branch for dead-code elimination. This lets linkers drop
     // lighting/environment sampler paths that the terminal does not need.
@@ -1832,8 +1899,13 @@ const injectPeelDiscard = (src, sceneRgbt = false) => {
     // brace (same anchor encodeDisplay() uses for its own epilogue, which
     // by now has already spliced, gated open or not, and is the last
     // thing before that brace).
+    // A light-transport variant always returns before this point (see
+    // patchLightTransportPayload's early return), so the tail is
+    // unreachable there and skipped for that variant.
     const outMatch = out.match(/\bout\s+vec4\s+(\w+)\s*;/);
-    if (outMatch) {
+    if (out.indexOf('MX_LIGHT_TRANSPORT_EARLY_RETURN') !== -1) {
+        // no-op: the tail is unreachable for this variant.
+    } else if (outMatch) {
         const v = outMatch[1];
         const closeIdx = out.lastIndexOf('}');
         const premult = '\n    if (u_peelMode == 2 && ' + (sceneRgbt ? 'u_peelRgbt == 0' : 'true') + ') { ' + v + '.rgb *= ' + v + '.a; }\n';
@@ -5510,6 +5582,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
     const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
+    const skipTransmittance = !!(sceneFeatureOptions && sceneFeatureOptions.skipTransmittance);
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -5658,7 +5731,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         lightTransportSupported = fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN') !== -1;
     }
     fs = patchShadowBounds(fs);
-    fs = patchShadowLightScope(fs);
+    fs = patchShadowLightScope(fs, { skipTransmittance });
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
     fs = patchAmbientOcclusion(fs, { skipSkyVis });
@@ -5711,6 +5784,7 @@ const DEFAULT_SAMPLER_BUDGET = 16;
 const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)' },
     { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)' },
+    { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)' },
 ];
 
 // Scene-view material compiler. This deliberately exposes the preview shader
@@ -5761,7 +5835,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
+const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -5871,6 +5945,14 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     // matrix here is a raw world-to-light-clip transform.
     // White map at strength 0 is an exact no-op, so a view with no AO pass
     // is byte-identical to one generated before AO existed.
+    // Opaque white default: an empty cell's clear color already reads as
+    // fully lit (see mx_shadow_transmittance), so "no transmitters" and
+    // "feature unavailable" both fall back safely without a caller check.
+    if (has('u_shadowTransmittance')) uniforms.u_shadowTransmittance = { value: shadowTransmittance || getDummyTexWhite() };
+    if (has('u_shadowRecordCells')) {
+        uniforms.u_shadowRecordCells = { value: shadowRecordCells && shadowRecordCells.length === SHADOW_FACE_SLOTS
+            ? shadowRecordCells : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 0)) };
+    }
     if (has('u_ssaoMap')) uniforms.u_ssaoMap = { value: ssaoMap || getDummyTexWhite() };
     if (has('u_ssaoTexel')) uniforms.u_ssaoTexel = { value: ssaoTexel ? ssaoTexel.clone() : new THREE.Vector2() };
     if (has('u_ssaoStrength')) uniforms.u_ssaoStrength = { value: ssaoMap ? ssaoStrength : 0 };
@@ -5919,10 +6001,20 @@ const createLightTransportUniforms = ({ compiled, displayUniforms }) => {
         }
     }
     uniforms.u_recordEntryDepth = { value: getDummyTexWhite() };
+    uniforms.u_recordExitDepth = { value: getDummyTexWhite() };
+    uniforms.u_recordCellOrigin = { value: new THREE.Vector2() };
+    uniforms.u_recordPass = { value: 1 };
     uniforms.u_recordDepthPlane = { value: new THREE.Vector4(0, 0, 0, 0) };
     uniforms.u_recordTexel = { value: new THREE.Vector2() };
     uniforms.u_recordDepthSpan = { value: 1 };
     uniforms.u_recordUnitScale = { value: 1 };
+    // Unused by the transfer variant itself. shadowRenderFaceTransmittance
+    // owns each active object's onBeforeRender and re-binds the target
+    // itself (three applies viewport/scissor only in setRenderTarget).
+    if (uniforms.u_shadowTransmittance) uniforms.u_shadowTransmittance = { value: getDummyTexWhite() };
+    if (uniforms.u_shadowRecordCells) {
+        uniforms.u_shadowRecordCells = { value: Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 0)) };
+    }
     uniforms.u_worldMatrix = { value: new THREE.Matrix4() };
     uniforms.u_viewProjectionMatrix = { value: new THREE.Matrix4() };
     uniforms.u_worldInverseTransposeMatrix = { value: new THREE.Matrix4() };
