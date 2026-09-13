@@ -107,6 +107,9 @@ async function main() {
     sourceHashesBefore: sourceHashes(),
     startedAt: new Date().toISOString(),
     errors: [],
+    // Optional fetches (version manifests, GitHub metadata) land here and
+    // never flip the run status; real render failures stay in errors.
+    warnings: [],
     cameras: []
   };
   const save = () => {
@@ -148,13 +151,15 @@ async function main() {
         };
         (report.console ??= []).push(item);
       });
-      page.on('requestfailed', r => report.errors.push({
+      const optionalResource = url => [/vendor[/]materialx[/]manifest[.]json([?#]|$)/, /source-facts[.]json([?#]|$)/, /^https?:[/][/](api[.])?github[.]com[/]/].some(re => re.test(String(url)));
+      const fetchSink = url => (optionalResource(url) ? report.warnings : report.errors);
+      page.on('requestfailed', r => fetchSink(r.url()).push({
         type: 'requestfailed',
         url: r.url(),
         text: r.failure()?.errorText || 'request failed'
       }));
       page.on('response', r => {
-        if (r.status() >= 400) report.errors.push({
+        if (r.status() >= 400) fetchSink(r.url()).push({
           type: 'http',
           status: r.status(),
           url: r.url()
