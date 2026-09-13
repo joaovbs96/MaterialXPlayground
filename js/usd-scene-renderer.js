@@ -1648,6 +1648,18 @@ const createMtlxSceneView = async ({
     // the material is opaque, dynamic, or otherwise unsupported. Cached
     // alongside the display compile since both share the same renderable.
     const transferCompiledByPath = new Map();
+    // Builds a material's detached transfer variant (shadow transmittance
+    // record writer) sharing the display map's texture uniforms.
+    const attachTransferMaterial = (material, transferCompiled, uniforms) => {
+        if (!transferCompiled || !window.createLightTransportUniforms) return;
+        const transferUniforms = window.createLightTransportUniforms({ compiled: transferCompiled, displayUniforms: uniforms });
+        const transferMaterial = new THREE.RawShaderMaterial({
+            vertexShader: transferCompiled.vs, fragmentShader: transferCompiled.fs, glslVersion: THREE.GLSL3,
+            uniforms: transferUniforms, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true,
+        });
+        transferMaterial.needsUpdate = true;
+        material.userData.mtlxSceneTransfer = { compiled: transferCompiled, material: transferMaterial, uniforms: transferUniforms };
+    };
     const sourceXmlByRecord = new WeakMap();
     const materialRecords = new Map();
 
@@ -1977,21 +1989,7 @@ const createMtlxSceneView = async ({
         // Per-object thin/solid-topology gating happens in
         // shadowCollectTransmitters; a compiled transfer variant here only
         // means the MATERIAL qualifies (static, not fully opaque).
-        if (transferCompiled && window.createLightTransportUniforms) {
-            const transferUniforms = window.createLightTransportUniforms({ compiled: transferCompiled, displayUniforms: uniforms });
-            const transferMaterial = new THREE.RawShaderMaterial({
-                vertexShader: transferCompiled.vs,
-                fragmentShader: transferCompiled.fs,
-                glslVersion: THREE.GLSL3,
-                uniforms: transferUniforms,
-                side: THREE.FrontSide,
-                transparent: false,
-                depthWrite: true,
-                depthTest: true,
-            });
-            transferMaterial.needsUpdate = true;
-            material.userData.mtlxSceneTransfer = { compiled: transferCompiled, material: transferMaterial, uniforms: transferUniforms };
-        }
+        attachTransferMaterial(material, transferCompiled, uniforms);
         if (window.applyPeelMaterialMode) {
             window.applyPeelMaterialMode(material, material.userData.mtlxScenePeel && sceneTransparencyEnabled());
         }
@@ -2215,6 +2213,11 @@ const createMtlxSceneView = async ({
                 }
             }
             material.userData.mtlxSceneFullyTransmissive = classification.coverage.mode === 'clear';
+            // A tile inherits the base material's thin verdict and transfer
+            // variant, so UDIM materials can cast colored shadows too.
+            material.userData.mtlxSceneThinWalled = classification.thinWalled;
+            const baseTransfer = info.material.userData && info.material.userData.mtlxSceneTransfer;
+            attachTransferMaterial(material, baseTransfer ? baseTransfer.compiled : null, uniforms);
             if (window.applyPeelMaterialMode) {
                 window.applyPeelMaterialMode(material, material.userData.mtlxScenePeel && sceneTransparencyEnabled());
             }
