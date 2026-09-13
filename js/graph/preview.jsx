@@ -191,6 +191,13 @@
         };
         const GRAPH_GEOM_LABELS = Object.assign({}, GEOM_LABELS, { pernode: 'Auto (by node type)' });
         const GRAPH_GEOM_BADGES = { pernode: 'Experimental', 'shaderball-scene': 'Default', 'custom': 'Experimental' };
+        // Experimental: wraps the previewed root-level shading network in a
+        // transient nodedef so it compiles as one compound function instead
+        // of an inlined chain (see wrapRootNetwork below).
+        const GRAPH_COMPOUND_KEY = 'mtlx_graph_preview_compound';
+        const readGraphCompoundRoot = () => {
+            try { return localStorage.getItem(GRAPH_COMPOUND_KEY) === '1'; } catch (e) { return false; }
+        };
         // Row layout for the docked/fullscreen viewport strip: docked splits
         // send/colorspace/collapse from the geometry/screenshot/env/settings
         // group; fullscreen folds everything into one row, same order.
@@ -207,6 +214,49 @@
         // Returns { renderable, label, cleanup, notice }.
         const buildPreviewRenderable = (parsed, target) => {
             const doc = parsed.doc;
+            // A library implementation scope opened from a node instance
+            // (target.originId/originScope, set by graph-app.jsx's
+            // openImplGraph) carries that instance's own document element,
+            // so previews inside the scope can use its authored inputs
+            // instead of the nodedef defaults.
+            const originScope = target ? (target.originScope || '') : '';
+            const originEl = (target && target.originId && target.originId.indexOf('n:') === 0)
+                ? mxSafe(() => {
+                    const c = originScope ? (docChild(doc, originScope) || doc.getNodeGraph(originScope)) : doc;
+                    return c ? c.getNode(target.originId.slice(2)) : null;
+                }, null)
+                : null;
+            const originAtRoot = !originScope;
+            // Copies originEl's authored input values/connections onto a
+            // freshly-materialized preview instance; connections only make
+            // sense when the origin lives at the document root, where
+            // nodename/nodegraph references resolve.
+            const applyOriginInputs = (inst) => {
+                if (!originEl) return;
+                for (const input of vecToArray(mxSafe(() => originEl.getInputs(), []))) {
+                    const name = mxElName(input);
+                    const type = mxElType(input);
+                    const ii = ensureTypedInput(doc, inst, name, type);
+                    if (!ii) continue;
+                    const nn = mxElAttr(input, 'nodename');
+                    const ng = mxElAttr(input, 'nodegraph');
+                    const out = mxElAttr(input, 'output');
+                    const ifn = mxElAttr(input, 'interfacename');
+                    if (originAtRoot && (nn || ng || out || ifn)) {
+                        if (nn) mxSetAttr(ii, 'nodename', nn);
+                        if (ng) mxSetAttr(ii, 'nodegraph', ng);
+                        if (out) mxSetAttr(ii, 'output', out);
+                        if (ifn) mxSetAttr(ii, 'interfacename', ifn);
+                        continue;
+                    }
+                    const val = mxSafe(() => (input.getValueString ? input.getValueString() : ''), '') || mxElAttr(input, 'value');
+                    if (val) mxWriteValue(ii, val, type);
+                    const cs = mxElAttr(input, 'colorspace');
+                    if (cs) mxSetAttr(ii, 'colorspace', cs);
+                    const unit = mxElAttr(input, 'unit');
+                    if (unit) mxSetAttr(ii, 'unit', unit);
+                }
+            };
             const temps = []; // { container, name } in creation order
             // { el, prev }: a definition-shadowing nodedef= pin to undo,
             // replayed before temps so document-local __pv_ND/NG names are
@@ -238,7 +288,8 @@
 
             // Wraps a tapped value (srcRef = { nodename | nodegraph, output? },
             // type outType) into a renderable root: surfaceshader -> material
-            // shell, BSDF/EDF -> surface shell, else color3 via convert chain.
+            // shell, BSDF/EDF -> surface shell, VDF -> glass layered over it,
+            // else color3 via convert chain.
             const wrapAsSurface = (srcRef, outType, label) => {
                 let pendingSrc = srcRef;
                 const connectSrc = (inp, fallbackName) => {
@@ -262,6 +313,21 @@
                     const surf = addTempNode('surface', '__pv_surface', 'surfaceshader');
                     if (!surf) return fail('Could not build the preview graph.');
                     connectSrc(ensureTypedInput(doc, surf, outType === 'BSDF' ? 'bsdf' : 'edf', outType));
+                    return ok(surf, label);
+                }
+                if (outType === 'VDF') {
+                    const glass = addTempNode('dielectric_bsdf', '__pv_glass', 'BSDF');
+                    if (!glass) return fail('Could not build the preview graph.');
+                    const sm = ensureTypedInput(doc, glass, 'scatter_mode', 'string');
+                    if (sm) mxWriteValue(sm, 'RT', 'string');
+                    const lay = addTempNode('layer', '__pv_layer', 'BSDF');
+                    if (!lay) return fail('Could not build the preview graph.');
+                    mxSafe(() => { lay.setNodeDefString('ND_layer_vdf'); return true; }, false);
+                    connectSrc(ensureTypedInput(doc, lay, 'base', 'VDF'));
+                    connectSrc(ensureTypedInput(doc, lay, 'top', 'BSDF'), mxElName(glass));
+                    const surf = addTempNode('surface', '__pv_surface', 'surfaceshader');
+                    if (!surf) return fail('Could not build the preview graph.');
+                    connectSrc(ensureTypedInput(doc, surf, 'bsdf', 'BSDF'), mxElName(lay));
                     return ok(surf, label);
                 }
                 const direct = findConvertChain(doc, outType, 'surfaceshader');
@@ -297,6 +363,113 @@
                 return ok(unlit, label);
             };
 
+            // Experimental (GRAPH_COMPOUND_KEY): compiles far faster as one
+            // compound function than inlined (measured 6x on a 108-node
+            // network). Promotes external/baked inputs to live nodedef inputs.
+            const compoundRoot = readGraphCompoundRoot();
+            const wrapRootNetwork = (shaderNode, label) => {
+                const seedName = mxElName(shaderNode);
+                const closure = new Map(); // name -> node, ROOT nodes only
+                const stack = [shaderNode];
+                while (stack.length) {
+                    const n = stack.pop();
+                    const nm = mxElName(n);
+                    if (closure.has(nm)) continue;
+                    closure.set(nm, n);
+                    for (const inp of vecToArray(mxSafe(() => n.getInputs(), []))) {
+                        const nn = mxElAttr(inp, 'nodename');
+                        if (!nn || mxElAttr(inp, 'nodegraph')) continue;
+                        const up = mxSafe(() => doc.getNode(nn), null);
+                        if (up) stack.push(up);
+                    }
+                }
+                if (closure.size <= 1) return ok(shaderNode, label); // nothing upstream to gain
+
+                const inst = mxSafe(() => {
+                    const defName = doc.createValidChildName('__pv_NDR');
+                    const category = doc.createValidChildName('__pv_root');
+                    const defR = doc.addNodeDef(defName, 'surfaceshader', category);
+                    if (!defR) return null;
+                    temps.push({ container: doc, name: defName }); // FIRST: cleanup is LIFO
+                    for (const o of vecToArray(mxSafe(() => defR.getOutputs(), []))) {
+                        defR.removeOutput(mxElName(o));
+                    }
+                    if (!defR.addOutput('out', 'surfaceshader')) return null;
+
+                    const gR = doc.addNodeGraph(doc.createValidChildName('__pv_NGR'));
+                    if (!gR) return null;
+                    temps.push({ container: doc, name: mxElName(gR) });
+                    gR.setNodeDefString(defName);
+
+                    // Copy each closure node in, promoting any input that
+                    // reaches outside the closure (an external node/nodegraph
+                    // link) or holds a baked non-string/boolean value.
+                    const extConns = []; // { pname, type, nn, ng, out }
+                    for (const n of closure.values()) {
+                        const name = mxElName(n);
+                        const c = gR.addNode(mxElCat(n), name, mxElType(n));
+                        if (!c) return null;
+                        c.copyContentFrom(n);
+                        c.setName(name);
+                        const nDef = resolveVersionedNodeDef(n);
+                        for (const i of vecToArray(mxSafe(() => c.getInputs(), []))) {
+                            const iName = mxElName(i);
+                            const nn = mxElAttr(i, 'nodename');
+                            const ng = mxElAttr(i, 'nodegraph');
+                            const out = mxElAttr(i, 'output');
+                            if (nn && closure.has(nn)) continue; // in-graph link, left as-is
+                            const defIn = nDef ? mxSafe(() => nDef.getActiveInput(iName), null) : null;
+                            const iType = (defIn && mxElType(defIn)) || mxElType(i);
+                            const pname = name + '_' + iName;
+                            if (nn || ng) {
+                                // A node outside the closure, or a root
+                                // nodegraph tap: promote to a nodedef input.
+                                if (!defR.addInput(pname, iType)) return null;
+                                mxRemoveAttr(i, 'nodename');
+                                mxRemoveAttr(i, 'nodegraph');
+                                mxRemoveAttr(i, 'output');
+                                mxSetAttr(i, 'interfacename', pname);
+                                extConns.push({ pname, type: iType, nn, ng, out });
+                                continue;
+                            }
+                            if (mxElAttr(i, 'interfacename')) continue; // already an interface link
+                            if (iType === 'string' || iType === 'boolean') continue; // baked in place
+                            const val = mxSafe(() => (i.getValueString ? i.getValueString() : ''), '') || mxElAttr(i, 'value');
+                            if (!val) continue;
+                            // filename inputs are promoted too: textures bind
+                            // through filename uniforms, not baked literals.
+                            const ndIn = defR.addInput(pname, iType);
+                            if (!ndIn) return null;
+                            mxWriteValue(ndIn, val, iType);
+                            mxRemoveAttr(i, 'value');
+                            mxSetAttr(i, 'interfacename', pname);
+                        }
+                    }
+                    const oR = gR.addOutput('out', 'surfaceshader');
+                    if (!oR) return null;
+                    mxSetAttr(oR, 'nodename', seedName);
+
+                    const rootInst = addTempNode(category, '__pv_rootInst', 'surfaceshader');
+                    if (!rootInst) return null;
+                    rootInst.setNodeDefString(defName);
+                    for (const c of extConns) {
+                        const ii = ensureTypedInput(doc, rootInst, c.pname, c.type);
+                        if (!ii) continue;
+                        if (c.nn) mxSetAttr(ii, 'nodename', c.nn);
+                        if (c.ng) mxSetAttr(ii, 'nodegraph', c.ng);
+                        if (c.out) mxSetAttr(ii, 'output', c.out);
+                    }
+                    return rootInst;
+                }, null);
+
+                if (!inst) { cleanup(); return ok(shaderNode, label); }
+                return ok(inst, label);
+            };
+            // Only a root-level surfaceshader is worth wrapping, used at
+            // every ok()-of-a-root-surfaceshader site below.
+            const maybeWrapRoot = (el, label) => (compoundRoot && mxElType(el) === 'surfaceshader')
+                ? wrapRootNetwork(el, label) : ok(el, label);
+
             // Preview one node instance in `container` (the doc root when
             // containerName is '', else the nodegraph of that name).
             const previewNode = (container, containerName, el) => {
@@ -307,16 +480,40 @@
                         if (mxElType(inp) !== 'surfaceshader') continue;
                         const nn = mxElAttr(inp, 'nodename');
                         const s = nn ? mxSafe(() => container.getNode(nn), null) : null;
-                        if (s) return ok(s, name);
+                        if (s) return maybeWrapRoot(s, name);
                     }
                     return ok(el, name); // let the generator resolve the material
                 }
-                if (t === 'surfaceshader') return ok(el, name);
+                // Only at the ROOT: inside a nodegraph a surfaceshader node
+                // still goes through the compound-tap path below.
+                if (t === 'surfaceshader' && !containerName) return maybeWrapRoot(el, name);
                 const out = nodeOutInfo(el);
                 if (!out.type) return fail('No preview for "' + name + '" \u2014 its output type is unknown.');
                 let srcRef;
+                const containerDef = containerName ? mxSafe(() => container.getNodeDef(), null) : null;
+                // Closure/shader taps compile far faster as a compound
+                // instance than inlined through a root-level graph tap. A
+                // library implementation graph is shared, so a raw
+                // __pv_out tap on it would mutate library content AND its
+                // interfacename links would resolve to nodedef defaults
+                // instead of the origin instance's values, route it
+                // through materializeTap for EVERY type, not only the
+                // compound ones.
+                const needsCompoundTap = containerName && (COMPOUND_TAP_TYPES.indexOf(out.type) !== -1
+                    || (containerDef && !isDocLocal(container)));
                 if (!containerName) {
                     srcRef = { nodename: name, output: out.name };
+                } else if (needsCompoundTap) {
+                    // A library functional graph has no graph inputs of its
+                    // own, so copy its nodedef instead: interface links
+                    // resolve through it.
+                    return materializeTap(containerDef ? {
+                        sourceGraph: container, defEl: containerDef,
+                        nodeName: name, outName: out.name, outType: out.type, label: name,
+                    } : {
+                        sourceGraph: container, graphInputsEl: container,
+                        nodeName: name, outName: out.name, outType: out.type, label: name,
+                    });
                 } else {
                     // The node lives inside a nodegraph: tap it through a
                     // transient output on that graph, referenced from the
@@ -330,12 +527,6 @@
                     mxSafe(() => { o.setAttribute('nodename', name); return true; }, false);
                     if (out.name) mxSafe(() => { o.setAttribute('output', out.name); return true; }, false);
                     srcRef = { nodegraph: containerName, output: oName };
-                }
-                // Closure-modifier nodes (BSDF/EDF/VDF output that ALSO
-                // takes a BSDF/EDF/VDF input — e.g. pbrlib multiply/add/mix)
-                // fail WebGL compilation in the WASM shadergen/stdlib build.
-                if (isClosureModifier(out.type, signatureInputTypes(doc, el, out.type))) {
-                    return fail('No preview for "' + name + '" \u2014 closure-modifier nodes (BSDF/EDF/VDF in and out) can\u2019t be compiled for preview.');
                 }
                 return wrapAsSurface(srcRef, out.type, name);
             };
@@ -378,6 +569,22 @@
                 const type = mxElType(o);
                 if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
                 if (containerName) {
+                    if (COMPOUND_TAP_TYPES.indexOf(type) !== -1) {
+                        const nodeName = mxElAttr(o, 'nodename');
+                        const output = mxElAttr(o, 'output');
+                        if (nodeName) {
+                            const defEl = mxSafe(() => container.getNodeDef(), null);
+                            return materializeTap(defEl ? {
+                                sourceGraph: container, defEl,
+                                nodeName, outName: output || null, outType: type, label: name,
+                            } : {
+                                sourceGraph: container, graphInputsEl: container,
+                                nodeName, outName: output || null, outType: type, label: name,
+                            });
+                        }
+                        // No nodename (interface-fed or unconnected output):
+                        // fall through to the raw tap below.
+                    }
                     return wrapAsSurface({ nodegraph: containerName, output: name }, type, name);
                 }
                 const srcRef = resolveConnSrc(container, containerName, o);
@@ -393,21 +600,26 @@
                 const type = mxElType(inp);
                 if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
                 const srcRef = resolveConnSrc(container, containerName, inp);
-                if (srcRef) {
-                    if (containerName && srcRef.nodename) {
-                        // Graph-internal target: tap it through a transient
-                        // output on that graph (same as previewNode's
-                        // containerName branch) — nodename= can't resolve it.
-                        const g = container;
-                        const oName = typeof g.createValidChildName === 'function'
-                            ? mxSafe(() => g.createValidChildName('__pv_out'), '__pv_out') : '__pv_out';
-                        const o = mxSafe(() => g.addOutput(oName, type), null);
-                        if (!o) return fail('Could not tap "' + name + '" for the preview.');
-                        temps.push({ container: g, name: oName });
-                        mxSafe(() => { o.setAttribute('nodename', srcRef.nodename); return true; }, false);
-                        if (srcRef.output) mxSafe(() => { o.setAttribute('output', srcRef.output); return true; }, false);
-                        return wrapAsSurface({ nodegraph: containerName, output: oName }, type, name);
-                    }
+                // A shared library container (e.g. the nodedef's own input,
+                // reached when no origin instance value applies) must never
+                // take the raw-tap branch below, falls through to the
+                // literal-value preview instead, same guard as previewNode's
+                // containerName branch.
+                if (srcRef && containerName && srcRef.nodename && isDocLocal(container)) {
+                    // Graph-internal target: tap it through a transient
+                    // output on that graph (same as previewNode's
+                    // containerName branch), nodename= can't resolve it.
+                    const g = container;
+                    const oName = typeof g.createValidChildName === 'function'
+                        ? mxSafe(() => g.createValidChildName('__pv_out'), '__pv_out') : '__pv_out';
+                    const o = mxSafe(() => g.addOutput(oName, type), null);
+                    if (!o) return fail('Could not tap "' + name + '" for the preview.');
+                    temps.push({ container: g, name: oName });
+                    mxSafe(() => { o.setAttribute('nodename', srcRef.nodename); return true; }, false);
+                    if (srcRef.output) mxSafe(() => { o.setAttribute('output', srcRef.output); return true; }, false);
+                    return wrapAsSurface({ nodegraph: containerName, output: oName }, type, name);
+                }
+                if (srcRef && (!containerName || !srcRef.nodename)) {
                     return wrapAsSurface(srcRef, type, name);
                 }
                 const val = mxSafe(() => (inp.getValueString ? inp.getValueString() : ''), '') || mxElAttr(inp, 'value');
@@ -467,6 +679,25 @@
                 return m;
             };
 
+            // Preview a definitions entry: instantiate the materialized
+            // copy and wrap it exactly like previewing any other node.
+            const previewDefinition = (entry, outputName, label) => {
+                const m = materializeDefinition(entry);
+                if (!m) return fail('No definition found for "' + label + '".');
+                const pick = (outputName && m.outputs.find((o) => o.name === outputName))
+                    || m.outputs.find((o) => COLOR_VIEWABLE.indexOf(o.type) !== -1)
+                    || m.outputs[0];
+                if (!pick) return fail('No preview for "' + label + '": it has no outputs.');
+                const multi = m.outputs.length > 1;
+                const inst = addTempNode(m.nodeString, '__pv_inst', multi ? 'multioutput' : (pick.type || m.outType));
+                if (!inst) return fail('Could not build the preview graph.');
+                mxSafe(() => { inst.setNodeDefString(m.defName); return true; }, false);
+                return withGeom(
+                    wrapAsSurface({ nodename: mxElName(inst), output: multi ? pick.name : null }, pick.type || m.outType, label),
+                    'shaderball-scene'
+                );
+            };
+
             // Local definitions whose name also exists in the library are
             // invisible to shader gen (by-name lookups favor the library).
             const shadowedEntries = () => (parsed.definitions || []).filter((entry) => {
@@ -489,6 +720,101 @@
                     restores.push({ el: n, prev: mxElAttr(n, 'nodedef') });
                     mxSetAttr(n, 'nodedef', m.defName);
                 }
+            };
+
+            // Closure and shader taps compile 5x faster as a compound instance
+            // than as a root-level graph-output tap, so wrap them in a transient
+            // nodedef plus functional graph and preview an instance of it.
+            const COMPOUND_TAP_TYPES = ['BSDF', 'EDF', 'VDF', 'surfaceshader', 'volumeshader', 'displacementshader'];
+            const materializeTap = ({ sourceGraph, defEl, graphInputsEl, nodeName, outName, outType, label }) => {
+                if (!defEl && !graphInputsEl) return fail('Could not build the preview graph (compound tap).');
+                const defName = mxSafe(() => doc.createValidChildName('__pv_NDT'), '__pv_NDT');
+                const category = mxSafe(() => doc.createValidChildName('__pv_tap'), '__pv_tap');
+                const defT = mxSafe(() => doc.addNodeDef(defName, outType, category), null);
+                if (!defT) return fail('Could not build the preview graph (compound tap).');
+                temps.push({ container: doc, name: defName }); // FIRST: cleanup is LIFO
+
+                if (defEl) {
+                    const okDef = mxSafe(() => { defT.copyContentFrom(defEl); return true; }, false);
+                    mxSafe(() => { defT.setName(defName); return true; }, false);
+                    mxSafe(() => { defT.setNodeString(category); return true; }, false);
+                    if (!okDef) return fail('Could not build the preview graph (compound tap).');
+                    for (const o of vecToArray(mxSafe(() => defT.getOutputs(), []))) {
+                        mxSafe(() => { defT.removeOutput(mxElName(o)); return true; }, false);
+                    }
+                    if (!mxSafe(() => defT.addOutput('out', outType), null)) {
+                        return fail('Could not build the preview graph (compound tap).');
+                    }
+                } else {
+                    // addNodeDef() already added an implicit 'out' output for
+                    // single-output types; drop it before adding our own.
+                    for (const o of vecToArray(mxSafe(() => defT.getOutputs(), []))) {
+                        mxSafe(() => { defT.removeOutput(mxElName(o)); return true; }, false);
+                    }
+                    for (const inp of vecToArray(mxSafe(() => graphInputsEl.getInputs(), []))) {
+                        const iName = mxElName(inp), iType = mxElType(inp);
+                        const ndIn = mxSafe(() => defT.addInput(iName, iType), null);
+                        if (!ndIn) continue;
+                        ['value', 'colorspace', 'unit', 'unittype', 'defaultgeomprop', 'uniform'].forEach((attr) => {
+                            const v = mxElAttr(inp, attr);
+                            if (v) mxSetAttr(ndIn, attr, v);
+                        });
+                    }
+                    if (!mxSafe(() => defT.addOutput('out', outType), null)) {
+                        return fail('Could not build the preview graph (compound tap).');
+                    }
+                }
+
+                const gName = mxSafe(() => doc.createValidChildName('__pv_NGT'), '__pv_NGT');
+                const gT = mxSafe(() => doc.addNodeGraph(gName), null);
+                if (!gT) return fail('Could not build the preview graph (compound tap).');
+                temps.push({ container: doc, name: gName });
+                const okGraph = mxSafe(() => { gT.copyContentFrom(sourceGraph); return true; }, false);
+                mxSafe(() => { gT.setName(gName); return true; }, false);
+                mxSafe(() => { gT.setNodeDefString(defName); return true; }, false);
+                if (!okGraph) return fail('Could not build the preview graph (compound tap).');
+                for (const o of vecToArray(mxSafe(() => gT.getOutputs(), []))) {
+                    mxSafe(() => { gT.removeOutput(mxElName(o)); return true; }, false);
+                }
+                if (!defEl) {
+                    // Functional graphs rely on the nodedef interface only ,
+                    // interfacename links inside still resolve through it.
+                    for (const i of vecToArray(mxSafe(() => gT.getInputs(), []))) {
+                        mxSafe(() => { gT.removeInput(mxElName(i)); return true; }, false);
+                    }
+                }
+                const oT = mxSafe(() => gT.addOutput('out', outType), null);
+                if (!oT) return fail('Could not build the preview graph (compound tap).');
+                mxSafe(() => { oT.setAttribute('nodename', nodeName); return true; }, false);
+                if (outName) mxSafe(() => { oT.setAttribute('output', outName); return true; }, false);
+                // Only for the REAL document graph (the graphInputsEl case) ,
+                // a functional scope's __pv_NG copy was retargeted already.
+                if (!defEl) retargetShadowed(gT);
+
+                const inst = addTempNode(category, '__pv_instT', outType);
+                if (!inst) return fail('Could not build the preview graph (compound tap).');
+                mxSafe(() => { inst.setNodeDefString(defName); return true; }, false);
+                // Only when this tap's defEl IS the origin node's own
+                // nodedef, a tap of some unrelated graph must keep the
+                // nodedef defaults, not another node's authored values.
+                if (originEl && defEl && mxElName(defEl) === mxElName(resolveVersionedNodeDef(originEl))) {
+                    applyOriginInputs(inst);
+                }
+                if (!defEl && graphInputsEl) {
+                    for (const inp of vecToArray(mxSafe(() => graphInputsEl.getInputs(), []))) {
+                        const iName = mxElName(inp), iType = mxElType(inp);
+                        const nn = mxElAttr(inp, 'nodename'), ng = mxElAttr(inp, 'nodegraph');
+                        const out = mxElAttr(inp, 'output'), ifn = mxElAttr(inp, 'interfacename');
+                        if (!nn && !ng && !out && !ifn) continue;
+                        const ii = ensureTypedInput(doc, inst, iName, iType);
+                        if (!ii) continue;
+                        if (nn) mxSetAttr(ii, 'nodename', nn);
+                        if (ng) mxSetAttr(ii, 'nodegraph', ng);
+                        if (out) mxSetAttr(ii, 'output', out);
+                        if (ifn) mxSetAttr(ii, 'interfacename', ifn);
+                    }
+                }
+                return wrapAsSurface({ nodename: mxElName(inst) }, outType, label);
             };
 
             // Root-level network: retarget the root and every instance
@@ -537,6 +863,16 @@
                         const realGraph = docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null);
                         if (copyGraph && el) {
                             const out = nodeOutInfo(el);
+                            if (out.type && COMPOUND_TAP_TYPES.indexOf(out.type) !== -1) {
+                                const firstGraph = entry.graphs[0] ? docChild(doc, entry.graphs[0]) : null;
+                                const defEl = docChild(doc, entry.nodedef)
+                                    || (firstGraph ? resolveNodedefFor(doc, firstGraph) : null)
+                                    || mxSafe(() => doc.getNodeDef(entry.nodedef), null);
+                                return withGeom(
+                                    materializeTap({ sourceGraph: copyGraph, defEl, nodeName: name, outName: out.name, outType: out.type, label: name }),
+                                    'shaderball-scene'
+                                );
+                            }
                             if (out.type) {
                                 const oName = mxSafe(() => copyGraph.createValidChildName('__pv_out'), '__pv_out');
                                 const o = mxSafe(() => copyGraph.addOutput(oName, out.type), null);
@@ -544,9 +880,6 @@
                                     temps.push({ container: copyGraph, name: oName });
                                     mxSafe(() => { o.setAttribute('nodename', name); return true; }, false);
                                     if (out.name) mxSafe(() => { o.setAttribute('output', out.name); return true; }, false);
-                                    if (isClosureModifier(out.type, signatureInputTypes(doc, el, out.type))) {
-                                        return fail('No preview for "' + name + '": closure-modifier nodes (BSDF/EDF/VDF in and out) can\'t be compiled for preview.');
-                                    }
                                     return withGeom(
                                         wrapAsSurface({ nodegraph: copyName, output: oName }, out.type, name),
                                         (realGraph && nodeAndUpstreamAllBuffer2d(el, realGraph, doc)) ? 'buffer2d' : 'shaderball-scene'
@@ -578,16 +911,31 @@
                     // Interface inputs only exist inside a nodegraph scope.
                     const g = tScope ? (docChild(doc, tScope) || mxSafe(() => doc.getNodeGraph(tScope), null)) : null;
                     let inp = null;
-                    if (tScopeFunctional) {
-                        const def = g ? resolveNodedefFor(doc, g) : null;
-                        inp = def && mxSafe(() => def.getInput(name), null);
+                    let pContainer = g, pContainerName = tScope;
+                    // A library implementation graph is functional too: its
+                    // interface lives on the nodedef that getNodeDef() resolves.
+                    const libDef = (!tScopeFunctional && g) ? mxSafe(() => g.getNodeDef(), null) : null;
+                    if (tScopeFunctional || libDef) {
+                        // The origin instance's own authored value/connection
+                        // for this graph input wins over the nodedef default;
+                        // it lives at the document root, so resolveConnSrc
+                        // needs the root as container.
+                        const originInp = originEl ? mxSafe(() => originEl.getInput(name), null) : null;
+                        if (originInp) {
+                            inp = originInp;
+                            pContainer = doc;
+                            pContainerName = '';
+                        } else {
+                            const def = libDef || (g ? resolveNodedefFor(doc, g) : null);
+                            inp = def && mxSafe(() => def.getInput(name), null);
+                        }
                     } else {
                         inp = g ? mxSafe(() => g.getInput(name), null) : null;
                     }
                     // Same rule as 'o:' above; the interface input's own
                     // external wiring (if any) resolves one scope up, in
                     // the doc — see upstreamAllBuffer2d's seedScope contract.
-                    if (inp) return withGeom(previewInterfaceInput(g, tScope, inp),
+                    if (inp) return withGeom(previewInterfaceInput(pContainer, pContainerName, inp),
                         upstreamAllBuffer2d(inp, doc, doc) ? 'buffer2d' : 'shaderball-scene');
                 }
                 // Stale target (new document, renamed scope, ...) → default.
@@ -599,7 +947,7 @@
             // itself, else the first node that can be found.
             if ((parsed.definitions || []).length) shadowLocalDefinitions();
             const r = findDocRenderable(doc);
-            if (r) return ok(r, mxElName(r));
+            if (r) return maybeWrapRoot(r, mxElName(r));
             const nodes = vecToArray(mxSafe(() => doc.getNodes(), []))
                 .filter((n) => !/^__pv_/.test(mxElName(n)));
             const mat = nodes.find((n) => mxElType(n) === 'material');
@@ -650,6 +998,16 @@
                 try {
                     if (mode === 'pernode') localStorage.setItem(GRAPH_GEOM_KEY, mode);
                     else localStorage.removeItem(GRAPH_GEOM_KEY);
+                } catch (e) { /* best-effort */ }
+            };
+            // Experimental compound-root-compile toggle (Settings popup);
+            // persisted the same way as geomMode above.
+            const [compoundRoot, setCompoundRootState] = React.useState(readGraphCompoundRoot);
+            const setCompoundRoot = (on) => {
+                setCompoundRootState(on);
+                try {
+                    if (on) localStorage.setItem(GRAPH_COMPOUND_KEY, '1');
+                    else localStorage.removeItem(GRAPH_COMPOUND_KEY);
                 } catch (e) { /* best-effort */ }
             };
             // Ref mirror so the registry subscription below (mount-once)
@@ -839,9 +1197,12 @@
                         const env = await getMxEnv();
                         const { mx, gen, lightData } = env;
                         // Compound implementations are cached by NAME per
-                        // GenContext, so a document owning its own nodedefs
-                        // needs a FRESH context, never the shared/stale one.
-                        const genContext = (parsed && parsed.hasDefinitions && typeof env.createGenContext === 'function')
+                        // GenContext: local nodedefs and the transient compound
+                        // taps built inside a nodegraph scope need a FRESH one.
+                        // compoundRoot: compound root-network implementations
+                        // are also cached by NAME per context, same reason.
+                        const needsFreshCtx = !!(parsed && (parsed.hasDefinitions || (target && target.scope) || compoundRoot));
+                        const genContext = (needsFreshCtx && typeof env.createGenContext === 'function')
                             ? env.createGenContext() : env.genContext;
                         if (!mounted) return;
                         // Let the graph paint before the heavy synchronous
@@ -1094,7 +1455,7 @@
                 return () => {
                     mounted = false;
                 };
-            }, [parsed, target, docRev, fileMap, geomMode, customGeomEpochKey, glEpoch]);
+            }, [parsed, target, docRev, fileMap, geomMode, compoundRoot, customGeomEpochKey, glEpoch]);
 
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
             // built-in slot) so it's the single geometry control for the
@@ -1123,7 +1484,7 @@
                     modelFooter={geomModelFooter}
                     defValue={null}
                     onChange={pickGeom}
-                    title="Preview geometry"
+                    title="Preview Geometry"
                     size="sm" block icon="cube" className="flex-1 min-w-0"
                 />
             );
@@ -1154,6 +1515,29 @@
                         viewRef={viewRef}
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
+                        settingsChildren={
+                            <div>
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="inline-flex items-center gap-1.5 text-gray-200">
+                                        Compound compile
+                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                    </span>
+                                    <button
+                                        onClick={() => setCompoundRoot(!compoundRoot)}
+                                        title={compoundRoot ? 'Disable compound compile' : 'Enable compound compile'}
+                                        className={`h-5 px-2 rounded border transition-colors shrink-0 ${
+                                            compoundRoot ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                                        }`}
+                                    >
+                                        {compoundRoot ? 'On' : 'Off'}
+                                    </button>
+                                </div>
+                                <div className="mt-1 text-[11px] text-gray-400">
+                                    Wraps the document's root-level shading network in a temporary node definition so the GPU driver compiles it as one function.
+                                    Measured 6x faster compiles on large closure networks; parameter edits stay live. Connections and node edits still recompile as before.
+                                </div>
+                            </div>
+                        }
                         slots={slotNodes}
                         clusters={isFullscreen ? GRAPH_PREVIEW_CLUSTERS_FULLSCREEN : GRAPH_PREVIEW_CLUSTERS_DOCKED}
                         // flex-wrap is a deliberate escape hatch: a width miss

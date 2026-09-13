@@ -217,6 +217,10 @@ const getMxEnv = version => {
           // nodedefs needs a FRESH one to avoid stale gen.
           createGenContext: () => {
             const c = new mx.GenContext(gen);
+            // loadStandardLibraries is the only bound way to register the
+            // source-code search path on a context (about 70 ms); the
+            // document it returns is discarded, callers carry the stdlib.
+            mx.loadStandardLibraries(c);
             configureGenContext(c);
             return c;
           }

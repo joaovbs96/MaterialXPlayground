@@ -65,8 +65,50 @@
             // lists library graphs first, 265 of them, alongside the doc's.
             const { nodegraphs, functionalGraphs, definitions } = computeDefinitions(doc);
             const hasDefinitions = definitions.length > 0;
+            const implGraphByNodedef = computeImplGraphByNodedef(doc);
 
-            return { mx, doc, nodegraphs, functionalGraphs, definitions, hasDefinitions, implGraphNames };
+            return { mx, doc, nodegraphs, functionalGraphs, definitions, hasDefinitions, implGraphNames, implGraphByNodedef };
+        };
+
+        // nodedef name -> nodegraph name, from <implementation nodegraph=""
+        // nodedef=""> elements and from nodegraphs carrying their own
+        // nodedef="" attribute, across both the doc and stdlib. stdlib is
+        // read off the doc's own data library, not re-fetched via
+        // getMxEnv, so this stays callable synchronously from refreshDefinitions.
+        const computeImplGraphByNodedef = (doc) => {
+            const stdlib = mxSafe(() => (typeof doc.getDataLibrary === 'function' ? doc.getDataLibrary() : null), null);
+            const map = new Map();
+            const collectFromImpls = (container) => {
+                vecToArray(mxSafe(() => container.getImplementations(), [])).forEach((impl) => {
+                    const ngName = mxElAttr(impl, 'nodegraph');
+                    const ndName = mxElAttr(impl, 'nodedef');
+                    if (ngName && ndName && !map.has(ndName)) map.set(ndName, ngName);
+                });
+            };
+            const collectFromGraphs = (graphs) => {
+                graphs.forEach((g) => {
+                    // getNodeDefString() is empty for library graphs in this
+                    // WASM build; fall back to the resolved nodedef's name.
+                    const ndName = mxSafe(() => g.getNodeDefString(), '')
+                        || mxElName(mxSafe(() => g.getNodeDef(), null));
+                    if (ndName && !map.has(ndName)) map.set(ndName, mxElName(g));
+                });
+            };
+            collectFromImpls(doc);
+            if (stdlib) collectFromImpls(stdlib);
+            collectFromGraphs(docChildren(doc).filter((el) => mxElCat(el) === 'nodegraph'));
+            if (stdlib) collectFromGraphs(vecToArray(mxSafe(() => stdlib.getNodeGraphs(), [])));
+            return map;
+        };
+
+        // Nodegraph implementing an instance's resolved nodedef, or null.
+        // One map lookup after the (already-memoized) nodedef resolution.
+        const implGraphForNode = (parsed, el) => {
+            if (!parsed || !parsed.implGraphByNodedef) return null;
+            const def = resolveVersionedNodeDef(el);
+            if (!def) return null;
+            const ndName = mxElName(def);
+            return parsed.implGraphByNodedef.get(ndName) || null;
         };
 
         // Validates the raw XML text, not the live parsed.doc — writes
@@ -274,6 +316,7 @@
         const refreshDefinitions = (parsed) => {
             Object.assign(parsed, computeDefinitions(parsed.doc));
             parsed.hasDefinitions = parsed.definitions.length > 0;
+            parsed.implGraphByNodedef = computeImplGraphByNodedef(parsed.doc);
             return parsed;
         };
 
@@ -320,32 +363,6 @@
             const pool = candidates.length ? candidates : defs;
             return pool.find((d) => mxSafe(() => d.getVersionString(), '') === ver) || fallback();
         };
-
-        // Every input type the node's signature exposes: authored inputs,
-        // the resolved nodedef's inputs, and — if getNodeDef() mis-resolves
-        // an unpinned closure overload — every same-output-type nodedef.
-        const signatureInputTypes = (doc, el, outType) => {
-            const authoredInTypes = vecToArray(mxSafe(() => el.getInputs(), [])).map(mxElType);
-            const def = resolveVersionedNodeDef(el);
-            let defInTypes = def ? vecToArray(mxSafe(() => def.getActiveInputs(), [])).map(mxElType) : [];
-            const defMatchesOut = def && (mxElType(def) === outType
-                || vecToArray(mxSafe(() => def.getActiveOutputs(), [])).some((o) => mxElType(o) === outType));
-            if (!defMatchesOut) {
-                // getNodeDef() can miss/mis-resolve unpinned closure
-                // overloads; scan every same-category, same-output nodedef.
-                const candDefs = vecToArray(mxSafe(() => doc.getMatchingNodeDefs(mxElCat(el)), []))
-                    .filter((d) => mxElType(d) === outType
-                        || vecToArray(mxSafe(() => d.getActiveOutputs(), [])).some((o) => mxElType(o) === outType));
-                for (const d of candDefs) {
-                    defInTypes = defInTypes.concat(vecToArray(mxSafe(() => d.getActiveInputs(), [])).map(mxElType));
-                }
-            }
-            return authoredInTypes.concat(defInTypes);
-        };
-        const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
-        const isClosureModifier = (outType, inTypes) =>
-            CLOSURE_TYPES.indexOf(outType) !== -1
-            && inTypes.some((t) => CLOSURE_TYPES.indexOf(t) !== -1);
 
         // Inputs/outputs of an element, types resolved from its NODEDEF
         // when implicit. opts.authoredOnly (default false) skips appending
@@ -505,7 +522,12 @@
                 if (m) lib = m[1];
             }
 
-            return { inputs, outputs, lib, group };
+            // Reuses the nodedef already resolved above (nodeDef()), one
+            // extra map lookup, no extra WASM round trips.
+            const implGraphMap = opts && opts.implGraphByNodedef;
+            const implGraph = (implGraphMap && def) ? (implGraphMap.get(mxElName(def)) || null) : null;
+
+            return { inputs, outputs, lib, group, implGraph };
         };
 
         // Node-editor xpos/ypos attributes (written by the MaterialX Graph
@@ -555,11 +577,12 @@
             if (!scope) {
                 for (const n of vecToArray(mxSafe(() => doc.getNodes(), []))) {
                     if (/^__pv_/.test(mxElName(n))) continue; // transient preview wrapper
-                    const ports = collectPorts(n);
+                    const ports = collectPorts(n, { implGraphByNodedef: parsed.implGraphByNodedef });
                     if (!ports.outputs.length) ports.outputs = defaultOutputPorts(n);
                     push({ id: 'n:' + mxElName(n), kind: kindOfNode(n), name: mxElName(n),
                            category: mxElCat(n), type: mxElType(n),
-                           inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n) });
+                           inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n),
+                           implGraph: ports.implGraph });
                 }
                 for (const g of docChildren(doc).filter((el) => mxElCat(el) === 'nodegraph')) {
                     if (parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(g)) !== -1) continue; // function definition, shown as a card below
@@ -632,7 +655,12 @@
             } else {
                 const g = docChild(doc, scope) || mxSafe(() => doc.getNodeGraph(scope), null);
                 if (!g) throw new Error('Nodegraph "' + scope + '" not found in the document.');
-                const isFunctionalScope = !!(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(scope) !== -1);
+                // A library graph (e.g. NG_standard_surface_surfaceshader)
+                // isn't in parsed.functionalGraphs (doc-local only), but its
+                // own nodedef= attribute still makes it functional: its
+                // real interface is the nodedef's inputs, not its own <input>s.
+                const isFunctionalScope = !!(parsed.functionalGraphs && parsed.functionalGraphs.indexOf(scope) !== -1)
+                    || !!mxSafe(() => g.getNodeDef(), null);
                 if (isFunctionalScope) {
                     // A functional graph's interface pins are the NODEDEF's
                     // inputs (it may author none of its own); read-only
@@ -666,16 +694,17 @@
                                uisoftmin: mxElAttr(inp, 'uisoftmin'), uisoftmax: mxElAttr(inp, 'uisoftmax'),
                                uiadvanced: mxElAttr(inp, 'uiadvanced') === 'true',
                                defColorspace: '',
-                               ifaceOwner: 'graph', readOnly: false });
+                               ifaceOwner: 'graph', readOnly: !isDocLocal(g) });
                     }
                 }
                 for (const n of vecToArray(mxSafe(() => g.getNodes(), []))) {
-                    const ports = collectPorts(n);
+                    const ports = collectPorts(n, { implGraphByNodedef: parsed.implGraphByNodedef });
                     if (!ports.outputs.length) ports.outputs = defaultOutputPorts(n);
                     push({ id: 'n:' + mxElName(n), kind: kindOfNode(n), name: mxElName(n),
                            category: mxElCat(n), type: mxElType(n),
                            lib: ports.lib, group: ports.group,
-                           inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n) });
+                           inputs: ports.inputs, outputs: ports.outputs, pos: storedPos(n),
+                           implGraph: ports.implGraph });
                 }
                 for (const o of vecToArray(mxSafe(() => g.getOutputs(), []))) {
                     if (/^__pv_/.test(mxElName(o))) continue; // transient preview tap
@@ -742,9 +771,10 @@
 
 Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
-    resolveVersionedNodeDef, signatureInputTypes, CLOSURE_TYPES, isClosureModifier,
+    resolveVersionedNodeDef,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG, ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,
     docChildren, docChild, isDocLocal, resolveNodedefFor, nodedefPorts,
     definitionOutType, computeDefinitions, refreshDefinitions,
+    computeImplGraphByNodedef, implGraphForNode,
 });
