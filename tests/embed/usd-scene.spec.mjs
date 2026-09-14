@@ -35,12 +35,22 @@ test('@scene renders the nested USD example with subset materials', async ({ pag
   await expect(page.getByTestId('usd-stage-root')).toContainText('root.usda');
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
-  // Diagnostics defaults collapsed when there are no warnings; open it to
-  // read the material provenance list underneath.
-  await page.getByTestId('usd-material-provenance').locator('button').first().click();
-  await expect(page.getByTestId('usd-material-provenance')).toContainText('nested/materials/red.mtlx');
-  await expect(page.getByTestId('usd-material-provenance')).toContainText('nested/materials/blue.mtlx');
-  await expect(page.getByTestId('usd-material-warnings')).toHaveCount(0);
+  // Diagnostics starts collapsed only without info lines; open it when
+  // the provenance list is not visible yet.
+  const provenance = page.getByTestId('usd-material-provenance');
+  const sources = provenance.locator('button', { hasText: /material sources/i });
+  await page.waitForTimeout(500);
+  for (let i = 0; i < 3 && !(await sources.isVisible().catch(() => false)); i++) {
+    await provenance.locator('button').first().click();
+    await page.waitForTimeout(300);
+  }
+  await expect(sources).toBeVisible();
+  if ((await sources.getAttribute('aria-expanded')) !== 'true') await sources.click();
+  await expect(provenance).toContainText('nested/materials/red.mtlx');
+  await expect(provenance).toContainText('nested/materials/blue.mtlx');
+  // Info lines (bake timings, unit defaults) are allowed; errors and warnings are not.
+  await expect(provenance).not.toContainText('Errors');
+  await expect(provenance).not.toContainText('Warnings');
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
   const studioImage = decodePNG(await canvas.screenshot());
   const sidebar = page.getByTestId('usd-scene-sidebar');
@@ -522,17 +532,16 @@ test('@scene refreshes display transform without reloading the USD stage', async
 
 test('@scene lets texture resolution and memory be picked before a stage loads', async ({ page, embedURL }) => {
   await page.goto(embedURL + '/index.html#!scene');
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  const renderingHeader = sidebar.getByRole('button', { name: /Rendering/ });
-  if (!(await sidebar.getByText('Texture resolution').isVisible().catch(() => false))) {
-    await renderingHeader.click();
-  }
-  const resolutionSelect = sidebar.getByText('Texture resolution').locator('..').getByRole('combobox');
+  await page.getByTestId('usd-scene-render-settings').click();
+  const popover = page.getByTestId('usd-scene-render-settings-popover');
+  await popover.getByRole('button', { name: 'Geometry and Textures', exact: true }).click();
+  const resolutionSelect = popover.getByText('Texture resolution', { exact: true }).locator('../..').getByRole('combobox');
   await resolutionSelect.click();
   await page.getByRole('option', { name: '1024 px', exact: true }).click();
-  const memorySelect = sidebar.getByText('Texture memory').locator('..').getByRole('combobox');
+  const memorySelect = popover.getByText('Texture memory', { exact: true }).locator('../..').getByRole('combobox');
   await memorySelect.click();
   await page.getByRole('option', { name: '2 GB', exact: true }).click();
+  await page.keyboard.press('Escape');
   await page.getByTestId('usd-scene-load-example').click();
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   const stats = await page.evaluate(() => window.__mtlxUsdSceneHandle.getTextureStats());

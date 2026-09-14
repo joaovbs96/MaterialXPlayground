@@ -44,12 +44,21 @@ test('@scene authored transparency defaults on and survives a material rebuild',
   const before = decodePNG(await canvas.screenshot());
   expect(centerRedness(before)).toBeGreaterThan(60);
 
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  const renderingCardButton = sidebar.getByRole('button', { name: /Rendering/ });
-  await renderingCardButton.click();
-  const toggle = sidebar.locator('label').filter({ hasText: /^Transparency/ }).getByRole('switch');
+  // The popover overlaps the canvas center at test viewport size, so it is
+  // closed (Escape, still mounted) before every pixel-sampling screenshot
+  // and reopened before the next control interaction.
+  const button = page.getByTestId('usd-scene-render-settings');
+  const popover = page.getByTestId('usd-scene-render-settings-popover');
+  const openEffectsTab = async () => {
+    await button.click();
+    await popover.getByRole('button', { name: 'Effects' }).click();
+  };
+  const toggle = popover.locator('label').filter({ hasText: /^Transparency/ }).getByRole('switch');
+
+  await openEffectsTab();
   expect(await toggle.isChecked()).toBe(true);
   await toggle.click();
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(150);
 
   expect(await page.evaluate(() => window.getUsdSceneTransparency())).toBe(false);
@@ -57,7 +66,9 @@ test('@scene authored transparency defaults on and survives a material rebuild',
   const afterOff = decodePNG(await canvas.screenshot());
   expect(centerRedness(afterOff)).toBeLessThan(30);
 
+  await openEffectsTab();
   await toggle.click();
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(150);
   expect(await page.evaluate(() => window.getUsdSceneTransparency())).toBe(true);
   expect(await page.evaluate(() => window.getForceTransparency())).toBe(false);
@@ -76,6 +87,7 @@ test('@scene authored transparency defaults on and survives a material rebuild',
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 30000 });
   await page.waitForTimeout(150);
 
+  await openEffectsTab();
   expect(await toggle.isChecked()).toBe(true);
 });
 
@@ -91,9 +103,10 @@ test('@scene explicit disabled preference persists without changing Viewer prefe
   await expect.poll(() => page.evaluate(() => typeof window.getUsdSceneTransparency === 'function'
     && window.getUsdSceneTransparency())).toBe(false);
   expect(await page.evaluate(() => window.getForceTransparency())).toBe(true);
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  await sidebar.getByRole('button', { name: /Rendering/ }).click();
-  const toggle = sidebar.locator('label').filter({ hasText: /^Transparency/ }).getByRole('switch');
+  await page.getByTestId('usd-scene-render-settings').click();
+  const popover = page.getByTestId('usd-scene-render-settings-popover');
+  await popover.getByRole('button', { name: 'Effects' }).click();
+  const toggle = popover.locator('label').filter({ hasText: /^Transparency/ }).getByRole('switch');
   expect(await toggle.isChecked()).toBe(false);
   await toggle.click();
   await page.waitForTimeout(100);

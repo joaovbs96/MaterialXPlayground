@@ -296,6 +296,55 @@
         const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
         const [skyVisOn, setSkyVisOn] = React.useState(true);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
+        // Render settings popover: replaces the old sidebar Rendering card.
+        // Tab is persisted so a reopen lands where the user left it.
+        const RENDER_TAB_KEY = 'mtlx_scene_render_settings_tab';
+        const RENDER_TABS = ['display', 'lighting', 'effects', 'geometry', 'viewport'];
+        const [renderSettingsOpen, setRenderSettingsOpen] = React.useState(false);
+        const [renderSettingsMounted, setRenderSettingsMounted] = React.useState(false);
+        const [renderTab, setRenderTab] = React.useState(() => {
+            try { const v = localStorage.getItem(RENDER_TAB_KEY); return RENDER_TABS.indexOf(v) >= 0 ? v : 'display'; }
+            catch (e) { return 'display'; }
+        });
+        const renderSettingsBtnRef = React.useRef(null);
+        const renderSettingsPopRef = React.useRef(null);
+        React.useEffect(() => { if (renderSettingsOpen) setRenderSettingsMounted(true); }, [renderSettingsOpen]);
+        React.useEffect(() => { try { localStorage.setItem(RENDER_TAB_KEY, renderTab); } catch (e) {} }, [renderTab]);
+        useEscapeToClose(() => setRenderSettingsOpen(false), renderSettingsOpen);
+        React.useEffect(() => {
+            if (!renderSettingsOpen) return undefined;
+            const onDown = (e) => {
+                if (renderSettingsPopRef.current && renderSettingsPopRef.current.contains(e.target)) return;
+                if (renderSettingsBtnRef.current && renderSettingsBtnRef.current.contains(e.target)) return;
+                setRenderSettingsOpen(false);
+            };
+            window.addEventListener('pointerdown', onDown);
+            return () => window.removeEventListener('pointerdown', onDown);
+        }, [renderSettingsOpen]);
+        // Mirrors the site-wide settings the top-right Settings popover used
+        // to offer for this view: global view transform and force transparency.
+        const [globalViewTransform, setGlobalViewTransformState] = React.useState(
+            () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
+        );
+        const [globalForceTransparency, setGlobalForceTransparency] = React.useState(
+            () => !!(window.getForceTransparency && window.getForceTransparency())
+        );
+        React.useEffect(() => {
+            if (!renderSettingsOpen) return;
+            if (window.getDisplayTransform) setGlobalViewTransformState(window.getDisplayTransform());
+            setGlobalForceTransparency(!!(window.getForceTransparency && window.getForceTransparency()));
+        }, [renderSettingsOpen]);
+        React.useEffect(() => {
+            const onDisplayTransform = () => { if (window.getDisplayTransform) setGlobalViewTransformState(window.getDisplayTransform()); };
+            window.addEventListener('mtlx-display-transform', onDisplayTransform);
+            return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
+        }, []);
+        const pickGlobalViewTransform = (mode) => { setGlobalViewTransformState(mode); if (window.setDisplayTransform) window.setDisplayTransform(mode); };
+        const toggleGlobalForceTransparency = (next) => { setGlobalForceTransparency(next); if (window.setForceTransparency) window.setForceTransparency(next); };
+        // Mirrors the boolean keys js/usd-scene-renderer.js reads at creation
+        // (storedSceneAo etc.) so a toggle flipped before load is honored by
+        // the next renderer instance without editing that file.
+        const writeStoredSceneBool = (key, enabled) => { try { localStorage.setItem(key, enabled ? '1' : '0'); } catch (e) {} };
         const [transparentPrims, setTransparentPrims] = React.useState([]);
         // Scene owns its transparency preference. It intentionally does not
         // mirror the shared Viewer Force Transparency setting: Scene defaults
@@ -812,6 +861,215 @@
         const triangleCount = stageTriangleCount(stage);
         const hasStage = !!stage || files.length > 0;
 
+        const RENDER_TAB_LABELS = { display: 'Display', lighting: 'Lighting', effects: 'Effects', geometry: 'Geometry and Textures', viewport: 'Viewport' };
+        const EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>;
+        // Row shells for the render settings popover: label/control on top,
+        // a short description below. Kept local since only this popover uses them.
+        const ToggleRow = ({ label, experimental, checked, onChange, disabled, title, description }) => (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
+                <label className="flex items-center justify-between gap-2 cursor-pointer" title={title}>
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300"><span>{label}</span>{experimental ? EXP_BADGE : null}</span>
+                    <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+                </label>
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+        const SelectRow = ({ label, experimental, control, description, title }) => (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0" title={title}>
+                <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300"><span>{label}</span>{experimental ? EXP_BADGE : null}</span>
+                    {control}
+                </div>
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+        const SliderRow = ({ children, description }) => (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
+                {children}
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+        const ButtonRow = ({ label, onClick, disabled, title, description }) => (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
+                <button type="button" onClick={onClick} disabled={disabled} title={title} className={BTN_SECONDARY + ' w-full'}>{label}</button>
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+        const renderDisplayTab = () => (
+            <React.Fragment>
+                <SelectRow
+                    label="Display transform" experimental
+                    title="This is the Scene's own setting; the Material Viewer keeps sRGB."
+                    control={
+                        <MtlxSelect
+                            value={displayTransform}
+                            options={['neutral', 'aces', 'srgb', 'lin_rec709']}
+                            labels={{ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' }}
+                            onChange={pickDisplayTransform}
+                            defValue="neutral"
+                            size="sm"
+                        />
+                    }
+                    description="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue; sRGB clips at 1.0 and matches the official MaterialX viewer."
+                />
+                <SliderRow description="Scales the whole image before the display transform, the way a camera would. The Environment card's exposure only gains the image based lighting.">
+                    <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25}
+                        onSlider={applyDisplayExposure} onNumber={applyDisplayExposure} />
+                </SliderRow>
+                <ToggleRow label="HDR presentation" checked={!!presentation.enabled} disabled={!handle || !presentation.supported}
+                    onChange={(enabled) => updatePresentation({ enabled })}
+                    description="Capture scene-linear HDR before a single display transform. Off uses the previous rendering path." />
+                <ToggleRow label="Highlight glow" checked={!!presentation.bloom} disabled={!handle || !presentation.enabled || !presentation.supported}
+                    onChange={(bloom) => updatePresentation({ bloom })}
+                    description="Optical glow from actual HDR highlights. This does not add lighting to nearby geometry." />
+                {presentation.enabled && presentation.bloom && presentation.supported ? (
+                    <SliderRow description="Controls how much of the glow highlight bleeds into the image.">
+                        <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025}
+                            onSlider={(strength) => updatePresentation({ strength })} onNumber={(strength) => updatePresentation({ strength })} />
+                    </SliderRow>
+                ) : null}
+                {presentation.supported ? (
+                    <SelectRow
+                        label="HDR view"
+                        title={handle ? undefined : 'Load a stage first'}
+                        control={
+                            <MtlxSelect
+                                value={presentation.debugView || 'final'}
+                                options={['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite']}
+                                labels={{ final: 'Final', linear: 'Scene linear', 'no-bloom': 'No glow', highlights: 'Highlights', bloom: 'Glow', composite: 'Composite' }}
+                                onChange={(debugView) => updatePresentation({ debugView })}
+                                defValue="final"
+                                size="sm"
+                                disabled={!handle}
+                            />
+                        }
+                        description="Temporary inspection view for the HDR presentation pipeline."
+                    />
+                ) : null}
+                {presentation.supported && presentation.enabled && presentation.bloom ? (
+                    <React.Fragment>
+                        <SliderRow description="Luminance level above which highlights start to glow.">
+                            <SliderField label="Glow threshold" value={presentation.threshold} min={0.01} max={1000} step={0.01}
+                                onSlider={(threshold) => updatePresentation({ threshold })} onNumber={(threshold) => updatePresentation({ threshold })} />
+                        </SliderRow>
+                        <SliderRow description="How softly the glow threshold transitions.">
+                            <SliderField label="Glow knee" value={presentation.knee} min={0} max={1} step={0.01}
+                                onSlider={(knee) => updatePresentation({ knee })} onNumber={(knee) => updatePresentation({ knee })} />
+                        </SliderRow>
+                        <SliderRow description="How far the glow spreads from each highlight.">
+                            <SliderField label="Glow radius" value={presentation.radius} min={0} max={1} step={0.01}
+                                onSlider={(radius) => updatePresentation({ radius })} onNumber={(radius) => updatePresentation({ radius })} />
+                        </SliderRow>
+                    </React.Fragment>
+                ) : null}
+                {presentation.supported ? (
+                    <ButtonRow label="Reset HDR presentation" onClick={resetPresentation} disabled={!handle}
+                        title={handle ? undefined : 'Load a stage first'}
+                        description={presentation.supported ? 'Scene-linear HDR preserves luminous highlights; this restores its defaults.' : (presentation.reason || 'HDR is unavailable on this device.')} />
+                ) : null}
+            </React.Fragment>
+        );
+        const renderLightingTab = () => (
+            <React.Fragment>
+                <ToggleRow label="Stage lights" experimental checked={stageLightsOn}
+                    title={stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights'}
+                    onChange={(next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); writeStoredSceneBool('mtlx_scene_stage_lights', next); }}
+                    description={(stageLightInfo.count || 0) + ' light(s) imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter\'s power.'} />
+                {stageLightsOn ? (
+                    <SliderRow description="Scales the imported stage lights' overall brightness.">
+                        <SliderField label="Stage light intensity" unit="EV" value={stageLightsEv} min={-8} max={8} step={0.25}
+                            onSlider={applyStageLightsEv} onNumber={applyStageLightsEv} />
+                    </SliderRow>
+                ) : null}
+                <ToggleRow label="Shadows" experimental checked={shadowsOn}
+                    title={shadowsOn ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
+                    onChange={(next) => { setShadowsOn(next); callHandle('setShadowsEnabled', next); writeStoredSceneBool('mtlx_scene_shadows', next); }}
+                    description="Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes." />
+                <ToggleRow label="Sky visibility" experimental checked={skyVisOn}
+                    title={skyVisOn ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
+                    onChange={(next) => { setSkyVisOn(next); callHandle('setSkyVisibility', next); writeStoredSceneBool('mtlx_scene_skyvis', next); }}
+                    description="Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can see into a coarse volume." />
+                {skyVisOn ? (
+                    <SliderRow description="How strongly the baked sky visibility darkens occluded areas.">
+                        <SliderField label="Sky visibility strength" value={skyVisStrength} min={0} max={1} step={0.05}
+                            onSlider={applySkyVisStrength} onNumber={applySkyVisStrength} />
+                    </SliderRow>
+                ) : null}
+            </React.Fragment>
+        );
+        const renderEffectsTab = () => (
+            <React.Fragment>
+                <ToggleRow label="Ambient occlusion" experimental checked={aoOn}
+                    title={aoOn ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
+                    onChange={(next) => { setAoOn(next); callHandle('setAmbientOcclusionEnabled', next); writeStoredSceneBool('mtlx_scene_ao', next); }}
+                    description="Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see." />
+                {aoOn ? (
+                    <SliderRow description="How strongly the estimated occlusion darkens creases and corners.">
+                        <SliderField label="Ambient occlusion strength" value={aoStrength} min={0} max={1} step={0.05}
+                            onSlider={applyAoStrength} onNumber={applyAoStrength} />
+                    </SliderRow>
+                ) : null}
+                <ToggleRow label="Screen-space reflections" experimental checked={ssrOn}
+                    title={ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace'}
+                    onChange={(next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); writeStoredSceneBool('mtlx_scene_ssr', next); }}
+                    description="Traces a screen-space ray through last frame's colour buffer for a reflection, falling back to the environment when it misses." />
+                {ssrOn ? (
+                    <React.Fragment>
+                        <SliderRow description="How much of the traced reflection blends into specular.">
+                            <SliderField label="Reflection strength" value={ssrStrength} min={0} max={1} step={0.05}
+                                onSlider={applySsrStrength} onNumber={applySsrStrength} />
+                        </SliderRow>
+                        <SliderRow description="Roughest surface that still receives a screen-space reflection.">
+                            <SliderField label="Reflection max roughness" value={ssrMaxRoughness} min={0.05} max={1} step={0.05}
+                                onSlider={applySsrMaxRoughness} onNumber={applySsrMaxRoughness} />
+                        </SliderRow>
+                    </React.Fragment>
+                ) : null}
+                <ToggleRow label="Transparency" experimental checked={sceneTransparency}
+                    title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
+                    onChange={(next) => { setSceneTransparencyState(next); window.setUsdSceneTransparency && window.setUsdSceneTransparency(next); }}
+                    description="Render opacity/transmission authored by scene materials. When off, transparent materials render opaque." />
+            </React.Fragment>
+        );
+        const renderGeometryTab = () => (
+            <React.Fragment>
+                <SelectRow label="Texture resolution"
+                    control={
+                        <MtlxSelect value={textureMaxSize} options={[512, 1024, 2048, 4096, Infinity]}
+                            labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
+                            onChange={pickTextureMaxSize} defValue={2048} size="sm" disabled={busy} />
+                    }
+                    description="Higher resolutions sharpen normal and roughness maps, at the cost of memory and load time." />
+                <SelectRow label="Texture memory"
+                    control={
+                        <MtlxSelect value={textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
+                            onChange={pickTextureBudgetGib} defValue={1} size="sm" disabled={busy} />
+                    }
+                    description="Higher values can exhaust GPU memory and lose the WebGL context on smaller GPUs." />
+                <SelectRow label="Subdivision"
+                    control={
+                        <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
+                            onChange={pickSubdivisionLevel} defValue={1} size="sm" disabled={busy} />
+                    }
+                    description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface." />
+            </React.Fragment>
+        );
+        const renderViewportTab = () => (
+            <React.Fragment>
+                <SelectRow label="View Transform"
+                    control={
+                        <MtlxSelect value={globalViewTransform} options={['srgb', 'aces', 'lin_rec709']}
+                            labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
+                            onChange={pickGlobalViewTransform} defValue="srgb" size="sm" />
+                    }
+                    description="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)." />
+                <ToggleRow label="Force Transparency" experimental checked={globalForceTransparency}
+                    onChange={toggleGlobalForceTransparency}
+                    title={globalForceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
+                    description="Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque)." />
+            </React.Fragment>
+        );
+
         const sidebarBody = (
             <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
                 <SectionCard icon="file" title="Stage" summary={rootBasename || 'No stage'} defaultOpen>
@@ -958,288 +1216,6 @@
                         />
                     </div>
                     <button type="button" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
-                </SectionCard>
-
-                <SectionCard icon="settings-cog" title="Rendering" summary={({ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' })[displayTransform] || displayTransform} dense>
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                            Display transform
-                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                        </span>
-                        <MtlxSelect
-                            value={displayTransform}
-                            options={['neutral', 'aces', 'srgb', 'lin_rec709']}
-                            labels={{ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' }}
-                            onChange={pickDisplayTransform}
-                            defValue="neutral"
-                            title="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue. sRGB clips at 1.0 and matches the official MaterialX viewer. This is the Scene's own setting; the Material Viewer keeps sRGB."
-                            size="sm"
-                        />
-                    </div>
-                    <SliderField
-                        label="Camera exposure" unit="EV"
-                        value={displayExposure}
-                        min={-8}
-                        max={8}
-                        step={0.25}
-                        onSlider={(v) => applyDisplayExposure(v)}
-                        onNumber={(v) => applyDisplayExposure(v)}
-                    />
-                    <div className="text-[11px] text-gray-400">
-                        Scales the whole image before the display transform, the way a camera would. The Environment card's exposure gains only the image based lighting, so on a stage that also has its own lights it cannot balance the picture on its own.
-                    </div>
-                    <label className="flex items-center justify-between gap-2" title="Capture scene-linear HDR before a single display transform. Off uses the previous rendering path.">
-                        <span className="text-xs font-medium text-gray-400">HDR presentation</span>
-                        <Toggle checked={!!presentation.enabled} disabled={!handle || !presentation.supported}
-                            onChange={(enabled) => updatePresentation({ enabled })} />
-                    </label>
-                    <label className="flex items-center justify-between gap-2" title="Optical glow from actual HDR highlights. This does not add lighting to nearby geometry.">
-                        <span className="text-xs font-medium text-gray-400">Highlight glow</span>
-                        <Toggle checked={!!presentation.bloom} disabled={!handle || !presentation.enabled || !presentation.supported}
-                            onChange={(bloom) => updatePresentation({ bloom })} />
-                    </label>
-                    {presentation.enabled && presentation.bloom && presentation.supported ? (
-                        <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025}
-                            onSlider={(strength) => updatePresentation({ strength })}
-                            onNumber={(strength) => updatePresentation({ strength })} />
-                    ) : null}
-                    {presentation.supported ? (
-                        <>
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-gray-400">HDR view</span>
-                                <MtlxSelect
-                                    value={presentation.debugView || 'final'}
-                                    options={['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite']}
-                                    labels={{ final: 'Final', linear: 'Scene linear', 'no-bloom': 'No glow', highlights: 'Highlights', bloom: 'Glow', composite: 'Composite' }}
-                                    onChange={(debugView) => updatePresentation({ debugView })}
-                                    defValue="final"
-                                    title="Temporary inspection view for the HDR presentation pipeline."
-                                    size="sm"
-                                    disabled={!handle}
-                                />
-                            </div>
-                            {presentation.enabled && presentation.bloom ? (
-                                <>
-                                    <SliderField label="Glow threshold" value={presentation.threshold} min={0.01} max={1000} step={0.01}
-                                        onSlider={(threshold) => updatePresentation({ threshold })}
-                                        onNumber={(threshold) => updatePresentation({ threshold })} />
-                                    <SliderField label="Glow knee" value={presentation.knee} min={0} max={1} step={0.01}
-                                        onSlider={(knee) => updatePresentation({ knee })}
-                                        onNumber={(knee) => updatePresentation({ knee })} />
-                                    <SliderField label="Glow radius" value={presentation.radius} min={0} max={1} step={0.01}
-                                        onSlider={(radius) => updatePresentation({ radius })}
-                                        onNumber={(radius) => updatePresentation({ radius })} />
-                                </>
-                            ) : null}
-                            <button type="button" onClick={resetPresentation} className={BTN_SECONDARY + ' w-full'} disabled={!handle}>Reset HDR presentation</button>
-                        </>
-                    ) : null}
-                    <div className="text-[11px] text-gray-400">
-                        {presentation.supported ? 'Scene-linear HDR preserves luminous highlights. Glow redistributes their brightness before the display transform; it does not replace emissive lighting or change authored colors.' : presentation.reason || 'HDR is unavailable on this device. The existing renderer remains active.'}
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-400">Texture resolution</span>
-                        <MtlxSelect
-                            value={textureMaxSize}
-                            options={[512, 1024, 2048, 4096, Infinity]}
-                            labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
-                            onChange={pickTextureMaxSize}
-                            defValue={2048}
-                            size="sm"
-                            disabled={busy}
-                        />
-                    </div>
-                    <div className="mt-1 text-[11px] text-gray-400">
-                        Higher resolutions sharpen normal and roughness maps, at the cost of memory and load time.
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-400">Texture memory</span>
-                        <MtlxSelect
-                            value={textureBudgetGib}
-                            options={[1, 2, 4]}
-                            labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
-                            onChange={pickTextureBudgetGib}
-                            defValue={1}
-                            size="sm"
-                            disabled={busy}
-                        />
-                    </div>
-                    <div className="mt-1 text-[11px] text-gray-400">
-                        Higher values can exhaust GPU memory and lose the WebGL context on smaller GPUs
-                    </div>
-                    <label
-                        className="flex items-center justify-between cursor-pointer"
-                        title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
-                    >
-                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                            Transparency
-                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                        </span>
-                        <Toggle
-                            checked={sceneTransparency}
-                            onChange={(next) => {
-                                setSceneTransparencyState(next);
-                                window.setUsdSceneTransparency && window.setUsdSceneTransparency(next);
-                            }}
-                        />
-                    </label>
-                    <div className="mt-1 text-[11px] text-gray-400">
-                        Render opacity/transmission authored by scene materials. When off, transparent materials render opaque. Applies immediately.
-                    </div>
-                    {stageLightInfo.count > 0 ? (
-                        <React.Fragment>
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights'}
-                            >
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                                    Stage lights
-                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                                </span>
-                                <Toggle
-                                    checked={stageLightsOn}
-                                    onChange={(next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); }}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                {stageLightInfo.count} light{stageLightInfo.count === 1 ? '' : 's'} imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter's power; Diagnostics lists the split per light.
-                            </div>
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={skyVisOn ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
-                            >
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                                    Sky visibility
-                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                                </span>
-                                <Toggle
-                                    checked={skyVisOn}
-                                    onChange={(next) => { setSkyVisOn(next); callHandle('setSkyVisibility', next); }}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can actually see into a coarse volume, once per stage. Room scale, which screen space occlusion cannot reach.
-                            </div>
-                            {skyVisOn ? (
-                                <SliderField
-                                    label="Sky visibility strength"
-                                    value={skyVisStrength}
-                                    min={0}
-                                    max={1}
-                                    step={0.05}
-                                    onSlider={(v) => applySkyVisStrength(v)}
-                                    onNumber={(v) => applySkyVisStrength(v)}
-                                />
-                            ) : null}
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={shadowsOn ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
-                            >
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                                    Shadows
-                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                                </span>
-                                <Toggle
-                                    checked={shadowsOn}
-                                    onChange={(next) => { setShadowsOn(next); callHandle('setShadowsEnabled', next); }}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. More casters increase geometry-pass cost.
-                            </div>
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={aoOn ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
-                            >
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                                    Ambient occlusion
-                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                                </span>
-                                <Toggle
-                                    checked={aoOn}
-                                    onChange={(next) => { setAoOn(next); callHandle('setAmbientOcclusionEnabled', next); }}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Screen space, so it only knows about geometry on screen.
-                            </div>
-                            {aoOn ? (
-                                <SliderField
-                                    label="Ambient occlusion strength"
-                                    value={aoStrength}
-                                    min={0}
-                                    max={1}
-                                    step={0.05}
-                                    onSlider={(v) => applyAoStrength(v)}
-                                    onNumber={(v) => applyAoStrength(v)}
-                                />
-                            ) : null}
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace'}
-                            >
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                                    Screen-space reflections
-                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                                </span>
-                                <Toggle
-                                    checked={ssrOn}
-                                    onChange={(next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); }}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Traces a screen-space ray through last frame's colour buffer for a reflection, falling back to the environment when it misses. Screen space, so it only knows about geometry on screen.
-                            </div>
-                            {ssrOn ? (
-                                <React.Fragment>
-                                    <SliderField
-                                        label="Reflection strength"
-                                        value={ssrStrength}
-                                        min={0}
-                                        max={1}
-                                        step={0.05}
-                                        onSlider={(v) => applySsrStrength(v)}
-                                        onNumber={(v) => applySsrStrength(v)}
-                                    />
-                                    <SliderField
-                                        label="Reflection max roughness"
-                                        value={ssrMaxRoughness}
-                                        min={0.05}
-                                        max={1}
-                                        step={0.05}
-                                        onSlider={(v) => applySsrMaxRoughness(v)}
-                                        onNumber={(v) => applySsrMaxRoughness(v)}
-                                    />
-                                </React.Fragment>
-                            ) : null}
-                            {stageLightsOn ? (
-                                <SliderField
-                                    label="Stage light intensity" unit="EV"
-                                    value={stageLightsEv}
-                                    min={-8}
-                                    max={8}
-                                    step={0.25}
-                                    onSlider={(v) => applyStageLightsEv(v)}
-                                    onNumber={(v) => applyStageLightsEv(v)}
-                                />
-                            ) : null}
-                        </React.Fragment>
-                    ) : null}
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-400">Subdivision</span>
-                        <MtlxSelect
-                            value={subdivisionLevel}
-                            options={[0, 1, 2]}
-                            labels={{ 0: 'Off', 1: '1', 2: '2' }}
-                            onChange={pickSubdivisionLevel}
-                            defValue={1}
-                            size="sm"
-                            disabled={busy}
-                        />
-                    </div>
-                    <div className="mt-1 text-[11px] text-gray-400">
-                        Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface.
-                    </div>
                 </SectionCard>
 
                 <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
@@ -1418,7 +1394,7 @@
                             showGeomSelect={false}
                             envAvail={false}
                             showBackdropPicker={false}
-                            showSettings
+                            showSettings={false}
                             showRotate
                             rotating={rotating}
                             onToggleRotating={toggleRotating}
@@ -1430,8 +1406,63 @@
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreen}
                             showLabels
-                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'record', 'settings', 'fullscreen']]}
+                            clusters={[['rotate', 'cameraReset'], ['screenshot', 'record', 'fullscreen']]}
                         />
+                    )}
+
+                    <div className="absolute top-2 left-2 z-30 flex items-center gap-2.5 flex-wrap max-w-[calc(100%-5rem)]">
+                        {!sidebarOpen && (
+                            <button
+                                type="button"
+                                onClick={() => setSidebarOpen(true)}
+                                title="Expand the scene viewer panel"
+                                className={HUD_PILL}
+                            >
+                                <MtlxIcon name="chevrons-right" className="w-4 h-4" />
+                                <span className="max-w-[5rem] md:max-w-[8rem] truncate">Scene</span>
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            ref={renderSettingsBtnRef}
+                            data-testid="usd-scene-render-settings"
+                            title="Render settings"
+                            onClick={() => setRenderSettingsOpen((o) => !o)}
+                            className={renderSettingsOpen ? HUD_PILL_ACTIVE : HUD_PILL}
+                        >
+                            <MtlxIcon name="settings-cog" className="w-4 h-4" />
+                            <span>Render settings</span>
+                        </button>
+                    </div>
+
+                    {renderSettingsMounted && (
+                        <div
+                            ref={renderSettingsPopRef}
+                            data-testid="usd-scene-render-settings-popover"
+                            className={(renderSettingsOpen ? '' : 'hidden ') + 'absolute z-30 top-11 left-2 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden'}
+                            style={{ width: 'min(560px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' }}
+                        >
+                            <div className="flex-none flex items-center gap-1 px-2 pt-2 border-b border-gray-700 overflow-x-auto">
+                                {RENDER_TABS.map((tab) => (
+                                    <button
+                                        key={tab}
+                                        type="button"
+                                        onClick={() => setRenderTab(tab)}
+                                        className={'shrink-0 px-2.5 py-1.5 text-[11px] font-medium rounded-t-md border-b-2 whitespace-nowrap '
+                                            + (renderTab === tab ? 'border-blue-500 text-blue-300' : 'border-transparent text-gray-400 hover:text-gray-200')}
+                                    >
+                                        {RENDER_TAB_LABELS[tab]}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-3 space-y-1">
+                                {renderTab === 'display' && renderDisplayTab()}
+                                {renderTab === 'lighting' && renderLightingTab()}
+                                {renderTab === 'effects' && renderEffectsTab()}
+                                {renderTab === 'geometry' && renderGeometryTab()}
+                                {renderTab === 'viewport' && renderViewportTab()}
+                            </div>
+                        </div>
                     )}
 
                     {handle && (() => {
@@ -1460,16 +1491,6 @@
                 <div role="alert" data-testid="usd-scene-error" className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
             )}
 
-            {!sidebarOpen && (
-                <button
-                    onClick={() => setSidebarOpen(true)}
-                    title="Expand the scene viewer panel"
-                    className={'absolute top-2 left-2 z-30 ' + HUD_PILL}
-                >
-                    <MtlxIcon name="chevrons-right" className="w-4 h-4" />
-                    <span className="max-w-[5rem] md:max-w-[8rem] truncate">Scene</span>
-                </button>
-            )}
             {recordOpen && (
                 <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)}
                     viewRef={handleRef} baseName={rootBasename ? rootBasename.replace(/\.[^.]+$/, '') : 'usd-scene'} transparent={false} />
