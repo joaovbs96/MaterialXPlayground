@@ -34,7 +34,9 @@ test('@scene imports USD cameras and selects, orbits and resets between them', a
   ]);
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
   await expect(page.getByTestId('usd-scene-error')).toHaveCount(0);
-  await expect(page.getByTestId('usd-material-warnings')).toHaveCount(0);
+  // Info lines (bake timings, unit defaults) are allowed; errors and warnings are not.
+  await expect(page.getByTestId('usd-material-provenance')).not.toContainText('Errors');
+  await expect(page.getByTestId('usd-material-provenance')).not.toContainText('Warnings');
 
   const cameraSelect = page.getByTestId('usd-scene-camera-select');
   await expect(cameraSelect).toBeVisible();

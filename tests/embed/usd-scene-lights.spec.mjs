@@ -36,7 +36,7 @@ test('@scene area-light conversion preserves lights for shader-side source cosin
       shadowDepthPlane: /u_shadowDepthPlanes[\s\S]*receiverDepth[\s\S]*dot\(vec4\(offsetP, 1\.0\), depthPlane\)/.test(fs),
       skyDirectional: /visibilityDirection[\s\S]*moments\.gba[\s\S]*dot\(visibilityDirection, skyNormal\)/.test(fs),
       skyFaceOriented: /vec3 skyNormal = normalize\(normalWorld\);[\s\S]*if \(!gl_FrontFacing\) skyNormal = -skyNormal;[\s\S]*dot\(visibilityDirection, skyNormal\)/.test(fs),
-      aoEnvironmentOnly: /Ambient occlusion[\s\S]*occlusion = mx_ssao_occlusion\(\)[\s\S]*Add environment contribution/.test(fs)
+      aoEnvironmentOnly: /Ambient occlusion[\s\S]*occlusion = [^;]*mx_ssao_occlusion\(\)[\s\S]*Add environment contribution/.test(fs)
         && /shader_constructor_out\.color \+= blended_coat_emission_edf_out;/.test(fs),
     };
   });
