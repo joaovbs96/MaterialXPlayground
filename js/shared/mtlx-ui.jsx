@@ -835,7 +835,8 @@ const exportAttributionLine = async () => {
 // a comment may not precede the declaration.
 const withExportAttribution = (xml, line) => {
     const text = xml == null ? '' : String(xml);
-    const NL = String.fromCharCode(10);
+    const NL = text.includes(String.fromCharCode(13, 10)) ? String.fromCharCode(13, 10) : String.fromCharCode(10);
+    line = String(line).split(String.fromCharCode(10)).join(NL);
     const m = /^\s*<\?xml[^>]*\?>\s*/.exec(text);
     return m
         ? text.slice(0, m[0].length) + line + NL + text.slice(m[0].length)

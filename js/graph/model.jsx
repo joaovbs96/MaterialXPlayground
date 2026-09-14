@@ -68,7 +68,7 @@
             const implGraphByNodedef = computeImplGraphByNodedef(doc);
 
             const envelope = splitXmlEnvelope(xmlText);
-            return { mx, doc, nodegraphs, functionalGraphs, definitions, hasDefinitions, implGraphNames, implGraphByNodedef, envelope };
+            return { mx, doc, nodegraphs, functionalGraphs, definitions, hasDefinitions, implGraphNames, implGraphByNodedef, envelope, sourceText: xmlText };
         };
 
         // nodedef name -> nodegraph name, from <implementation nodegraph=""
@@ -179,7 +179,8 @@
             // every write — the one choke point all callers share, so it
             // self-heals documents from outside the graph editor too.
             mxSafe(() => stripValuesFromConnectedInputs(parsed.doc), 0);
-            return withXmlEnvelope(parsed.mx.writeToXmlString(parsed.doc), parsed.envelope);
+            return preserveSourceFormatting(parsed.sourceText,
+                withXmlEnvelope(parsed.mx.writeToXmlString(parsed.doc), parsed.envelope));
         };
 
         // Document's own children only, never the library: every by-name

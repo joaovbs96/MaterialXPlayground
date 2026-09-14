@@ -1128,6 +1128,163 @@ const withXmlEnvelope = (xml, envelope) => {
     return text;
 };
 
+// Source formatting survives a save: tags and comments are matched between the
+// loaded text and the writer's output, unchanged ones keep their original text
+// (wrapping, blank lines, quoting); only edited or new elements use the writer's.
+const XML_ENTITIES = { quot: '"', apos: "'", lt: '<', gt: '>', amp: '&' };
+const xmlDecode = (s) => s.replace(/&(quot|apos|lt|gt|amp|#\d+|#x[0-9a-f]+);/gi, (m, e) => {
+    if (e[0] !== '#') return XML_ENTITIES[e.toLowerCase()];
+    return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+});
+// Element name, attributes with their value offsets, and where new attributes go.
+const xmlTagParts = (raw) => {
+    const m = /^<([^\s/>!?]+)/.exec(raw);
+    if (!m) return null;
+    const attrs = new Map();
+    const attrRe = /(\s*)([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    attrRe.lastIndex = m[0].length;
+    let a, lastEnd = m[0].length;
+    while ((a = attrRe.exec(raw))) {
+        const quoted = a[3] != null ? a[3] : a[4];
+        const valueEnd = a.index + a[0].length - 1;
+        attrs.set(a[2], {
+            value: xmlDecode(quoted), quote: a[3] != null ? '"' : "'",
+            start: a.index, end: a.index + a[0].length, valueStart: valueEnd - quoted.length, valueEnd,
+        });
+        lastEnd = a.index + a[0].length;
+    }
+    return { tag: m[1], attrs, insertAt: lastEnd, selfClosing: /\/\s*>$/.test(raw) };
+};
+const xmlTokenKey = (raw) => {
+    if (raw.startsWith('<!--')) return '<!--' + raw.slice(4, -3).replace(/\s+/g, ' ').trim() + '-->';
+    // Any XML declaration matches any other: quoting and encoding are layout.
+    if (raw.startsWith('<?xml')) return '<?xml?>';
+    if (raw.startsWith('<?') || raw.startsWith('</')) return raw.replace(/\s+/g, '');
+    const parts = xmlTagParts(raw);
+    if (!parts) return raw.replace(/\s+/g, ' ');
+    let key = '<' + parts.tag;
+    parts.attrs.forEach((v, n) => { key += ' ' + n + '="' + v.value + '"'; });
+    return key + (parts.selfClosing ? '/>' : '>');
+};
+const xmlTokenize = (text) => {
+    const tokens = [];
+    const re = /<!--[\s\S]*?-->|<[^>]*>|[^<]+/g;
+    let m, gapStart = 0;
+    while ((m = re.exec(text))) {
+        if (m[0][0] !== '<' && !m[0].trim()) continue;
+        tokens.push({ key: m[0][0] === '<' ? xmlTokenKey(m[0]) : m[0].trim(), raw: m[0], gap: text.slice(gapStart, m.index) });
+        gapStart = m.index + m[0].length;
+    }
+    return { tokens, tail: text.slice(gapStart) };
+};
+// Rewrites a source tag to the output tag's attributes without touching its
+// layout; null when they are different elements (tag, name or closing form).
+const xmlPatchTag = (srcRaw, outRaw) => {
+    const s = xmlTagParts(srcRaw), o = xmlTagParts(outRaw);
+    if (!s || !o || s.tag !== o.tag || s.selfClosing !== o.selfClosing) return null;
+    const sName = s.attrs.get('name'), oName = o.attrs.get('name');
+    if ((sName && sName.value) !== (oName && oName.value)) return null;
+    const esc = (v, q) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(q === '"' ? /"/g : /'/g, q === '"' ? '&quot;' : '&apos;');
+    const edits = [];
+    s.attrs.forEach((sa, n) => {
+        const oa = o.attrs.get(n);
+        if (!oa) edits.push({ start: sa.start, end: sa.end, text: '' });
+        else if (oa.value !== sa.value) edits.push({ start: sa.valueStart, end: sa.valueEnd, text: esc(oa.value, sa.quote) });
+    });
+    let added = '';
+    o.attrs.forEach((oa, n) => { if (!s.attrs.has(n)) added += ' ' + n + '="' + esc(oa.value, '"') + '"'; });
+    if (added) edits.push({ start: s.insertAt, end: s.insertAt, text: added });
+    edits.sort((x, y) => y.start - x.start);
+    let text = srcRaw;
+    for (const e of edits) text = text.slice(0, e.start) + e.text + text.slice(e.end);
+    return text;
+};
+// Myers diff over token keys; returns source index per output index (-1 when
+// inserted), or null when the edit distance exceeds maxD.
+const xmlTokenMatches = (a, b, maxD) => {
+    const n = a.length, m = b.length;
+    const match = new Int32Array(m).fill(-1);
+    let lo = 0;
+    while (lo < n && lo < m && a[lo] === b[lo]) { match[lo] = lo; lo++; }
+    let hiA = n, hiB = m;
+    while (hiA > lo && hiB > lo && a[hiA - 1] === b[hiB - 1]) { hiA--; hiB--; match[hiB] = hiA; }
+    const A = a.slice(lo, hiA), B = b.slice(lo, hiB), N = A.length, M = B.length;
+    if (!N || !M) return match;
+    const off = N + M + 1;
+    const v = new Int32Array(2 * off + 2);
+    const trace = [];
+    let found = false;
+    for (let d = 0; d <= Math.min(N + M, maxD) && !found; d++) {
+        trace.push(v.slice(off - d, off + d + 1));
+        for (let k = -d; k <= d; k += 2) {
+            let x = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
+            let y = x - k;
+            while (x < N && y < M && A[x] === B[y]) { x++; y++; }
+            v[off + k] = x;
+            if (x >= N && y >= M) { found = true; break; }
+        }
+    }
+    if (!found) return null;
+    let x = N, y = M;
+    for (let d = trace.length - 1; d >= 0; d--) {
+        const vd = trace[d];
+        const k = x - y;
+        if (d === 0) {
+            while (x > 0 && y > 0) { match[lo + y - 1] = lo + x - 1; x--; y--; }
+            break;
+        }
+        const at = (kk) => vd[kk + d];
+        const prevK = (k === -d || (k !== d && at(k - 1) < at(k + 1))) ? k + 1 : k - 1;
+        const prevX = at(prevK), prevY = prevX - prevK;
+        while (x > prevX && y > prevY) { match[lo + y - 1] = lo + x - 1; x--; y--; }
+        x = prevX; y = prevY;
+    }
+    return match;
+};
+const preserveSourceFormatting = (sourceText, writtenXml, { maxD = 3000, maxLength = 16 * 1024 * 1024 } = {}) => {
+    const written = writtenXml == null ? '' : String(writtenXml);
+    const source = sourceText == null ? '' : String(sourceText);
+    if (!source || source.length > maxLength || written.length > maxLength) return written;
+    const src = xmlTokenize(source);
+    const out = xmlTokenize(written);
+    const match = xmlTokenMatches(src.tokens.map((t) => t.key), out.tokens.map((t) => t.key), maxD);
+    if (!match) return written;
+    const crlf = /\r\n/.test(source);
+    const nl = (s) => (crlf ? s.replace(/\r?\n/g, '\r\n') : s);
+    // Source tokens dropped by the diff, reusable as in-place edits of a
+    // changed output tag between the same matched neighbours.
+    const used = new Uint8Array(src.tokens.length);
+    match.forEach((i) => { if (i >= 0) used[i] = 1; });
+    let text = '';
+    let prevSrc = -1;
+    for (let j = 0; j < out.tokens.length; j++) {
+        let i = match[j];
+        if (i >= 0) {
+            text += src.tokens[i].gap + src.tokens[i].raw;
+            prevSrc = i;
+            continue;
+        }
+        let nextSrc = src.tokens.length;
+        for (let jj = j + 1; jj < out.tokens.length; jj++) if (match[jj] >= 0) { nextSrc = match[jj]; break; }
+        let patched = null;
+        for (let c = prevSrc + 1; c < nextSrc && patched == null; c++) {
+            if (used[c] || src.tokens[c].raw[0] !== '<') continue;
+            const p = xmlPatchTag(src.tokens[c].raw, out.tokens[j].raw);
+            if (p != null) { patched = p; i = c; }
+        }
+        if (patched != null) {
+            used[i] = 1;
+            text += src.tokens[i].gap + patched;
+            prevSrc = i;
+        } else {
+            text += nl(out.tokens[j].gap) + nl(out.tokens[j].raw);
+        }
+    }
+    const last = out.tokens.length - 1;
+    const lastMatchedToEnd = last >= 0 && match[last] === src.tokens.length - 1;
+    return text + (lastMatchedToEnd ? src.tail : nl(out.tail));
+};
+
 // Session-lifetime texture cache, keyed by file identity, re-binding the
 // same dropped file after a view rebuild reuses the decoded THREE.Texture
 // instead of a fresh async load, which let the default color flash.
@@ -6105,7 +6262,7 @@ Object.assign(window, {
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
     normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText, readMtlxXml,
-    isExportAttribution, splitXmlEnvelope, withXmlEnvelope,
+    isExportAttribution, splitXmlEnvelope, withXmlEnvelope, preserveSourceFormatting,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture,
     collectMxUniforms, mxValueToThreeUniform,

@@ -127,6 +127,62 @@ test('graph roundtrip edits change attributes and names but never the element or
   expect(result.again).toBe(result.saved);
 });
 
+// Hand-formatted source: wrapped attributes, blank lines, single quotes.
+const HAND_FORMATTED = [
+  "<?xml version='1.0' encoding='utf-8'?>",
+  '<materialx version="1.39">',
+  '',
+  '  <nodedef name="ND_probe_surface" node="probe_surface" nodegroup="pbr"',
+  '           doc="Probe definition" uiname="Probe">',
+  '    <input name="weight" type="float" value="1.0" uimin="0.0" uimax="1.0"',
+  '           doc="Wrapped doc string." />',
+  "    <input name='tint' type='color3' value='1, 1, 1' />",
+  '    <output name="out" type="surfaceshader" />',
+  '  </nodedef>',
+  '',
+  '  <nodegraph name="NG_probe_surface" nodedef="ND_probe_surface">',
+  '',
+  '    <!-- Stage one -->',
+  '    <multiply name="scaled" type="float">',
+  '      <input name="in1" type="float" interfacename="weight" />',
+  '      <input name="in2" type="float" value="2.0" />',
+  '    </multiply>',
+  '',
+  '    <output name="out" type="surfaceshader" />',
+  '',
+  '  </nodegraph>',
+  '',
+  '</materialx>',
+  '',
+].join('\n');
+
+test('graph roundtrip keeps hand formatting and edits only the changed lines', async ({ page, embedURL }) => {
+  await openGraphEditor(page, embedURL);
+  const { outputs } = await cycleInPage(page, HAND_FORMATTED, 2);
+  expect(outputs[0], 'an unedited save rewrote the formatting').toBe(HAND_FORMATTED);
+  expect(outputs[1]).toBe(outputs[0]);
+
+  const crlf = HAND_FORMATTED.replace(/\n/g, '\r\n');
+  const crlfOut = await cycleInPage(page, crlf, 1);
+  expect(crlfOut.outputs[0], 'CRLF source was not kept byte for byte').toBe(crlf);
+
+  const edited = await page.evaluate(async (xml) => {
+    const parsed = await window.parseMtlxDocument(xml);
+    parsed.doc.getNodeDef('ND_probe_surface').getInput('weight').setValueString('0.25', 'float');
+    const saved = window.serializeDocXml(parsed);
+    const reparsed = await window.parseMtlxDocument(saved);
+    return { saved, again: window.serializeDocXml(reparsed) };
+  }, HAND_FORMATTED);
+  const before = HAND_FORMATTED.split('\n');
+  const after = edited.saved.split('\n');
+  expect(after.length, 'line count changed by a value edit').toBe(before.length);
+  const changed = before.map((line, i) => (line === after[i] ? null : i)).filter((i) => i != null);
+  expect(changed).toEqual([5]);
+  expect(after[5]).toContain('value="0.25"');
+  expect(after[6]).toBe('           doc="Wrapped doc string." />');
+  expect(edited.again).toBe(edited.saved);
+});
+
 test('graph export attribution is optional, never stacks and is remembered', async ({ page, embedURL }) => {
   await openGraphEditor(page, embedURL);
   // Captures what the export writes instead of opening a native save picker.
