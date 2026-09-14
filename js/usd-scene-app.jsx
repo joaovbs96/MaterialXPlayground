@@ -575,6 +575,15 @@
         const viewportRef = containerRef;
         const activeRef = React.useRef(active);
         activeRef.current = active;
+        // Sleeping the view also drops the preview panel (its own live
+        // viewer) by remounting it empty; the next double-click rebuilds it.
+        const [previewEpoch, setPreviewEpoch] = React.useState(0);
+        React.useEffect(() => {
+            if (active) return;
+            setPreviewOpen(false);
+            setPreviewPayload(null);
+            setPreviewEpoch((epoch) => epoch + 1);
+        }, [active]);
         const abortRef = React.useRef(null);
         const mountedRef = React.useRef(true);
         const filesRef = React.useRef(files);
@@ -1692,6 +1701,17 @@
                             </div>
                         );
                     })()}
+
+                    <MaterialPreviewPanel
+                        key={previewEpoch}
+                        open={previewOpen}
+                        payload={previewPayload}
+                        anchor={previewAnchor}
+                        onClose={() => setPreviewOpen(false)}
+                        containerRef={containerRef}
+                        panelRef={previewPanelRef}
+                        sceneFiles={sceneLooseFiles}
+                    />
                 </div>
             </div>
 

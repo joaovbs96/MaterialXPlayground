@@ -1242,6 +1242,9 @@ const createMtlxSceneView = async ({
     // invalidated on every material create/replace and on refreshRenderMode.
     let peelPipeline = null;
     let presentationPipeline = null;
+    // Captured presentation `enabled` flag while asleep, so wake restores it
+    // without touching the persisted user setting (see setActive below).
+    let presentationSleepRestore = null;
     const sceneRgbtState = {
         mode: 'inactive', reason: null, payloadMaterials: 0,
         unsupportedLabels: [],
@@ -5153,6 +5156,10 @@ const createMtlxSceneView = async ({
             };
         }).sort((a, b) => a.primPath.localeCompare(b.primPath));
         const renderFrame = () => {
+            // Asleep: skip every draw so a background broadcast (env/display
+            // sync to hidden keep-alive views) cannot re-allocate transient
+            // targets. setActive(true) renders the catch-up frame itself.
+            if (!active) return;
             ensureShadowCurrent();
             const callerTarget = renderer.getRenderTarget();
             const outputSize = callerTarget
@@ -5608,11 +5615,59 @@ const createMtlxSceneView = async ({
             },
             getBackdrop: () => environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : 'studio',
             setAutoRotate: (value) => { if (controls) controls.autoRotate = !!value; return !!(controls && controls.autoRotate); },
+            // Sleeps the transient GPU pools while another view is active and
+            // wakes them back on return. Textures, geometries, materials,
+            // compiled programs and the stage documents stay resident; only
+            // the lazily-reallocated render targets are released.
             setActive: (value) => {
+                const wasActive = active;
                 active = !!value;
                 if (!active && raf) { cancelAnimationFrame(raf); raf = 0; }
-                if (active) { startLoop(); if (displayDirty && queueDisplayRebuild && isMounted()) queueDisplayRebuild(); }
+                if (!active && wasActive) {
+                    disposeShadowResources();
+                    disposeAoResources();
+                    disposePrepassResources();
+                    disposeSsrHistoryResources();
+                    disposeThicknessResources();
+                    disposeOpaqueDepthProbe();
+                    if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
+                    if (presentationPipeline) {
+                        const settings = presentationPipeline.getSettings();
+                        presentationSleepRestore = !!settings.enabled;
+                        if (settings.enabled) {
+                            try { presentationPipeline.setSettings({ enabled: false, persist: false }); } catch (e) {}
+                        }
+                    }
+                    // Camera has not moved, so the stale key would otherwise
+                    // skip the shadow rebuild the wake frame needs.
+                    shadowCameraKey = '';
+                    shadowForceState = null;
+                }
+                if (active) {
+                    if (presentationPipeline && presentationSleepRestore) {
+                        try { presentationPipeline.setSettings({ enabled: true, persist: false }); } catch (e) {}
+                    }
+                    presentationSleepRestore = null;
+                    shadowCameraKey = '';
+                    shadowForceState = null;
+                    displayDirty = true;
+                    startLoop();
+                    if (displayDirty && queueDisplayRebuild && isMounted()) queueDisplayRebuild();
+                    if (!stopped) { if (environmentBridge && environmentBridge.update) environmentBridge.update(); renderFrame(); }
+                }
             },
+            getSleepState: () => ({
+                asleep: !active,
+                resident: {
+                    shadowAtlas: !!shadowTarget,
+                    prepass: !!prepassTargets[0],
+                    ao: !!aoTarget,
+                    ssrHistory: !!ssrHistoryTarget,
+                    thickness: !!thicknessTarget,
+                    peel: !!(peelPipeline && peelPipeline.debug && peelPipeline.debug().opaque),
+                    presentation: !!(presentationPipeline && presentationPipeline.debug().size),
+                },
+            }),
             selectPrim: (primPath) => prims.find((o) => o.userData.primPath === primPath) || null,
             // Resolved document plus the loose files it references, for the
             // graph/shaderball preview panel. UDIM refs match every file
@@ -5812,6 +5867,9 @@ const createMtlxSceneView = async ({
                 if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                 if (window.unregisterLiveView) window.unregisterLiveView(handle);
                 try { renderer.dispose(); } catch (e) {}
+                // Releases the WebGL context immediately instead of waiting
+                // for GC, so a torn-down scene frees GPU memory right away.
+                try { renderer.forceContextLoss(); } catch (e) {}
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
                 __captureCanvas = null; __captureCtx = null;
             },
@@ -5828,7 +5886,8 @@ const createMtlxSceneView = async ({
                 ssr: { historyTarget: ssrHistoryTarget, historyValid, prepassTargets: prepassTargets.slice(), prepassIndex },
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
-                linearScopeActive: !!sceneLinearState }),
+                linearScopeActive: !!sceneLinearState,
+                sleep: handle.getSleepState() }),
             // Reads the RGB-T pipeline's opaque depth at one canvas pixel (top
             // left origin) in [0, 1], blitted through a quad shader because a
             // depth texture cannot be read back directly.
@@ -6367,7 +6426,7 @@ const createMtlxSceneView = async ({
         if (peelPipeline) { try { peelPipeline.dispose(); } catch (err) {} }
         if (controls) controls.dispose();
         if (environmentBridge && environmentBridge.dispose) environmentBridge.dispose();
-        if (renderer) renderer.dispose();
+        if (renderer) { try { renderer.dispose(); } catch (err) {} try { renderer.forceContextLoss(); } catch (err) {} }
         if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
         throw e;
     }
