@@ -6239,6 +6239,32 @@ const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)' },
 ];
 
+// Viewer-path generation with the same sampler budget as the Scene: drops
+// optional samplers in SAMPLER_BUDGET_DROP_ORDER until the fragment fits
+// the texture unit limit, and notes every drop on srcs.notices.
+const generatePreviewSourcesWithinBudget = async (args) => {
+    const overrideBudget = typeof window !== 'undefined' ? window.__mtlxSamplerBudgetOverride : undefined;
+    const budget = Number.isFinite(overrideBudget) ? overrideBudget : DEFAULT_SAMPLER_BUDGET;
+    const dropped = [];
+    let srcs = null;
+    for (let attempt = 0; ; attempt++) {
+        const sceneFeatureOptions = {};
+        for (const d of dropped) sceneFeatureOptions[d.key] = true;
+        srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions }));
+        if (!srcs) return null;
+        if (countFragmentSamplers(srcs.fs).count <= budget) break;
+        if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break;
+        dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
+    }
+    if (dropped.length) {
+        const count = countFragmentSamplers(srcs.fs).count;
+        srcs.notices = (srcs.notices || []).concat(['Sampler budget: dropped ' + dropped.map((d) => d.label).join(', ')
+            + ' to fit ' + count + '/' + budget + ' texture image units']);
+        srcs.samplerBudget = { limit: budget, count, dropped: dropped.map((d) => d.label) };
+    }
+    return srcs;
+};
+
 // Scene-view material compiler. This deliberately exposes the preview shader
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
@@ -6690,7 +6716,7 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
     const __t = window.MTLX_PERF_LOG ? performance.now() : 0;
     let srcs;
     try {
-        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+        srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
     } catch (e) {
         return { refreshed: false, srcs: null };
     }
@@ -8359,7 +8385,7 @@ const createMtlxRenderView = async ({
                 // Generates the shader from the renderable surface node.
                 // See generatePreviewSources for the full breakdown;
                 // extracted so tryRefreshRenderView can reuse it for a diff.
-                const __srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+                const __srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
                 // Bail if this build was superseded while awaiting above:
                 // nothing GL-side exists yet, so disposePartial() is a
                 // safe, idempotent no-op beyond flagging `stopped`.
@@ -9693,7 +9719,7 @@ const createMtlxRenderView = async ({
                 // on an already-disposed renderer/context.
                 if (stopped || !isMounted()) return null;
                 if (!srcs) {
-                    srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted });
+                    srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
                 }
                 // A thrown generation error is NOT caught here, it
                 // propagates like a first-build failure, so the UI shows
@@ -10074,6 +10100,7 @@ Object.assign(window, {
     setEnvOverride, getEnvOverride,
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms, createLightTransportUniforms,
+    generatePreviewSources, generatePreviewSourcesWithinBudget,
     ensurePrefilteredEnv, getSpecularEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
