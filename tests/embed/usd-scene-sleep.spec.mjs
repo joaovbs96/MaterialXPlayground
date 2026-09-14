@@ -23,6 +23,8 @@ test('@scene sleeps its transient GPU targets while another view is active and w
     const h = window.__mtlxUsdSceneHandle;
     h.renderNow(); h.renderNow();
     h.__sleepSpecMarker = 'before-sleep';
+    // Tag every compiled material: a wake must not rebuild them.
+    h.prims.forEach((o) => (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (m) m.userData.__sleepSpecTag = 1; }));
   });
 
   const before = await page.evaluate(() => window.__mtlxUsdSceneHandle.getSleepState());
@@ -69,6 +71,13 @@ test('@scene sleeps its transient GPU targets while another view is active and w
   const woken = await page.evaluate(() => window.__mtlxUsdSceneHandle.getSleepState());
   expect(woken.asleep).toBe(false);
   expect(woken.resident).toEqual(before.resident);
+  const untagged = await page.evaluate(() => {
+    const h = window.__mtlxUsdSceneHandle;
+    let count = 0;
+    h.prims.forEach((o) => (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { if (m && !m.userData.__sleepSpecTag) count++; }));
+    return count;
+  });
+  expect(untagged).toBe(0);
 
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
   const screenshot = decodePNG(await canvas.screenshot());

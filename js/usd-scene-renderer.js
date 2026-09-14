@@ -5650,7 +5650,8 @@ const createMtlxSceneView = async ({
                     presentationSleepRestore = null;
                     shadowCameraKey = '';
                     shadowForceState = null;
-                    displayDirty = true;
+                    // No forced rebuild: materials and textures stayed resident,
+                    // so only a display change made while asleep recompiles.
                     startLoop();
                     if (displayDirty && queueDisplayRebuild && isMounted()) queueDisplayRebuild();
                     if (!stopped) { if (environmentBridge && environmentBridge.update) environmentBridge.update(); renderFrame(); }

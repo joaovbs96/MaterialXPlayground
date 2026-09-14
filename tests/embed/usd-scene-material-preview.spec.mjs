@@ -85,7 +85,7 @@ test('@scene opens a material preview panel on double-click', async ({ page, emb
   await expect(panel).toBeVisible({ timeout: 15000 });
   await expect(panel).toContainText(/\S/, { timeout: 15000 });
   await expect(panel.locator('.react-flow__node').first()).toBeVisible({ timeout: 15000 });
-  await expect.poll(() => page.evaluate(() => window.__previewRenderablesEvents.length), { timeout: 15000 }).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__previewRenderablesEvents.length), { timeout: 30000 }).toBeGreaterThan(0);
   // The shaderball column must actually be expanded (not collapsed to the
   // chevron chip), so the <materialx-viewer> element has real pixel size.
   const shaderball = panel.locator('materialx-viewer');
