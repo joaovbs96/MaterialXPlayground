@@ -301,6 +301,7 @@
             const [name, setName] = React.useState(defaultName || '');
             const [format, setFormat] = React.useState('mtlx');
             const [convertTo, setConvertTo] = React.useState('keep');
+            const [attribution, setAttribution] = React.useState(() => readExportAttributionPref());
             const [busy, setBusy] = React.useState(false);
             // Suspended while the unsaved-changes confirm sits on top of
             // this dialog, so Esc there closes only that confirm.
@@ -315,6 +316,7 @@
                     setName(defaultName || '');
                     setFormat('mtlx');
                     setConvertTo('keep');
+                    setAttribution(readExportAttributionPref());
                     setBusy(false);
                 }
                 wasOpen.current = open;
@@ -333,7 +335,7 @@
                 if (!trimmedName || busy) return;
                 setBusy(true);
                 try {
-                    await onExport({ name: trimmedName, format, convertTo });
+                    await onExport({ name: trimmedName, format, convertTo, attribution });
                     onClose();
                 } catch (e) {
                     // Leave the dialog open so the user can see the error
@@ -398,6 +400,13 @@
                                 </div>
                             )}
                         </div>
+                        <label className="flex items-center gap-2 cursor-pointer"
+                            title="A comment after the XML declaration naming MaterialX Playground, its version and address">
+                            <input type="checkbox" checked={attribution} data-testid="export-attribution"
+                                onChange={(e) => { setAttribution(e.target.checked); writeExportAttributionPref(e.target.checked); }}
+                                className="h-3.5 w-3.5 accent-blue-500" />
+                            <span className="text-gray-200">Add MaterialX Playground attribution comment</span>
+                        </label>
                         {resolved.length > 0 && (
                             <div className="text-gray-500 text-[11px]">
                                 {resolved.length} texture{resolved.length === 1 ? '' : 's'} will be packaged with the .zip.

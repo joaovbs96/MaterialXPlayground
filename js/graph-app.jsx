@@ -3143,7 +3143,7 @@
             // Serialize the CURRENT document (edits, connections, layout)
             // and write it as .mtlx; prefers a native save-file picker,
             // falling back to anchor-download when unavailable/failed.
-            const doExportMtlx = async (nameOverride) => {
+            const doExportMtlx = async (nameOverride, { attribution = readExportAttributionPref() } = {}) => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
                 if (xml == null) {
@@ -3151,7 +3151,7 @@
                     return false;
                 }
                 const base = nameOverride || defaultExportBase();
-                const exportedXml = await attributeExportedXml(xml);
+                const exportedXml = attribution ? await attributeExportedXml(xml) : xml;
                 const blob = new Blob([exportedXml], { type: 'application/xml' });
                 if (IN_ELECTRON && window.mtlxDesktop) {
                     try {
@@ -3269,7 +3269,7 @@
             // Same document packaged as a .zip alongside every matched
             // texture (`resolvedTextures`, from scanExportTextures). Stored
             // under its authored ref path so re-dropping the zip resolves normally.
-            const doExportZip = async (name, resolvedTextures, convertTo = 'keep') => {
+            const doExportZip = async (name, resolvedTextures, convertTo = 'keep', { attribution = readExportAttributionPref() } = {}) => {
                 if (!parsed) return false;
                 const { xml, error } = await resolveDocXml();
                 if (xml == null) {
@@ -3284,7 +3284,7 @@
                 let keptNote = null;
 
                 if (!convertTo || convertTo === 'keep') {
-                    zip.file(name + '.mtlx', await attributeExportedXml(xml));
+                    zip.file(name + '.mtlx', attribution ? await attributeExportedXml(xml) : xml);
                     const seenPaths = new Set();
                     for (const t of (resolvedTextures || [])) {
                         const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
@@ -3332,7 +3332,8 @@
                         writtenPaths.add(swappedPath);
                         convertedByRef[zipPath] = result.ext;
                     }
-                    zip.file(name + '.mtlx', await attributeExportedXml(rewriteFilenameRefs(xml, (ref) => convertedByRef[ref])));
+                    const convertedXml = rewriteFilenameRefs(xml, (ref) => convertedByRef[ref]);
+                    zip.file(name + '.mtlx', attribution ? await attributeExportedXml(convertedXml) : convertedXml);
                     if (kept.length > 0) {
                         keptNote = kept.length + ' texture(s) could not be converted and were packaged unchanged.';
                     }
@@ -3354,20 +3355,20 @@
             // guard exportMtlx/exportZip so only one export runs at a time
             // (shared across both formats); resolveDocXml's retry stays unguarded.
             const exportBusyRef = React.useRef(false);
-            const exportMtlx = async (nameOverride) => {
+            const exportMtlx = async (nameOverride, opts) => {
                 if (exportBusyRef.current) return false;
                 exportBusyRef.current = true;
                 try {
-                    return await doExportMtlx(nameOverride);
+                    return await doExportMtlx(nameOverride, opts);
                 } finally {
                     exportBusyRef.current = false;
                 }
             };
-            const exportZip = async (name, resolvedTextures, convertTo = 'keep') => {
+            const exportZip = async (name, resolvedTextures, convertTo = 'keep', opts) => {
                 if (exportBusyRef.current) return false;
                 exportBusyRef.current = true;
                 try {
-                    return await doExportZip(name, resolvedTextures, convertTo);
+                    return await doExportZip(name, resolvedTextures, convertTo, opts);
                 } finally {
                     exportBusyRef.current = false;
                 }
@@ -3567,10 +3568,10 @@
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
-            const handleExportDialogSubmit = async ({ name, format, convertTo }) => {
+            const handleExportDialogSubmit = async ({ name, format, convertTo, attribution }) => {
                 const ok = format === 'zip'
-                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [], convertTo)
-                    : await exportMtlx(name);
+                    ? await exportZip(name, (exportDialog && exportDialog.textures.resolved) || [], convertTo, { attribution })
+                    : await exportMtlx(name, { attribution });
                 if (!ok) throw new Error('export failed');
             };
 

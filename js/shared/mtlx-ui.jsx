@@ -797,16 +797,19 @@ const MTLX_SITE_URL = 'https://joaovbs96.github.io/MaterialXPlayground/';
 // them would just burn the full 1.5s on every export; skip the wait.
 const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
 
+// First version resolved this session, reused so repeated exports of one
+// document produce identical bytes.
+let exportAttributionVersion = '';
 const exportAttributionLine = async () => {
     const NL = String.fromCharCode(10);
-    let version = '';
+    let version = exportAttributionVersion;
     try {
-        const facts = IN_ELECTRON ? null : await Promise.race([
+        const facts = (IN_ELECTRON || version) ? null : await Promise.race([
             Promise.resolve(window.mtlxSourceFacts),
             new Promise((r) => setTimeout(() => r(null), 1500)),
         ]);
         const tag = facts && facts.version ? String(facts.version).trim() : '';
-        if (tag) version = ' ' + (/^v/i.test(tag) ? tag : 'v' + tag);
+        if (tag) version = exportAttributionVersion = ' ' + (/^v/i.test(tag) ? tag : 'v' + tag);
     } catch (e) { /* no facts available: attribute without a version */ }
     // The page's own canonical declaration wins; the literal only covers
     // hosts that ship no canonical link (the VS Code webview).
@@ -840,6 +843,16 @@ const withExportAttribution = (xml, line) => {
 };
 
 const attributeExportedXml = async (xml) => withExportAttribution(xml, await exportAttributionLine());
+
+// The Export dialog's attribution checkbox, remembered per browser; on
+// unless the user turned it off.
+const EXPORT_ATTRIBUTION_KEY = 'mtlx_export_attribution';
+const readExportAttributionPref = () => {
+    try { return localStorage.getItem(EXPORT_ATTRIBUTION_KEY) !== '0'; } catch (e) { return true; }
+};
+const writeExportAttributionPref = (on) => {
+    try { localStorage.setItem(EXPORT_ATTRIBUTION_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+};
 
 // Bundles the viewport-control state cluster shared by the three preview
 // surfaces: rotate/env toggles, env-availability, fullscreen, screenshot.
@@ -3073,6 +3086,7 @@ Object.assign(window, {
     errMsg,
     useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle, useViewEnum,
     downloadSnapshot, snapshotBaseName, downloadBlob, downloadXml, attributeExportedXml,
+    readExportAttributionPref, writeExportAttributionPref,
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
