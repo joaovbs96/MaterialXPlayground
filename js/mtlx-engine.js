@@ -1098,6 +1098,36 @@ const readMtlxXml = async (mx, doc, xml) => {
     return opts ? mx.readFromXmlString(doc, xml, '', opts) : mx.readFromXmlString(doc, xml);
 };
 
+// Comments outside <materialx> never become elements, so they are carried as
+// strings. The site's own attribution is dropped here and re-added on export.
+const isExportAttribution = (comment) => /^<!--\s*Exported by MaterialX Playground/.test(String(comment || ''));
+const splitXmlEnvelope = (text) => {
+    const src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    const comments = (s) => (s.match(/<!--[\s\S]*?-->/g) || []).filter((c) => !isExportAttribution(c));
+    const open = src.search(/<materialx\b/);
+    const close = src.lastIndexOf('</materialx>');
+    return {
+        prolog: open > 0 ? comments(src.slice(0, open).replace(/<\?xml[^>]*\?>/, '')) : [],
+        trailer: close >= 0 ? comments(src.slice(close + '</materialx>'.length)) : [],
+    };
+};
+const withXmlEnvelope = (xml, envelope) => {
+    let text = xml == null ? '' : String(xml);
+    const prolog = (envelope && envelope.prolog) || [];
+    const trailer = (envelope && envelope.trailer) || [];
+    if (prolog.length) {
+        const m = /^\s*<\?xml[^>]*\?>\n?/.exec(text);
+        const at = m ? m[0].length : 0;
+        text = text.slice(0, at) + (m && !m[0].endsWith('\n') ? '\n' : '') + prolog.join('\n') + '\n' + text.slice(at);
+    }
+    const close = text.lastIndexOf('</materialx>');
+    if (trailer.length && close >= 0) {
+        const end = close + '</materialx>'.length;
+        text = text.slice(0, end) + '\n' + trailer.join('\n') + text.slice(end);
+    }
+    return text;
+};
+
 // Session-lifetime texture cache, keyed by file identity, re-binding the
 // same dropped file after a view rebuild reuses the decoded THREE.Texture
 // instead of a fresh async load, which let the default color flash.
@@ -6075,6 +6105,7 @@ Object.assign(window, {
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
     normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText, readMtlxXml,
+    isExportAttribution, splitXmlEnvelope, withXmlEnvelope,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture,
     collectMxUniforms, mxValueToThreeUniform,
