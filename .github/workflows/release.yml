@@ -37,7 +37,23 @@ name: Release offline package
 on:
   release:
     types: [published]
+  # Manual runs are for verifying the pipeline: pick the jobs, then
+  # download the gallery, zip, vsix and installer artifacts from the run.
+  # Nothing is attached to a release on dispatch.
   workflow_dispatch:
+    inputs:
+      run_gallery:
+        description: Render the gallery tiles (about 15 min on a GPU-less runner)
+        type: boolean
+        default: true
+      run_package:
+        description: Build the offline site zip and the VS Code extension
+        type: boolean
+        default: true
+      run_desktop:
+        description: Build the desktop installers on all three platforms
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -46,7 +62,92 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Renders the gallery data once per release and hands it to the package
+  # and desktop jobs as an artifact. On a release it first waits for
+  # deploy.yml to publish the same tiles, so the reuse below finds them all.
+  gallery:
+    if: github.event_name == 'release' || inputs.run_gallery
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      - name: Install the capture browser
+        run: npx playwright install --with-deps chromium
+
+      # Both workflows start on the same release event. Reading the live
+      # site before the deploy lands returns 404 or stale tiles and forces
+      # a full render here. Any failure below just falls back to rendering.
+      - name: Wait for the Pages deploy of this release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          deadline=$((SECONDS + 5400))
+          run_id=""
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ -z "$run_id" ]; then
+              run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?event=release&head_sha=$GITHUB_SHA&per_page=5" --jq '.workflow_runs[0].id // empty')
+              if [ -z "$run_id" ]; then echo "deploy run not listed yet"; sleep 30; continue; fi
+              echo "waiting for deploy run $run_id"
+            fi
+            read -r status conclusion < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '"\(.status) \(.conclusion // "")"')
+            if [ "$status" = "completed" ]; then
+              echo "deploy run $run_id finished: $conclusion"
+              if [ "$conclusion" != "success" ]; then
+                echo "::warning::Pages deploy did not succeed; rendering the gallery here instead."
+                exit 0
+              fi
+              for _ in $(seq 1 20); do
+                if curl -sfo /dev/null "$SITE/gallery/manifest.json"; then echo "live manifest reachable"; exit 0; fi
+                sleep 15
+              done
+              echo "::warning::live manifest unreachable after the deploy; rendering the gallery here instead."
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "::warning::gave up waiting for the Pages deploy; rendering the gallery here instead."
+
+      # Reuses every tile the live site already has for an unchanged
+      # material and renders the rest (about 13s each on a GPU-less runner).
+      - name: Generate gallery data
+        run: |
+          node scripts/build-gallery.mjs
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+      - name: Upload gallery artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gallery-data
+          path: gallery
+          if-no-files-found: error
+          retention-days: 3
+
   package:
+    needs: gallery
+    # Runs after the gallery job, or without it on a manual run that left
+    # the gallery unchecked (the tiles then come from the live site).
+    if: ${{ !cancelled() && (github.event_name == 'release' || inputs.run_package) && (needs.gallery.result == 'success' || needs.gallery.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,6 +179,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # A high or critical advisory in either lockfile must never reach a
+      # release; dependency-audit.yml runs the same check on every push.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
 
       - name: Vendor the offline MaterialX snapshot
         run: npm run vendor:offline
@@ -139,12 +245,18 @@ jobs:
           echo "mtlx_default_version=$MTLX_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
 
       # Populates gallery/ at the repo root BEFORE the rsync below, so the
-      # offline zip carries it and electron/scripts/stage-site.mjs (desktop
-      # job) finds it too. --reuse-only downloads the tiles the live site
-      # already published and renders NOTHING: rendering needs a browser and
-      # costs ~13s a material on a GPU-less runner. Materials published since
-      # the last deploy simply keep the gallery placeholder.
+      # offline zip carries it; rendered once by the gallery job above.
       - name: Populate gallery data
+        if: needs.gallery.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gallery-data
+          path: gallery
+
+      # Manual run without the gallery job: reuse what the live site has
+      # and render nothing; materials it lacks keep the placeholder tile.
+      - name: Populate gallery data from the live site
+        if: needs.gallery.result != 'success'
         run: |
           node scripts/build-gallery.mjs
           node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
@@ -279,8 +391,8 @@ jobs:
   # `needs: package` certifies the tree once (build, stale gate, check)
   # before three runners spend 40+ minutes each on it.
   desktop:
-    needs: package
-    if: github.event_name == 'release'
+    needs: [gallery, package]
+    if: ${{ !cancelled() && (github.event_name == 'release' || inputs.run_desktop) && needs.package.result == 'success' && (needs.gallery.result == 'success' || needs.gallery.result == 'skipped') }}
     strategy:
       # One platform failing must not deny the other two their artifacts.
       fail-fast: false
@@ -311,11 +423,18 @@ jobs:
       - name: Vendor the offline MaterialX snapshot
         run: npm run vendor:offline
 
-      # Same reuse-only download as the package job: the desktop app ships
-      # the gallery, but no runner should re-render tiles the site already
-      # published. Without this the packaged app shows the gallery's "not
-      # generated" card and its preset picker falls back to MTLX_PRESETS.
+      # The desktop app ships the gallery; without it the packaged app shows
+      # the gallery's "not generated" card and its preset picker falls back
+      # to MTLX_PRESETS. Same artifact the package job used.
       - name: Populate gallery data
+        if: needs.gallery.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gallery-data
+          path: gallery
+
+      - name: Populate gallery data from the live site
+        if: needs.gallery.result != 'success'
         run: |
           node scripts/build-gallery.mjs
           node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
@@ -324,15 +443,24 @@ jobs:
         run: npm ci
         working-directory: electron
 
+      - name: Audit desktop dependencies
+        run: npm audit --audit-level=high
+        working-directory: electron
+
       - name: Smoke-test the desktop shell
         timeout-minutes: 5
         shell: bash
         run: |
-          # Fallback if the Linux leg fails on sandbox errors: prefix the
-          # xvfb-run command with ELECTRON_DISABLE_SANDBOX=1. Not applied by
-          # default; only add it if this step starts failing on ubuntu-latest.
+          # ubuntu-24.04 runners restrict unprivileged user namespaces, so
+          # Electron falls back to its SUID helper and aborts unless that
+          # binary is root-owned with mode 4755 (the message it prints).
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -y && sudo apt-get install -y xvfb
+            # The binary is fetched lazily on first launch, so fetch it now
+            # (idempotent) before fixing the helper's owner and mode.
+            (cd electron && node node_modules/electron/install.js)
+            SANDBOX=electron/node_modules/electron/dist/chrome-sandbox
+            sudo chown root:root "$SANDBOX" && sudo chmod 4755 "$SANDBOX"
             xvfb-run -a node electron/scripts/dev.mjs --smoke --skip-gallery
           else
             node electron/scripts/dev.mjs --smoke --skip-gallery

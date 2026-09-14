@@ -1,0 +1,63 @@
+# -----------------------------------------------------------------------------
+# Dependency audit
+# -----------------------------------------------------------------------------
+# Runs npm audit against both lockfiles (site and desktop shell) so a high
+# or critical advisory fails a pull request or push instead of surfacing as
+# a Dependabot alert after the fact. Audits read the lockfile only; no
+# install is needed. The weekly run catches advisories published while no
+# code changes are happening. release.yml repeats the same check before
+# packaging.
+# -----------------------------------------------------------------------------
+
+name: Dependency audit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'electron/package.json'
+      - 'electron/package-lock.json'
+      - '.github/workflows/dependency-audit.yml'
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'electron/package.json'
+      - 'electron/package-lock.json'
+      - '.github/workflows/dependency-audit.yml'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Audit site dependencies
+        run: npm audit --package-lock-only --audit-level=high
+
+      - name: Audit desktop dependencies
+        run: npm audit --package-lock-only --audit-level=high
+        working-directory: electron

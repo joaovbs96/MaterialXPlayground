@@ -88,12 +88,17 @@
         // The shared legend UI: the open card, the collapsed pill, and the
         // tri-state control embedded in both. The caller owns open/showAll
         // state and the ref that measures whichever branch is rendered.
-        function MtlxTypeLegend({ types, displayTypes, open, showAll, setOpen, setShowAll, nodeCount, connectionCount, showCounts }) {
-            return open ? (
+        function MtlxTypeLegend({ types, displayTypes, open, showAll, setOpen, setShowAll, nodeCount, connectionCount, showCounts, embedded }) {
+            // Embedded (docked at the foot of the left sidebar) drops the
+            // floating card's own chrome and just fills the sidebar column.
+            const cardCls = embedded
+                ? 'w-full px-3 py-2 border-t border-gray-700 bg-gray-900/70'
                 // w-80 (not w-60): the longest type name (displacementshader,
                 // ~133px at this legend's text-[11px] font-mono) doesn't fit
                 // in a grid-cols-2 column at the old width.
-                <div className="bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80">
+                : 'bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80';
+            return open ? (
+                <div className={cardCls}>
                     <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
                         <LegendTriState
@@ -103,7 +108,8 @@
                             setLegendShowAll={setShowAll}
                         />
                     </div>
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-48 overflow-y-auto custom-scrollbar">
+                    <div className={'grid grid-cols-2 gap-x-3 gap-y-1 overflow-y-auto custom-scrollbar '
+                        + (embedded ? 'max-h-40' : 'max-h-48')}>
                         {displayTypes.map((t) => {
                             const inGraph = types.indexOf(t) !== -1;
                             return (
@@ -144,7 +150,9 @@
                         setShowAll(false);
                     }}
                     title="Show the type color legend"
-                    className={BTN_TOOLBAR + ' cursor-pointer'}
+                    className={(embedded
+                        ? 'w-full flex items-center gap-2 px-3 py-1.5 border-t border-gray-700 bg-gray-900/70 cursor-pointer'
+                        : BTN_TOOLBAR + ' cursor-pointer')}
                 >
                     <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
                     {types.slice(0, 3).map((t) => (

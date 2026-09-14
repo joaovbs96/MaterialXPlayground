@@ -87,7 +87,11 @@
             // 1. Structural nodes explicitly pull their assigned TYPE_COLORS
             if (data.kind === 'nodegraph') return typeColor('nodegraph');
             if (data.kind === 'input' || data.kind === 'output') return typeColor(data.type);
-            
+
+            // Definition cards (nodedef-only, or a functional nodegraph)
+            // read as nodegraphs regardless of their resolved output type.
+            if (data.kind === 'nodedef' || data.functional) return typeColor('nodegraph');
+
             // 2. Data nodes pull directly from their output type
             // (color3, float, etc)
             if (data.type) return typeColor(data.type);
@@ -131,6 +135,12 @@
                     portMode: nodeMode,
                     onOpen: (d.kind === 'nodegraph' && o.onOpenScope)
                         ? () => o.onOpenScope(d.name) : undefined,
+                    // A data node whose nodedef is backed by a library
+                    // nodegraph (e.g. standard_surface -> NG_standard_
+                    // surface_surfaceshader) can jump straight to it, view only.
+                    onOpenImpl: (d.implGraph && o.onOpenImpl)
+                        ? () => o.onOpenImpl(d.implGraph, d.id) : undefined,
+                    implGraph: d.implGraph,
                     onTogglePorts: o.onTogglePorts ? () => o.onTogglePorts(d.id) : undefined,
                     onPortAdd: o.onPortAdd,
                     // Inline rename on the card. The `renaming` flag itself is

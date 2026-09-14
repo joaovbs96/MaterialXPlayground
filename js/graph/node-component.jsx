@@ -102,6 +102,9 @@
                 }
             }
             const isIface = data.kind === 'input' || data.kind === 'output';
+            // A definition card: a bare nodedef ('d:'), or a functional
+            // nodegraph implementing one ('g:' with data.functional).
+            const isDef = data.kind === 'nodedef' || !!data.functional;
             const openScope = data.onOpen
                 ? (e) => { e.stopPropagation(); data.onOpen(); }
                 : undefined;
@@ -111,11 +114,13 @@
             const expanded = data.portMode === 'all';
             return (
                 <div
-                    title={data.kind === 'nodegraph' && data.onOpen ? 'Double-click to open this nodegraph' : undefined}
+                    title={isDef
+                        ? 'Definition ' + data.nodedef + (data.onOpen ? '. Double-click to open its implementation graph' : '')
+                        : (data.kind === 'nodegraph' && data.onOpen ? 'Double-click to open this nodegraph' : undefined)}
                     className={'relative rounded-lg border font-mono text-[11px] '
-                        + (isIface ? 'border-dashed bg-gray-900/70 ' : 'bg-gray-800 shadow-md ')
+                        + (isIface ? 'border-dashed bg-gray-900/70 ' : (isDef ? 'border-dashed bg-gray-800 shadow-md ' : 'bg-gray-800 shadow-md '))
                         + (selected ? 'border-blue-500 ring-1 ring-blue-500/50'
-                                    : (isIface ? 'border-gray-500' : 'border-gray-600'))}
+                                    : ((isIface || isDef) ? 'border-gray-500' : 'border-gray-600'))}
                     style={{ width: NODE_W }}>
                     {hasDefaults && data.onTogglePorts && (
                         <button
@@ -164,6 +169,11 @@
                                     {data.kind === 'input' ? 'interface' : 'output'}
                                 </span>
                             )}
+                            {isDef && (
+                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">
+                                    definition
+                                </span>
+                            )}
                             {/* data.onOpen is what makes a read-only render inert (no
                                 callback, no chip). mtlx-node-open is a CSS hook so a
                                 pointer-events:none preview can re-enable just this chip. */}
@@ -172,8 +182,20 @@
                                     onClick={openScope}
                                     onDoubleClick={openScope}
                                     title="Open this nodegraph"
-                                    className="mtlx-node-open ml-auto flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
-                                >open <MtlxIcon name="corner-down-left" className="w-2.5 h-2.5" /></button>
+                                    className={'mtlx-node-open flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors'
+                                        + (isDef ? '' : ' ml-auto')}
+                                >edit <MtlxIcon name="pencil" className="w-2.5 h-2.5" /></button>
+                            )}
+                            {/* A data node backed by a library implementation
+                                nodegraph, pill-navigates in view only, same
+                                inert-on-preview contract as onOpen above. */}
+                            {data.onOpenImpl && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
+                                    onDoubleClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
+                                    title="Explore the implementation nodegraph (view only)"
+                                    className="mtlx-node-open flex-none ml-auto inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
+                                >view <MtlxIcon name="eye" className="w-2.5 h-2.5" /></button>
                             )}
                         </div>
                         <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-gray-600 italic' : 'text-gray-500')}>
@@ -183,9 +205,9 @@
                     <div className="py-0.5">
                         {safePortList(data.inputs, data.id, 'inputs').map((inp) => (
                             <div key={'in:' + inp.name}
-                                className={'relative flex items-center gap-1.5 px-2' + (inp.authored === false ? ' opacity-50' : '')}
+                                className={'relative flex items-center gap-1.5 px-2' + (inp.authored === false && !isDef ? ' opacity-50' : '')}
                                 style={{ height: 22 }}
-                                title={inp.authored === false ? 'Not set in the document — nodedef default' : undefined}>
+                                title={inp.authored === false ? (isDef ? 'Interface input (default shown)' : 'Not set in the document — nodedef default') : undefined}>
                                 <Handle type="target" position={Position.Left} id={'in:' + inp.name}
                                     onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: inp.name, portType: inp.type, dir: 'in' }); }}
                                     // Occupied handles are click-through so

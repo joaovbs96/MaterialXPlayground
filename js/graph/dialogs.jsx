@@ -26,6 +26,7 @@
             { keys: 'Drag a wire to empty canvas', desc: 'Same filtered add-node search, placed at the drop point', group: 'mouse' },
             { keys: 'Drag a wire onto a node', desc: 'Pick a compatible port on that node to connect to', group: 'mouse' },
             { keys: 'Double-click a nodegraph', desc: 'Open (enter) its scope — or click its open ⏎ chip', group: 'mouse' },
+            { keys: 'Double-click a definition card', desc: 'Open its implementation graph; the sidebar edits the nodedef interface', group: 'mouse' },
             { keys: '+ / − badge on a node', desc: "Show or hide that node's default-valued inputs", group: 'mouse' },
             { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page', group: 'mouse', browserOnly: true },
             // Keyboard
@@ -34,7 +35,8 @@
             { keys: 'Esc', desc: 'Close the open search, picker, or dialog (browsers also exit full screen)', group: 'keyboard' },
             { keys: 'F', desc: 'Fit the whole graph in view', group: 'keyboard' },
             { keys: 'A', desc: 'Re-run the automatic layout once', group: 'keyboard' },
-            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs)', group: 'keyboard' },
+            { keys: 'L', desc: 'Toggle the node list sidebar', group: 'keyboard' },
+            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs; at the root: also a new node definition)', group: 'keyboard' },
             { keys: '↑ ↓ / Enter', desc: 'Navigate / choose inside the add-node search and port pickers', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + V', desc: 'Paste the copied node(s)', group: 'keyboard' },

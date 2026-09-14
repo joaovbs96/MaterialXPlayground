@@ -18,7 +18,7 @@
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
         // an INPUT that can consume it; null/'' is the normal flow.
-        function AddNodeSearch({ catalog, ifaceMode, onAddInterface, onPick, onClose, filterMode = null, filterType = '' }) {
+        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
@@ -28,10 +28,17 @@
             // rows below — picking one doesn't add anything yet, it swaps
             // the palette body to this small name+type form.
             const [ifaceDraft, setIfaceDraft] = React.useState(null); // { kind, name, type, value, colorspace, uiname, uifolder, uimin, uimax, uiadvanced }
+            // Same idea for the synthetic "node definition" row: name,
+            // output type, nodegroup and the implementation-graph toggle.
+            // initialMode lets a caller (the Edit menu / pane context menu)
+            // open the palette straight into this form.
+            const [defDraft, setDefDraft] = React.useState(initialMode === 'definition'
+                ? { node: '', type: 'color3', nodegroup: '', withGraph: true } : null);
             // "More options" disclosure (interface inputs only): collapsed
             // by default so the quick name+type add flow stays unchanged.
             const [ifaceMoreOpen, setIfaceMoreOpen] = React.useState(false);
             const nameRef = React.useRef(null);
+            const defNameRef = React.useRef(null);
             React.useEffect(() => {
                 const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0);
                 return () => clearTimeout(t);
@@ -41,13 +48,19 @@
                 const t = setTimeout(() => { if (nameRef.current) nameRef.current.focus(); }, 0);
                 return () => clearTimeout(t);
             }, [!!ifaceDraft]);
+            React.useEffect(() => {
+                if (!defDraft) return;
+                const t = setTimeout(() => { if (defNameRef.current) defNameRef.current.focus(); }, 0);
+                return () => clearTimeout(t);
+            }, [!!defDraft]);
             // Distinct output types present across the whole catalog, for
             // the type-filter dropdown next to the search box.
             const typeOptions = React.useMemo(() => {
                 const s = new Set();
                 (catalog || []).forEach((c) => (c.signatures || []).forEach((sig) => { if (sig.type) s.add(sig.type); }));
+                (docCatalog || []).forEach((c) => (c.signatures || []).forEach((sig) => { if (sig.type) s.add(sig.type); }));
                 return Array.from(s).sort();
-            }, [catalog]);
+            }, [catalog, docCatalog]);
             const items = React.useMemo(() => {
                 const s = q.trim().toLowerCase();
                 const synth = [];
@@ -59,40 +72,47 @@
                         synth.push({ synthetic: 'iface-output', category: 'output' });
                     }
                 }
-                if (!catalog) return synth;
-                let pool = catalog;
-                if (typeFilter) {
-                    pool = filterMode === 'out'
-                        // The double-clicked port is an OUTPUT: the new node
-                        // must be able to consume it, i.e. have some INPUT
-                        // of that type.
-                        ? pool.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
-                        // Default (including filterMode 'in'): the new node
-                        // must produce that type as its OUTPUT.
-                        : pool.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
+                if (defMode) {
+                    if (!s || 'definition'.indexOf(s) !== -1 || 'nodedef'.indexOf(s) !== -1 || 'new'.indexOf(s) !== -1) {
+                        synth.push({ synthetic: 'definition', category: 'node definition' });
+                    }
                 }
-                const match = s ? pool.filter((c) =>
-                    c.category.toLowerCase().indexOf(s) !== -1 ||
-                    (c.group || '').toLowerCase().indexOf(s) !== -1) : pool;
-                const rank = (c) => {
-                    if (!s) return 2;
-                    const n = c.category.toLowerCase();
-                    if (n === s) return 0;
-                    if (n.indexOf(s) === 0) return 1;
-                    if (n.indexOf(s) !== -1) return 2;
-                    return 3; // matched on the group only
+                if (!catalog) return synth;
+                // Rank on category first, group second (see catalog.jsx's
+                // searchFilter comment): a group-only match still shows,
+                // just demoted below every category match.
+                const keysOf = (c) => [c.category, c.group || ''];
+                // Same typeFilter + text match applied to both pools, so
+                // document-local definitions rank identically to stdlib
+                // ones; only their placement (first) differs, below.
+                const filterPool = (pool) => {
+                    let p = pool;
+                    if (typeFilter) {
+                        p = filterMode === 'out'
+                            // The double-clicked port is an OUTPUT: the new node
+                            // must be able to consume it, i.e. have some INPUT
+                            // of that type.
+                            ? p.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
+                            // Default (including filterMode 'in'): the new node
+                            // must produce that type as its OUTPUT.
+                            : p.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
+                    }
+                    return searchFilter(p, s, keysOf);
                 };
-                return synth.concat(match.slice()
-                    .sort((a, b) => rank(a) - rank(b) || a.category.localeCompare(b.category))
-                    .slice(0, 60));
-            }, [catalog, q, ifaceMode, typeFilter, filterMode]);
+                const docItems = (docCatalog && docCatalog.length) ? filterPool(docCatalog) : [];
+                const stdlibItems = filterPool(catalog);
+                return synth.concat(docItems, stdlibItems).slice(0, 60);
+            }, [catalog, docCatalog, q, ifaceMode, defMode, typeFilter, filterMode]);
             React.useEffect(() => { setHi(0); }, [q]);
             React.useEffect(() => { // keep the highlighted row in view
                 const el = listRef.current && listRef.current.children[hi];
                 if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
             }, [hi, items]);
             const pick = (c) => {
-                if (c.synthetic) {
+                if (c.synthetic === 'definition') {
+                    setDefDraft({ node: '', type: 'color3', nodegroup: '', withGraph: true });
+                }
+                else if (c.synthetic) {
                     setIfaceDraft({
                         kind: c.synthetic, name: '', type: 'color3',
                         value: '', colorspace: '', uiname: '', uifolder: '',
@@ -113,6 +133,11 @@
                 onAddInterface(ifaceDraft.kind, ifaceDraft.name, ifaceDraft.type, meta);
                 onClose();
             };
+            const confirmDef = () => {
+                if (!defDraft || !defDraft.node.trim()) return;
+                onCreateDefinition(defDraft);
+                onClose();
+            };
             const onKeyDown = (e) => {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(items.length - 1, 0))); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
@@ -122,6 +147,10 @@
             const onDraftKeyDown = (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); confirmIface(); }
                 else if (e.key === 'Escape') { e.preventDefault(); setIfaceDraft(null); }
+            };
+            const onDefDraftKeyDown = (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); confirmDef(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setDefDraft(null); }
             };
             return (
                 <div className="absolute inset-0 z-40" onMouseDown={onClose}>
@@ -258,6 +287,61 @@
                                     Enter add {'·'} Esc back
                                 </div>
                             </div>
+                        ) : defDraft ? (
+                            <div onKeyDown={onDefDraftKeyDown}>
+                                <div className="px-3 py-2 border-b border-gray-700 text-[11px] text-gray-400 italic">
+                                    New node definition
+                                </div>
+                                <div className="px-3 py-2.5 space-y-2">
+                                    <input
+                                        ref={defNameRef}
+                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        placeholder="node name, e.g. my_shader"
+                                        value={defDraft.node}
+                                        spellCheck={false}
+                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { node: e.target.value }))}
+                                    />
+                                    <select
+                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                        value={defDraft.type}
+                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { type: e.target.value }))}
+                                    >
+                                        {IFACE_VALUE_TYPES.filter((t) => t !== 'material').map((t) => (
+                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
+                                        ))}
+                                    </select>
+                                    <input
+                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        placeholder="nodegroup (optional)"
+                                        value={defDraft.nodegroup}
+                                        spellCheck={false}
+                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { nodegroup: e.target.value }))}
+                                    />
+                                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 font-mono">
+                                        <input
+                                            type="checkbox"
+                                            className="h-3.5 w-3.5 accent-blue-500"
+                                            checked={defDraft.withGraph}
+                                            onChange={(e) => setDefDraft(Object.assign({}, defDraft, { withGraph: e.target.checked }))}
+                                        />
+                                        Create implementation graph
+                                    </label>
+                                    <div className="flex items-center gap-2 pt-0.5">
+                                        <button
+                                            onClick={confirmDef}
+                                            disabled={!defDraft.node.trim()}
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >Create</button>
+                                        <button
+                                            onClick={() => setDefDraft(null)}
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                        >Back</button>
+                                    </div>
+                                </div>
+                                <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                                    Enter create {'·'} Esc back
+                                </div>
+                            </div>
                         ) : (<React.Fragment>
                         <div className="flex items-stretch border-b border-gray-700">
                             <input
@@ -303,7 +387,7 @@
                                         <React.Fragment>
                                             <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: '#94a3b8' }} />
                                             <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">interface</span>
+                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
@@ -313,6 +397,7 @@
                                                 <span className="ml-auto flex-none text-[9px] text-gray-500" title="This category has several signatures — pick one in the properties panel after adding">{c.signatures.length} sigs</span>
                                             )}
                                             {c.group && <span className={(c.signatures.length > 1 ? '' : 'ml-auto ') + 'flex-none text-[9px] text-gray-500 uppercase tracking-wider'}>{c.group}</span>}
+                                            {c.local && <span className={(c.signatures.length > 1 || c.group ? '' : 'ml-auto ') + 'flex-none text-blue-300/90 border border-blue-500/40 rounded px-1 text-[8px] uppercase tracking-wider'}>doc</span>}
                                         </React.Fragment>
                                     )}
                                 </button>
@@ -324,6 +409,67 @@
                         </React.Fragment>)}
                     </div>
                 </div>
+            );
+        }
+
+        // Small blur/Enter-committing text field for the Interface metadata
+        // group (params panel, i: nodes) and the Definition panel, mirroring
+        // ParamRow's textField commit pattern since that pattern isn't exported standalone.
+        function IfaceMetaField({ value, placeholder, onCommit, readOnly, className, title }) {
+            const [draft, setDraft] = React.useState(value || '');
+            React.useEffect(() => { setDraft(value || ''); }, [value]);
+            const commit = () => { if (draft !== (value || '')) onCommit(draft); };
+            return (
+                <input
+                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
+                        + (readOnly ? ' opacity-60' : '') + (className ? ' ' + className : '')}
+                    value={draft}
+                    placeholder={placeholder}
+                    title={title}
+                    spellCheck={false}
+                    readOnly={!!readOnly}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') { commit(); e.target.blur(); }
+                        if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); }
+                    }}
+                />
+            );
+        }
+
+        // Type-picker dropdown: swatch-dotted, mono-font MtlxSelect over
+        // a type list (defaults to IFACE_VALUE_TYPES). Forwards onChange
+        // as the plain string value, not an event.
+        function TypeSelect({ value, onChange, disabled, title, className, types, emptyOption }) {
+            const typeList = types || IFACE_VALUE_TYPES;
+            const labels = React.useMemo(() => {
+                const m = {};
+                typeList.forEach((t) => { m[t] = <span style={{ color: typeColor(t) }}>{t}</span>; });
+                return m;
+            }, [typeList]);
+            const dots = React.useMemo(() => {
+                const m = {};
+                typeList.forEach((t) => { m[t] = typeColor(t); });
+                return m;
+            }, [typeList]);
+            return (
+                <MtlxSelect
+                    value={value}
+                    onChange={(v) => onChange(v)}
+                    options={typeList}
+                    labels={labels}
+                    dots={dots}
+                    defValue={null}
+                    disabled={disabled}
+                    title={title}
+                    emptyOption={emptyOption}
+                    size="sm"
+                    variant="field"
+                    font="mono"
+                    align="left"
+                    className={className || 'flex-none w-28'}
+                />
             );
         }
 
@@ -353,9 +499,12 @@
         // One row per param: connected inputs jump to their source node;
         // unconnected ones edit the value, debounced (each commit writes
         // the doc and recompiles); onLive fires per tick for a live preview.
-        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace }) {
+        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
+            // A ref (not state): blurring alone must never re-trigger the
+            // re-seed effects below, only an actual value change should.
+            const focusedRef = React.useRef(false);
             const [draft, setDraft] = React.useState(inp.value || '');
-            React.useEffect(() => { setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
+            React.useEffect(() => { if (!focusedRef.current) setDraft(inp.value || ''); }, [nodeId, inp.name, inp.value]);
             // Displayed decimals: 4-component rows (color4/vector4) are tighter,
             // so round to 3; color3/vector2/3 round to 4.
             const compDec = (VEC_SIZE[inp.type] || 0) === 4 ? 3 : 4;
@@ -366,7 +515,9 @@
                 () => parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec))
             );
             React.useEffect(() => {
-                setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec)));
+                if (!focusedRef.current) {
+                    setCompText(parseComps(inp.value || '', VEC_SIZE[inp.type] || 0).map((x) => numDec(x, compDec)));
+                }
             }, [nodeId, inp.name, inp.value]);
             const onCommitRef = React.useRef(onCommit);
             onCommitRef.current = onCommit;
@@ -451,7 +602,8 @@
                     placeholder="(no value)"
                     spellCheck={false}
                     onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
+                    onFocus={() => { focusedRef.current = true; }}
+                    onBlur={() => { focusedRef.current = false; commit(); }}
                     onKeyDown={(e) => {
                         if (e.key === 'Enter') { commit(); e.target.blur(); }
                         if (e.key === 'Escape') { setDraft(inp.value || ''); e.target.blur(); }
@@ -524,7 +676,14 @@
                         nv[i] = raw;
                         setCompText(nv);
                         const n = parseFloat(raw);
-                        if (isNaN(n)) return; // e.g. "", "-", "1." — keep displaying, don't commit yet
+                        if (isNaN(n)) {
+                            // e.g. "", "-", "1.": keep displaying, don't commit
+                            // yet, and drop any earlier pending commit so it
+                            // can't land later and stomp this component.
+                            if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+                            pendingRef.current = null;
+                            return;
+                        }
                         const clamped = isColor ? Math.max(0, Math.min(1, n)) : n;
                         const nums = nv.map((s2, j) => {
                             if (j === i) return clamped;
@@ -566,11 +725,21 @@
                                         className={'w-full min-w-0 px-1 py-0.5 ' + boxCls}
                                         value={s}
                                         onChange={(e) => setComp(i, e.target.value, isSpinEvent(e))}
+                                        onFocus={() => { focusedRef.current = true; }}
                                         onBlur={(e) => {
-                                            const v = String(fmt(comps[i]));
-                                            e.target.value = v;
+                                            focusedRef.current = false;
+                                            flush();
                                             const nv = compText.slice();
-                                            nv[i] = v;
+                                            if (isNaN(parseFloat(nv[i]))) {
+                                                // Unparseable draft (fast backspacing
+                                                // to empty): restore from the
+                                                // document's own component value.
+                                                const docComps = parseComps(inpValRef.current, vecN);
+                                                nv[i] = numDec(docComps[i], compDec);
+                                            } else {
+                                                nv[i] = String(fmt(comps[i]));
+                                            }
+                                            e.target.value = nv[i];
                                             setCompText(nv);
                                         }}
                                     />
@@ -598,6 +767,8 @@
                                     min={lo} max={hi} step={step}
                                     value={Math.max(lo, Math.min(hi, curN))}
                                     onChange={(e) => commitSoon(numStr(parse(e.target.value)))}
+                                    onFocus={() => { focusedRef.current = true; }}
+                                    onBlur={() => { focusedRef.current = false; }}
                                 />
                             )}
                             <input
@@ -617,9 +788,25 @@
                                         // isSpinEvent above).
                                         if (isSpinEvent(e)) flush();
                                     }
-                                    else setDraft(raw);
+                                    else {
+                                        setDraft(raw);
+                                        // Unparseable draft: drop any commit
+                                        // still pending so it can't land
+                                        // later and overwrite this field.
+                                        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+                                        pendingRef.current = null;
+                                    }
                                 }}
-                                onBlur={() => setDraft(numStr(curN))}
+                                onFocus={() => { focusedRef.current = true; }}
+                                onBlur={() => {
+                                    focusedRef.current = false;
+                                    flush();
+                                    // If what's left doesn't parse (e.g. fast
+                                    // backspacing to empty), restore from the
+                                    // document value instead of a stale commit.
+                                    if (isNaN(parse(draft))) setDraft(inpValRef.current || '');
+                                    else setDraft(numStr(curN));
+                                }}
                             />
                         </div>
                     );
@@ -664,6 +851,26 @@
                 return <div className="flex items-center gap-1.5">{textField()}</div>;
             };
 
+            const body = inp.connected ? (
+                sourceId ? (
+                    <button
+                        onClick={() => onJump(sourceId)}
+                        title="Select and show the node this input is connected to"
+                        className={(hideHeader ? '' : 'mt-1 ') + 'max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate'}
+                    ><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> from {sourceId.slice(2)}</button>
+                ) : (
+                    <div className={(hideHeader ? '' : 'mt-1 ') + 'inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono'}><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
+                )
+            ) : readOnly ? (
+                <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-gray-400 font-mono truncate'} title={inp.value}>
+                    {inp.value !== '' ? inp.value : '\u2014'}
+                </div>
+            ) : (
+                hideHeader ? control() : <div className="mt-1">{control()}</div>
+            );
+
+            if (hideHeader) return <div className="flex-1 min-w-0">{body}</div>;
+
             return (
                 <div className="py-1.5 border-b border-gray-700/60 last:border-b-0">
                     <div className="flex items-center gap-1.5 text-[11px] font-mono">
@@ -671,25 +878,9 @@
                         <span className="text-gray-300 truncate text-[11px] font-mono" title={inp.uiname ? inp.name : undefined}>{inp.uiname || inp.name}</span>
                         <span className="ml-auto flex-none text-[9px] font-mono" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
                     </div>
-                    {inp.connected ? (
-                        sourceId ? (
-                            <button
-                                onClick={() => onJump(sourceId)}
-                                title="Select and show the node this input is connected to"
-                                className="mt-1 max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate"
-                            ><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> from {sourceId.slice(2)}</button>
-                        ) : (
-                            <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono"><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
-                        )
-                    ) : readOnly ? (
-                        <div className="mt-1 text-[11px] text-gray-400 font-mono truncate" title={inp.value}>
-                            {inp.value !== '' ? inp.value : '\u2014'}
-                        </div>
-                    ) : (
-                        <div className="mt-1">{control()}</div>
-                    )}
+                    {body}
                 </div>
             );
         }
 
-Object.assign(window, { AddNodeSearch, ParamRow, VEC_SIZE });
+Object.assign(window, { AddNodeSearch, ParamRow, VEC_SIZE, IfaceMetaField, IFACE_VALUE_TYPES, TypeSelect });

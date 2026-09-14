@@ -46,8 +46,12 @@ const HARNESS_PATH = "/tests/embed/fixtures/harness.html";
 // Scaled by --jobs below: N workers sharing the CPU inflate each
 // capture roughly N-fold, and a fixed 60s budget turns that into mass
 // timeouts rather than a slower-but-correct run.
-const PER_MATERIAL_TIMEOUT_BASE_MS = 60000;
-const READY_WAIT_TIMEOUT_MS = 45000;
+// The heaviest shaders (anisotropic coat, OpenPBR car paint) compile for
+// well over 30s on a GPU-less runner, and the compile blocks the renderer
+// thread, so the screenshot itself needs a generous cap.
+const PER_MATERIAL_TIMEOUT_BASE_MS = 240000;
+const READY_WAIT_TIMEOUT_MS = 90000;
+const SCREENSHOT_TIMEOUT_MS = 150000;
 const SETTLE_WAIT_MS = 1500;
 const MAX_ATTEMPTS = 3;
 
@@ -177,7 +181,12 @@ async function captureOne(context, baseURL, outDir, material) {
     const handle = await page.evaluateHandle((i) => window.__viewers[i], idx);
     const element = handle.asElement();
     if (!element) throw new Error("viewer element handle not found");
-    await element.screenshot({ type: "jpeg", quality: 80, path: path.join(outDir, "thumbs", `${material.id}.jpg`) });
+    // A page clip, not element.screenshot(): the element variant waits for
+    // the box to hold still across two animation frames, and a SwiftShader
+    // render loop stretches those frames past the 30s cap on a GPU-less CI runner.
+    const box = await element.boundingBox();
+    if (!box) throw new Error("viewer element has no layout box");
+    await page.screenshot({ type: "jpeg", quality: 80, clip: box, timeout: SCREENSHOT_TIMEOUT_MS, path: path.join(outDir, "thumbs", `${material.id}.jpg`) });
   } finally {
     await page.close().catch(() => {});
   }

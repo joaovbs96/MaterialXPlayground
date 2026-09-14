@@ -300,7 +300,7 @@
                 viewEpoch, setViewEpoch,
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
                 takeScreenshot: takeScreenshotRaw,
-            } = useViewportControls(controlsViewRef, viewportRef, () => nodeName + '_' + geom);
+            } = useViewportControls(controlsViewRef, viewportRef, () => snapshotBaseName(nodeName, geom));
             // Keeps the source canvas's OrbitControls locked to the
             // target's framing whenever either view (re)builds.
             useCameraSync(() => [viewRef.current, sourceViewRef.current], viewEpoch);

@@ -200,6 +200,55 @@
             return null;
         };
 
+        // Picks the table matching a nodedef-index VERSION entry (its
+        // inputTypes/outputTypes port-name maps); disambiguates tables
+        // whose group type is the same generic label, e.g. "multioutput".
+        const pickTableForVersion = (tables, version) => {
+            if (!version || !tables || !tables.length) return null;
+            const outKeys = Object.keys(version.outputTypes || {});
+            const inTypes = version.inputTypes || {};
+            let best = null;
+            let bestScore = 0;
+            for (const table of tables) {
+                const ports = table.ports || {};
+                const names = Object.keys(ports);
+                let score = 0;
+                let outHits = 0;
+                names.filter(n => isOutputPort(n, ports[n])).forEach((n) => {
+                    if (outKeys.includes(n)) { score += 2; outHits += 1; }
+                });
+                Object.keys(inTypes).forEach((n) => {
+                    if (!Object.prototype.hasOwnProperty.call(ports, n)) return;
+                    const resolved = (resolveType(ports, n) || '').trim().toLowerCase();
+                    const want = String(inTypes[n] || '').trim().toLowerCase();
+                    if (expandSigToken(resolved).includes(want)) score += 1;
+                });
+                if (outHits > 0 && score > bestScore) { bestScore = score; best = table; }
+            }
+            return best;
+        };
+
+        // Fallback for callers with no nodedef-index version (the VS Code
+        // hover): scores tables by how many authored `inputs` ({name, type})
+        // match a table's port name and resolved, expanded type.
+        const pickTableForInputs = (tables, inputs) => {
+            if (!inputs || !inputs.length || !tables || !tables.length) return null;
+            let best = null;
+            let bestScore = 0;
+            for (const table of tables) {
+                const ports = table.ports || {};
+                let score = 0;
+                inputs.forEach(({ name, type }) => {
+                    if (!name || !Object.prototype.hasOwnProperty.call(ports, name)) return;
+                    const resolved = (resolveType(ports, name) || '').trim().toLowerCase();
+                    const want = String(type || '').trim().toLowerCase();
+                    if (expandSigToken(resolved).includes(want)) score += 1;
+                });
+                if (score > bestScore) { bestScore = score; best = table; }
+            }
+            return bestScore >= 1 ? best : null;
+        };
+
         // `defaultsOverride`: optional {portName: value} map from the
         // Version picker; overrides just the "default" cell with the
         // selected version's live value, leaving spec prose untouched.
@@ -322,6 +371,7 @@
         // internal-only helpers (signature/column-layout math) stay local.
         Object.assign(window, {
             getPortTables, isUndocumented,
-            unionColumns, signaturePreviewType, pickTableForType, PortTable,
+            unionColumns, signaturePreviewType, pickTableForType,
+            pickTableForVersion, pickTableForInputs, PortTable,
             NodeDefPortsTable, AutoDocNotice,
         });

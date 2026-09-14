@@ -114,31 +114,59 @@ const getMxEnv = (version) => {
                 const gen = mx.EsslShaderGenerator.create();
                 const genContext = new mx.GenContext(gen);
                 const stdlib = mx.loadStandardLibraries(genContext);
-                // TONE MAPPING: deliberately diverges from the official
-                // viewer (raw linear output here; ACES + sRGB applied by
-                // encodeDisplay() below, gated at runtime so linear
-                // depth-peel passes can defer it, see its header).
-                try { genContext.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
-                // Textures are uploaded flipY=false (V0 = image top row),
-                // so generated shaders must sample file textures at
-                // (u, 1-v) for MaterialX's lower-left UV origin, without
-                // this, every image renders upside down.
-                try { genContext.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
-                // Keep the tangent-frame handedness emitted by Three rather
-                // than asking MaterialX to reconstruct bitangent with an
-                // unsigned cross product. Mirrored UV islands and mirrored
-                // object transforms otherwise invert tangent-space normal
-                // maps. Older bindings may omit this option; the geometry
-                // path still supplies i_bitangent as an additive fallback.
-                try { genContext.getOptions().hwImplicitBitangents = false; } catch (e) { /* option absent */ }
-                // Shadow occlusion: MaterialX emits mx_shadow_occlusion() from a
-                // variance (moments) map. Safe to enable everywhere because the
-                // default u_shadowMap is white, which reads as fully lit.
-                try { genContext.getOptions().hwShadowMap = true; } catch (e) { /* option absent */ }
 
-                // Direct light, like the official viewer's registerLights():
-                // binds directional_light (id 1) from any <directional_light>
-                // in environment_map.mtlx via DOMParser; no rig means pure IBL.
+                // ldef/rigLights are filled in once the light rig below has
+                // been fetched and parsed; configureGenContext reads them
+                // by closure, so it must be called AFTER that happens.
+                let ldef = null;
+                const rigLights = [];
+                // Every GenContext option + light binding this build needs,
+                // centralized so a FRESH context (createGenContext below)
+                // gets the exact same setup as this shared one.
+                const configureGenContext = (ctx) => {
+                    // TONE MAPPING: deliberately diverges from the official
+                    // viewer (raw linear output here; ACES + sRGB applied by
+                    // encodeDisplay() below, gated at runtime so linear
+                    // depth-peel passes can defer it, see its header).
+                    try { ctx.getOptions().hwSrgbEncodeOutput = false; } catch (e) { /* option absent */ }
+                    // Textures are uploaded flipY=false (V0 = image top row),
+                    // so generated shaders must sample file textures at
+                    // (u, 1-v) for MaterialX's lower-left UV origin, without
+                    // this, every image renders upside down.
+                    try { ctx.getOptions().fileTextureVerticalFlip = true; } catch (e) { /* option absent */ }
+                    // Keep the tangent-frame handedness emitted by Three rather
+                    // than reconstructing the bitangent with an unsigned cross
+                    // product, which inverts mirrored tangent-space normal maps.
+                    try { ctx.getOptions().hwImplicitBitangents = false; } catch (e) { /* option absent */ }
+                    // Shadow occlusion from a variance map; safe everywhere since
+                    // the default u_shadowMap is white and reads as fully lit.
+                    try { ctx.getOptions().hwShadowMap = true; } catch (e) { /* option absent */ }
+                    // Direct light, like the official viewer's registerLights():
+                    // binds directional_light (id 1) from any <directional_light>
+                    // in environment_map.mtlx via DOMParser; no rig means pure IBL.
+                    try {
+                        const HwGen = mx.HwShaderGenerator;
+                        if (HwGen && HwGen.bindLightShader && ldef) {
+                            try { HwGen.unbindLightShaders(ctx); } catch (e) { /* fresh ctx */ }
+                            HwGen.bindLightShader(ldef, 1, ctx);
+                            // Point and spot as well, so USD stage lights have a
+                            // target: the id IS LightData.type in the generated
+                            // sampleLightSource() switch. Each bind is guarded alone.
+                            for (const [name, id] of [['ND_point_light', LIGHT_TYPE_POINT], ['ND_spot_light', LIGHT_TYPE_SPOT]]) {
+                                try {
+                                    const def = stdlib.getNodeDef ? stdlib.getNodeDef(name) : null;
+                                    if (def) HwGen.bindLightShader(def, id, ctx);
+                                } catch (e) { console.warn('light shader ' + name + ' unavailable:', e); }
+                            }
+                            // Capacity covers the rig, the reserved env key-light
+                            // slot and STAGE_LIGHT_SLOTS for imported USD lights;
+                            // a bound array's length can never change afterwards.
+                            const opts = ctx.getOptions();
+                            opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1 + STAGE_LIGHT_SLOTS);
+                        }
+                    } catch (e) { console.warn('direct-light registration unavailable:', e); }
+                };
+
                 return fetch('./environment_map.mtlx')
                     .then((r) => (r.ok ? r.text() : null))
                     .catch(() => null)
@@ -146,25 +174,11 @@ const getMxEnv = (version) => {
                         const lightData = [];
                         try {
                             const HwGen = mx.HwShaderGenerator;
-                            const ldef = stdlib.getNodeDef ? stdlib.getNodeDef('ND_directional_light') : null;
+                            ldef = stdlib.getNodeDef ? stdlib.getNodeDef('ND_directional_light') : null;
                             if (HwGen && HwGen.bindLightShader && ldef) {
-                                try { HwGen.unbindLightShaders(genContext); } catch (e) { /* fresh ctx */ }
-                                HwGen.bindLightShader(ldef, 1, genContext);
-                                // Point and spot as well, so USD stage lights
-                                // have a target: the id IS LightData.type in
-                                // the generated sampleLightSource() switch.
-                                // Each bind is guarded on its own, a missing
-                                // nodedef just leaves that type unavailable.
-                                for (const [name, id] of [['ND_point_light', LIGHT_TYPE_POINT], ['ND_spot_light', LIGHT_TYPE_SPOT]]) {
-                                    try {
-                                        const def = stdlib.getNodeDef ? stdlib.getNodeDef(name) : null;
-                                        if (def) HwGen.bindLightShader(def, id, genContext);
-                                    } catch (e) { console.warn('light shader ' + name + ' unavailable:', e); }
-                                }
                                 // Parses <directional_light> via DOMParser,
                                 // which handles self-closing tags unlike
                                 // regex. Parse failure warns, never throws.
-                                const rigLights = [];
                                 if (rigXml) {
                                     try {
                                         const rigDoc = new DOMParser().parseFromString(rigXml, 'text/xml');
@@ -203,16 +217,6 @@ const getMxEnv = (version) => {
                                         console.warn('direct-light rig: DOMParser failed on environment_map.mtlx, no rig lights loaded.', e);
                                     }
                                 }
-                                // Capacity must cover the rig, the reserved
-                                // env key-light slot and STAGE_LIGHT_SLOTS for
-                                // imported USD lights. It becomes a #define in
-                                // the generated GLSL, so it is fixed for good:
-                                // a bound array's length can never change.
-                                try {
-                                    const opts = genContext.getOptions();
-                                    const want = rigLights.length + 1 + STAGE_LIGHT_SLOTS;
-                                    opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, want);
-                                } catch (e) { /* keep default */ }
                                 // No fallback light: an empty rig leaves
                                 // lightData empty, so u_numActiveLightSources
                                 // is 0 and the light loop is a no-op (pure IBL).
@@ -234,7 +238,23 @@ const getMxEnv = (version) => {
                             console.warn('direct-light registration unavailable:', e);
                             lightData.length = 0;
                         }
-                        return { mx, gen, genContext, stdlib, lightData, version: ver };
+                        // Unconditional: options apply even with no light rig.
+                        configureGenContext(genContext);
+                        return {
+                            mx, gen, genContext, stdlib, lightData, version: ver,
+                            // Compound implementations are cached by NAME
+                            // per context, so a document with its own
+                            // nodedefs needs a FRESH one to avoid stale gen.
+                            createGenContext: () => {
+                                const c = new mx.GenContext(gen);
+                                // loadStandardLibraries is the only bound way to register the
+                                // source-code search path on a context (about 70 ms); the
+                                // document it returns is discarded, callers carry the stdlib.
+                                mx.loadStandardLibraries(c);
+                                configureGenContext(c);
+                                return c;
+                            },
+                        };
                     });
             })
             .catch((e) => {
@@ -2589,10 +2609,14 @@ const applyColorspaceTransforms = (doc, maxDepth) => {
 };
 
 // Doc-level renderable scan: returns [{ name, node }], one entry per
-// renderable surface. Scans by TYPE rather than getMaterialNodes(),
-// which isn't bound in every JS build. Live-doc callers need mxExclusive.
-const listDocRenderables = (doc) => {
+// renderable surface, by TYPE rather than getMaterialNodes(). Live-doc
+// callers need mxExclusive; opts.synthesizeDefinitions adds a third pass.
+const listDocRenderables = (doc, opts) => {
     mxWarnIfLocked('listDocRenderables'); // exported doc-reading helper, see mxWarnIfLocked's header comment
+    // The third pass ADDS nodedef/nodegraph/node copies to `doc`, so only
+    // throwaway documents (the viewer's) may opt in; the editor's live
+    // document must never be scanned with it.
+    const synthesizeDefinitions = !!(opts && opts.synthesizeDefinitions);
     const renderables = [];
     const seen = new Set();
     // Defensive skip of transient __pv_* wrapper nodes: the graph
@@ -2638,6 +2662,72 @@ const listDocRenderables = (doc) => {
         for (const n of allNodes) {
             if (typeOf(n) === 'surfaceshader') pushShader(nameOf(n), n);
         }
+    }
+    if (!renderables.length && synthesizeDefinitions) {
+        // Third pass: no instance renders at all, so surface every
+        // surfaceshader nodedef/nodegraph DEFINITION the document
+        // declares, so at least the definition itself can be previewed.
+        try {
+            const children = vecToArray(doc.getChildren());
+            const nodedefChildren = children.filter((c) => mxElCat(c) === 'nodedef');
+            const nodegraphChildren = children.filter((c) => mxElCat(c) === 'nodegraph');
+            const localDefNames = new Set(nodedefChildren.map((d) => mxElName(d)));
+            // Single-output nodedefs expose their type via getOutputs();
+            // a def with no <output> children falls back to its own
+            // type attribute (mxElType covers both wrapper shapes).
+            const isSurfaceShaderDef = (def) => {
+                const outs = vecToArray(mxSafe(() => (def.getOutputs ? def.getOutputs() : null), null));
+                if (outs.length) return outs.some((o) => mxElType(o) === 'surfaceshader');
+                return mxElType(def) === 'surfaceshader';
+            };
+            const entries = []; // { nodedefName, def, graphs }
+            const seenDefNames = new Set();
+            // (i) local nodedef children whose output is surfaceshader.
+            for (const def of nodedefChildren) {
+                const nodedefName = mxElName(def);
+                if (!nodedefName || seenDefNames.has(nodedefName) || !isSurfaceShaderDef(def)) continue;
+                seenDefNames.add(nodedefName);
+                const graphs = nodegraphChildren.filter((g) => mxSafe(() => g.getNodeDefString(), '') === nodedefName);
+                entries.push({ nodedefName, def, graphs });
+            }
+            // (ii) local nodegraphs implementing a LIBRARY-owned (not
+            // document-local) surfaceshader nodedef.
+            for (const g of nodegraphChildren) {
+                const nodedefName = mxElAttr(g, 'nodedef');
+                if (!nodedefName || localDefNames.has(nodedefName) || seenDefNames.has(nodedefName)) continue;
+                const def = mxSafe(() => g.getNodeDef(), null);
+                if (!def || !isSurfaceShaderDef(def)) continue;
+                seenDefNames.add(nodedefName);
+                const graphs = nodegraphChildren.filter((gg) => mxSafe(() => gg.getNodeDefString(), '') === nodedefName);
+                entries.push({ nodedefName, def, graphs });
+            }
+            // Materialize each entry as unique document-local copies, so
+            // shader gen compiles THIS document's nodedef/graph instead
+            // of a same-named library one (see the GenContext caching
+            // note above listDocRenderables' caller in viewer-app.jsx).
+            for (const entry of entries) {
+                const nodeString = mxSafe(() => entry.def.getNodeString(), '');
+                if (!nodeString) continue;
+                const defCopyName = mxSafe(() => doc.createValidChildName(entry.nodedefName + '_preview'), null);
+                const copyDef = defCopyName && mxSafe(() => doc.addNodeDef(defCopyName, 'surfaceshader', nodeString), null);
+                if (!copyDef) continue;
+                mxSafe(() => { copyDef.copyContentFrom(entry.def); return true; }, false);
+                mxSafe(() => { copyDef.setName(defCopyName); return true; }, false);
+                for (const g of entry.graphs) {
+                    const graphCopyName = mxSafe(() => doc.createValidChildName(mxElName(g) + '_preview'), null);
+                    const copyGraph = graphCopyName && mxSafe(() => doc.addNodeGraph(graphCopyName), null);
+                    if (!copyGraph) continue;
+                    mxSafe(() => { copyGraph.copyContentFrom(g); return true; }, false);
+                    mxSafe(() => { copyGraph.setName(graphCopyName); return true; }, false);
+                    mxSafe(() => { copyGraph.setNodeDefString(defCopyName); return true; }, false);
+                }
+                const instName = mxSafe(() => doc.createValidChildName(nodeString + '_definition'), null);
+                const inst = instName && mxSafe(() => doc.addNode(nodeString, instName, 'surfaceshader'), null);
+                if (!inst) continue;
+                mxSafe(() => { inst.setNodeDefString(defCopyName); return true; }, false);
+                renderables.push({ name: nodeString + ' (definition)', node: inst, definition: true });
+            }
+        } catch (e) { /* third pass is best-effort */ }
     }
     return renderables;
 };

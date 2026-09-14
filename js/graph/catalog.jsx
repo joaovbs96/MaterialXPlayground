@@ -115,4 +115,71 @@
             return nodeCatalogPromise;
         };
 
-Object.assign(window, { buildNodeCatalog, nodeDefInfo, groupSignatures });
+        // Document-local definitions for the Tab palette: same grouping
+        // and signature shape as buildNodeCatalog, but scanned from
+        // parsed.definitions' local entries instead of the stdlib.
+        const buildDocCatalog = (parsed) => {
+            if (!parsed || !parsed.definitions || !parsed.definitions.length) return [];
+            const byCat = {};
+            for (const entry of parsed.definitions) {
+                if (!entry.local || !entry.nodedef) continue;
+                const def = docChild(parsed.doc, entry.nodedef);
+                if (!def) continue;
+                const category = mxSafe(() => def.getNodeString(), '') || entry.node;
+                if (!category) continue;
+                if (!byCat[category]) {
+                    byCat[category] = {
+                        category,
+                        group: mxSafe(() => def.getNodeGroup(), '') || 'document',
+                        defs: [nodeDefInfo(def)],
+                        local: true,
+                    };
+                } else {
+                    byCat[category].defs.push(nodeDefInfo(def));
+                }
+            }
+            return Object.keys(byCat).sort().map((k) => {
+                const e = byCat[k];
+                e.signatures = groupSignatures(e.defs);
+                return e;
+            });
+        };
+
+        // ---- Search ranking shared by the Tab palette and other lists ----
+
+        // Case-insensitive rank of q within text: 0 exact, 1 prefix,
+        // 2 substring, 3 no match at all.
+        const searchRank = (text, q) => {
+            const t = (text || '').toLowerCase();
+            const s = (q || '').toLowerCase();
+            if (!s) return 0;
+            if (t === s) return 0;
+            if (t.indexOf(s) === 0) return 1;
+            if (t.indexOf(s) !== -1) return 2;
+            return 3;
+        };
+
+        // Filters+sorts items by rank over keysOf(item) (an array of
+        // strings). The FIRST key drives the real rank (0/1/2); a match
+        // on any later key only, with no match on the first, is kept but
+        // demoted to rank 3 ("matched a secondary key"). No match on any
+        // key drops the item. Empty q returns items unchanged.
+        const searchFilter = (items, q, keysOf) => {
+            const s = (q || '').trim().toLowerCase();
+            if (!s) return items;
+            const scored = [];
+            items.forEach((item) => {
+                const keys = keysOf(item);
+                let rank = searchRank(keys[0], s);
+                if (rank >= 3) {
+                    const secondary = keys.slice(1).some((k) => searchRank(k, s) < 3);
+                    if (!secondary) return;
+                    rank = 3;
+                }
+                scored.push({ item, rank, key0: keys[0] || '' });
+            });
+            scored.sort((a, b) => a.rank - b.rank || a.key0.localeCompare(b.key0));
+            return scored.map((x) => x.item);
+        };
+
+Object.assign(window, { buildNodeCatalog, nodeDefInfo, groupSignatures, buildDocCatalog, searchRank, searchFilter });

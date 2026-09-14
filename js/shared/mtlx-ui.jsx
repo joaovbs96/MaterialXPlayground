@@ -27,6 +27,18 @@ const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded
 const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-gray-600/50 bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors whitespace-nowrap';
 const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-blue-500 bg-blue-600/80 backdrop-blur text-white transition-colors whitespace-nowrap';
 
+// Collapsible parameter-group header (graph editor sidebar + definition
+// panel). Negative margins matching the panel's own px-2.5 pull the
+// border edge-to-edge instead of sitting inset.
+const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
+    + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
+    + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
+
+// Small square icon buttons for list rows (reorder controls, etc).
+const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-gray-600 bg-gray-800/80 text-gray-400 hover:bg-gray-700/80 hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-gray-800/80 disabled:hover:text-gray-400';
+const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-blue-600/80 disabled:hover:text-gray-100';
+const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-red-400 hover:border-red-800/60';
+
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
 const errMsg = (e) => String((e && e.message) || e);
@@ -989,6 +1001,22 @@ const downloadSnapshot = (view, baseName) => {
     a.download = baseName.replace(/[^\w.-]+/g, '_') + '.png';
     a.href = url;
     a.click();
+};
+
+// Snapshot base name for any preview: `<name>_<geom>`, except when geom is
+// the imported custom model, where the loaded model's own name is used
+// instead of the literal 'custom'. Never throws.
+const snapshotBaseName = (name, geom) => {
+    try {
+        let label = geom;
+        if (geom === 'custom') {
+            const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
+            label = String((c && c.name) || 'custom').replace(/\.[A-Za-z0-9]+$/, '') || 'custom';
+        }
+        return (name || 'material') + '_' + label;
+    } catch (e) {
+        return (name || 'material') + '_' + geom;
+    }
 };
 
 // Download a Blob as a file: object URL -> synthetic anchor click ->
@@ -2970,7 +2998,7 @@ const MtlxSelect = ({
                                 style={{ backgroundColor: o.dot }}
                             />
                         )}
-                        <span className="flex-1 truncate">{o.label}</span>
+                        <span className="flex-1 min-w-0 truncate">{o.label}</span>
                         {o.badge && (
                             <span
                                 style={o.badge.tone === 'warn' ? { color: MXS_BADGE_WARN } : undefined}
@@ -3429,7 +3457,7 @@ Object.assign(window, {
     GEOM_LABELS, GEOM_ICONS, defaultGeomFor, geomTileLabel,
     errMsg,
     useEscapeToClose, useNarrowPane, useFullscreen, useViewToggle, useViewEnum,
-    downloadSnapshot, downloadBlob, downloadXml, attributeExportedXml,
+    downloadSnapshot, snapshotBaseName, downloadBlob, downloadXml, attributeExportedXml,
     useViewportControls,
     openInGraphEditor, openInViewer, looseFilesFrom,
     useWindowFileDrop, LoadingOverlay, ViewportControls,
@@ -3437,6 +3465,8 @@ Object.assign(window, {
     fullscreenPortalRoot,
     BTN_MENUBAR,
     HUD_PILL, HUD_PILL_ACTIVE,
+    GROUP_HEADER_CLASS,
+    ICON_BTN_SM, ICON_BTN_SM_PRIMARY, ICON_BTN_SM_DANGER,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
     RecordGifDialog,
     presetDocUrl, presetKey,

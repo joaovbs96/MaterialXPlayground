@@ -74,13 +74,13 @@ const DEFAULT_MATERIAL_URL = window.MtlxAssets.repoUrl('resources/Materials/Exam
 // and list its renderable materials/shaders. `version`, when given,
 // selects which MaterialX build getMxEnv() resolves.
 const loadMtlxDocument = async (xmlText, path, version) => {
+  const env = await getMxEnv(version);
   const {
     mx,
     gen,
-    genContext,
     stdlib,
     lightData
-  } = await getMxEnv(version);
+  } = env;
   const doc = mx.createDocument();
   if (typeof mx.readFromXmlString !== 'function') {
     throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
@@ -98,7 +98,14 @@ const loadMtlxDocument = async (xmlText, path, version) => {
   // Renderables: material nodes' surfaceshader inputs first, then
   // bare surfaceshader nodes as a fallback (see listDocRenderables
   // in js/mtlx-engine.js for the caveat this works around).
-  const renderables = listDocRenderables(doc);
+  const renderables = listDocRenderables(doc, {
+    synthesizeDefinitions: true
+  });
+  // A definition-only renderable (see listDocRenderables' third
+  // pass) instantiates from a document-local copy, so shader gen
+  // needs a FRESH context, the shared one caches compound
+  // implementations by graph name and would serve stale gen.
+  const genContext = renderables.some(r => r.definition) && typeof env.createGenContext === 'function' ? env.createGenContext() : env.genContext;
   // `path`/`version` ride along so the render effect can stamp what
   // actually got rendered (renderedMtlx/renderedVersion) once a
   // view builds.
@@ -110,7 +117,8 @@ const loadMtlxDocument = async (xmlText, path, version) => {
     doc,
     renderables,
     path,
-    version: version || window.MtlxAssets.MTLX_DEFAULT_VERSION
+    version: version || window.MtlxAssets.MTLX_DEFAULT_VERSION,
+    sourceXml: xmlText
   };
 };
 
@@ -466,7 +474,7 @@ function MaterialViewerApp({
   // before; read fresh by the hook on every screenshot.
   const getSnapshotBase = () => {
     const matName = renderables[chosenMat] && renderables[chosenMat].name || 'material';
-    return matName + '_' + geom;
+    return snapshotBaseName(matName, geom);
   };
   const {
     rotating,
@@ -541,15 +549,22 @@ function MaterialViewerApp({
     const loaded = loadedRef.current;
     if (!loaded || !loaded.doc) return;
     let xml;
-    try {
-      // Belt-and-suspenders: strip any input carrying both a
-      // value and a connection before handing off — self-heals
-      // documents loaded before this fix existed.
-      mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
-      xml = loaded.mx.writeToXmlString(loaded.doc);
-    } catch (e) {
-      console.warn('Send to Editor: failed to serialize the document', e);
-      return;
+    // A definition-only render (see listDocRenderables' third
+    // pass) mutated `loaded.doc` with synthesized preview
+    // copies, so hand the editor the as-loaded source instead.
+    if (loaded.renderables.some(r => r.definition)) {
+      xml = loaded.sourceXml;
+    } else {
+      try {
+        // Belt-and-suspenders: strip any input carrying both a
+        // value and a connection before handing off. Self-heals
+        // documents loaded before this fix existed.
+        mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
+        xml = loaded.mx.writeToXmlString(loaded.doc);
+      } catch (e) {
+        console.warn('Send to Editor: failed to serialize the document', e);
+        return;
+      }
     }
     const files = looseFilesFrom(fileMapRef.current || {});
     // Filename must match what's actually rendered
@@ -965,7 +980,7 @@ function MaterialViewerApp({
         // Same reasoning as the catch below: this document
         // parsed but has nothing to render, so the previous
         // one (still valid) stays on screen instead of blanking.
-        reportError('The document parsed, but contains no renderable material (no surfacematerial or surfaceshader node).');
+        reportError('The document parsed, but contains no renderable material (no surfacematerial, surfaceshader node, or surface shader node definition).');
         return;
       }
       loadedRef.current = loaded;
