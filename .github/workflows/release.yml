@@ -63,15 +63,15 @@ concurrency:
 
 jobs:
   # Renders the gallery data once per release and hands it to the package
-  # and desktop jobs as an artifact. deploy.yml publishes the same tiles
-  # to Pages on the same release event, so pulling them from the live site
-  # here raced that deploy and shipped the gallery placeholder.
+  # and desktop jobs as an artifact. On a release it first waits for
+  # deploy.yml to publish the same tiles, so the reuse below finds them all.
   gallery:
     if: github.event_name == 'release' || inputs.run_gallery
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,6 +92,41 @@ jobs:
 
       - name: Install the capture browser
         run: npx playwright install --with-deps chromium
+
+      # Both workflows start on the same release event. Reading the live
+      # site before the deploy lands returns 404 or stale tiles and forces
+      # a full render here. Any failure below just falls back to rendering.
+      - name: Wait for the Pages deploy of this release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          deadline=$((SECONDS + 5400))
+          run_id=""
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ -z "$run_id" ]; then
+              run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?event=release&head_sha=$GITHUB_SHA&per_page=5" --jq '.workflow_runs[0].id // empty')
+              if [ -z "$run_id" ]; then echo "deploy run not listed yet"; sleep 30; continue; fi
+              echo "waiting for deploy run $run_id"
+            fi
+            read -r status conclusion < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '"\(.status) \(.conclusion // "")"')
+            if [ "$status" = "completed" ]; then
+              echo "deploy run $run_id finished: $conclusion"
+              if [ "$conclusion" != "success" ]; then
+                echo "::warning::Pages deploy did not succeed; rendering the gallery here instead."
+                exit 0
+              fi
+              for _ in $(seq 1 20); do
+                if curl -sfo /dev/null "$SITE/gallery/manifest.json"; then echo "live manifest reachable"; exit 0; fi
+                sleep 15
+              done
+              echo "::warning::live manifest unreachable after the deploy; rendering the gallery here instead."
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "::warning::gave up waiting for the Pages deploy; rendering the gallery here instead."
 
       # Reuses every tile the live site already has for an unchanged
       # material and renders the rest (about 13s each on a GPU-less runner).
