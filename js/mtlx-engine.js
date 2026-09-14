@@ -3334,7 +3334,7 @@ const boundDecodedTexture = async (tex, maxSize) => {
 // Cache hits assign synchronously; misses load async (TextureLoader, or
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
 const bindDroppedTextures = (view, fileMap, onBound) => {
-    const bound = [], missing = [];
+    const bound = [], missing = [], udimFirstTile = [];
     const pending = [];
     const cache = view.textureCache || TEXTURE_CACHE;
     const isAlive = () => typeof view.isAlive !== 'function' || view.isAlive();
@@ -3348,6 +3348,12 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         } catch (e) { ref = ''; }
         if (!ref) continue; // no file reference recorded
         let hit = findFileForRef(fileMap, ref);
+        // A UDIM set has no single file; the shaderball's UVs live in the
+        // first tile, so bind the lowest-numbered tile instead of nothing.
+        if (!hit && /<UDIM>/i.test(ref)) {
+            const tiles = findFilesForRef(fileMap, ref).sort((a, b) => a.ref.localeCompare(b.ref));
+            if (tiles.length) { hit = { key: tiles[0].key, how: 'udim-first-tile' }; udimFirstTile.push(ref); }
+        }
         if (!hit) { missing.push(ref); continue; }
         const originalHit = hit;
         hit = preferKtx2Sibling(fileMap, hit);
@@ -3433,7 +3439,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         bound.push(ref + '  →  ' + hit.key);
     }
     if (ktx2Substituted > 0) console.info('bindDroppedTextures: ' + ktx2Substituted + ' texture(s) loaded from .ktx2 sibling(s)');
-    return { bound, missing, pending, ktx2Substituted };
+    if (udimFirstTile.length) console.info('bindDroppedTextures: ' + udimFirstTile.length + ' UDIM reference(s) bound to their first tile for the preview');
+    return { bound, missing, pending, ktx2Substituted, udimFirstTile };
 };
 
 // Extracts a plain JS array from a real array or an embind vector-like
