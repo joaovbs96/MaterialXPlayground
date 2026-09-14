@@ -2716,8 +2716,10 @@ onRenameCommit: (id, nm) => inlineRenameCommitRef.current(id, nm),
                 const note = (ref) => {
                     if (!ref || seenRefs.has(ref)) return;
                     seenRefs.add(ref);
-                    const hit = findFileForRef(fileMapRef.current, ref);
-                    if (hit) resolved.push({ ref, key: hit.key });
+                    // UDIM references expand to one entry per tile so the zip
+                    // carries every tile under its concrete path.
+                    const hits = findFilesForRef(fileMapRef.current, ref);
+                    if (hits.length) hits.forEach((hit) => resolved.push({ ref: hit.ref, key: hit.key }));
                     else unresolved.push(ref);
                 };
                 const scanNode = (n, prefix, pinByName) => {

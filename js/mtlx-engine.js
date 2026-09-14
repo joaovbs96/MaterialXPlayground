@@ -2741,6 +2741,33 @@ const findFileForRef = (fileMap, ref) => {
     return null;
 };
 
+// A <UDIM> reference names a tile set: every key whose path matches the
+// reference with the token replaced by four digits, each hit carrying the
+// concrete tile ref. Plain references yield the single findFileForRef hit.
+const findFilesForRef = (fileMap, ref) => {
+    const raw = String(ref || '');
+    if (!/<UDIM>/i.test(raw)) {
+        const hit = findFileForRef(fileMap, raw);
+        return hit ? [{ key: hit.key, how: hit.how, ref: raw }] : [];
+    }
+    const want = normPath(raw);
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/<udim>/g, '(\\d{4})');
+    const tries = [
+        { how: 'exact', re: new RegExp('^' + escaped + '$') },
+        { how: 'suffix', re: new RegExp('(^|/)' + escaped + '$') },
+        { how: 'basename', re: new RegExp('(^|/)' + escaped.split('/').pop() + '$') },
+    ];
+    for (const { how, re } of tries) {
+        const hits = [];
+        for (const key of Object.keys(fileMap)) {
+            const m = re.exec(normPath(key));
+            if (m) hits.push({ key, how, ref: raw.replace(/<UDIM>/gi, m[m.length - 1]) });
+        }
+        if (hits.length) return hits;
+    }
+    return [];
+};
+
 // Given a resolved file-map hit, prefer a sibling "<stem>.ktx2" in the same
 // directory when one exists (per-UDIM tile too, since the tile code lives in
 // the stem: "wall.1001.png" -> "wall.1001.ktx2"), and never touch the
@@ -9935,7 +9962,7 @@ Object.assign(window, {
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
-    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, preferKtx2Sibling, resolveIncludes, readMtlxText,
+    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     loadBoundedBitmapTexture,
