@@ -6035,7 +6035,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
     const skipTransmittance = !!(sceneFeatureOptions && sceneFeatureOptions.skipTransmittance);
     const skipRefraction = !!(sceneFeatureOptions && sceneFeatureOptions.skipRefraction);
-    const skipSsr = !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
+    // Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
+    const skipSsr = true || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -6238,7 +6239,8 @@ const DEFAULT_SAMPLER_BUDGET = 16;
 // is a sceneFeatureOptions flag of generatePreviewSourcesUnlocked. Append
 // future samplers here.
 const SAMPLER_BUDGET_DROP_ORDER = [
-    { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
+    // Parked with screen-space reflections (always skipped for now).
+    // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
     { key: 'skipAoVolume', label: 'occlusion volume (u_aoVolumeMap)' },
     { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)' },
     { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)' },

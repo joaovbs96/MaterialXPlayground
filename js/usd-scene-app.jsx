@@ -544,7 +544,9 @@
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
-        const [ssrOn, setSsrOn] = React.useState(true);
+        // Screen-space reflections are parked: rows hidden, state and handlers kept.
+        const SSR_ROWS_HIDDEN = true;
+        const [ssrOn, setSsrOn] = React.useState(false);
         const [ssrStrength, setSsrStrength] = React.useState(1);
         const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
         const [skyVisOn, setSkyVisOn] = React.useState(true);
@@ -1299,6 +1301,7 @@
                             onSlider={applyAoStrength} onNumber={applyAoStrength} />
                     </SliderRow>
                 ) : null}
+                {SSR_ROWS_HIDDEN ? null : (<React.Fragment>
                 <ToggleRow label="Screen-space reflections" experimental checked={ssrOn}
                     title={ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace'}
                     onChange={(next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); writeStoredSceneBool('mtlx_scene_ssr', next); }}
@@ -1315,6 +1318,7 @@
                         </SliderRow>
                     </React.Fragment>
                 ) : null}
+                </React.Fragment>)}
                 <ToggleRow label="Transparency" experimental checked={sceneTransparency}
                     title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
                     onChange={(next) => { setSceneTransparencyState(next); window.setUsdSceneTransparency && window.setUsdSceneTransparency(next); }}

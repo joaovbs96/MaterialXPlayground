@@ -98,12 +98,14 @@ const storedSceneAoStrength = () => {
 };
 
 // Screen-space reflections: a history-reprojected trace for opaque
-// surfaces, image based (IBL) as the fallback. Default on.
+// surfaces, image based (IBL) as the fallback. Parked while its artefacts
+// are investigated: forced off, setters kept; flip SCENE_SSR_PARKED to restore.
+const SCENE_SSR_PARKED = true;
 const SCENE_SSR_KEY = 'mtlx_scene_ssr';
 const SCENE_SSR_STRENGTH_KEY = 'mtlx_scene_ssr_strength';
 const SCENE_SSR_MAX_ROUGHNESS_KEY = 'mtlx_scene_ssr_max_roughness';
 const storedSceneSsr = () => {
-    if (window.top !== window) return false;
+    if (SCENE_SSR_PARKED || window.top !== window) return false;
     try { return localStorage.getItem(SCENE_SSR_KEY) !== '0'; } catch (e) { return true; }
 };
 const storedSceneSsrStrength = () => {
@@ -5455,7 +5457,7 @@ const createMtlxSceneView = async ({
             },
         });
         const setScreenSpaceReflections = (on) => {
-            ssrEnabled = !!on;
+            ssrEnabled = !SCENE_SSR_PARKED && !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_SSR_KEY, ssrEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
             if (!ssrEnabled) { applySsrHistory(); disposeSsrHistoryResources(); }
             return ssrEnabled;
