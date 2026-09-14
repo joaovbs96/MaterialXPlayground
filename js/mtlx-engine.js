@@ -1088,6 +1088,16 @@ const readMtlxText = async (entry, path, map) => {
     return { raw, resolved };
 };
 
+// Parses MaterialX XML keeping comments as elements in document order, so a
+// write puts them back where they were; builds without XmlReadOptions fall back.
+const readMtlxXml = async (mx, doc, xml) => {
+    let opts = null;
+    try {
+        if (typeof mx.XmlReadOptions === 'function') { opts = new mx.XmlReadOptions(); opts.readComments = true; }
+    } catch (e) { opts = null; }
+    return opts ? mx.readFromXmlString(doc, xml, '', opts) : mx.readFromXmlString(doc, xml);
+};
+
 // Session-lifetime texture cache, keyed by file identity, re-binding the
 // same dropped file after a view rebuild reuses the decoded THREE.Texture
 // instead of a fresh async load, which let the default color flash.
@@ -6064,7 +6074,7 @@ Object.assign(window, {
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
-    normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText,
+    normPath, readDroppedItems, expandZips, findFileForRef, resolveIncludes, readMtlxText, readMtlxXml,
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture,
     collectMxUniforms, mxValueToThreeUniform,

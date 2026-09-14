@@ -81,7 +81,7 @@
             // implementation that fetches XIncludes). Missing the await
             // left the renderable scan below seeing a still-empty document.
             try {
-                await mx.readFromXmlString(doc, xmlText);
+                await readMtlxXml(mx, doc, xmlText);
             } catch (e) {
                 throw new Error('MaterialX could not parse the document: ' + mxErr(mx, e));
             }

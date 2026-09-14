@@ -37,7 +37,7 @@
                 throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
             }
             try {
-                await mx.readFromXmlString(doc, xmlText);
+                await readMtlxXml(mx, doc, xmlText);
             } catch (e) {
                 throw new Error('MaterialX could not parse the document: ' + mxErr(mx, e));
             }
@@ -123,7 +123,7 @@
                 }
                 const doc = mx.createDocument();
                 try {
-                    await mx.readFromXmlString(doc, xml);
+                    await readMtlxXml(mx, doc, xml);
                 } catch (e) {
                     // A parse failure isn't valid either — report it as
                     // the sole issue, same as VS Code's tier-1 XML scan
