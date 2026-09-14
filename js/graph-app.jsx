@@ -331,9 +331,11 @@
 
         // Left sidebar (the node list): same resize/persistence shape as
         // the right one, its own range and storage keys.
-        const LEFT_SIDEBAR_MIN_WIDTH = 220;
+        // The minimum keeps the type filter, the sort dropdown and the
+        // direction button on one row without clipping (see scope-list.jsx).
+        const LEFT_SIDEBAR_MIN_WIDTH = 336;
         const LEFT_SIDEBAR_MAX_WIDTH = 480;
-        const LEFT_SIDEBAR_DEFAULT_WIDTH = 260;
+        const LEFT_SIDEBAR_DEFAULT_WIDTH = 352;
         const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'mtlxGraphLeftSidebarWidth';
         const LEFT_SIDEBAR_OPEN_STORAGE_KEY = 'mtlxGraphLeftSidebarOpen';
         const clampLeftSidebarWidth = (w, editorWidth) => {
