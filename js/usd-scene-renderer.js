@@ -4010,7 +4010,15 @@ const createMtlxSceneView = async ({
             // decide which volume overflows instead of the documented order.
             const capacity = Math.min(THICKNESS_TARGET_MAX_ACTIVE,
                 Math.floor(THICKNESS_TARGET_BUDGET_BYTES / Math.max(1, bytesPerTarget)));
-            const selected = ordered.slice(0, capacity);
+            // Consistency rule: a material with more volumes than fit the
+            // budget uses the reference distance for all of them, so identical
+            // pieces never split into two looks (thin shells measure near zero).
+            const materialKeyOf = (object) => (Array.isArray(object.material) ? object.material : [object.material])
+                .map((m) => (m && m.userData && m.userData.mtlxSceneMaterialPath) || '').join('|');
+            const perMaterial = new Map();
+            ordered.forEach((object) => { const k = materialKeyOf(object); perMaterial.set(k, (perMaterial.get(k) || 0) + 1); });
+            const consistencyFallback = ordered.filter((object) => perMaterial.get(materialKeyOf(object)) > capacity);
+            const selected = ordered.filter((object) => perMaterial.get(materialKeyOf(object)) <= capacity).slice(0, capacity);
             const active = new Set(selected);
             thicknessTargets.forEach((target, object) => {
                 if (!active.has(object) || target.width !== tw || target.height !== th || target.texture.type !== targetType) {
@@ -4019,7 +4027,7 @@ const createMtlxSceneView = async ({
                 }
             });
             const allocated = [];
-            const overflow = ordered.slice(selected.length);
+            const overflow = ordered.filter((object) => !active.has(object));
             for (const object of selected) {
                 let target = thicknessTargets.get(object);
                 if (!target) {
@@ -4040,6 +4048,7 @@ const createMtlxSceneView = async ({
                 targetType: floatOk ? 'FloatType' : 'HalfFloatType', targetFormat: 'RGBA + depth',
                 fallback: 'material-reference-distance',
                 overflowPrims: overflow.slice(0, 32).map((object) => String(object.userData?.primPath || object.name || 'unknown')),
+                consistencyFallbackVolumes: consistencyFallback.length,
                 unsupportedFallbackPrims: [],
                 unsupportedTopologyPrims: topologyUnsupported.slice(0, 32).map(({ object, topology: info }) => ({
                     prim: String(object.userData?.primPath || object.name || 'unknown'), reason: info.reason,
