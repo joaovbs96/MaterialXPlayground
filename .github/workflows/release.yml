@@ -69,7 +69,7 @@ jobs:
   gallery:
     if: github.event_name == 'release' || inputs.run_gallery
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
