@@ -256,6 +256,9 @@
     // Pure: keeps a panel rect fully inside bounds, shrinking it first when
     // it is larger than the container. No side effects, safe for a Node test.
     const clampPanelRect = (rect, bounds) => {
+        // Empty bounds mean the view is hidden (display none); clamping
+        // against them would collapse the rect to nothing, so keep it.
+        if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
         const width = Math.max(0, Math.min(rect.width, bounds.width));
         const height = Math.max(0, Math.min(rect.height, bounds.height));
         const x = Math.max(0, Math.min(rect.x, bounds.width - width));
@@ -266,12 +269,16 @@
 
     const MATERIAL_PREVIEW_RECT_KEY = 'mtlx_scene_material_preview_rect';
     const MATERIAL_PREVIEW_DEFAULT_SIZE = { width: 640, height: 420 };
+    const MATERIAL_PREVIEW_MIN_SIZE = { width: 320, height: 220 };
     const readStoredMaterialPreviewRect = () => {
         try {
             const raw = localStorage.getItem(MATERIAL_PREVIEW_RECT_KEY);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
-            if (parsed && [parsed.x, parsed.y, parsed.width, parsed.height].every(Number.isFinite)) return parsed;
+            // A collapsed rect (persisted from a hidden view) is discarded so
+            // the next open falls back to the default size at the click.
+            if (parsed && [parsed.x, parsed.y, parsed.width, parsed.height].every(Number.isFinite)
+                && parsed.width >= MATERIAL_PREVIEW_MIN_SIZE.width && parsed.height >= MATERIAL_PREVIEW_MIN_SIZE.height) return parsed;
         } catch (e) { /* storage unavailable or corrupt */ }
         return null;
     };
@@ -305,8 +312,12 @@
         // First-ever open with no persisted rect: default 640x420 anchored
         // at the click. A later open keeps whatever rect the user left.
         React.useEffect(() => {
-            if (!open || !anchor || !containerRef.current || rectRef.current) return;
+            if (!open || !containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
+            // A remembered rect is re-clamped on every open so one saved from
+            // a larger window still lands inside the current viewport.
+            if (rectRef.current) { setRect(clampPanelRect(rectRef.current, bounds)); return; }
+            if (!anchor) return;
             const base = {
                 x: anchor.x - MATERIAL_PREVIEW_DEFAULT_SIZE.width / 2,
                 y: anchor.y - MATERIAL_PREVIEW_DEFAULT_SIZE.height / 2,
@@ -376,8 +387,8 @@
             const bounds = containerRef.current.getBoundingClientRect();
             const next = clampPanelRect({
                 x: drag.rect.x, y: drag.rect.y,
-                width: drag.rect.width + (e.clientX - drag.startX),
-                height: drag.rect.height + (e.clientY - drag.startY),
+                width: Math.max(MATERIAL_PREVIEW_MIN_SIZE.width, drag.rect.width + (e.clientX - drag.startX)),
+                height: Math.max(MATERIAL_PREVIEW_MIN_SIZE.height, drag.rect.height + (e.clientY - drag.startY)),
             }, bounds);
             setRect(next);
         };

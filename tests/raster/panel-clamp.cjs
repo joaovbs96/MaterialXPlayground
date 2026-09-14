@@ -44,4 +44,14 @@ assert.equal(inside.y, 30, 'an in-bounds rect must not move (y)');
 assert.equal(inside.width, 300, 'an in-bounds rect must not move (width)');
 assert.equal(inside.height, 200, 'an in-bounds rect must not move (height)');
 
-console.log('clampPanelRect corner, oversized and in-bounds cases PASS');
+// Empty bounds (the view is hidden): the rect must survive untouched, never
+// collapse to zero and get persisted that way.
+for (const empty of [{ width: 0, height: 0 }, { width: 0, height: 600 }, undefined]) {
+  const kept = clampPanelRect({ x: 40, y: 50, width: 640, height: 420 }, empty);
+  assert.equal(kept.width, 640, 'empty bounds must keep the width');
+  assert.equal(kept.height, 420, 'empty bounds must keep the height');
+  assert.equal(kept.x, 40, 'empty bounds must keep x');
+  assert.equal(kept.y, 50, 'empty bounds must keep y');
+}
+
+console.log('clampPanelRect corner, oversized, in-bounds and empty-bounds cases PASS');

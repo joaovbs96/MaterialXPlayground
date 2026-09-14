@@ -158,6 +158,20 @@ test('@scene opens a material preview panel on double-click', async ({ page, emb
   // The Scene view's own panel (with its own react-flow graph) can still be
   // mounted-but-hidden behind the new route, so scope to a VISIBLE match.
   await expect(page.locator('.react-flow__node:visible', { hasText: graphNodeName }).first()).toBeVisible({ timeout: 15000 });
+
+  // Back to the Scene: the panel was remounted while the view was hidden
+  // (zero-size bounds), so the next double-click must still open a panel
+  // of a usable size instead of a collapsed one.
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 120000 });
+  await page.mouse.dblclick(x, y);
+  await expect(panel).toBeVisible({ timeout: 15000 });
+  const box = await panel.boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(320);
+  expect(box.height).toBeGreaterThanOrEqual(220);
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('mtlx_scene_material_preview_rect') || 'null'));
+  expect(stored && stored.width).toBeGreaterThanOrEqual(320);
 });
 
 // @scene: a material that references a real texture must hand every scene
