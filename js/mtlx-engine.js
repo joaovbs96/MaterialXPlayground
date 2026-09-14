@@ -86,7 +86,11 @@ const getMxEnv = (version) => {
         // the <script> re-fetch of the same URL), deliberate and cheap,
         // since the second one is an HTTP cache hit; do not "optimize" this
         // into a hardcoded version check.
-        const factoryPromise = import('./js/materialx/' + ver + '/JsMaterialXGenShader.js')
+        // Absolute URL on purpose: WebKit resolves import() in a classic
+        // script against the script URL, not the document base, so the
+        // embeds (served from embed/gen/ under a base tag) 404 in Safari.
+        const factoryUrl = new URL('./js/materialx/' + ver + '/JsMaterialXGenShader.js', document.baseURI).href;
+        const factoryPromise = import(factoryUrl)
             .then((mod) => (typeof mod.default === 'function' ? mod.default : loadMxFactoryViaScript(ver)));
         mxEnvPromises.set(ver, factoryPromise
             .then((factory) => factory({
