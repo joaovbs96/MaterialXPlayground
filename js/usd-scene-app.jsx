@@ -481,6 +481,21 @@
         const [handle, setHandle] = React.useState(null);
         const [error, setError] = React.useState('');
         const [previewOpen, setPreviewOpen] = React.useState(false);
+        // Short viewport note explaining why a double-click opened nothing.
+        const [doubleClickNote, setDoubleClickNote] = React.useState('');
+        const doubleClickNoteTimer = React.useRef(0);
+        const showDoubleClickNote = (text) => {
+            setDoubleClickNote(text);
+            clearTimeout(doubleClickNoteTimer.current);
+            doubleClickNoteTimer.current = setTimeout(() => setDoubleClickNote(''), 3000);
+        };
+        const DOUBLE_CLICK_NOTES = {
+            moved: 'Double-click ignored: the pointer moved between the clicks',
+            'no-api': 'Double-click preview is unavailable for this stage',
+            'no-hit': 'Double-click: no surface under the pointer',
+            'no-material': 'Double-click: the surface has no material bound',
+            'no-document': 'Double-click: no MaterialX document for this material',
+        };
         const [previewPayload, setPreviewPayload] = React.useState(null);
         const [previewAnchor, setPreviewAnchor] = React.useState(null);
         const previewPanelRef = React.useRef(null);
@@ -825,16 +840,32 @@
         React.useEffect(() => {
             const container = containerRef.current;
             if (!container || !handle) return undefined;
-            const down = { x: 0, y: 0 };
-            const onPointerDown = (e) => { down.x = e.clientX; down.y = e.clientY; };
+            const down = { x: 0, y: 0, t: 0 };
+            // Diagnostics: every attempt lands in window.__mtlxUsdSceneDoubleClicks
+            // (last 40) and a failure shows its reason in the viewport.
+            const log = (entry) => {
+                const list = (window.__mtlxUsdSceneDoubleClicks = window.__mtlxUsdSceneDoubleClicks || []);
+                list.push(Object.assign({ t: Math.round(performance.now()) }, entry));
+                if (list.length > 40) list.splice(0, list.length - 40);
+                if (entry.event === 'dblclick') console.debug('[usd-scene] double-click ' + entry.reason, entry);
+            };
+            const onPointerDown = (e) => {
+                down.x = e.clientX; down.y = e.clientY; down.t = performance.now();
+                log({ event: 'pointerdown', x: e.clientX, y: e.clientY, button: e.button, pointerType: e.pointerType, target: e.target && e.target.tagName });
+            };
             const onDblClick = (e) => {
-                if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
-                if (previewPanelRef.current && previewPanelRef.current.contains(e.target)) return;
-                if (typeof handle.pickAt !== 'function' || typeof handle.getMaterialDocument !== 'function') return;
+                const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+                const base = { event: 'dblclick', x: e.clientX, y: e.clientY, moved: Math.round(moved), sinceDown: Math.round(performance.now() - down.t), target: e.target && e.target.tagName };
+                const fail = (reason, extra) => { log(Object.assign({ reason }, base, extra || {})); showDoubleClickNote(DOUBLE_CLICK_NOTES[reason] || reason); };
+                if (moved > 4) return fail('moved');
+                if (previewPanelRef.current && previewPanelRef.current.contains(e.target)) return log(Object.assign({ reason: 'in-panel' }, base));
+                if (typeof handle.pickAt !== 'function' || typeof handle.getMaterialDocument !== 'function') return fail('no-api');
                 const hit = handle.pickAt(e.clientX, e.clientY);
-                if (!hit || !hit.materialPath) return;
+                if (!hit) return fail('no-hit');
+                if (!hit.materialPath) return fail('no-material', { hit });
                 const doc = handle.getMaterialDocument(hit.materialPath);
-                if (!doc) return;
+                if (!doc) return fail('no-document', { hit });
+                log(Object.assign({ reason: 'ok' }, base, { hit: { primPath: hit.primPath, materialPath: hit.materialPath } }));
                 const bounds = container.getBoundingClientRect();
                 setPreviewPayload(Object.assign({ primPath: hit.primPath, materialName: hit.materialName }, doc));
                 setPreviewAnchor({ x: e.clientX - bounds.left, y: e.clientY - bounds.top });
@@ -1696,6 +1727,11 @@
                         </div>
                     )}
 
+                    {doubleClickNote && (
+                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-10 left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-[11px] text-amber-200">
+                            {doubleClickNote}
+                        </div>
+                    )}
                     {handle && (() => {
                         const segments = [rootBasename, meshes.length + ' meshes'];
                         const mtlxVersion = (window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION) || window.__mtlxVersion;
