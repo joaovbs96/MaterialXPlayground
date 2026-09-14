@@ -1810,6 +1810,19 @@ const createMtlxSceneView = async ({
     };
     const sourceXmlByRecord = new WeakMap();
     const materialRecords = new Map();
+    // Resolved MaterialX document per material path, for the graph/shaderball
+    // preview panel: { xml, name, materialName, sourceAsset }.
+    const materialDocuments = new Map();
+    // fileMap minus .mtlx sources and hidden side files, same filter as
+    // looseFilesFrom in js/shared/mtlx-ui.jsx.
+    const looseSceneFiles = (map) => {
+        const out = {};
+        Object.keys(map || {}).forEach((k) => {
+            if (window.isHiddenSideFile && window.isHiddenSideFile(k)) return;
+            if (!/\.mtlx$/i.test(k)) out[k] = map[k];
+        });
+        return out;
+    };
 
     // USD `over` blocks recorded by the worker (usd-stage-worker.js
     // collectMaterialOverrides) as { node, input, value } text triples.
@@ -1899,6 +1912,30 @@ const createMtlxSceneView = async ({
         }
     };
 
+    // Serializes the resolved document for the preview panel, falling back
+    // to the pre-parse text (one dedup warning) when the writer is missing
+    // or the document merged the stdlib in (setDataLibrary not available),
+    // so the shared library is never dumped into the panel.
+    const storeMaterialDocument = async (record, doc, resolvedXml, mergedLibrary) => {
+        const key = String((record && record.path) || '');
+        if (!key) return;
+        const baseName = (String((record && record.sourceAsset) || '').split('/').pop() || '').replace(/\.[^./]+$/, '');
+        let xml = null;
+        if (!mergedLibrary && mxEnv.mx && typeof mxEnv.mx.writeToXmlString === 'function') {
+            xml = await window.mxExclusive(() => window.mxSafe(() => mxEnv.mx.writeToXmlString(doc), null));
+        }
+        if (!xml) {
+            xml = resolvedXml;
+            const warning = '[info] Material document xml uses the resolved source for ' + (record.materialName || key);
+            if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+        }
+        materialDocuments.set(key, {
+            xml, name: baseName,
+            materialName: record.materialName || null,
+            sourceAsset: record.sourceAsset || null,
+        });
+    };
+
     const loadRenderable = async (record) => {
         if (record && (record.renderable || record.node)) {
             return { node: record.renderable || record.node, document: null };
@@ -1945,6 +1982,7 @@ const createMtlxSceneView = async ({
                 const matches = renderables.filter((r) => String(r.name || '') === name);
                 if (matches.length === 1) {
                     await window.mxExclusive(() => applyUsdOverrides(doc, matches[0].node, record, usdaDir));
+                    await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
                     return { node: matches[0].node, document: doc };
                 }
             }
@@ -1954,6 +1992,7 @@ const createMtlxSceneView = async ({
             // subidentifier that did not match must remain an error.
             if (renderables.length === 1 && !explicitName) {
                 await window.mxExclusive(() => applyUsdOverrides(doc, renderables[0].node, record, usdaDir));
+                await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
                 return { node: renderables[0].node, document: doc };
             }
             throw new Error('MaterialX source has no unambiguous renderable for ' + (record.materialName || record.subIdentifier || source));
@@ -5575,6 +5614,65 @@ const createMtlxSceneView = async ({
                 if (active) { startLoop(); if (displayDirty && queueDisplayRebuild && isMounted()) queueDisplayRebuild(); }
             },
             selectPrim: (primPath) => prims.find((o) => o.userData.primPath === primPath) || null,
+            // Resolved document plus the loose files it references, for the
+            // graph/shaderball preview panel. UDIM refs match every file
+            // starting with the prefix before <UDIM>.
+            getMaterialDocument: (materialPath) => {
+                const entry = materialDocuments.get(String(materialPath || ''));
+                if (!entry) return null;
+                const loose = looseSceneFiles(fileMap);
+                const xml = entry.xml || '';
+                const refs = new Set();
+                const tagRe = /<[^>]*\btype\s*=\s*(["'])filename\1[^>]*>/gi;
+                let tagMatch;
+                while ((tagMatch = tagRe.exec(xml)) !== null) {
+                    const valueMatch = /\b(?:value|default)\s*=\s*(["'])(.*?)\1/i.exec(tagMatch[0]);
+                    if (valueMatch && valueMatch[2]) refs.add(valueMatch[2]);
+                }
+                if (!refs.size) return Object.assign({}, entry, { files: loose });
+                const files = {};
+                refs.forEach((ref) => {
+                    const decoded = ref.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&');
+                    const udim = decoded.indexOf('<UDIM>');
+                    if (udim >= 0) {
+                        const prefix = decoded.slice(0, udim);
+                        Object.keys(loose).forEach((k) => { if (k.startsWith(prefix)) files[k] = loose[k]; });
+                    } else if (loose[decoded]) files[decoded] = loose[decoded];
+                });
+                return Object.assign({}, entry, { files: Object.keys(files).length ? files : loose });
+            },
+            // Viewport pick: nearest visible, non-excluded prim under the
+            // client point, with the material at the hit face.
+            pickAt: (clientX, clientY) => {
+                const rect = renderer.domElement.getBoundingClientRect();
+                if (!rect.width || !rect.height) return null;
+                const ndc = new THREE.Vector2(
+                    ((clientX - rect.left) / rect.width) * 2 - 1,
+                    -((clientY - rect.top) / rect.height) * 2 + 1,
+                );
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(ndc, camera);
+                const targets = prims.filter((o) => o.visible && !(o.userData && o.userData.excludeFromFrame));
+                const hits = raycaster.intersectObjects(targets, false);
+                if (!hits.length) return null;
+                const hit = hits[0];
+                const object = hit.object;
+                const material = Array.isArray(object.material)
+                    ? object.material[hit.face ? hit.face.materialIndex : 0]
+                    : object.material;
+                const materialPath = (material && material.userData && material.userData.mtlxSceneMaterialPath)
+                    || (object.userData && object.userData.materialPath) || '';
+                const record = materialRecords.get(String(materialPath));
+                return {
+                    primPath: (object.userData && object.userData.primPath) || null,
+                    geometryPath: (object.userData && object.userData.geometryPath) || null,
+                    instanceIndex: (object.userData && object.userData.instanceIndex !== undefined) ? object.userData.instanceIndex : null,
+                    materialPath: materialPath || null,
+                    materialName: (record && record.materialName) || null,
+                    point: [hit.point.x, hit.point.y, hit.point.z],
+                    distance: hit.distance,
+                };
+            },
             // Current camera pose for a turntable recorder or URL/state
             // persistence. null when there is no OrbitControls rig.
             // Rounded to 4 decimals, same contract as the shader-preview handle.

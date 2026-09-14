@@ -245,18 +245,237 @@
         return candidates.find((value) => typeof value === 'function');
     };
 
+    // Pure: keeps a panel rect fully inside bounds, shrinking it first when
+    // it is larger than the container. No side effects, safe for a Node test.
+    const clampPanelRect = (rect, bounds) => {
+        const width = Math.max(0, Math.min(rect.width, bounds.width));
+        const height = Math.max(0, Math.min(rect.height, bounds.height));
+        const x = Math.max(0, Math.min(rect.x, bounds.width - width));
+        const y = Math.max(0, Math.min(rect.y, bounds.height - height));
+        return { x, y, width, height };
+    };
+    window.usdSceneClampPanelRect = clampPanelRect;
+
+    const MATERIAL_PREVIEW_RECT_KEY = 'mtlx_scene_material_preview_rect';
+    const MATERIAL_PREVIEW_DEFAULT_SIZE = { width: 640, height: 420 };
+    const readStoredMaterialPreviewRect = () => {
+        try {
+            const raw = localStorage.getItem(MATERIAL_PREVIEW_RECT_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (parsed && [parsed.x, parsed.y, parsed.width, parsed.height].every(Number.isFinite)) return parsed;
+        } catch (e) { /* storage unavailable or corrupt */ }
+        return null;
+    };
+
+    // Floating graph + shaderball preview for the material under a
+    // double-click in the viewport. Stays mounted (CSS-hidden) after first
+    // open so the graph-preview/materialx-viewer instances survive reopens.
+    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles }) {
+        const shownRef = React.useRef(null);
+        if (payload) shownRef.current = payload;
+        const shown = shownRef.current;
+        const [rect, setRect] = React.useState(() => readStoredMaterialPreviewRect());
+        const rectRef = React.useRef(rect);
+        rectRef.current = rect;
+        const bodyRef = React.useRef(null);
+        const dragRef = React.useRef(null);
+        const resizeRef = React.useRef(null);
+        const [bodyHeight, setBodyHeight] = React.useState(0);
+        const [depsReady, setDepsReady] = React.useState(!!window.MtlxGraphPreview);
+
+        useEscapeToClose(onClose, open);
+
+        // Clamp a restored rect against the current container once mounted.
+        React.useEffect(() => {
+            if (!containerRef.current) return;
+            const bounds = containerRef.current.getBoundingClientRect();
+            setRect((prev) => (prev ? clampPanelRect(prev, bounds) : prev));
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+
+        // First-ever open with no persisted rect: default 640x420 anchored
+        // at the click. A later open keeps whatever rect the user left.
+        React.useEffect(() => {
+            if (!open || !anchor || !containerRef.current || rectRef.current) return;
+            const bounds = containerRef.current.getBoundingClientRect();
+            const base = {
+                x: anchor.x - MATERIAL_PREVIEW_DEFAULT_SIZE.width / 2,
+                y: anchor.y - MATERIAL_PREVIEW_DEFAULT_SIZE.height / 2,
+                width: MATERIAL_PREVIEW_DEFAULT_SIZE.width,
+                height: MATERIAL_PREVIEW_DEFAULT_SIZE.height,
+            };
+            setRect(clampPanelRect(base, bounds));
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [open, anchor]);
+
+        React.useEffect(() => {
+            if (!rect) return;
+            try { localStorage.setItem(MATERIAL_PREVIEW_RECT_KEY, JSON.stringify(rect)); } catch (e) { /* storage unavailable */ }
+        }, [rect]);
+
+        React.useEffect(() => {
+            if (!window.MtlxGraphPreview && open) {
+                let cancelled = false;
+                window.mtlxLoadViewDeps('galleryDetail').then(() => { if (!cancelled) setDepsReady(true); });
+                return () => { cancelled = true; };
+            }
+            return undefined;
+        }, [open]);
+
+        // Deps on !!shown, not []: the body div does not exist in the DOM
+        // until the panel opens for the first time (shown is still null on
+        // the very first mount, so a one-shot effect would see no element
+        // and never attach), so this must re-run once shown flips truthy.
+        React.useEffect(() => {
+            if (!bodyRef.current || !window.ResizeObserver) return undefined;
+            const observer = new ResizeObserver((entries) => {
+                const entry = entries[0];
+                if (entry) setBodyHeight(Math.round(entry.contentRect.height));
+            });
+            observer.observe(bodyRef.current);
+            return () => observer.disconnect();
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [!!shown]);
+
+        const beginDrag = (dragTargetRef) => (e) => {
+            if (e.button !== undefined && e.button !== 0) return;
+            // A pointerdown that started on a button (Close, Open in Graph
+            // Editor) must not capture the pointer: capture redirects the
+            // matching mouseup, which silently swallows the button's click.
+            if (e.target && e.target.closest && e.target.closest('button')) return;
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* unsupported */ }
+            dragTargetRef.current = { startX: e.clientX, startY: e.clientY, rect: rectRef.current };
+        };
+        const endDrag = (dragTargetRef) => (e) => {
+            dragTargetRef.current = null;
+            try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (err) { /* unsupported */ }
+        };
+        const onHeaderMove = (e) => {
+            const drag = dragRef.current;
+            if (!drag || !containerRef.current) return;
+            const bounds = containerRef.current.getBoundingClientRect();
+            const next = clampPanelRect({
+                x: drag.rect.x + (e.clientX - drag.startX),
+                y: drag.rect.y + (e.clientY - drag.startY),
+                width: drag.rect.width, height: drag.rect.height,
+            }, bounds);
+            setRect(next);
+        };
+        const onResizeMove = (e) => {
+            const drag = resizeRef.current;
+            if (!drag || !containerRef.current) return;
+            const bounds = containerRef.current.getBoundingClientRect();
+            const next = clampPanelRect({
+                x: drag.rect.x, y: drag.rect.y,
+                width: drag.rect.width + (e.clientX - drag.startX),
+                height: drag.rect.height + (e.clientY - drag.startY),
+            }, bounds);
+            setRect(next);
+        };
+
+        if (!shown) return null; // never opened yet this session
+
+        // The full scene's loose files (every dropped/loaded non-.mtlx
+        // entry), not just getMaterialDocument's own filename-ref-scoped
+        // map: the exporter's own matcher can resolve a texture under a
+        // relative form the renderer's narrower scan did not try.
+        const handoffFiles = (sceneFiles && Object.keys(sceneFiles).length) ? sceneFiles : shown.files;
+        const openInEditor = () => {
+            window.openInGraphEditor({ xml: shown.xml, name: shown.name, files: handoffFiles, select: shown.materialName });
+        };
+        const rectStyle = rect
+            ? { left: rect.x, top: rect.y, width: rect.width, height: rect.height }
+            : { left: 0, top: 0, width: MATERIAL_PREVIEW_DEFAULT_SIZE.width, height: MATERIAL_PREVIEW_DEFAULT_SIZE.height };
+
+        return (
+            <div
+                ref={panelRef}
+                data-testid="usd-scene-material-preview"
+                className={'absolute z-40 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden' + (open ? '' : ' hidden')}
+                style={rectStyle}
+                aria-hidden={!open}
+            >
+                <div
+                    className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700 bg-gray-900/70 cursor-move touch-none"
+                    onPointerDown={beginDrag(dragRef)}
+                    onPointerMove={onHeaderMove}
+                    onPointerUp={endDrag(dragRef)}
+                >
+                    <div className="min-w-0 flex flex-col">
+                        <span className="text-[11px] text-gray-400 truncate max-w-[16rem]">{shown.primPath || ''}</span>
+                        <span className="text-sm font-semibold text-gray-100 truncate max-w-[16rem]">{shown.materialName || shown.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        <button type="button" onClick={openInEditor} className={HUD_PILL}>
+                            <MtlxIcon name="external-link" className="w-3.5 h-3.5" /> Open in Graph Editor
+                        </button>
+                        <button type="button" onClick={onClose} className={HUD_PILL} aria-label="Close">
+                            <MtlxIcon name="x" className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+                <div ref={bodyRef} className="relative flex-1 min-h-0">
+                    {!depsReady ? (
+                        <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm animate-pulse">Loading preview</div>
+                    ) : (
+                        <window.MtlxGraphPreview
+                            xml={shown.xml}
+                            preview="right"
+                            previewTextures={handoffFiles}
+                            previewName={shown.name}
+                            previewExpanded
+                            previewResizable
+                            previewSplitStorageKey="mtlx_scene_material_preview_split"
+                            lazy={false}
+                            controls={['zoom']}
+                            autoFocus="fit"
+                            chrome="card"
+                            height={bodyHeight || (MATERIAL_PREVIEW_DEFAULT_SIZE.height - 60)}
+                        />
+                    )}
+                </div>
+                <div
+                    data-testid="usd-scene-material-preview-resize"
+                    className="absolute bottom-0 right-0 w-4 h-4 z-20 cursor-nwse-resize touch-none"
+                    onPointerDown={beginDrag(resizeRef)}
+                    onPointerMove={onResizeMove}
+                    onPointerUp={endDrag(resizeRef)}
+                />
+            </div>
+        );
+    }
+
     function SceneViewerApp({ active = true }) {
         const narrow = useNarrowPane();
         const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
         const sidebarOpenRef = React.useRef(sidebarOpen);
         sidebarOpenRef.current = sidebarOpen;
         const [files, setFiles] = React.useState([]);
+        // Full loose (non-.mtlx) file map of the loaded scene, for the
+        // material preview panel's editor hand-off: the renderer's own
+        // getMaterialDocument().files is scoped to what its own filename-ref
+        // scan matched, which can miss a texture the export scanner later
+        // wants under a different relative form.
+        const sceneLooseFiles = React.useMemo(() => {
+            const map = {};
+            files.forEach(({ path, data }) => {
+                if (!path || /\.mtlx$/i.test(path)) return;
+                if (window.isHiddenSideFile && window.isHiddenSideFile(path)) return;
+                map[path] = (data instanceof ArrayBuffer) ? new Blob([data]) : data;
+            });
+            return map;
+        }, [files]);
         const [rootPath, setRootPath] = React.useState('');
         const [status, setStatus] = React.useState('idle');
         const [progress, setProgress] = React.useState({ phase: '', done: 0, total: 0, message: '' });
         const [stage, setStage] = React.useState(null);
         const [handle, setHandle] = React.useState(null);
         const [error, setError] = React.useState('');
+        const [previewOpen, setPreviewOpen] = React.useState(false);
+        const [previewPayload, setPreviewPayload] = React.useState(null);
+        const [previewAnchor, setPreviewAnchor] = React.useState(null);
+        const previewPanelRef = React.useRef(null);
         const [dragOver, setDragOver] = React.useState(false);
         const [selectedPrim, setSelectedPrim] = React.useState('');
         const [selectedCamera, setSelectedCamera] = React.useState('default');
@@ -299,7 +518,7 @@
         // Render settings popover: replaces the old sidebar Rendering card.
         // Tab is persisted so a reopen lands where the user left it.
         const RENDER_TAB_KEY = 'mtlx_scene_render_settings_tab';
-        const RENDER_TABS = ['display', 'lighting', 'effects', 'geometry', 'viewport'];
+        const RENDER_TABS = ['display', 'lighting', 'effects', 'geometry'];
         const [renderSettingsOpen, setRenderSettingsOpen] = React.useState(false);
         const [renderSettingsMounted, setRenderSettingsMounted] = React.useState(false);
         const [renderTab, setRenderTab] = React.useState(() => {
@@ -321,26 +540,6 @@
             window.addEventListener('pointerdown', onDown);
             return () => window.removeEventListener('pointerdown', onDown);
         }, [renderSettingsOpen]);
-        // Mirrors the site-wide settings the top-right Settings popover used
-        // to offer for this view: global view transform and force transparency.
-        const [globalViewTransform, setGlobalViewTransformState] = React.useState(
-            () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb')
-        );
-        const [globalForceTransparency, setGlobalForceTransparency] = React.useState(
-            () => !!(window.getForceTransparency && window.getForceTransparency())
-        );
-        React.useEffect(() => {
-            if (!renderSettingsOpen) return;
-            if (window.getDisplayTransform) setGlobalViewTransformState(window.getDisplayTransform());
-            setGlobalForceTransparency(!!(window.getForceTransparency && window.getForceTransparency()));
-        }, [renderSettingsOpen]);
-        React.useEffect(() => {
-            const onDisplayTransform = () => { if (window.getDisplayTransform) setGlobalViewTransformState(window.getDisplayTransform()); };
-            window.addEventListener('mtlx-display-transform', onDisplayTransform);
-            return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
-        }, []);
-        const pickGlobalViewTransform = (mode) => { setGlobalViewTransformState(mode); if (window.setDisplayTransform) window.setDisplayTransform(mode); };
-        const toggleGlobalForceTransparency = (next) => { setGlobalForceTransparency(next); if (window.setForceTransparency) window.setForceTransparency(next); };
         // Mirrors the boolean keys js/usd-scene-renderer.js reads at creation
         // (storedSceneAo etc.) so a toggle flipped before load is honored by
         // the next renderer instance without editing that file.
@@ -603,6 +802,35 @@
             observer.observe(containerRef.current); return () => observer.disconnect();
         }, [handle]);
 
+        // Double-click a mesh to open its material's graph + shaderball
+        // preview. A dblclick within 4px of its own pointerdown counts as a
+        // click on the viewport; one starting inside the open panel does not.
+        React.useEffect(() => {
+            const container = containerRef.current;
+            if (!container || !handle) return undefined;
+            const down = { x: 0, y: 0 };
+            const onPointerDown = (e) => { down.x = e.clientX; down.y = e.clientY; };
+            const onDblClick = (e) => {
+                if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
+                if (previewPanelRef.current && previewPanelRef.current.contains(e.target)) return;
+                if (typeof handle.pickAt !== 'function' || typeof handle.getMaterialDocument !== 'function') return;
+                const hit = handle.pickAt(e.clientX, e.clientY);
+                if (!hit || !hit.materialPath) return;
+                const doc = handle.getMaterialDocument(hit.materialPath);
+                if (!doc) return;
+                const bounds = container.getBoundingClientRect();
+                setPreviewPayload(Object.assign({ primPath: hit.primPath, materialName: hit.materialName }, doc));
+                setPreviewAnchor({ x: e.clientX - bounds.left, y: e.clientY - bounds.top });
+                setPreviewOpen(true);
+            };
+            container.addEventListener('pointerdown', onPointerDown);
+            container.addEventListener('dblclick', onDblClick);
+            return () => {
+                container.removeEventListener('pointerdown', onPointerDown);
+                container.removeEventListener('dblclick', onDblClick);
+            };
+        }, [handle]);
+
         // Page-wide drag & drop: files can drop anywhere, not just a sidebar
         // drop zone. The engine's readDroppedItems (js/mtlx-engine.js:880,
         // used inside useWindowFileDrop) preserves nested directory-relative
@@ -861,7 +1089,7 @@
         const triangleCount = stageTriangleCount(stage);
         const hasStage = !!stage || files.length > 0;
 
-        const RENDER_TAB_LABELS = { display: 'Display', lighting: 'Lighting', effects: 'Effects', geometry: 'Geometry and Textures', viewport: 'Viewport' };
+        const RENDER_TAB_LABELS = { display: 'Display', lighting: 'Lighting', effects: 'Effects', geometry: 'Geometry and Textures' };
         const EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>;
         // Row shells for the render settings popover: label/control on top,
         // a short description below. Kept local since only this popover uses them.
@@ -1054,22 +1282,6 @@
                     description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface." />
             </React.Fragment>
         );
-        const renderViewportTab = () => (
-            <React.Fragment>
-                <SelectRow label="View Transform"
-                    control={
-                        <MtlxSelect value={globalViewTransform} options={['srgb', 'aces', 'lin_rec709']}
-                            labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
-                            onChange={pickGlobalViewTransform} defValue="srgb" size="sm" />
-                    }
-                    description="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)." />
-                <ToggleRow label="Force Transparency" experimental checked={globalForceTransparency}
-                    onChange={toggleGlobalForceTransparency}
-                    title={globalForceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
-                    description="Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque)." />
-            </React.Fragment>
-        );
-
         const sidebarBody = (
             <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
                 <SectionCard icon="file" title="Stage" summary={rootBasename || 'No stage'} defaultOpen>
@@ -1337,7 +1549,7 @@
                         </div>
                     </div>
                     <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
-                        Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
+                        Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color. Double-click a surface to preview its material graph and shaderball.
                     </div>
                 </div>
             )}
@@ -1460,7 +1672,6 @@
                                 {renderTab === 'lighting' && renderLightingTab()}
                                 {renderTab === 'effects' && renderEffectsTab()}
                                 {renderTab === 'geometry' && renderGeometryTab()}
-                                {renderTab === 'viewport' && renderViewportTab()}
                             </div>
                         </div>
                     )}

@@ -112,4 +112,16 @@ test('@scene USD overrides on a referenced MaterialX material apply a scalar ove
   expect(rightMean.r).toBeGreaterThan(150);
   expect(rightMean.g).toBeGreaterThan(150);
   expect(rightMean.b).toBeLessThan(60);
+
+  // getMaterialDocument on the swapped-texture material: xml carries the
+  // overridden asset value, and files only holds the texture it references.
+  const doc = await page.evaluate(() => {
+    const handle = window.__mtlxUsdSceneHandle;
+    const mesh = handle.prims.find((o) => /texswap/i.test(o.userData.primPath || ''));
+    const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    return handle.getMaterialDocument(mat.userData.mtlxSceneMaterialPath);
+  });
+  expect(doc).toBeTruthy();
+  expect(doc.xml).toContain('tex-b.png');
+  expect(Object.keys(doc.files)).toEqual(['tex-b.png']);
 });

@@ -13,7 +13,7 @@ test('@scene render settings popover holds every tab and row before a stage load
   const popover = page.getByTestId('usd-scene-render-settings-popover');
   await expect(popover).toBeVisible();
 
-  const tabNames = ['Display', 'Lighting', 'Effects', 'Geometry and Textures', 'Viewport'];
+  const tabNames = ['Display', 'Lighting', 'Effects', 'Geometry and Textures'];
   for (const name of tabNames) {
     await expect(popover.getByRole('button', { name, exact: true })).toBeVisible();
   }
@@ -38,10 +38,8 @@ test('@scene render settings popover holds every tab and row before a stage load
     await expect(popover.getByText(label, { exact: true }).first()).toBeVisible();
   }
 
-  await popover.getByRole('button', { name: 'Viewport', exact: true }).click();
-  for (const label of ['View Transform', 'Force Transparency']) {
-    await expect(popover.getByText(label, { exact: true }).first()).toBeVisible();
-  }
+  // Viewer-only settings stay out of the Scene popover.
+  await expect(popover.getByRole('button', { name: 'Viewport', exact: true })).toHaveCount(0);
 
   // Sidebar still has Environment, no longer has Rendering.
   const sidebar = page.getByTestId('usd-scene-sidebar');
