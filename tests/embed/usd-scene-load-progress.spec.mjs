@@ -104,6 +104,14 @@ test('@scene load-progress events carry per-material and per-phase counts in ord
   expect(readyEvents.length).toBe(1);
   expect(events[events.length - 1]).toBe(readyEvents[0]);
 
+  // The renderer-side fixture load only exercises the renderer phases; the
+  // worker phases are covered end to end by the scene worker itself, but
+  // every collected phase must still be a known table entry in table order.
+  const phaseOrder = await page.evaluate(() => window.USD_SCENE_LOAD_PHASES.map((p) => p.phase));
+  expect(events.every((e) => phaseOrder.includes(e.phase))).toBe(true);
+  expect(events.some((e) => e.phase === 'geometry')).toBe(true);
+  expect(events.some((e) => e.phase === 'material')).toBe(true);
+
   const fractions = await page.evaluate((collected) => {
     let previous = 0;
     const out = [];
@@ -121,6 +129,27 @@ test('@scene load-progress events carry per-material and per-phase counts in ord
   }))));
 });
 
+test('@scene the example stage load shows numbered steps and worker phases are renamed', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await page.waitForFunction(() => window.usdSceneProgressFraction && window.USD_SCENE_LOAD_PHASES, null, { timeout: 30000 });
+
+  await page.getByTestId('usd-scene-load-example').click();
+
+  const labelLocator = page.getByTestId('usd-scene-progress');
+  const seenLabels = [];
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const text = await labelLocator.textContent().catch(() => '');
+    if (text) seenLabels.push(text);
+    if (/Compiling materials/.test(text || '') && /\d+\/\d+/.test(text || '')) break;
+    await page.waitForTimeout(100);
+  }
+
+  expect(seenLabels.some((t) => /^Step \d+\/9: /.test(t))).toBe(true);
+  expect(seenLabels.some((t) => /Compiling materials/.test(t) && /\d+\/\d+/.test(t))).toBe(true);
+});
+
 test('@scene usdSceneProgressFraction segment maths are monotonic and land in their segment', async ({ page, embedURL }) => {
   await page.goto(embedURL + '/index.html#!scene');
   await page.waitForFunction(() => window.usdSceneProgressFraction, null, { timeout: 30000 });
@@ -131,6 +160,9 @@ test('@scene usdSceneProgressFraction segment maths are monotonic and land in th
       { phase: 'worker', done: 4, total: 4, message: 'Reading input files' },
       { phase: 'parse', done: 0, total: 0, message: 'Composing stage' },
       { phase: 'parse', done: 1, total: 1, message: 'Composed stage' },
+      { phase: 'extract-geometry', done: 1, total: 1, message: 'Copied mesh data' },
+      { phase: 'extract-materials', done: 0, total: 0, message: 'Extracting material payloads' },
+      { phase: 'extract-materials', done: 1, total: 1, message: 'Extracted material payloads' },
       { phase: 'material', status: 'start', index: 1, total: 2, label: 'a' },
       { phase: 'material', status: 'ready', index: 1, total: 2, label: 'a' },
       { phase: 'material', status: 'start', index: 2, total: 2, label: 'b' },
@@ -157,11 +189,11 @@ test('@scene usdSceneProgressFraction segment maths are monotonic and land in th
   for (let i = 1; i < result.length; i += 1) expect(result[i]).toBeGreaterThanOrEqual(result[i - 1]);
   expect(result[result.length - 1]).toBe(1);
   // The first (worker, explicit fraction) event lands inside worker's
-  // [0.00, 0.08] segment, scaled rather than used as the raw whole fraction.
+  // [0.00, 0.06] segment, scaled rather than used as the raw whole fraction.
   expect(result[0]).toBeGreaterThan(0);
-  expect(result[0]).toBeLessThanOrEqual(0.08);
+  expect(result[0]).toBeLessThanOrEqual(0.06);
   // The parse event with no counts (done 0/total 0) does not regress past
-  // where the worker phase already landed; it starts at parse's own 0.08.
-  expect(result[2]).toBeGreaterThanOrEqual(0.08);
-  expect(result[2]).toBeLessThanOrEqual(0.12);
+  // where the worker phase already landed; it starts at parse's own 0.06.
+  expect(result[2]).toBeGreaterThanOrEqual(0.06);
+  expect(result[2]).toBeLessThanOrEqual(0.10);
 });

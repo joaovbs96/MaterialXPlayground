@@ -196,17 +196,25 @@
     // readDroppedItems, which preserves nested directory paths); flatten it
     // to the same { path, data } shape readFiles() produces.
     const filesFromMap = (map) => Object.keys(map || {}).map((path) => ({ path: String(path).replace(/\\/g, '/'), data: map[path] }));
-    // Whole-load segment table: each phase owns a slice of the bar so it
-    // fills once across the whole load instead of restarting per phase.
-    const USD_SCENE_PROGRESS_SEGMENTS = {
-        worker: [0.00, 0.08],
-        parse: [0.08, 0.12],
-        material: [0.12, 0.52],
-        'material-bind': [0.52, 0.56],
-        texture: [0.56, 0.74],
-        geometry: [0.74, 0.88],
-        renderer: [0.88, 0.99],
-    };
+    // Whole-load phase table: the single source of truth for the load
+    // sequence's step numbering, labels and progress-bar segments.
+    const USD_SCENE_LOAD_PHASES = [
+        { phase: 'worker', label: 'Reading files', segment: [0.00, 0.06] },
+        { phase: 'parse', label: 'Composing stage', segment: [0.06, 0.10] },
+        { phase: 'extract-geometry', label: 'Extracting meshes', segment: [0.10, 0.14] },
+        { phase: 'extract-materials', label: 'Extracting materials', segment: [0.14, 0.18] },
+        { phase: 'material', label: 'Compiling materials', segment: [0.18, 0.52] },
+        { phase: 'material-bind', label: 'Binding materials', segment: [0.52, 0.56] },
+        { phase: 'texture', label: 'Loading textures', segment: [0.56, 0.72] },
+        { phase: 'geometry', label: 'Preparing geometry', segment: [0.72, 0.86] },
+        { phase: 'renderer', label: 'Preparing viewport', segment: [0.86, 0.99] },
+    ];
+    window.USD_SCENE_LOAD_PHASES = USD_SCENE_LOAD_PHASES;
+    // Each phase owns a slice of the bar so it fills once across the whole
+    // load instead of restarting per phase.
+    const USD_SCENE_PROGRESS_SEGMENTS = Object.fromEntries(
+        USD_SCENE_LOAD_PHASES.map((entry) => [entry.phase, entry.segment])
+    );
     // Pure: maps one progress event plus the previous whole-load fraction to
     // the next whole-load fraction. Never moves backwards inside one load.
     const usdSceneProgressFraction = (event, previous) => {
@@ -1083,8 +1091,11 @@
         void textureSizeTick;
 
         const fraction = progress.fraction;
-        const phaseLabels = { worker: 'Loading stage', parse: 'Composing stage', geometry: 'Preparing geometry', material: 'Compiling materials', 'material-bind': 'Binding materials', texture: 'Loading textures', renderer: 'Preparing viewport', 'gpu-program': 'Checking GPU programs' };
-        const progressLabel = phaseLabels[progress.phase] || (progress.phase ? progress.phase.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : (status === 'rendered' ? 'Ready' : 'Loading'));
+        const phaseLabels = { ...Object.fromEntries(USD_SCENE_LOAD_PHASES.map((entry) => [entry.phase, entry.label])), 'gpu-program': 'Checking GPU programs' };
+        const phaseIndex = USD_SCENE_LOAD_PHASES.findIndex((entry) => entry.phase === progress.phase);
+        const phaseCount = USD_SCENE_LOAD_PHASES.length;
+        const stepPrefix = phaseIndex >= 0 ? ('Step ' + (phaseIndex + 1) + '/' + phaseCount + ': ') : '';
+        const progressLabel = stepPrefix + (phaseLabels[progress.phase] || (progress.phase ? progress.phase.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : (status === 'rendered' ? 'Ready' : 'Loading')));
         const progressText = progress.total ? (progress.done + '/' + progress.total) : (/texture|material/i.test(progress.phase) ? '' : progress.message);
         // Second, dimmer overlay line: the current item within the phase.
         const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'occlusion-volume': 'Baking occlusion volume', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };

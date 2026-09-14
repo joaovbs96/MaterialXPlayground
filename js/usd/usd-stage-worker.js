@@ -1515,7 +1515,7 @@ async function load(request) {
         for (const mesh of snapshotDraw(subtree).meshes) pushMesh(mesh);
       }
       postMessage({ id: request.id, type: "progress", value: {
-        phase: "geometry", done: index + 1, total: uniqueMeshPaths.length,
+        phase: "extract-geometry", done: index + 1, total: uniqueMeshPaths.length,
         fraction: 0.45 + 0.3 * ((index + 1) / uniqueMeshPaths.length),
         message: "Copied mesh data",
       } });
@@ -1526,7 +1526,7 @@ async function load(request) {
     // extraction may also refresh the Emscripten heap.
     drawSnapshot = snapshotDraw(draw);
   }
-  postMessage({ id: request.id, type: "progress", value: { phase: "material", done: 0, total: 0, fraction: 0.8, message: "Extracting material payloads" } });
+  postMessage({ id: request.id, type: "progress", value: { phase: "extract-materials", done: 0, total: 0, fraction: 0.8, message: "Extracting material payloads" } });
   const payloads = api.extractMaterialPayloads(root);
   // Payload material/texture views have the same lifetime as draw views.  Do
   // the copy before diagnostics can touch the native heap, then pass only
@@ -1601,7 +1601,7 @@ async function load(request) {
     weldMesh(mesh);
   }
   postMessage({ id: request.id, type: "progress", value: {
-    phase: "material", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
+    phase: "extract-materials", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
   } });
   const cameraWarnings = [];
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
