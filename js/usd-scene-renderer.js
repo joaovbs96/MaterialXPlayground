@@ -1224,6 +1224,10 @@ const createMtlxSceneView = async ({
     window.addEventListener('mtlx-usd-scene-transparency', sceneTransparencyListener);
     // heightToNormalTexel is generation-affecting like the display
     // transform: reuse the same rebuild path so a flag flip recompiles.
+    // accumulation needs no entry here: the handle registers itself in
+    // the shared LIVE_VIEWS registry below (window.registerLiveView), and
+    // setAccumulationEnabled already calls view.refreshAccumulation()
+    // through that same registry, same as every other live view.
     const settingsChangedListener = (e) => {
         if (e.detail && e.detail.key === 'heightToNormalTexel') displayTransformListener();
     };
@@ -1454,6 +1458,17 @@ const createMtlxSceneView = async ({
     let historyViewProjectionInverse = new THREE.Matrix4();
     let historyEye = new THREE.Vector3();
     let ssrHistoryWarned = false;
+    // Progressive jittered-frame accumulation (shared window.createFrameAccumulator):
+    // averages up to 32 sub-pixel samples while the camera and scene are still.
+    // reset()/dispose() both just free the GPU targets and zero the sample
+    // count; the accumulator object itself stays reusable, so it is never
+    // set back to null once created.
+    let accumulator = null;
+    let accumSignature = '';
+    let accumForce = false;
+    let accumConverged = false;
+    let accumReason = null;
+    const invalidateAccumulation = () => { accumForce = true; accumConverged = false; };
     // `thicknessTarget` remains the first allocated target for the existing
     // diagnostic hook. Rendering and binding use the per-object map below.
     let thicknessTarget = null;
@@ -4765,6 +4780,8 @@ const createMtlxSceneView = async ({
             renderer.setSize(w, h, false);
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
+            if (accumulator) accumulator.reset();
+            invalidateAccumulation();
         };
         const frameAll = () => {
             // Backdrops/skyboxes are deliberately excluded from framing.
@@ -4818,7 +4835,7 @@ const createMtlxSceneView = async ({
         // viewport, which is not true here).
         const applyCamera = (primPath) => {
             selectedCameraPath = primPath || null;
-            if (!primPath) { frameAll(); return true; }
+            if (!primPath) { frameAll(); invalidateAccumulation(); return true; }
             const record = sceneArray(stage.cameras).find((c) => c.primPath === primPath);
             if (!record) return false;
             sceneRoot.updateMatrixWorld(true);
@@ -4856,6 +4873,7 @@ const createMtlxSceneView = async ({
                 controls.update();
             }
             lastFrameDistance = distance;
+            invalidateAccumulation();
             return true;
         };
         const resetCamera = () => { applyCamera(selectedCameraPath); };
@@ -5018,6 +5036,10 @@ const createMtlxSceneView = async ({
                     renderer.compile(scene, camera);
                     reportBadPrograms(materials, ' after display-transform refresh');
                     report({ phase: 'display-transform', status: 'ready', value: targetMode });
+                    // Materials/textures just swapped in asynchronously; the
+                    // per-tick signature would also catch the new material
+                    // uuids, but this makes the reset land the same frame.
+                    invalidateAccumulation();
                     return;
                 }
             }
@@ -5166,11 +5188,15 @@ const createMtlxSceneView = async ({
                 materialPath: String((hit && hit.userData && hit.userData.mtlxSceneMaterialPath) || 'unknown'),
             };
         }).sort((a, b) => a.primPath.localeCompare(b.primPath));
-        const renderFrame = () => {
+        const renderFrame = (options) => {
             // Asleep: skip every draw so a background broadcast (env/display
             // sync to hidden keep-alive views) cannot re-allocate transient
             // targets. setActive(true) renders the catch-up frame itself.
             if (!active) return;
+            // jittered: this draw is one accumulation sample under a
+            // sub-pixel-offset camera. Everything else about the frame is
+            // identical; only the SSR history capture below is skipped.
+            const jittered = !!(options && options.jittered);
             ensureShadowCurrent();
             const callerTarget = renderer.getRenderTarget();
             const outputSize = callerTarget
@@ -5261,7 +5287,11 @@ const createMtlxSceneView = async ({
                     try { drawSceneColor(linear); }
                     finally { if (release) release(); }
                 });
-                captureSsrHistory();
+                // A jittered sample must never become next frame's SSR
+                // history: the reprojection would be built from an offset
+                // camera and smear. SSR is parked today (SCENE_SSR_PARKED)
+                // so this is currently inert either way.
+                if (!jittered) captureSsrHistory();
             } else {
                 drawSceneColor(false);
             }
@@ -5304,6 +5334,86 @@ const createMtlxSceneView = async ({
             if (peelPipeline && (!enabled || !anyTransparent)) peelPipeline.dispose();
             renderFrame();
         };
+        // Everything besides camera pose that can change the drawn image
+        // without going through a material uuid: effect toggles, HDR
+        // presentation, environment/display settings and the flag that
+        // regenerates materials. One joined string so a single compare
+        // in runAccumulationStep() below detects any of it changing.
+        const computeAccumSignature = () => {
+            const out = [];
+            out.push(camera.matrixWorld.elements.join(','));
+            out.push(camera.projectionMatrix.elements.join(','));
+            out.push(sceneRoot.matrixWorld.elements.join(','));
+            const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+            out.push(size.x + 'x' + size.y + '@' + renderer.getPixelRatio());
+            out.push(aoEnabled ? 1 : 0, aoStrength, shadowsEnabled ? 1 : 0, ssrEnabled ? 1 : 0);
+            out.push(skyVisEnabled ? 1 : 0, skyVisStrength, sceneDisplayTransform, envRotationRad, envExposure);
+            out.push(sceneTransparencyEnabled() ? 1 : 0, stageLightsEnabled ? 1 : 0, stageLightsEv);
+            out.push(presentationPipeline ? JSON.stringify(presentationPipeline.getSettings()) : '');
+            out.push(environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : '');
+            out.push(window.getHeightToNormalTexel ? (window.getHeightToNormalTexel() ? 1 : 0) : 0);
+            const ids = [];
+            materials.forEach((m) => { if (m && m.uuid) ids.push(m.uuid); });
+            out.push(ids.sort().join(','));
+            return out.join('|');
+        };
+        // Snapshot/captureFrame draw a plain unjittered frame for their
+        // own readback; if the accumulator already holds a converged (or
+        // still-settling) average of the SAME image, re-present it right
+        // after so the canvas does not strand the direct frame until the
+        // next rAF tick. A no-op whenever the image actually changed.
+        const restoreAccumulatedPresentation = () => {
+            if (!accumulator || accumulator.samples < 4 || accumForce) return;
+            if (computeAccumSignature() !== accumSignature) return;
+            accumulator.present();
+        };
+        const runAccumulationStep = () => {
+            const accumulationEnabled = !!(window.getAccumulationEnabled && window.getAccumulationEnabled());
+            const animatedMaterial = !!(window.MTLX_CLOCK && Array.from(materials).some(
+                (m) => m.uniforms && (m.uniforms.u_time || m.uniforms.u_frame)));
+            const sig = computeAccumSignature();
+            const changed = accumForce || sig !== accumSignature;
+            accumSignature = sig;
+            accumForce = false;
+            if (!accumulationEnabled) {
+                if (accumulator && accumulator.samples) accumulator.reset();
+                accumConverged = false; accumReason = 'disabled';
+                renderFrame();
+                return;
+            }
+            if (animatedMaterial) {
+                if (accumulator && accumulator.samples) accumulator.reset();
+                accumConverged = false; accumReason = 'animated';
+                renderFrame();
+                return;
+            }
+            if (changed) {
+                if (accumulator) accumulator.reset();
+                accumConverged = false; accumReason = 'moving';
+                renderFrame(); // direct path while the image is settling
+                return;
+            }
+            if (accumConverged) { accumReason = null; return; } // already presented, canvas holds it
+            const bufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+            if (bufSize.x < 1 || bufSize.y < 1) { renderFrame(); return; }
+            if (!accumulator && window.createFrameAccumulator) accumulator = window.createFrameAccumulator(renderer);
+            if (!accumulator) { renderFrame(); return; }
+            const target = window.getAccumulationSampleCount ? window.getAccumulationSampleCount() : 32;
+            if (accumulator.samples < target) {
+                const jitter = accumulator.beginSample();
+                try {
+                    if (camera.setViewOffset) camera.setViewOffset(bufSize.x, bufSize.y, jitter.x, jitter.y, bufSize.x, bufSize.y);
+                    renderFrame({ jittered: true });
+                } finally {
+                    if (camera.clearViewOffset) camera.clearViewOffset();
+                }
+                accumulator.endSample();
+            }
+            accumReason = null;
+            if (accumulator.samples < 4) { renderFrame(); return; } // no aliasing flash below the threshold
+            accumulator.present();
+            if (accumulator.samples >= target) accumConverged = true;
+        };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
@@ -5311,7 +5421,7 @@ const createMtlxSceneView = async ({
             applyStudioPolarClamp();
             applyStudioDistanceClamp();
             if (controls) controls.update();
-            renderFrame();
+            runAccumulationStep();
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
@@ -5641,6 +5751,8 @@ const createMtlxSceneView = async ({
                     disposeSsrHistoryResources();
                     disposeThicknessResources();
                     disposeOpaqueDepthProbe();
+                    if (accumulator) accumulator.dispose();
+                    accumConverged = false;
                     if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                     if (presentationPipeline) {
                         const settings = presentationPipeline.getSettings();
@@ -5661,6 +5773,10 @@ const createMtlxSceneView = async ({
                     presentationSleepRestore = null;
                     shadowCameraKey = '';
                     shadowForceState = null;
+                    // The wake frame must be direct: transient pools were
+                    // just freed above, and nothing about the image is
+                    // known to still match the last presented average.
+                    invalidateAccumulation();
                     // No forced rebuild: materials and textures stayed resident,
                     // so only a display change made while asleep recompiles.
                     startLoop();
@@ -5799,7 +5915,12 @@ const createMtlxSceneView = async ({
                 }
                 __captureCtx.clearRect(0, 0, w, h);
                 __captureCtx.drawImage(renderer.domElement, 0, 0, w, h);
-                return __captureCtx.getImageData(0, 0, w, h);
+                const imageData = __captureCtx.getImageData(0, 0, w, h);
+                // Stays unjittered (GIF frames are a live sequence), but a
+                // converged accumulator for this same image should not be
+                // stranded off-canvas until the next rAF tick.
+                restoreAccumulatedPresentation();
+                return imageData;
             },
             // Leaves capture mode: restores on-screen visibility, pixel
             // ratio and layout-driven sizing. Idempotent, safe to call twice.
@@ -5813,14 +5934,51 @@ const createMtlxSceneView = async ({
             },
             renderNow: () => {
                 if (stopped) return;
+                // Always forces a fresh direct frame: a caller reaching for
+                // renderNow() wants the current state on screen right now,
+                // not a stale averaged frame from before whatever changed.
+                invalidateAccumulation();
                 if (environmentBridge && environmentBridge.update) environmentBridge.update();
                 renderFrame();
             },
-            snapshot: () => {
+            // opts.accumulated: with the setting on and the image not
+            // animated, synchronously finishes the remaining accumulation
+            // samples and returns the averaged frame (screenshots wait for
+            // all 32). Otherwise behaves exactly as before: one direct
+            // frame, re-presenting any still-valid average afterward so
+            // the canvas is not left holding the direct frame.
+            snapshot: (opts) => {
                 if (stopped || !renderer.domElement || !renderer.domElement.toDataURL) return null;
                 if (environmentBridge && environmentBridge.update) environmentBridge.update();
+                const accumulationEnabled = !!(window.getAccumulationEnabled && window.getAccumulationEnabled());
+                const animatedMaterial = !!(window.MTLX_CLOCK && Array.from(materials).some(
+                    (m) => m.uniforms && (m.uniforms.u_time || m.uniforms.u_frame)));
+                if (opts && opts.accumulated && accumulationEnabled && !animatedMaterial && window.createFrameAccumulator) {
+                    const bufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+                    if (bufSize.x >= 1 && bufSize.y >= 1) {
+                        if (!accumulator) accumulator = window.createFrameAccumulator(renderer);
+                        const target = window.getAccumulationSampleCount ? window.getAccumulationSampleCount() : 32;
+                        while (accumulator.samples < target) {
+                            const jitter = accumulator.beginSample();
+                            try {
+                                if (camera.setViewOffset) camera.setViewOffset(bufSize.x, bufSize.y, jitter.x, jitter.y, bufSize.x, bufSize.y);
+                                renderFrame({ jittered: true });
+                            } finally {
+                                if (camera.clearViewOffset) camera.clearViewOffset();
+                            }
+                            accumulator.endSample();
+                        }
+                        accumulator.present();
+                        accumConverged = true;
+                        accumReason = null;
+                        accumSignature = computeAccumSignature();
+                        return renderer.domElement.toDataURL('image/png');
+                    }
+                }
                 renderFrame();
-                return renderer.domElement.toDataURL('image/png');
+                const url = renderer.domElement.toDataURL('image/png');
+                restoreAccumulatedPresentation();
+                return url;
             },
             // Re-applies peel/opaque mode on every compiled material from
             // its own userData.mtlxSceneTransparent verdict against the
@@ -5840,9 +5998,34 @@ const createMtlxSceneView = async ({
                 if (stopped) return;
                 if (sceneTransparencyRefresh) sceneTransparencyRefresh();
             },
+            // Setting-changed target for the shared setAccumulationEnabled
+            // (called through the same LIVE_VIEWS registry the Scene handle
+            // registers itself into below): resets the in-progress average,
+            // and frees its GPU targets outright when turned off.
+            refreshAccumulation: () => {
+                if (accumulator) {
+                    if (!(window.getAccumulationEnabled && window.getAccumulationEnabled())) accumulator.dispose();
+                    else accumulator.reset();
+                }
+                accumConverged = false;
+                accumForce = true;
+            },
+            // Async/explicit invalidation for changes the per-tick
+            // signature check cannot see on its own (see
+            // computeAccumSignature's header for what it does cover).
+            invalidateAccumulation: () => { invalidateAccumulation(); },
+            getAccumulationState: () => ({
+                enabled: !!(window.getAccumulationEnabled && window.getAccumulationEnabled()),
+                active: !accumReason && !!accumulator && accumulator.samples > 0,
+                samples: accumulator ? accumulator.samples : 0,
+                target: window.getAccumulationSampleCount ? window.getAccumulationSampleCount() : 32,
+                converged: accumConverged,
+                reason: accumReason,
+            }),
             dispose: () => {
                 if (stopped) return;
                 stopped = true;
+                if (accumulator) accumulator.dispose();
                 disposeShadowResources();
                 disposeAoResources();
                 disposePrepassResources();

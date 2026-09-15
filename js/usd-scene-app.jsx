@@ -603,6 +603,24 @@
             window.addEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
             return () => window.removeEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
         }, []);
+        // Accumulation and texel-space bump are global engine settings
+        // shared with every other preview tool; stay in sync with any
+        // other open Settings surface (or an embed HUD) that changes them.
+        const [accumulation, setAccumulation] = React.useState(
+            () => !!(window.getAccumulationEnabled && window.getAccumulationEnabled())
+        );
+        const [heightToNormalTexel, setHeightToNormalTexel] = React.useState(
+            () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel())
+        );
+        React.useEffect(() => {
+            const onSettingsChanged = (e) => {
+                if (!e.detail) return;
+                if (e.detail.key === 'accumulation') setAccumulation(!!e.detail.value);
+                else if (e.detail.key === 'heightToNormalTexel') setHeightToNormalTexel(!!e.detail.value);
+            };
+            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+        }, []);
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
@@ -1259,6 +1277,10 @@
                         title={handle ? undefined : 'Load a stage first'}
                         description={presentation.supported ? 'Scene-linear HDR preserves luminous highlights; this restores its defaults.' : (presentation.reason || 'HDR is unavailable on this device.')} />
                 ) : null}
+                <ToggleRow label="Accumulate frames" checked={accumulation}
+                    title={accumulation ? 'Disable frame accumulation' : 'Enable frame accumulation'}
+                    onChange={(next) => { setAccumulation(next); window.setAccumulationEnabled && window.setAccumulationEnabled(next); }}
+                    description="While the camera is still, averages 32 slightly offset frames to smooth edges, fine detail and speckle. Screenshots wait for all 32." />
             </React.Fragment>
         );
         const renderLightingTab = () => (
@@ -1346,6 +1368,10 @@
                             onChange={pickSubdivisionLevel} defValue={1} size="sm" disabled={busy} />
                     }
                     description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface." />
+                <ToggleRow label="Texel-space bump" experimental checked={heightToNormalTexel}
+                    title={heightToNormalTexel ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'}
+                    onChange={(next) => { setHeightToNormalTexel(next); window.setHeightToNormalTexel && window.setHeightToNormalTexel(next); }}
+                    description="Computes heighttonormal slopes per texel instead of per screen pixel, removing speckle on high resolution height maps. Differs from the official MaterialX viewer. Recompiles materials." />
             </React.Fragment>
         );
         const sidebarBody = (
