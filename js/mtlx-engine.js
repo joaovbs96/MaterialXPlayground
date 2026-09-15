@@ -3143,6 +3143,18 @@ const loadExrTexture = async (blob) => {
         const buf = await blob.arrayBuffer();
         const d = new THREE.EXRLoader().setDataType(THREE.FloatType).parse(buf);
         if (!d || !d.data) return null;
+        // EXRLoader.parse writes scanlines bottom-up (row 0 = image bottom);
+        // reverse row order so row 0 = top, matching every other loader here.
+        const channels = d.data.length / (d.width * d.height);
+        const stride = d.width * channels;
+        for (let y = 0; y < d.height >> 1; y += 1) {
+            const top = y * stride, bottom = (d.height - 1 - y) * stride;
+            for (let i = 0; i < stride; i += 1) {
+                const t = d.data[top + i];
+                d.data[top + i] = d.data[bottom + i];
+                d.data[bottom + i] = t;
+            }
+        }
         const tex = new THREE.DataTexture(d.data, d.width, d.height, d.format, d.type);
         tex.minFilter = tex.magFilter = THREE.LinearFilter;
         return tex;
