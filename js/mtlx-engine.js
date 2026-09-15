@@ -9971,9 +9971,22 @@ const createMtlxRenderView = async ({
                         const jitter = accumulator.beginSample();
                         try {
                             if (camera.setViewOffset) camera.setViewOffset(bufSize.x, bufSize.y, jitter.x, jitter.y, bufSize.x, bufSize.y);
+                            // setUniforms() already ran once above (clean
+                            // matrices, for the digest); the MaterialX
+                            // uniforms are a plain JS object, NOT read
+                            // live from the camera like three's built-in
+                            // materials are, so without this refresh the
+                            // jittered projection would reach the peel/
+                            // built-in passes but never the RawShaderMaterial.
+                            setUniforms();
                             renderFrame();
                         } finally {
                             if (camera.clearViewOffset) camera.clearViewOffset();
+                            // Restores u_viewProjectionMatrix etc. to the
+                            // unjittered pose, so the sub-4-sample direct
+                            // frame below and next tick's digest never see
+                            // a jittered value.
+                            setUniforms();
                         }
                         accumulator.endSample();
                     }
@@ -10326,9 +10339,16 @@ const createMtlxRenderView = async ({
                         const jitter = accumulator.beginSample();
                         try {
                             if (camera.setViewOffset) camera.setViewOffset(bufSize.x, bufSize.y, jitter.x, jitter.y, bufSize.x, bufSize.y);
+                            // Refreshes u_viewProjectionMatrix etc. with the
+                            // jittered projection, same as animate()'s own
+                            // sampling loop: the MaterialX uniforms are a
+                            // plain JS object, not read live from the
+                            // camera like three's built-in materials.
+                            setUniforms();
                             renderFrame();
                         } finally {
                             if (camera.clearViewOffset) camera.clearViewOffset();
+                            setUniforms(); // restores the unjittered pose
                         }
                         accumulator.endSample();
                     }

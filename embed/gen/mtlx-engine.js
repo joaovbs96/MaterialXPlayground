@@ -2792,7 +2792,18 @@ if(!isActive()){accumConverged=false;accumReason='hidden';return;}if(!controls&&
 const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const sig=computeAccumSignature();const changed=accumForce||sig!==accumSignature;accumSignature=sig;accumForce=false;if(!ACCUMULATION_ENABLED||!mesh){if(accumulator&&accumulator.samples)accumulator.reset();accumConverged=false;accumReason='disabled';renderFrame();return;}if(animatedMaterial){if(accumulator&&accumulator.samples)accumulator.reset();accumConverged=false;accumReason='animated';renderFrame();return;}if(changed){if(accumulator)accumulator.reset();accumConverged=false;accumReason='moving';renderFrame();// direct path while the image is settling
 return;}if(accumConverged){accumReason=null;return;}// 32 samples already presented, canvas holds it
 const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(bufSize.x<1||bufSize.y<1){renderFrame();return;}// not laid out yet
-if(!accumulator)accumulator=createFrameAccumulator(renderer);if(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);renderFrame();}finally{if(camera.clearViewOffset)camera.clearViewOffset();}accumulator.endSample();}accumReason=null;if(accumulator.samples<4){renderFrame();return;}// no aliasing flash below the threshold
+if(!accumulator)accumulator=createFrameAccumulator(renderer);if(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);// setUniforms() already ran once above (clean
+// matrices, for the digest); the MaterialX
+// uniforms are a plain JS object, NOT read
+// live from the camera like three's built-in
+// materials are, so without this refresh the
+// jittered projection would reach the peel/
+// built-in passes but never the RawShaderMaterial.
+setUniforms();renderFrame();}finally{if(camera.clearViewOffset)camera.clearViewOffset();// Restores u_viewProjectionMatrix etc. to the
+// unjittered pose, so the sub-4-sample direct
+// frame below and next tick's digest never see
+// a jittered value.
+setUniforms();}accumulator.endSample();}accumReason=null;if(accumulator.samples<4){renderFrame();return;}// no aliasing flash below the threshold
 accumulator.present();if(accumulator.samples>=ACCUMULATION_SAMPLES)accumConverged=true;};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}const handle={uniforms,introspected,vs,fs,controls,renderer,notices:notices||[],isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
 // full-scene mode by contract: every caller hides the rotate
 // button there, and fallbackSpin would rotate the authored scene.
@@ -2919,7 +2930,13 @@ handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs
 // needed to reach 32 (continuing an in-progress accumulation
 // rather than restarting it), presents the average, and reads
 // THAT back. Otherwise identical to the plain snapshot.
-snapshot:opts=>{setUniforms();const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(opts&&opts.accumulated&&ACCUMULATION_ENABLED&&mesh&&!animatedMaterial&&bufSize.x>=1&&bufSize.y>=1){if(!accumulator)accumulator=createFrameAccumulator(renderer);while(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);renderFrame();}finally{if(camera.clearViewOffset)camera.clearViewOffset();}accumulator.endSample();}accumulator.present();accumConverged=true;accumReason=null;// Matches what the next animate() tick would compute,
+snapshot:opts=>{setUniforms();const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(opts&&opts.accumulated&&ACCUMULATION_ENABLED&&mesh&&!animatedMaterial&&bufSize.x>=1&&bufSize.y>=1){if(!accumulator)accumulator=createFrameAccumulator(renderer);while(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);// Refreshes u_viewProjectionMatrix etc. with the
+// jittered projection, same as animate()'s own
+// sampling loop: the MaterialX uniforms are a
+// plain JS object, not read live from the
+// camera like three's built-in materials.
+setUniforms();renderFrame();}finally{if(camera.clearViewOffset)camera.clearViewOffset();setUniforms();// restores the unjittered pose
+}accumulator.endSample();}accumulator.present();accumConverged=true;accumReason=null;// Matches what the next animate() tick would compute,
 // so it sees "unchanged" and keeps this average on screen.
 accumSignature=computeAccumSignature();return renderer.domElement.toDataURL('image/png');}renderFrame();const url=renderer.domElement.toDataURL('image/png');restoreAccumulatedPresentation();return url;},// Reads back the current view at caller-chosen dimensions:
 // syncs a render first, then resamples through a 2D canvas

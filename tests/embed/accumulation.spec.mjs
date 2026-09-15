@@ -41,6 +41,48 @@ const GLASS_MTLX = `<?xml version="1.0"?>
   </surfacematerial>
 </materialx>`;
 
+// Static (no u_time) high-frequency fractal3d noise driving base_color,
+// object-space position scaled way up so it aliases hard at sphere/
+// screen resolution: same class of per-pixel speckle as Stirling's flake
+// noise. Pattern lifted from examples/animated_noise.mtlx minus the
+// time-based scroll (an animated material never accumulates at all).
+const NOISE_MTLX = `<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_accum_noise">
+    <position name="pos" type="vector3">
+      <input name="space" type="string" value="object" />
+    </position>
+    <multiply name="scaledpos" type="vector3">
+      <input name="in1" type="vector3" nodename="pos" />
+      <input name="in2" type="float" value="400.0" />
+    </multiply>
+    <fractal3d name="noise" type="float">
+      <input name="position" type="vector3" nodename="scaledpos" />
+      <input name="amplitude" type="float" value="1.0" />
+      <input name="octaves" type="integer" value="3" />
+    </fractal3d>
+    <remap name="noise01" type="float">
+      <input name="in" type="float" nodename="noise" />
+      <input name="inlow" type="float" value="-1.0" />
+      <input name="inhigh" type="float" value="1.0" />
+      <input name="outlow" type="float" value="0.0" />
+      <input name="outhigh" type="float" value="1.0" />
+    </remap>
+    <convert name="noisecol" type="color3">
+      <input name="in" type="float" nodename="noise01" />
+    </convert>
+    <output name="out" type="color3" nodename="noisecol" />
+  </nodegraph>
+  <standard_surface name="SR_accum_noise" type="surfaceshader">
+    <input name="base" type="float" value="1.0" />
+    <input name="base_color" type="color3" nodegraph="NG_accum_noise" output="out" />
+    <input name="specular" type="float" value="0.0" />
+  </standard_surface>
+  <surfacematerial name="NoiseMat" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_accum_noise" />
+  </surfacematerial>
+</materialx>`;
+
 // Opens #!viewer, drops a one-file directory containing `mtlxText`, waits
 // for it to render, and returns { context, page } with
 // window.__mtlxViewerHandle live. A fresh context per call, same
@@ -367,6 +409,69 @@ test('shaderball-scene studio backdrop is not darkened by accumulation', async (
     const ibox = Math.floor(Math.min(direct.width, direct.height) * 0.12);
     expect(meanAbsDiff(Math.floor((direct.width - ibox) / 2), Math.floor((direct.height - ibox) / 2), ibox, ibox))
       .toBeLessThanOrEqual(2);
+  } finally {
+    await context.close();
+  }
+});
+
+// Regression: animate()/snapshot()'s per-sample loop called setUniforms()
+// (which bakes u_viewProjectionMatrix/u_viewPosition into the MaterialX
+// RawShaderMaterial's plain-JS uniforms object) BEFORE camera.setViewOffset(),
+// and renderFrame() never refreshed them, so every "jittered" sample was
+// actually identical for the MaterialX surface (built-in three materials
+// read camera.projectionMatrix live at draw time, so THEY jittered fine,
+// masking the bug on any scene with a backdrop). Isolated here with a
+// view whose ONLY geometry is the MaterialX mesh itself (no backdrop).
+
+// Fraction of pixels, inside a centered box, whose value differs from
+// their own 3x3-neighborhood mean by more than `threshold` levels (any
+// channel) - same speckle metric as heighttonormal.spec.mjs.
+function speckleFraction(png, x0, y0, boxSize, threshold) {
+  let speckled = 0, total = 0;
+  for (let y = y0 + 1; y < y0 + boxSize - 1; y++) {
+    for (let x = x0 + 1; x < x0 + boxSize - 1; x++) {
+      let sr = 0, sg = 0, sb = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const p = png.getPixel(x + dx, y + dy);
+          sr += p.r; sg += p.g; sb += p.b; n++;
+        }
+      }
+      const p = png.getPixel(x, y);
+      const dr = Math.abs(p.r - sr / n), dg = Math.abs(p.g - sg / n), db = Math.abs(p.b - sb / n);
+      total++;
+      if (Math.max(dr, dg, db) > threshold) speckled++;
+    }
+  }
+  return total ? speckled / total : 0;
+}
+
+test('accumulation smooths a high-frequency procedural material (not just built-in materials)', async ({ browser, embedURL }) => {
+  const { context, page } = await loadSphereView(browser, embedURL, NOISE_MTLX, { geom: 'sphere' });
+  try {
+    await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      if (h.setBackdrop) h.setBackdrop('none');
+      if (h.setAutoRotate) h.setAutoRotate(false);
+    });
+    await page.waitForTimeout(300);
+    await expect.poll(() => page.evaluate(() => window.__mtlxViewerHandle.getAccumulationState()),
+      { timeout: WAIT_TIMEOUT }).toMatchObject({ samples: 32, converged: true });
+
+    const [directUrl, accUrl] = await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      return [h.snapshot(), h.snapshot({ accumulated: true })];
+    });
+    const direct = decodePNG(Buffer.from(directUrl.split(',')[1], 'base64'));
+    const accumulated = decodePNG(Buffer.from(accUrl.split(',')[1], 'base64'));
+
+    const box = Math.floor(Math.min(direct.width, direct.height) * 0.3);
+    const x0 = Math.floor((direct.width - box) / 2), y0 = Math.floor((direct.height - box) / 2);
+    const directFraction = speckleFraction(direct, x0, y0, box, 6);
+    const accFraction = speckleFraction(accumulated, x0, y0, box, 6);
+    expect(directFraction).toBeGreaterThan(0.05);
+    expect(accFraction).toBeLessThan(directFraction * 0.85);
+    expect(directFraction - accFraction).toBeGreaterThan(0.1);
   } finally {
     await context.close();
   }
