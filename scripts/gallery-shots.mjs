@@ -53,6 +53,10 @@ const PER_MATERIAL_TIMEOUT_BASE_MS = 240000;
 const READY_WAIT_TIMEOUT_MS = 90000;
 const SCREENSHOT_TIMEOUT_MS = 150000;
 const SETTLE_WAIT_MS = 1500;
+// Bounded wait for the embed's `mtlx-displacement` settled signal (docs/
+// EMBEDDING.md's Displacement section) before falling back to the fixed
+// SETTLE_WAIT_MS paint wait below; most materials settle well under this.
+const DISPLACEMENT_SETTLE_TIMEOUT_MS = 5000;
 const MAX_ATTEMPTS = 3;
 
 function log(...args) {
@@ -177,6 +181,16 @@ async function captureOne(context, baseURL, outDir, material) {
       idx,
       { timeout: READY_WAIT_TIMEOUT_MS }
     );
+    // Prefer the real settled signal over a wall-clock guess; a timeout
+    // here just means it never fired (e.g. an older build), so fall
+    // through to the fixed paint-settle wait either way.
+    await page
+      .waitForFunction(
+        (i) => window.__viewers[i].__events.some((e) => e.type === "mtlx-displacement" && e.detail && e.detail.settled),
+        idx,
+        { timeout: DISPLACEMENT_SETTLE_TIMEOUT_MS }
+      )
+      .catch(() => {});
     await page.waitForTimeout(SETTLE_WAIT_MS);
     const handle = await page.evaluateHandle((i) => window.__viewers[i], idx);
     const element = handle.asElement();

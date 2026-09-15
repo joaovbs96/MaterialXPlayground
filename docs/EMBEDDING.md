@@ -58,6 +58,8 @@ in-page, for reference while you work.
 | `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `backdrop` is `environment`) the visible backdrop; the current `env`/`exposure`/`backdrop` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of whatever `backdrop` would otherwise show (the studio room, by default). See [Transparent background](#transparent-background). |
 | `forcetransparency` | boolean | *(off, or the visitor's last Settings choice)* | Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as `transparent` above. See [Force transparency](#force-transparency). |
+| `displacement` | boolean | on | Whether the material's displacement (if any) moves the preview mesh. See [Displacement](#displacement). |
+| `previewsubdivision` | integer, `0`-`3` | `2` | Loop subdivision level applied to the preview geometry ahead of displacement. See [Displacement](#displacement). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -157,6 +159,37 @@ the visitor's shared `localStorage` preference for this site. Only a visitor usi
 HUD panel's own toggle persists that shared preference. Omitting the param entirely still starts
 this embed from whatever that shared preference already is, left untouched either way.
 
+### Displacement
+
+`displacement` and `previewsubdivision` control the same per-vertex CPU displacement the full
+playground app applies: a material with a `displacementshader` moves the preview mesh along its
+own geometry, evaluated once per vertex against the current subdivision level.
+
+```html
+<iframe
+  src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&displacement=1&previewsubdivision=2"
+  width="480" height="360" loading="lazy" style="border:0"
+  title="MaterialX material preview">
+</iframe>
+```
+
+A few things worth knowing:
+
+- **Subdivision level and the triangle cap.** Each level is roughly 4x the triangle count of the
+  one below it; the resulting mesh is capped at 1.5M triangles regardless of the requested level,
+  and a capped run is reported through `mtlx-error`.
+- **Scale is the preview's own normalized units** (the built-in geometries fit inside a radius-1
+  sphere), not the document's authored world units.
+- **Animated displacement** (a `time`/`frame`-driven offset) is evaluated once, at time 0, not
+  animated frame to frame.
+- **Failure falls back to the undisplaced mesh.** A displacement evaluation failure never blocks
+  the material itself from rendering; it reports through the `displacement` event (below) with
+  `state: 'failed'`, never through `mtlx-error`.
+- **Never persists.** Like `forcetransparency` above, setting `displacement`/`previewsubdivision`
+  here, or via the equivalent `setDisplacement`/`setPreviewSubdivision` postMessage commands or
+  the Settings HUD panel's own controls in this embed, only affects this embed instance and never
+  writes to the visitor's shared `localStorage` preference for this site.
+
 ## The `<materialx-viewer>` custom element
 
 For anything beyond a single static embed, a docs page with several materials, a product
@@ -206,6 +239,8 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `geometryurl` | `.geometryUrl` | URL string (`.obj`/`.glb`/`.gltf`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `forcetransparency` | `.forceTransparency` | boolean | off | Yes |
+| `displacement` | `.displacement` | boolean | on | Yes |
+| `previewsubdivision` | `.previewSubdivision` | integer, `0`-`3` | `2` | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
@@ -236,6 +271,11 @@ Boolean attributes on the element itself (`autorotate`, `background`, `transpare
 regardless of value, so `transparent="0"` is still on. Use `el.removeAttribute('transparent')`,
 or the property (`el.transparent = false`), to turn one off. This is a different rule from the
 `boolean` query params above, which do parse the value (`1`/`true`/`yes`/`on`).
+
+`displacement` is the one exception: its default is *on*, so absence can't mean false the way it
+does for the others above. Instead it parses its value the same way the `boolean` query params
+do, and only an off-like spelling (`off`, `0`, `false`, `no`) reads as false; setting the property
+to a boolean writes the literal word (`el.displacement = false` sets `displacement="off"`).
 
 `base` only needs setting explicitly if `mtlx-viewer.js` isn't loaded as a plain, synchronous
 `<script src>` next to `viewer.html` (for example, if you copy the script into a bundler or
@@ -268,13 +308,17 @@ Dispatched as `CustomEvent`s on the element itself:
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
 | `mtlx-renderables` | `[{ name, type }, ...]`, the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, a failed or unsupported `geometryUrl`, or an unrecognized `wheel`/`version`/`backdrop`/`forcetransparency` value. |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, a failed or unsupported `geometryUrl`, or an unrecognized `wheel`/`version`/`backdrop`/`forcetransparency`/`displacement`/`previewsubdivision` value. |
+| `mtlx-displacement` | `{ state: string, notices: string[], settled: boolean }` | Never fatal, unlike `mtlx-error`. Fires whenever the current view's displacement status changes (`state` is one of the engine's own displacement states, e.g. `'applied'`, `'off'`, `'failed'`), and again with `settled: true` once evaluation finishes after a load or a `displacement`/`previewsubdivision` change, so a host can await it instead of guessing a fixed wait (see [Displacement](#displacement)). |
 
 ```js
 const el = document.querySelector('materialx-viewer');
 el.addEventListener('mtlx-ready', (e) => console.log('engine version', e.detail.version));
 el.addEventListener('mtlx-renderables', (e) => console.log('materials:', e.detail));
 el.addEventListener('mtlx-error', (e) => console.error('viewer error:', e.detail.message));
+el.addEventListener('mtlx-displacement', (e) => {
+  if (e.detail.settled) console.log('displacement settled:', e.detail.state);
+});
 ```
 
 ## Theming

@@ -14,9 +14,9 @@
 //
 // Inbound (host -> iframe): load, setGeometry, setGeometryUrl,
 // setEnvRotation, setEnvExposure, setEnvBackground, setBackdrop, setEnvMap,
-// setTransparent, setForceTransparency, setTheme, resetCamera, snapshot,
-// setMaterial, setCamera, getCamera.
-// Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
+// setTransparent, setForceTransparency, setDisplacement, setPreviewSubdivision,
+// setTheme, resetCamera, snapshot, setMaterial, setCamera, getCamera.
+// Outbound (iframe -> host): ready, renderables, error, snapshot, camera, displacement.
 (function () {
     'use strict';
 
@@ -297,6 +297,35 @@
         window.setForceTransparency(initialForceTransparency, { persist: false });
     }
 
+    // `displacement` drives the shared engine Displacement toggle (default
+    // on), same tab-only/non-persisting contract as `forcetransparency`.
+    function parseDisplacement(v) {
+        if (v == null || v === '') return undefined;
+        var s = String(v).trim().toLowerCase();
+        if (TRUE_WORDS.indexOf(s) !== -1) return true;
+        if (FALSE_WORDS.indexOf(s) !== -1) return false;
+        post('error', { message: 'Unknown `displacement` value "' + v + '". Valid values: 1, true, yes, on, 0, false, no, off.' });
+        return undefined;
+    }
+    var initialDisplacement = parseDisplacement(qs.get('displacement'));
+    if (initialDisplacement !== undefined && typeof window.setDisplacementEnabled === 'function') {
+        window.setDisplacementEnabled(initialDisplacement, { persist: false });
+    }
+
+    // `previewsubdivision` drives the shared engine preview subdivision
+    // level (0..3, default 2), same tab-only/non-persisting contract.
+    function parsePreviewSubdivision(v) {
+        if (v == null || v === '') return undefined;
+        var n = Number(v);
+        if (!isNaN(n) && Number.isInteger(n) && n >= 0 && n <= 3) return n;
+        post('error', { message: 'Unknown `previewsubdivision` value "' + v + '". Valid values: 0, 1, 2, 3.' });
+        return undefined;
+    }
+    var initialPreviewSubdivision = parsePreviewSubdivision(qs.get('previewsubdivision'));
+    if (initialPreviewSubdivision !== undefined && typeof window.setPreviewSubdivisionLevel === 'function') {
+        window.setPreviewSubdivisionLevel(initialPreviewSubdivision, { persist: false });
+    }
+
     // Live env state, tracked here (not just handed to the engine once) so
     // it survives a view REBUILD (a geometry/material change disposes the
     // old handle and creates a new one, see js/viewer-app.jsx's render
@@ -355,6 +384,29 @@
             initialCameraApplied = true;
             if (handle.setCamera) handle.setCamera(initialCameraPose, true);
         }
+        // Displacement settled signal, see postDisplacementSettled below:
+        // fires once for every load/rebuild, not just settings changes.
+        postDisplacementSettled(handle);
+    }
+
+    // Non-fatal `displacement` status, forwarded for the CURRENT view only
+    // (a rebuild's stale event from the torn-down previous handle is
+    // dropped, matching how currentHandle already tracks the live one).
+    window.addEventListener('mtlx-displacement-status', function (e) {
+        if (!e.detail || e.detail.view !== currentHandle) return;
+        post('displacement', { state: e.detail.state, notices: e.detail.notices || [] });
+    });
+
+    // Settled signal for hosts: resolves once the view's displacement
+    // evaluation (if any) is no longer in flight, then posts a `displacement`
+    // event with `settled: true`, so a host can await it instead of guessing.
+    function postDisplacementSettled(handle) {
+        if (!handle || typeof handle.whenDisplacementSettled !== 'function') return;
+        handle.whenDisplacementSettled().then(function () {
+            if (currentHandle !== handle) return; // superseded by a later rebuild
+            var state = typeof handle.getDisplacementState === 'function' ? handle.getDisplacementState() : null;
+            post('displacement', { state: state ? state.state : null, notices: state ? state.notices : [], settled: true });
+        });
     }
 
     // Correlates a 'load' call with the renderables/error it eventually
@@ -592,6 +644,24 @@
         if (typeof window.setForceTransparency === 'function') window.setForceTransparency(!!msg.on, { persist: false });
     }
 
+    // Live `setDisplacement`/`setPreviewSubdivision` (tab-only, non-
+    // persisting): the shared setters refresh every live view themselves,
+    // so postDisplacementSettled just needs to wait on the current one.
+    function handleSetDisplacement(msg) {
+        if (typeof window.setDisplacementEnabled === 'function') window.setDisplacementEnabled(!!msg.on, { persist: false });
+        postDisplacementSettled(currentHandle);
+    }
+
+    function handleSetPreviewSubdivision(msg) {
+        var n = Number(msg.level);
+        if (isNaN(n) || !Number.isInteger(n) || n < 0 || n > 3) {
+            post('error', withId({ message: 'Invalid `level` for setPreviewSubdivision; expected an integer 0-3.' }, msg));
+            return;
+        }
+        if (typeof window.setPreviewSubdivisionLevel === 'function') window.setPreviewSubdivisionLevel(n, { persist: false });
+        postDisplacementSettled(currentHandle);
+    }
+
     // Live theme update (LIVE_ATTRS): re-validates before applying, same
     // as the initial query-param pass, so a bad live value still can't
     // reach the stylesheet.
@@ -672,6 +742,8 @@
         setEnvMap: handleSetEnvMap,
         setTransparent: handleSetTransparent,
         setForceTransparency: handleSetForceTransparency,
+        setDisplacement: handleSetDisplacement,
+        setPreviewSubdivision: handleSetPreviewSubdivision,
         setTheme: handleSetTheme,
         resetCamera: handleResetCamera,
         snapshot: handleSnapshot,

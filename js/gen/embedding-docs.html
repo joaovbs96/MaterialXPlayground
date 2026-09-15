@@ -138,6 +138,18 @@ in-page, for reference while you work.</p>
 <td>Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as <code>transparent</code> above. See <a href="#force-transparency">Force transparency</a>.</td>
 </tr>
 <tr>
+<td><code>displacement</code></td>
+<td>boolean</td>
+<td>on</td>
+<td>Whether the material&#39;s displacement (if any) moves the preview mesh. See <a href="#displacement">Displacement</a>.</td>
+</tr>
+<tr>
+<td><code>previewsubdivision</code></td>
+<td>integer, <code>0</code>-<code>3</code></td>
+<td><code>2</code></td>
+<td>Loop subdivision level applied to the preview geometry ahead of displacement. See <a href="#displacement">Displacement</a>.</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td>CSS color</td>
 <td><code>#3b82f6</code></td>
@@ -317,6 +329,33 @@ share that toggle&#39;s persistence: setting <code>forcetransparency</code> here
 the visitor&#39;s shared <code>localStorage</code> preference for this site. Only a visitor using the Settings
 HUD panel&#39;s own toggle persists that shared preference. Omitting the param entirely still starts
 this embed from whatever that shared preference already is, left untouched either way.</p>
+<h3 id="displacement">Displacement</h3>
+<p><code>displacement</code> and <code>previewsubdivision</code> control the same per-vertex CPU displacement the full
+playground app applies: a material with a <code>displacementshader</code> moves the preview mesh along its
+own geometry, evaluated once per vertex against the current subdivision level.</p>
+<pre><code class="language-html">&lt;iframe
+  src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;displacement=1&amp;previewsubdivision=2&quot;
+  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
+  title=&quot;MaterialX material preview&quot;&gt;
+&lt;/iframe&gt;
+</code></pre>
+<p>A few things worth knowing:</p>
+<ul>
+<li><strong>Subdivision level and the triangle cap.</strong> Each level is roughly 4x the triangle count of the
+one below it; the resulting mesh is capped at 1.5M triangles regardless of the requested level,
+and a capped run is reported through <code>mtlx-error</code>.</li>
+<li><strong>Scale is the preview&#39;s own normalized units</strong> (the built-in geometries fit inside a radius-1
+sphere), not the document&#39;s authored world units.</li>
+<li><strong>Animated displacement</strong> (a <code>time</code>/<code>frame</code>-driven offset) is evaluated once, at time 0, not
+animated frame to frame.</li>
+<li><strong>Failure falls back to the undisplaced mesh.</strong> A displacement evaluation failure never blocks
+the material itself from rendering; it reports through the <code>displacement</code> event (below) with
+<code>state: &#39;failed&#39;</code>, never through <code>mtlx-error</code>.</li>
+<li><strong>Never persists.</strong> Like <code>forcetransparency</code> above, setting <code>displacement</code>/<code>previewsubdivision</code>
+here, or via the equivalent <code>setDisplacement</code>/<code>setPreviewSubdivision</code> postMessage commands or
+the Settings HUD panel&#39;s own controls in this embed, only affects this embed instance and never
+writes to the visitor&#39;s shared <code>localStorage</code> preference for this site.</li>
+</ul>
 <h2 id="the-materialx-viewer-custom-element">The <code>&lt;materialx-viewer&gt;</code> custom element</h2>
 <p>For anything beyond a single static embed, a docs page with several materials, a product
 grid, a listing that scrolls, use the wrapper element instead of hand-writing iframes. It
@@ -464,6 +503,20 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>displacement</code></td>
+<td><code>.displacement</code></td>
+<td>boolean</td>
+<td>on</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>previewsubdivision</code></td>
+<td><code>.previewSubdivision</code></td>
+<td>integer, <code>0</code>-<code>3</code></td>
+<td><code>2</code></td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td><code>.accent</code></td>
 <td>CSS color</td>
@@ -531,6 +584,10 @@ iframe/WebGL context).</p>
 regardless of value, so <code>transparent=&quot;0&quot;</code> is still on. Use <code>el.removeAttribute(&#39;transparent&#39;)</code>,
 or the property (<code>el.transparent = false</code>), to turn one off. This is a different rule from the
 <code>boolean</code> query params above, which do parse the value (<code>1</code>/<code>true</code>/<code>yes</code>/<code>on</code>).</p>
+<p><code>displacement</code> is the one exception: its default is <em>on</em>, so absence can&#39;t mean false the way it
+does for the others above. Instead it parses its value the same way the <code>boolean</code> query params
+do, and only an off-like spelling (<code>off</code>, <code>0</code>, <code>false</code>, <code>no</code>) reads as false; setting the property
+to a boolean writes the literal word (<code>el.displacement = false</code> sets <code>displacement=&quot;off&quot;</code>).</p>
 <p><code>base</code> only needs setting explicitly if <code>mtlx-viewer.js</code> isn&#39;t loaded as a plain, synchronous
 <code>&lt;script src&gt;</code> next to <code>viewer.html</code> (for example, if you copy the script into a bundler or
 inject it dynamically). Normally it&#39;s inferred automatically from where the script itself
@@ -612,13 +669,21 @@ calling these.</p>
 <tr>
 <td><code>mtlx-error</code></td>
 <td><code>{ message: string }</code></td>
-<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, a failed or unsupported <code>geometryUrl</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code> value.</td>
+<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, a failed or unsupported <code>geometryUrl</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code>/<code>displacement</code>/<code>previewsubdivision</code> value.</td>
+</tr>
+<tr>
+<td><code>mtlx-displacement</code></td>
+<td><code>{ state: string, notices: string[], settled: boolean }</code></td>
+<td>Never fatal, unlike <code>mtlx-error</code>. Fires whenever the current view&#39;s displacement status changes (<code>state</code> is one of the engine&#39;s own displacement states, e.g. <code>&#39;applied&#39;</code>, <code>&#39;off&#39;</code>, <code>&#39;failed&#39;</code>), and again with <code>settled: true</code> once evaluation finishes after a load or a <code>displacement</code>/<code>previewsubdivision</code> change, so a host can await it instead of guessing a fixed wait (see <a href="#displacement">Displacement</a>).</td>
 </tr>
 </tbody></table>
 <pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);
 el.addEventListener(&#39;mtlx-ready&#39;, (e) =&gt; console.log(&#39;engine version&#39;, e.detail.version));
 el.addEventListener(&#39;mtlx-renderables&#39;, (e) =&gt; console.log(&#39;materials:&#39;, e.detail));
 el.addEventListener(&#39;mtlx-error&#39;, (e) =&gt; console.error(&#39;viewer error:&#39;, e.detail.message));
+el.addEventListener(&#39;mtlx-displacement&#39;, (e) =&gt; {
+  if (e.detail.settled) console.log(&#39;displacement settled:&#39;, e.detail.state);
+});
 </code></pre>
 <h2 id="theming">Theming</h2>
 <p>Four params (<code>accent</code>, <code>surface</code>, <code>text</code>, <code>radius</code>) map to CSS custom properties consumed by
