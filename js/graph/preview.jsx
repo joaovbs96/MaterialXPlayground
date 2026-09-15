@@ -283,7 +283,7 @@
                 if (el) temps.push({ container: doc, name: nm });
                 return el;
             };
-            const ok = (renderable, label) => ({ renderable, label, cleanup, notice: null });
+            const ok = (renderable, label, materialName = null) => ({ renderable, label, materialName, cleanup, notice: null });
             const fail = (notice) => { cleanup(); return { renderable: null, label: '', cleanup: () => {}, notice }; };
 
             // Wraps a tapped value (srcRef = { nodename | nodegraph, output? },
@@ -370,7 +370,7 @@
             // outType/outName are seedNode's own output: surfaceshader or
             // any other COMPOUND_TAP_TYPES closure type, outName set only
             // for a multi-output seed.
-            const wrapRootNetwork = (seedNode, label, outType, outName) => {
+            const wrapRootNetwork = (seedNode, label, outType, outName, matName = null) => {
                 const seedName = mxElName(seedNode);
                 const closure = new Map(); // name -> node, ROOT nodes only
                 const stack = [seedNode];
@@ -390,7 +390,7 @@
                 // is already a valid renderable; a closure type still needs
                 // the surface/material shell to be renderable at all.
                 if (closure.size <= 1) {
-                    return outType === 'surfaceshader' ? ok(seedNode, label)
+                    return outType === 'surfaceshader' ? ok(seedNode, label, matName)
                         : wrapAsSurface({ nodename: seedName }, outType, label);
                 }
 
@@ -480,17 +480,27 @@
 
                 if (!inst) {
                     cleanup();
-                    return outType === 'surfaceshader' ? ok(seedNode, label)
+                    return outType === 'surfaceshader' ? ok(seedNode, label, matName)
                         : wrapAsSurface({ nodename: seedName }, outType, label);
                 }
-                return outType === 'surfaceshader' ? ok(inst, label)
+                return outType === 'surfaceshader' ? ok(inst, label, matName)
                     : wrapAsSurface({ nodename: mxElName(inst) }, outType, label);
             };
             // Only a root-level surfaceshader is worth wrapping this way,
             // used at every ok()-of-a-root-surfaceshader site below; other
             // COMPOUND_TAP_TYPES roots are routed in previewNode directly.
-            const maybeWrapRoot = (el, label) => (compoundRoot && mxElType(el) === 'surfaceshader')
-                ? wrapRootNetwork(el, label, 'surfaceshader', null) : ok(el, label);
+            // Displacement lives on the material, so a previewed root shader carries the
+            // material wired to it; the compound wrapper node would otherwise hide it.
+            const materialForShader = (shaderName) => {
+                for (const n of vecToArray(mxSafe(() => doc.getNodes(), []))) {
+                    if (mxElType(n) !== 'material') continue;
+                    const inp = mxSafe(() => n.getInput('surfaceshader'), null);
+                    if (inp && mxElAttr(inp, 'nodename') === shaderName) return mxElName(n);
+                }
+                return null;
+            };
+            const maybeWrapRoot = (el, label, matName = materialForShader(mxElName(el))) => (compoundRoot && mxElType(el) === 'surfaceshader')
+                ? wrapRootNetwork(el, label, 'surfaceshader', null, matName) : ok(el, label, matName);
 
             // Preview one node instance in `container` (the doc root when
             // containerName is '', else the nodegraph of that name).
@@ -502,9 +512,9 @@
                         if (mxElType(inp) !== 'surfaceshader') continue;
                         const nn = mxElAttr(inp, 'nodename');
                         const s = nn ? mxSafe(() => container.getNode(nn), null) : null;
-                        if (s) return maybeWrapRoot(s, name);
+                        if (s) return maybeWrapRoot(s, name, name);
                     }
-                    return ok(el, name); // let the generator resolve the material
+                    return ok(el, name, name); // let the generator resolve the material
                 }
                 // Only at the ROOT: inside a nodegraph a surfaceshader node
                 // still goes through the compound-tap path below.
@@ -1350,6 +1360,7 @@
                                     res = await tryRefreshRenderView({
                                         view: live, mx, gen, genContext,
                                         renderable: built.renderable,
+                                        materialName: built.materialName || null,
                                         label: built.label || parsed.label,
                                         isMounted: () => mounted,
                                     });
@@ -1395,6 +1406,7 @@
                                     window.mxExclusive(() => built.cleanup());
                                     applied = await live.applyMaterial({
                                         mx, gen, genContext, renderable: built.renderable,
+                                        materialName: built.materialName || null,
                                         srcs: res.srcs,
                                         label: built.label || parsed.label,
                                         isMounted: () => mounted,
@@ -1406,6 +1418,7 @@
                                     try {
                                         applied = await live.applyMaterial({
                                             mx, gen, genContext, renderable: built.renderable,
+                                            materialName: built.materialName || null,
                                             label: built.label || parsed.label,
                                             isMounted: () => mounted,
                                         });
@@ -1457,8 +1470,7 @@
                                 view = await createMtlxRenderView({
                                     canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                     label: built.label || parsed.label,
-                                    materialName: (built.renderable && built.renderable.getName)
-                                        ? built.renderable.getName() : null,
+                                    materialName: built.materialName || null,
                                     needsLighting: true,
                                     geomName: wantGeom,
                                     // 3D geometries orbit by default; the full scene opts

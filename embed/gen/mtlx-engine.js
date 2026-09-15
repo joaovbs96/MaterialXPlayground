@@ -1808,7 +1808,7 @@ try{compileFilteringDriverNoise(renderer,scene,camera);const badProg=(renderer.i
 // Returns { refreshed, srcs } (srcs handed back so a real-mismatch
 // caller doesn't need to regenerate again) or { refreshed: true }.
 // ------------------------------------------------------------------
-const tryRefreshRenderView=async({view,mx,gen,genContext,renderable,label,isMounted=()=>true})=>{const __t=window.MTLX_PERF_LOG?performance.now():0;let srcs;try{srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,isMounted});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
+const tryRefreshRenderView=async({view,mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true})=>{const __t=window.MTLX_PERF_LOG?performance.now():0;let srcs;try{srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
 // rather than relying on srcs.vs/fs alone. Gated on FORCE_TRANSPARENCY:
 // when off, a verdict flip is irrelevant and forcing rebuild is pointless.
 if(srcs.vs!==view.vs||srcs.fs!==view.fs||FORCE_TRANSPARENCY&&!!srcs.transparent!==!!view.isTransparent)return{refreshed:false,srcs};// A filename value can change without the GLSL text changing, so
@@ -2893,10 +2893,11 @@ handle.setEnvironment(env);if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);fet
 return getEnvironment().then(def=>{if(def)swapIn(def,false);return true;});}const clean=String(url).split('?')[0].split('#')[0];const ext=clean.slice(clean.lastIndexOf('.')).toLowerCase();if(ext!=='.hdr'&&ext!=='.exr'){return Promise.reject(new Error('Unsupported environment URL "'+url+'". Expected .hdr or .exr.'));}if(ext==='.hdr'&&typeof THREE.RGBELoader==='undefined'){return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));}if(ext==='.exr'&&typeof THREE.EXRLoader==='undefined'){return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));}return fetch(url).then(r=>{if(!r.ok)throw new Error('Failed to fetch environment "'+url+'" (HTTP '+r.status+').');return r.arrayBuffer();}).then(buf=>{const raw=parseEnvBuffer(buf,ext);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+url+'".');}swapIn(buildEnvFromParsedTexture(raw),true);return true;});},// Applies a new (or already-generated) material into this
 // SAME shell, instead of calling createMtlxRenderView() again.
 // Returns null when superseded/bailed; throws on real compile failure.
-applyMaterial:async({mx,gen,genContext,renderable,srcs=null,label,isMounted=()=>true})=>{const __applyPerfStart=window.MTLX_PERF_LOG?performance.now():0;// `stopped` is disposePartial's flag, an apply arriving
+applyMaterial:async({mx,gen,genContext,renderable,srcs=null,label,materialName:applyMaterialName,isMounted=()=>true})=>{const __applyPerfStart=window.MTLX_PERF_LOG?performance.now():0;// `stopped` is disposePartial's flag, an apply arriving
 // after teardown must do nothing, not resurrect GL state
 // on an already-disposed renderer/context.
-if(stopped||!isMounted())return null;if(!srcs){srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted});}// A thrown generation error is NOT caught here, it
+if(stopped||!isMounted())return null;if(!srcs){// A caller switching materials passes the new material's name.
+const genMaterialName=applyMaterialName!==undefined?applyMaterialName:materialName;srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName:genMaterialName,isMounted});}// A thrown generation error is NOT caught here, it
 // propagates like a first-build failure, so the UI shows
 // the same overlay while the old material keeps rendering.
 if(!srcs||!isMounted()||stopped)return null;const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});// 'bailed' or a lost isMounted(): must not touch the

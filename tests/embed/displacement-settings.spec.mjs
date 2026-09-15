@@ -266,3 +266,38 @@ test.describe('SettingsDialog popover sizing (#!graph preview)', () => {
     expect(box.y + box.height).toBeLessThanOrEqual(720);
   });
 });
+
+// Compound Compile wraps the previewed surface shader in a transient node that
+// no material references; the preview must still find the material's displacement.
+const COMPOUND_DISPLACED_MTLX = `<?xml version="1.0"?>
+<materialx version="1.39">
+  <constant name="tint" type="color3"><input name="value" type="color3" value="0.8, 0.4, 0.2" /></constant>
+  <standard_surface name="surf" type="surfaceshader"><input name="base_color" type="color3" nodename="tint" /></standard_surface>
+  <displacement name="disp" type="displacementshader"><input name="displacement" type="float" value="0.15" /></displacement>
+  <surfacematerial name="mat" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="surf" />
+    <input name="displacementshader" type="displacementshader" nodename="disp" />
+  </surfacematerial>
+</materialx>`;
+
+test('Graph Editor preview applies displacement with Compound Compile on', async ({ page, embedURL }) => {
+  await page.addInitScript(() => {
+    try { localStorage.setItem('mtlx_graph_preview_compound', '1'); } catch (e) { /* storage blocked */ }
+    window.__dispEvents = [];
+    window.addEventListener('mtlx-displacement-status', (e) => { window.__dispEvents.push((e.detail || {}).state); });
+  });
+  await page.goto(embedURL + INDEX_PATH + '#!graph');
+  await page.waitForSelector('.gtb-bar', { timeout: WAIT_TIMEOUT });
+  await page.waitForFunction(() => typeof window.parseMtlxDocument === 'function', null, { timeout: WAIT_TIMEOUT });
+  await page.evaluate((xml) => {
+    window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: { xml, name: 'compound-displaced', files: {} } }));
+  }, COMPOUND_DISPLACED_MTLX);
+  await page.getByTitle('Settings').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  await page.waitForTimeout(8000);
+  // The first build displaces before the view handle exists, so toggle to make
+  // the live preview re-resolve its displacement and report the result.
+  await page.evaluate(() => { window.__dispEvents.length = 0; window.setDisplacementEnabled(false, { persist: false }); });
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => window.setDisplacementEnabled(true, { persist: false }));
+  await expect.poll(() => page.evaluate(() => window.__dispEvents.slice()), { timeout: WAIT_TIMEOUT }).toContain('applied');
+});

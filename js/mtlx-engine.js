@@ -7351,11 +7351,11 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
 // Returns { refreshed, srcs } (srcs handed back so a real-mismatch
 // caller doesn't need to regenerate again) or { refreshed: true }.
 // ------------------------------------------------------------------
-const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, label, isMounted = () => true }) => {
+const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, label, materialName = null, isMounted = () => true }) => {
     const __t = window.MTLX_PERF_LOG ? performance.now() : 0;
     let srcs;
     try {
-        srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
+        srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName, isMounted });
     } catch (e) {
         return { refreshed: false, srcs: null };
     }
@@ -10641,14 +10641,16 @@ const createMtlxRenderView = async ({
             // Applies a new (or already-generated) material into this
             // SAME shell, instead of calling createMtlxRenderView() again.
             // Returns null when superseded/bailed; throws on real compile failure.
-            applyMaterial: async ({ mx, gen, genContext, renderable, srcs = null, label, isMounted = () => true }) => {
+            applyMaterial: async ({ mx, gen, genContext, renderable, srcs = null, label, materialName: applyMaterialName, isMounted = () => true }) => {
                 const __applyPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 // `stopped` is disposePartial's flag, an apply arriving
                 // after teardown must do nothing, not resurrect GL state
                 // on an already-disposed renderer/context.
                 if (stopped || !isMounted()) return null;
                 if (!srcs) {
-                    srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName, isMounted });
+                    // A caller switching materials passes the new material's name.
+                    const genMaterialName = applyMaterialName !== undefined ? applyMaterialName : materialName;
+                    srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName: genMaterialName, isMounted });
                 }
                 // A thrown generation error is NOT caught here, it
                 // propagates like a first-build failure, so the UI shows
