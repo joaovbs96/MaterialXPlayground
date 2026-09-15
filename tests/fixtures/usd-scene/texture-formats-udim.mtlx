@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="udim_tif" type="color3">
+    <input name="file" type="filename" value="textures/udimtile.&lt;UDIM&gt;.tif" colorspace="srgb_texture" />
+  </image>
+  <surface_unlit name="udim_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="udim_tif" />
+  </surface_unlit>
+  <surfacematerial name="udim_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="udim_surface" />
+  </surfacematerial>
+</materialx>

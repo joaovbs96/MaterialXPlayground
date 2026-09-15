@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_exr" type="color3">
+    <input name="file" type="filename" value="quadB.exr" colorspace="srgb_texture" />
+  </image>
+  <surface_unlit name="exr_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="img_exr" />
+  </surface_unlit>
+  <surfacematerial name="exr_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="exr_surface" />
+  </surfacematerial>
+</materialx>
