@@ -1395,7 +1395,7 @@
                         <MtlxSelect value={textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
                             onChange={pickTextureBudgetGib} defValue={1} size="sm" disabled={busy} />
                     }
-                    description="How much memory all scene textures may use together. If the scene needs more, every texture loads at a lower resolution (down to 512 px) until they fit, so textures look blurrier. If they still do not fit, textures past the limit are left out: those inputs use their default values and UDIM tiles turn neutral grey. Higher values keep textures sharp, but going beyond what your GPU has can lose the WebGL context and blank the view." />
+                    description="How much memory all scene textures may use. Over the limit, textures load at a lower resolution (down to 512 px); if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view." />
                 <SelectRow label="Subdivision"
                     control={
                         <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
