@@ -465,6 +465,16 @@
         );
     }
 
+    // Kept as one array so the list is easy to edit without touching the
+    // popover markup below.
+    const SCENE_KNOWN_ISSUES = [
+        'A malformed prim can crash the USD runtime.',
+        'USD over edits on referenced MaterialX nodes are ignored.',
+        'UsdPreviewSurface is only flattened to basic constants and textures, not converted to MaterialX.',
+        'Reloading stages many times in one session has hung twice.',
+    ];
+    const KNOWN_ISSUES_POPOVER_W = 260;
+
     function SceneViewerApp({ active = true }) {
         const narrow = useNarrowPane();
         const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
@@ -576,6 +586,33 @@
             window.addEventListener('pointerdown', onDown);
             return () => window.removeEventListener('pointerdown', onDown);
         }, [renderSettingsOpen]);
+        // Sidebar "Experimental" pill: a small known-issues popover, portaled
+        // out of the sidebar's overflow-hidden and clamped to the viewport
+        // the same way SettingsDialog in mtlx-ui.jsx anchors below its cog.
+        const [knownIssuesOpen, setKnownIssuesOpen] = React.useState(false);
+        const knownIssuesBtnRef = React.useRef(null);
+        const knownIssuesPopRef = React.useRef(null);
+        const [knownIssuesPos, setKnownIssuesPos] = React.useState(null);
+        useEscapeToClose(() => setKnownIssuesOpen(false), knownIssuesOpen);
+        React.useLayoutEffect(() => {
+            if (!knownIssuesOpen) return undefined;
+            const rect = knownIssuesBtnRef.current ? knownIssuesBtnRef.current.getBoundingClientRect() : null;
+            if (rect) {
+                const left = Math.max(8, Math.min(rect.left, window.innerWidth - KNOWN_ISSUES_POPOVER_W - 8));
+                setKnownIssuesPos({ left, top: Math.min(rect.bottom + 4, window.innerHeight - 8) });
+            }
+            return undefined;
+        }, [knownIssuesOpen]);
+        React.useEffect(() => {
+            if (!knownIssuesOpen) return undefined;
+            const onDown = (e) => {
+                if (knownIssuesPopRef.current && knownIssuesPopRef.current.contains(e.target)) return;
+                if (knownIssuesBtnRef.current && knownIssuesBtnRef.current.contains(e.target)) return;
+                setKnownIssuesOpen(false);
+            };
+            window.addEventListener('pointerdown', onDown);
+            return () => window.removeEventListener('pointerdown', onDown);
+        }, [knownIssuesOpen]);
         // Mirrors the boolean keys js/usd-scene-renderer.js reads at creation
         // (storedSceneAo etc.) so a toggle flipped before load is honored by
         // the next renderer instance without editing that file.
@@ -1576,11 +1613,37 @@
                     <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
                         <span className="text-[13px] font-semibold text-gray-200">Scene Viewer</span>
                         <button
+                            ref={knownIssuesBtnRef}
+                            type="button"
+                            data-testid="usd-scene-experimental-pill"
+                            aria-expanded={knownIssuesOpen}
+                            title="Known issues"
+                            onClick={() => setKnownIssuesOpen((o) => !o)}
+                            className="ml-2 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300 hover:bg-amber-600/40 hover:border-amber-500/70"
+                        >Experimental</button>
+                        <button
                             onClick={() => setSidebarOpen(false)}
                             title="Collapse the scene viewer panel"
                             className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
                         ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                     </div>
+                    {knownIssuesOpen && knownIssuesPos && ReactDOM.createPortal(
+                        <div
+                            ref={knownIssuesPopRef}
+                            data-testid="usd-scene-known-issues"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            style={{ position: 'fixed', zIndex: 9999, width: KNOWN_ISSUES_POPOVER_W, left: knownIssuesPos.left, top: knownIssuesPos.top }}
+                            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+                        >
+                            <div className="px-3 py-2.5 space-y-1.5">
+                                <div className="text-[12px] font-semibold text-gray-200">Known issues</div>
+                                <ul className="list-disc pl-4 space-y-1 text-[11px] text-gray-400">
+                                    {SCENE_KNOWN_ISSUES.map((issue, i) => <li key={i}>{issue}</li>)}
+                                </ul>
+                            </div>
+                        </div>,
+                        fullscreenPortalRoot()
+                    )}
                     {sidebarBody}
                     <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
                         <div className="flex items-center gap-2 mb-1.5">
