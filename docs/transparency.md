@@ -87,15 +87,59 @@ is negative, and a plain clamp would misread every one of those layers as maxima
 guess at what's behind the surface, and the peel's own alpha compositing is now ALSO showing the
 real scene behind it, so showing both at full strength would double-count.
 
-**Opt-in via Settings, and the non-persisting embed path**
+**Scene RGB-T path and measured accuracy**
 
-The behavior above is gated behind Settings -> Force Transparency (cogwheel in each view's
-viewport controls), persisted in `localStorage` (`mtlxForceTransparency`) and **off by
+The USD Scene renderer compiles its scene materials with the RGB-T payload contract. Scene
+Transparency controls whether that payload is activated by the compositor. Pass 0
+writes premultiplied color `C`, pass 1 writes RGB transmission `T`, and pass 2 writes tail `C`
+plus a scalar residual. `patchRgbtPayload` routes the generated viewing-transmission terminal to
+that contract and leaves the original source untouched when the generated structure is not
+unambiguous. `u_peelRgbt` is the runtime switch, so ordinary Material Viewer shaders keep their
+legacy behavior. The opacity block is applied once after the terminal is split into `C` and `T`;
+the RGB-T transmission helper returns its tint at the start of the branch so a generated
+refraction tint and a second two-sided tint factor are not counted again.
+
+The payload uses independent color and transmission targets with eight exact depth layers,
+followed by a scalar raster-ordered tail for deeper fragments and one linear display composite.
+An opaque subgroup in a mixed mesh is captured once in `opaqueRT` and discarded from every
+RGB-T geometry pass. This keeps an ordinary opaque submaterial from being counted as a
+transmissive layer or repeatedly added to `C`.
+
+The GPU checks are deliberately pixel-based. The core MaterialX fixture suite passes 7/7 tests:
+Standard and OpenPBR weights 0, 0.5, and 1 read back `T = 0, 0.48, 0.96`; a closed slab reads
+`0.9216`; opacity 0.5 reads the expected `0.98` transmitted term; a zero-reflection clear emitter keeps
+its emissive `C`; the white-furnace values are approximately `C = 0.04` for one interface and
+`C = 0.0784` for two; connected weight and tint read `[0.12, 0.24, 0.48]`; bulk OpenPBR tint
+reads `[0.2304, 0.4608, 0.9216]`; grouped opaque and unsupported-source cases also link and
+render through their intended paths. The independent GPU compositor checks pass 3/3, and the
+meter/centimeter thickness check passes 1/1. A separate integration check passes through the
+actual `createMtlxSceneView` and `handle.renderNow()` path with an untouched compiled material,
+reading `[0.12, 0.24, 0.48]` over a white emissive plane.
+
+These are controlled optical fixtures, not a claim of pixel equivalence for every USD asset.
+Thin-walled surfaces use a single-interface approximation in this payload; the checks do not
+establish exact thin-sheet multiple scattering or bulk attenuation. The thickness map selects
+the nearest back face, which is valid for an isolated convex solid. Concave geometry, nested
+shells, and overlapping transparent meshes can underestimate the true path. The bulk tint check
+uses a labeled synthetic floating-point back-depth sample so it isolates the authored depth
+ratio; it is paired with the actual thickness-units render check and does not stand in for a
+full-scene prepass. Finally, the scalar tail preserves deeper emissive `C` but reduces deeper
+chromatic transmission to a scalar residual after the eight exact layers.
+
+**Material Viewer Force Transparency setting and the non-persisting embed path**
+
+The Material Viewer behavior above is gated behind Settings -> Force Transparency (cogwheel in
+each view's viewport controls), persisted in `localStorage` (`mtlxForceTransparency`) and **off by
 default**, off means official-viewer parity: the verdict stays write-only and previews render
 opaque, matching the pre-feature behavior above; on enables the depth-peel graph described
 above. The shader's alpha output is generated regardless of the setting, only the render path
 is gated, so toggling updates a live material in place: the change is instant and no preview
 rebuild happens.
+
+The USD Scene uses the independent `mtlxUsdSceneTransparency` setting. Fresh Scene profiles
+default to enabled, and an existing `mtlxForceTransparency` value is migrated once when that
+Scene preference has not been stored. `setUsdSceneTransparency(v, { persist })` controls the
+Scene compositor without changing the Material Viewer setting.
 
 `setForceTransparency(v, { persist })` (js/mtlx-engine.js) defaults to `persist: true`, matching
 a visitor's direct gesture on a Settings toggle or the embed HUD's own checkbox. `embed/embed-
@@ -118,11 +162,12 @@ preference already is.
 - `u_refractionTwoSided` is `false`, matching upstream MaterialXView's `LightHandler` default
   (`true` would square the transmission tint in `mx_surface_transmission`, visibly affecting
   only tinted transmission, not clear glass).
-- Transmission's RGB still comes from an environment-map refraction approximation, not real
+- Material Viewer's legacy transmission RGB still comes from an environment-map refraction approximation, not real
   scene geometry visible through the surface, MaterialX's own rasterizer-preview technique,
   inherited from the in-wasm epilogue. The alpha channel's Fresnel rim (above) is this project's
   own addition on top of that, tuned by rendering real glass materials, not derived from the
-  MaterialX spec.
+  MaterialX spec. This tradeoff describes the shared Material Viewer preview path; USD Scene
+  uses its separate scene-compositor transmission path.
 - The docs page's node previews have their own live uniform-edit path that doesn't hook the
   re-check yet (known follow-up).
 

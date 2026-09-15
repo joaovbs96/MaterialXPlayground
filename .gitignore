@@ -1,6 +1,9 @@
 *.py
 node_modules/
 vendor/materialx/
+# Pinned usd-wg-webview runtime (20 MB wasm), fetched by
+# npm run vendor (scripts/vendor.mjs) with SHA-256 checks, never committed.
+vendor/usd-webview-bindings/
 *.vsix
 
 .gpu-render-out/**
@@ -29,6 +32,8 @@ js/materialx/1.39.4/
 # Playwright output (npm run test:embed).
 test-results/
 playwright-report/
+# Debug renders from the wing-shadow spec and tests/raster (MTLX_RENDER_RESULTS).
+render-results/
 
 # docs/local/: scratch notes and internal write-ups that are for us only
 # and deliberately not published. Anything in here is invisible to git,
@@ -42,3 +47,13 @@ gallery/
 
 # Claude Code local settings and agent worktrees
 .claude/
+
+.usd-chess-test-results/**
+.tmp-chess-stage.mjs
+.tmp-teapot-stage.mjs
+.tmp-teapot-diag.mjs
+*.log
+.tmp-chess-graph.mjs
+
+# repo-local KTX-Software install (scripts/setup-ktx.mjs)
+tools/

@@ -38,8 +38,17 @@ function resolveSafePath(root, pathname) {
     return null;
   }
   const resolvedRoot = path.resolve(root);
+  if (decoded.includes('\0')) return null;
+  decoded = decoded.replaceAll('\\', '/');
   const full = path.resolve(resolvedRoot, '.' + decoded);
   if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
+  if (decoded.split('/').some(part => part === '.' || part === '..' || part.startsWith('.'))) return null;
+  try {
+    const real = fs.realpathSync.native(full);
+    if (real !== resolvedRoot && !real.startsWith(resolvedRoot + path.sep)) return null;
+  } catch (e) {
+    // Missing files are handled by serveFile; containment is checked when present.
+  }
   return full;
 }
 

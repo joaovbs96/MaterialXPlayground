@@ -192,9 +192,13 @@ const useCompareSlot = () => {
 
     const onPickFileList = (fileList) => {
         const map = {};
+        let skipped = 0;
         for (const f of Array.from(fileList || [])) {
-            map[f.webkitRelativePath || f.name] = f;
+            const relPath = f.webkitRelativePath || f.name;
+            if (isHiddenSideFile(relPath)) { skipped++; continue; }
+            map[relPath] = f;
         }
+        if (skipped) console.info('onPickFileList: skipped ' + skipped + ' side file(s)');
         ingest(map);
     };
     const onPickFiles = (e) => {

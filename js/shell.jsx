@@ -143,6 +143,12 @@ const VIEW_DEPS = {
         css: [],
         scripts: [
             'vendor/jszip/jszip.min.js',
+            // RecordGifDialog (mtlx-ui.jsx) calls window.recordTurntableGif;
+            // embed/viewer.html loads these two itself.
+            'js/shared/gif-encoder.js',
+            'js/shared/mtlx-turntable.js',
+            // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
+            'vendor/three/KTX2Loader.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -166,6 +172,8 @@ const VIEW_DEPS = {
             'vendor/highlightjs/highlight.min.js',
             'vendor/highlightjs/xml.min.js',
             'embed/mtlx-viewer.js',
+            // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
+            'vendor/three/KTX2Loader.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -222,6 +230,15 @@ const VIEW_DEPS = {
         app: 'js/gallery-app.jsx',
         globalName: 'MtlxGalleryApp',
     },
+    // Fetches and renders ROADMAP.md at view time. No engine, no graph
+    // dependencies: mtlx-ui only, for SectionCard/MtlxIcon/pills.
+    roadmap: {
+        css: [],
+        scripts: [],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx'],
+        app: 'js/roadmap-app.jsx',
+        globalName: 'MtlxRoadmapApp',
+    },
     // Dependency-only bundle (no app/globalName): loaded on demand via
     // mtlxLoadViewDeps('galleryDetail') on first overlay open. Never
     // routed to directly, so it's absent from Shell's viewState/render tree.
@@ -242,6 +259,16 @@ const VIEW_DEPS = {
             'js/graph/node-component.jsx',
             'js/graph/graph-preview.jsx',
         ],
+    },
+    scene: {
+        css: [],
+        // vendor/utif/UTIF.js: loadTifTexture (js/mtlx-engine.js) needs it for
+        // scene TIF/UDIM tiles, same dependency the viewer route already has.
+        // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
+        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-post.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
+        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        app: 'js/usd-scene-app.jsx',
+        globalName: 'SceneViewerApp',
     },
     compare: {
         css: [],
@@ -1024,10 +1051,12 @@ function Shell() {
         viewer: { mounted: false, status: 'idle' },
         graph: { mounted: false, status: 'idle' },
         compare: { mounted: false, status: 'idle' },
+        scene: { mounted: false, status: 'idle' },
         builder: { mounted: false, status: 'idle' },
         vscode: { mounted: false, status: 'idle' },
         whatIsMaterialx: { mounted: false, status: 'idle' },
         gallery: { mounted: false, status: 'idle' },
+        roadmap: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -1104,7 +1133,7 @@ function Shell() {
             // viewer/graph/compare hard-require WebGL2 — skip fetching
             // their dependency bundles and go straight to the blocking
             // message below instead. Docs works fine without it.
-            if ((activeView === 'viewer' || activeView === 'graph' || activeView === 'compare') && !hasWebGL2()) {
+            if ((activeView === 'viewer' || activeView === 'graph' || activeView === 'compare' || activeView === 'scene') && !hasWebGL2()) {
                 return { ...prev, [activeView]: { mounted: true, status: 'no-webgl2' } };
             }
             return { ...prev, [activeView]: { mounted: true, status: 'loading' } };
@@ -1137,11 +1166,13 @@ function Shell() {
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
+            scene: 'MaterialX Playground — USD Scene Viewer',
             compare: 'MaterialX Playground — Material Compare',
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
             whatIsMaterialx: 'MaterialX Playground - What is MaterialX?',
             gallery: 'MaterialX Playground - Material Gallery',
+            roadmap: 'MaterialX Playground - Roadmap',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
     }, [activeView]);
@@ -1163,6 +1194,7 @@ function Shell() {
             viewer: IN_VSCODE ? 'flex-1 min-h-0' : '',
             graph: '',
             compare: '',
+            scene: '',
             // The builder means to fill the viewport and let only its
             // sidebar scroll, but min-h-0 alone never enforced that: any
             // overflow reached the document, and since the preview stage
@@ -1176,6 +1208,7 @@ function Shell() {
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             whatIsMaterialx: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             gallery: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            roadmap: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -1205,7 +1238,7 @@ function Shell() {
             content = (
                 <div className="flex items-center justify-center h-40 text-center text-gray-300 text-sm px-4">
                     {'WebGL2 is not available. The '
-                        + (view === 'viewer' ? 'Material Viewer' : view === 'compare' ? 'Material Compare' : 'Node Graph Editor')
+                        + (view === 'viewer' ? 'Material Viewer' : view === 'compare' ? 'Material Compare' : view === 'scene' ? 'USD Scene Viewer' : 'Node Graph Editor')
                         + ' needs a WebGL2-capable browser. Try a current Chrome, Firefox, Edge, or Safari, and make sure hardware acceleration is enabled.'}
                 </div>
             );
@@ -1273,6 +1306,10 @@ function Shell() {
                 // Same wrapper contract as vscode/whatIsMaterialx/home: a
                 // static, scrollable content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
+            } else if (view === 'roadmap') {
+                // Same wrapper contract as gallery: a static, scrollable
+                // content page, not a full-bleed canvas.
+                content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
             } else {
                 // graph/compare: no extra container — both fill #root
                 // directly via their own `absolute inset-0` root.
@@ -1299,10 +1336,12 @@ function Shell() {
             {renderView('viewer')}
             {renderView('graph')}
             {renderView('compare')}
+            {renderView('scene')}
             {renderView('builder')}
             {renderView('vscode')}
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
+            {renderView('roadmap')}
             <DesktopCloseConfirmDialog />
             <DesktopNoticeBar />
             <DesktopSettingsDialog />

@@ -35,7 +35,7 @@ Load and inspect MaterialX materials in 3D.
 - **Image-based lighting** from a built-in HDR environment, with automatic key-light extraction (a strong sun in the image becomes a sharp analytic directional light, toggleable) and a three-way backdrop choice: a white studio room (the default), the environment itself, or none (the environment's lighting stays on in all three).
 - **Drag-and-drop loading.** Drop a `.mtlx` document anywhere on the page, alone or with loose textures, a folder of textures, or a `.zip`. Textures are matched by relative path, with a UV-checker fallback for anything unresolved.
 - **Curated examples.** Load official MaterialX example materials, textures included, plus the Playground's own examples (currently an animated, time-driven noise material), from a built-in presets list.
-- **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, a cube, or a draped cloth mesh), a material picker when a document defines several, save-as-PNG, and fullscreen.
+- **Interactive viewport** with orbit and zoom, optional turntable, selectable preview geometry (the Standard Shader Ball, the Shader Ball used by official MaterialX viewers, a 2D buffer view, a sphere, a cube, or a draped cloth mesh), a material picker when a document defines several, save-as-PNG, 360° turntable GIF export, and fullscreen.
 - **Send to Graph Editor** to keep working on the current material in the Node Graph Editor.
 - **Animated materials.** `time` and `frame` nodes are driven the way MaterialXView drives them: seconds since the page loaded and a per-frame counter, shared by every view so the Compare panes stay in lockstep. Both reach the shader as 32-bit floats, so after a couple of days with the same page open the animation timing gets coarser; reloading the page resets it.
 
@@ -74,15 +74,23 @@ Build MaterialX node graphs visually.
 
 ## Running locally
 
-A fresh clone is the complete, runnable site: there is nothing to build or install. Just serve the folder with any static file server:
+Requires Node 22.12 or newer (20.19 or newer also works).
+
+A fresh clone runs with one setup pass, then serve the folder with any static file server:
 
 ```bash
+npm ci
+npm run vendor
+npm run build
+
 # Python 3
 python -m http.server 8000
 
 # or Node
 npx serve .
 ```
+
+`npm run vendor` needs network access once; it also fetches the ~20 MB OpenUSD Scene Viewer runtime into `vendor/usd-webview-bindings/`. If your clone lives inside a OneDrive-synced folder, `npm run vendor` can fail with `EPERM`; clone outside synced folders instead.
 
 Then open <http://localhost:8000/>. Serving over HTTP is required; opening `index.html` via `file://` won't work, because the app fetches its `.jsx`, WASM, and library files.
 
@@ -175,6 +183,25 @@ Drop a single material into any other web page as a lightweight, chromeless view
 - **Self-hostable**: the offline release zip ships everything the embed needs.
 
 See [docs/EMBEDDING.md](docs/EMBEDDING.md) for the full reference: every query parameter and attribute, the element's methods and events, loading documents the embed can't fetch itself, performance notes, and self-hosting instructions.
+
+## Compressed textures (KTX2)
+
+Both the Viewer and the Scene understand `.ktx2` (Basis Universal UASTC) textures through the same texture path as `.png`/`.jpg`/`.tif`/`.exr`/`.hdr`. Install the encoder once with:
+
+```
+npm run setup:ktx
+```
+
+This downloads Khronos [KTX-Software](https://github.com/KhronosGroup/KTX-Software) into a repo-local `tools/ktx/` folder (not committed) and reports the resulting `toktx --version`. Then cook a folder of textures with:
+
+```
+node scripts/cook-textures.mjs <folder> [--quality fast|default|high] [--jobs N] [--dry-run] [--force] [--encoder auto|toktx|basis]
+```
+
+This recurses into subfolders and writes a `.ktx2` sibling next to each source texture (skipping `.tx`/`.tex` and never overwriting an existing `.ktx2`, unless `--force`). When you drop or pick a folder that contains both `name.<ext>` and `name.ktx2` (per UDIM tile too), the app always prefers the `.ktx2` sibling and ignores the original — the original file is never modified or deleted.
+
+`--encoder auto` (the default) uses `toktx` when it can be found (`KTX_TOKTX` env var, `tools/ktx/bin/toktx`, or PATH), and otherwise falls back to a vendored wasm Basis Universal encoder with a loud warning. The wasm fallback hard-caps source images at 12,582,912 pixels, so a 4096x4096 source is silently downscaled to about 3547x3547 before encoding; `toktx` has no such cap and encodes true 4096x4096 output. Run `npm run setup:ktx` to get `toktx` and avoid the fallback.
+
 ## Tech stack
 
 - [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) (WebAssembly build: core + GenShader)
@@ -193,6 +220,8 @@ Some files in this repo are produced by scripts rather than written by hand: the
 ---
 
 ## Roadmap
+
+The full, current roadmap lives in [ROADMAP.md](ROADMAP.md) and renders on the site's [Roadmap page](#!roadmap) at view time.
 
 - Custom geometry load support as GLB/GLTF/OBJ for all tools (USD/USDZ TBD).
 - **Interactive tutorials subsite**: a guided, hands-on set of MaterialX tutorials, served alongside the app (in progress).

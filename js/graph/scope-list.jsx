@@ -241,12 +241,12 @@
                                 variant="field"
                                 font="mono"
                                 align="left"
-                                className="flex-none w-36"
+                                className="flex-1 min-w-[8.5rem] max-w-[9rem]"
                             />
                             <button
                                 type="button"
                                 title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
-                                className={ICON_BTN_SM}
+                                className={ICON_BTN_SM + ' flex-none'}
                                 onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
                             >
                                 <MtlxIcon name={sortDir === 'asc' ? 'sort-ascending' : 'sort-descending'} className="w-3.5 h-3.5" />

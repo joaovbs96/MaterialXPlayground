@@ -105,7 +105,7 @@ in-page, for reference while you work.</p>
 <td><code>controls</code></td>
 <td>comma-separated list, see below</td>
 <td><code>none</code> (fully chromeless)</td>
-<td>Which HUD buttons to show over the viewport. Accepts the eight names below plus the <code>none</code>/<code>all</code> keywords. Omitting the param entirely is identical to <code>controls=none</code>. Unrecognized names are dropped and reported through <code>mtlx-error</code>; recognized ones still work.</td>
+<td>Which HUD buttons to show over the viewport. Accepts the nine names below plus the <code>none</code>/<code>all</code> keywords. Omitting the param entirely is identical to <code>controls=none</code>. Unrecognized names are dropped and reported through <code>mtlx-error</code>; recognized ones still work.</td>
 </tr>
 <tr>
 <td><code>backdrop</code></td>
@@ -238,6 +238,10 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 <td>A &quot;save PNG&quot; button.</td>
 </tr>
 <tr>
+<td><code>record</code></td>
+<td>A &quot;Record&quot; button that exports a 360° turntable GIF of the current view.</td>
+</tr>
+<tr>
 <td><code>settings</code></td>
 <td>The settings popover (force-transparency, etc.).</td>
 </tr>
@@ -252,7 +256,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 <li><strong><code>none</code></strong> - no controls at all. This is also what an absent <code>controls</code> param means, so
 <code>controls=none</code> and omitting the param entirely are exactly the same thing; <code>none</code> just
 makes that choice explicit and self-documenting in the URL.</li>
-<li><strong><code>all</code></strong> - every control above, equivalent to spelling out all eight names. It&#39;s derived
+<li><strong><code>all</code></strong> - every control above, equivalent to spelling out all nine names. It&#39;s derived
 from the actual list of controls internally, so it stays correct automatically if a control
 is ever added or removed.</li>
 </ul>
@@ -268,12 +272,12 @@ always reported through the <code>mtlx-error</code> event so the mistake isn&#39
 </thead>
 <tbody><tr>
 <td><code>none,all</code> (either order)</td>
-<td>All eight controls</td>
+<td>All nine controls</td>
 <td>A direct contradiction between the two keywords; <code>all</code> is the more permissive reading, so it wins.</td>
 </tr>
 <tr>
 <td><code>all,geometry</code> (<code>all</code> plus specific names)</td>
-<td>All eight controls</td>
+<td>All nine controls</td>
 <td>The named controls are already included in <code>all</code>, so they&#39;re redundant rather than conflicting - reported, then ignored.</td>
 </tr>
 <tr>
@@ -768,7 +772,7 @@ shows in place of the plain placeholder until that instance actually activates.<
 <td>5,628,322 (~5.37 MiB)</td>
 </tr>
 <tr>
-<td><code>?geometry=shaderball&amp;controls=geometry,rotate,reset,env,screenshot,settings,fullscreen</code> (full HUD)</td>
+<td><code>?geometry=shaderball&amp;controls=geometry,rotate,reset,env,screenshot,record,settings,fullscreen</code> (full HUD)</td>
 <td>~5.79 MiB</td>
 </tr>
 </tbody></table>

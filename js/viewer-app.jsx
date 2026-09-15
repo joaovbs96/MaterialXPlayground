@@ -315,6 +315,20 @@
                 window.addEventListener('mtlx-display-transform', onDisplayTransform);
                 return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
             }, []);
+            // Experimental heighttonormal flag (js/mtlx-engine.js) bakes
+            // into generated fragment source, same as displayTransform
+            // above, so a flip must also force the render effect to rerun.
+            const [heightToNormalTexel, setHeightToNormalTexelState] = React.useState(
+                () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel())
+            );
+            React.useEffect(() => {
+                const onSettingsChanged = (e) => {
+                    if (!e.detail || e.detail.key !== 'heightToNormalTexel') return;
+                    setHeightToNormalTexelState(!!e.detail.value);
+                };
+                window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+                return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            }, []);
             // Restore re-inits GL state but not render-target contents
             // (PMREM bake, shadow map), so a glEpoch bump forces the build
             // effect to dispose and fully rebuild.
@@ -366,6 +380,7 @@
                 if (onErrorRef.current) onErrorRef.current(msg);
             };
             const [texReport, setTexReport] = React.useState(null);
+            const [materialNotices, setMaterialNotices] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             // Compact-mode threshold: drives the toolbar's label/icon switch
             // and the Files sidebar auto-collapse. Declared above sidebarOpen
@@ -452,6 +467,9 @@
                     setError('Save PNG preview failed: ' + errMsg(e));
                 }
             };
+            // RecordGifDialog (js/shared/mtlx-ui.jsx) open state, shared by
+            // both HUD flavors below.
+            const [recordOpen, setRecordOpen] = React.useState(false);
             // Shared by ViewportControls (app) and EmbedControls (chromeless):
             // resetCamera is absent for some geometries (e.g. flat2d).
             const handleCameraReset = () => {
@@ -532,6 +550,7 @@
                     setRenderables([]);
                     setChosenMat(0);
                     setTexReport(null);
+                    setMaterialNotices(null);
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
                 }
@@ -844,10 +863,14 @@
 
             const onPickFileList = (fileList) => {
                 const map = {};
+                let skipped = 0;
                 for (const f of Array.from(fileList || [])) {
                     // webkitdirectory inputs carry relative paths
-                    map[f.webkitRelativePath || f.name] = f;
+                    const relPath = f.webkitRelativePath || f.name;
+                    if (isHiddenSideFile(relPath)) { skipped++; continue; }
+                    map[relPath] = f;
                 }
+                if (skipped) console.info('onPickFileList: skipped ' + skipped + ' side file(s)');
                 ingest(map);
             };
             const onPickFiles = (e) => {
@@ -924,6 +947,7 @@
                     }
                     setError(null);
                     setTexReport(null);
+                    setMaterialNotices(null);
                     setBusy(true);
                     setStatus('Generating shader…');
                     try {
@@ -948,6 +972,7 @@
                         if (!view) return; // superseded: the new run drives `busy`
                         if (!mounted) { view.dispose(); return; }
                         viewRef.current = view;
+                        window.__mtlxViewerHandle = view; // test and console access to the live shaderball handle.
                         if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
                         // Initial env rotation/exposure controlled props —
                         // applied once per (re)build, same as autoRotate/
@@ -969,6 +994,10 @@
                         setRenderedVersion(loaded.version);
                         const report = bindDroppedTextures(view, fileMapRef.current);
                         setTexReport(report);
+                        setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
+                        if (chromeless && view.notices && view.notices.length) {
+                            view.notices.forEach((n) => console.info('[mtlx] ' + n));
+                        }
                         setStatus(null);
                         setBusy(false);
                         if (onViewRef.current) onViewRef.current(view);
@@ -989,7 +1018,7 @@
                         if (onViewRef.current) onViewRef.current(null);
                     }
                 };
-            }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform]);
+            }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
 
             // Backs the Scene card's transparency-forcing toggle (browser
             // only): local mirror of the engine's persisted value, replacing
@@ -1136,7 +1165,7 @@
 
             // Embed HUD opt-in: which ViewportControls buttons chromeless
             // mode shows. Recognized names: 'geometry', 'material', 'rotate',
-            // 'reset', 'env', 'screenshot', 'settings', 'fullscreen'. Ignored
+            // 'reset', 'env', 'screenshot', 'record', 'settings', 'fullscreen'. Ignored
             // (every showCtl() call short-circuits true) when !chromeless, so
             // the full app's HUD is unaffected.
             const embedControls = Array.isArray(controls) ? controls : [];
@@ -1152,12 +1181,19 @@
             // Per-control effective visibility, computed once so the mount
             // gate and each EmbedControls prop agree (a control can be
             // requested but still suppressed, e.g. rotate on the room geom).
+            // Geometries without an orbit rig (flat2d) cannot record, so the
+            // Record button hides instead of opening a dialog that only
+            // shows the "needs an orbit camera" guard.
+            const recordView = viewRef.current;
+            const canRecord = !!(recordView && typeof recordView.beginCapture === 'function'
+                && recordView.getCamera && recordView.getCamera());
             const ctlFlags = {
                 geometry: showCtl('geometry'),
                 rotate: showCtl('rotate') && !roomGeomActive,
                 reset: showCtl('reset'),
                 env: showCtl('env'),
                 screenshot: showCtl('screenshot'),
+                record: showCtl('record') && canRecord,
                 settings: showCtl('settings'),
                 fullscreen: showCtl('fullscreen'),
             };
@@ -1171,12 +1207,12 @@
             const hudClusters = IN_VSCODE
                 ? [
                     ['geom', 'rotate', 'cameraReset', 'env'],
-                    ['screenshot', 'shaderCode', 'sendToGraph'],
+                    ['screenshot', 'record', 'shaderCode', 'sendToGraph'],
                     ['presets', 'settings', 'fullscreen'],
                 ]
                 : [
                     ['rotate', 'cameraReset'],
-                    ['screenshot', 'shaderCode', 'sendToGraph'],
+                    ['screenshot', 'record', 'shaderCode', 'sendToGraph'],
                     ['presets', 'fullscreen'],
                 ];
             // Page-transparency CSS: requested AND resolved away from the
@@ -1215,7 +1251,7 @@
                                     placeholder="No document loaded"
                                     multiple
                                     icon="files"
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                     onFiles={onPickFileList}
                                 />
                             </div>
@@ -1444,6 +1480,18 @@
                             </div>
                         </SectionCard>
                     )}
+
+                    {materialNotices && materialNotices.length > 0 && (
+                        <SectionCard icon="info" title="Material notices" summary={materialNotices.length + ''} defaultOpen>
+                            <div className="space-y-2">
+                                {materialNotices.map((n, i) => (
+                                    <div key={'n' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all">
+                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{n}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </SectionCard>
+                    )}
                 </div>
             );
 
@@ -1517,6 +1565,8 @@
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
                                         showScreenshot={ctlFlags.screenshot}
+                                        onRecord={() => setRecordOpen(true)}
+                                        showRecord={ctlFlags.record}
                                         showSettings={ctlFlags.settings}
                                         isFullscreen={isFullscreen}
                                         onToggleFullscreen={onToggleFullscreen}
@@ -1557,6 +1607,8 @@
                                         viewEpoch={viewEpoch}
                                         onScreenshot={takeScreenshot}
                                         showScreenshot={showCtl('screenshot')}
+                                        onRecord={() => setRecordOpen(true)}
+                                        showRecord={showCtl('record') && canRecord}
                                         // Settings cog's only content (the transparency
                                         // toggle) moved into the sidebar's Scene card.
                                         showSettings={IN_VSCODE}
@@ -1755,6 +1807,12 @@
                             overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
                             generate={({ renderable, label, targetKey }) =>
                                 generateTargetSources({ mx: loadedRef.current.mx, renderable, label, targetKey })} />
+                    )}
+                    {/* Not chromeless-gated: the Record button is reachable
+                        from EmbedControls too. */}
+                    {recordOpen && (
+                        <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)}
+                            viewRef={viewRef} baseName={getSnapshotBase()} transparent={transparentActive} />
                     )}
                 </div>
             );

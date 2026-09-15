@@ -331,9 +331,11 @@
 
         // Left sidebar (the node list): same resize/persistence shape as
         // the right one, its own range and storage keys.
-        const LEFT_SIDEBAR_MIN_WIDTH = 220;
+        // The minimum keeps the type filter, the sort dropdown and the
+        // direction button on one row without clipping (see scope-list.jsx).
+        const LEFT_SIDEBAR_MIN_WIDTH = 336;
         const LEFT_SIDEBAR_MAX_WIDTH = 480;
-        const LEFT_SIDEBAR_DEFAULT_WIDTH = 260;
+        const LEFT_SIDEBAR_DEFAULT_WIDTH = 352;
         const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'mtlxGraphLeftSidebarWidth';
         const LEFT_SIDEBAR_OPEN_STORAGE_KEY = 'mtlxGraphLeftSidebarOpen';
         const clampLeftSidebarWidth = (w, editorWidth) => {
@@ -3399,8 +3401,10 @@
                 const note = (ref) => {
                     if (!ref || seenRefs.has(ref)) return;
                     seenRefs.add(ref);
-                    const hit = findFileForRef(fileMapRef.current, ref);
-                    if (hit) resolved.push({ ref, key: hit.key });
+                    // UDIM references expand to one entry per tile so the zip
+                    // carries every tile under its concrete path.
+                    const hits = findFilesForRef(fileMapRef.current, ref);
+                    if (hits.length) hits.forEach((hit) => resolved.push({ ref: hit.ref, key: hit.key }));
                     else unresolved.push(ref);
                 };
                 const scanNode = (n, prefix, pinByName) => {
@@ -7266,7 +7270,7 @@
                                     defValue={null}
                                     title="Which .mtlx document to display"
                                     size="md"
-                                    className="max-w-[10rem] md:max-w-[14rem] shrink-0"
+                                    className="max-w-[10rem] md:max-w-[28rem] shrink-0"
                                 />
                             )}
                             {/* What stays out of the menus: the canvas verbs

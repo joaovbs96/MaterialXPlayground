@@ -92,9 +92,13 @@
     <script src="vendor/three/RGBELoader.js"></script>
     <script src="vendor/three/fflate.min.js"></script>
     <script src="js/vendor/EXRLoader.js"></script>
+    <script src="vendor/pako/pako_inflate.min.js"></script>
     <script src="vendor/utif/UTIF.js"></script>
     <script src="vendor/three/GLTFLoader.js"></script>
     <script src="vendor/three/DRACOLoader.js"></script>
+    <!-- KTX2Loader: decodes .ktx2 compressed textures (loadKtx2Texture,
+         js/mtlx-engine.js). See index.html for the generator/provenance note. -->
+    <script src="vendor/three/KTX2Loader.js"></script>
     <script src="vendor/three/OBJLoader.js"></script>
     <script src="vendor/three/OrbitControls.js"></script>
     <script src="js/mtlx-assets.js"></script>
@@ -117,6 +121,11 @@
          every view script, same requirement as index.html:148. Plain
          script, no transform needed (js/shared/ui-commons.js is JSX-free). -->
     <script src="js/shared/ui-commons.js"></script>
+
+    <!-- 360 GIF turntable recording: plain scripts, used by
+         RecordGifDialog (js/shared/mtlx-ui.jsx) on demand. -->
+    <script src="js/shared/gif-encoder.js"></script>
+    <script src="js/shared/mtlx-turntable.js"></script>
 
     <script>
         // Loads the remaining precompiled scripts (scripts/build-embed.mjs)

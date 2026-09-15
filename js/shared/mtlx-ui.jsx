@@ -107,6 +107,257 @@ const DialogFrame = ({
     );
 };
 
+// RecordGifDialog's own CSS, injected once as a plain <style> element
+// (js/mtlx-engine.js pattern) since embeds load no Tailwind. Every rule
+// is scoped under mtlx-rec- so nothing leaks into the host page.
+(() => {
+    if (typeof document === 'undefined' || document.getElementById('mtlx-rec-css')) return;
+    const st = document.createElement('style');
+    st.id = 'mtlx-rec-css';
+    st.textContent = [
+        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(17,24,39,.7);font-family:inherit;}',
+        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:#111827;border:1px solid #374151;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);color:#f3f4f6;}',
+        '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #374151;background:#1f2937;border-radius:10px 10px 0 0;}',
+        '.mtlx-rec-title{font-size:13px;font-weight:700;color:#f3f4f6;}',
+        '.mtlx-rec-close{background:none;border:none;padding:4px;color:#9ca3af;cursor:pointer;line-height:0;}',
+        '.mtlx-rec-close:hover{color:#f3f4f6;}',
+        '.mtlx-rec-icon{width:16px;height:16px;display:block;}',
+        '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}',
+        '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}',
+        '.mtlx-rec-label{font-size:11px;color:#9ca3af;flex-shrink:0;}',
+        '.mtlx-rec-seg{display:inline-flex;border:1px solid #374151;border-radius:8px;overflow:hidden;}',
+        '.mtlx-rec-seg-btn{appearance:none;border:none;background:#1f2937;color:#9ca3af;font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid #374151;}',
+        '.mtlx-rec-seg-btn:last-child{border-right:none;}',
+        '.mtlx-rec-seg-btn:hover:not(:disabled){background:#374151;color:#f3f4f6;}',
+        '.mtlx-rec-seg-btn.is-active{background:#2563eb;color:#fff;}',
+        '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}',
+        '.mtlx-rec-hint{font-size:11px;color:#9ca3af;}',
+        '.mtlx-rec-error{font-size:11px;color:#dc2626;}',
+        '.mtlx-rec-success{font-size:11px;color:#9ca3af;}',
+        '.mtlx-rec-progress{height:6px;border-radius:4px;background:#374151;overflow:hidden;}',
+        '.mtlx-rec-progress-fill{height:100%;background:#2563eb;transition:width .15s ease;}',
+        '.mtlx-rec-progress-text{font-size:11px;color:#9ca3af;}',
+        '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid #374151;background:#000;}',
+        '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #374151;}',
+        '.mtlx-rec-btn{appearance:none;border:1px solid #374151;background:#1f2937;color:#f3f4f6;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}',
+        '.mtlx-rec-btn:hover:not(:disabled){background:#374151;}',
+        '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}',
+        '.mtlx-rec-btn--primary{background:#2563eb;border-color:#2563eb;color:#fff;}',
+        '.mtlx-rec-btn--primary:hover:not(:disabled){background:#1d4ed8;}',
+        '.mtlx-rec-btn--danger{background:#dc2626;border-color:#dc2626;color:#fff;}',
+        '.mtlx-rec-btn--danger:hover:not(:disabled){background:#b91c1c;}',
+    ].join('');
+    document.head.appendChild(st);
+})();
+
+// One segmented-pill row inside RecordGifDialog's body: a small label on
+// the left, a strip of options on the right. Plain function component,
+// not exported (RecordGifDialog-only), mirroring FieldLabel/Toggle below.
+function RecSegRow({ label, options, value, onChange, disabled }) {
+    return (
+        <div className="mtlx-rec-row">
+            <span className="mtlx-rec-label">{label}</span>
+            <div className="mtlx-rec-seg">
+                {options.map((opt) => (
+                    <button
+                        key={String(opt.value)}
+                        type="button"
+                        disabled={disabled}
+                        className={'mtlx-rec-seg-btn' + (value === opt.value ? ' is-active' : '')}
+                        onClick={() => onChange(opt.value)}
+                    >{opt.label}</button>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+// Defaults merged with whatever's in localStorage; wrapped in try/catch
+// since localStorage can throw (private mode, disabled site data).
+const RECORD_GIF_KEY = 'mtlxRecordGif';
+const loadRecordGifSettings = (transparentDefault) => {
+    const d = window.TURNTABLE_DEFAULTS || {};
+    const defaults = {
+        size: d.size || 720, aspect: 'square', duration: d.seconds || 4, fps: d.fps || 25,
+        dither: d.dither !== false, transparent: !!transparentDefault,
+    };
+    try {
+        const raw = localStorage.getItem(RECORD_GIF_KEY);
+        if (raw) return Object.assign({}, defaults, JSON.parse(raw));
+    } catch (e) { /* ignore, fall through to defaults */ }
+    return defaults;
+};
+
+// 360° turntable GIF recorder dialog: settings -> record -> download.
+// No Tailwind (its own mtlx-rec- CSS above) since this also mounts inside
+// the Tailwind-less embed via ViewportControls'/EmbedControls' Record button.
+const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
+    const [settings, setSettings] = React.useState(() => loadRecordGifSettings(transparent));
+    const [state, setState] = React.useState('idle'); // idle | recording | done | error
+    const [progress, setProgress] = React.useState({ phase: 'capture', done: 0, total: 0 });
+    const [savedMB, setSavedMB] = React.useState(null);
+    const [error, setError] = React.useState('');
+    const previewRef = React.useRef(null);
+    const offscreenRef = React.useRef(null);
+    const abortRef = React.useRef(null);
+
+    React.useEffect(() => {
+        try { localStorage.setItem(RECORD_GIF_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ }
+    }, [settings]);
+
+    // Aborts any in-flight recording on unmount, so a view/route switch
+    // mid-capture doesn't leave the encoder worker running unattended.
+    React.useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
+
+    const handleClose = () => {
+        if (abortRef.current) abortRef.current.abort();
+        onClose();
+    };
+    useEscapeToClose(handleClose, open);
+
+    if (!open) return null;
+
+    const view = viewRef && viewRef.current;
+    const canRecord = !!(view && typeof view.beginCapture === 'function'
+        && typeof view.getCamera === 'function' && view.getCamera());
+
+    const setField = (key) => (value) => setSettings((s) => Object.assign({}, s, { [key]: value }));
+
+    let outWidth = settings.size;
+    const outHeight = settings.size;
+    if (settings.aspect === 'viewport') {
+        const el = view && view.renderer && view.renderer.domElement;
+        if (el && el.clientWidth && el.clientHeight) {
+            const ratio = el.clientWidth / el.clientHeight;
+            outWidth = Math.max(16, Math.round((outHeight * ratio) / 2) * 2);
+        }
+    }
+    const frameCount = window.turntableFrameCount
+        ? window.turntableFrameCount(settings.duration, settings.fps)
+        : Math.round(settings.duration * settings.fps);
+
+    const drawPreviewFrame = (imageData) => {
+        const canvas = previewRef.current;
+        if (!canvas) return;
+        let off = offscreenRef.current;
+        if (!off || off.width !== imageData.width || off.height !== imageData.height) {
+            off = document.createElement('canvas');
+            off.width = imageData.width;
+            off.height = imageData.height;
+            offscreenRef.current = off;
+        }
+        off.getContext('2d').putImageData(imageData, 0, 0);
+        const h = Math.min(200, imageData.height);
+        const w = Math.round(h * (imageData.width / imageData.height));
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(off, 0, 0, w, h);
+    };
+
+    const handleRecord = async () => {
+        if (!canRecord || state === 'recording') return;
+        setError('');
+        setSavedMB(null);
+        setState('recording');
+        setProgress({ phase: 'capture', done: 0, total: frameCount });
+        const controller = new AbortController();
+        abortRef.current = controller;
+        try {
+            const blob = await window.recordTurntableGif(view, {
+                width: outWidth,
+                height: outHeight,
+                frames: frameCount,
+                fps: settings.fps,
+                dither: settings.dither,
+                transparent: !!settings.transparent,
+                clockwise: true,
+                onProgress: setProgress,
+                onFrame: drawPreviewFrame,
+                signal: controller.signal,
+            });
+            downloadBlob(blob, (baseName || 'material') + '-turntable.gif');
+            setSavedMB((blob.size / (1024 * 1024)).toFixed(1));
+            setState('done');
+        } catch (e) {
+            if (e && e.name === 'AbortError') {
+                setState('idle');
+            } else {
+                setError(errMsg(e));
+                setState('error');
+            }
+        } finally {
+            abortRef.current = null;
+        }
+    };
+    const handleStop = () => { if (abortRef.current) abortRef.current.abort(); };
+
+    const recording = state === 'recording';
+    const pct = progress.total ? Math.max(0, Math.min(100, (progress.done / progress.total) * 100)) : 0;
+    const progressText = progress.phase === 'capture'
+        ? `Capturing frame ${progress.done}/${progress.total}`
+        : 'Encoding…';
+
+    return (
+        <div className="mtlx-rec-overlay" onMouseDown={handleClose}>
+            <div className="mtlx-rec-panel" onMouseDown={(e) => e.stopPropagation()}>
+                <div className="mtlx-rec-header">
+                    <span className="mtlx-rec-title">Record 360° GIF</span>
+                    <button className="mtlx-rec-close" onClick={handleClose} title="Close">
+                        <MtlxIcon name="x" className="mtlx-rec-icon" />
+                    </button>
+                </div>
+                <div className="mtlx-rec-body">
+                    {!canRecord && (
+                        <div className="mtlx-rec-error">Recording needs an orbit camera view.</div>
+                    )}
+                    <RecSegRow label="Size" value={settings.size} disabled={recording}
+                        onChange={setField('size')}
+                        options={[480, 720, 1080].map((v) => ({ value: v, label: String(v) }))} />
+                    <RecSegRow label="Aspect" value={settings.aspect} disabled={recording}
+                        onChange={setField('aspect')}
+                        options={[{ value: 'square', label: 'Square' }, { value: 'viewport', label: 'Viewport' }]} />
+                    <RecSegRow label="Duration" value={settings.duration} disabled={recording}
+                        onChange={setField('duration')}
+                        options={[3, 4, 6, 8].map((v) => ({ value: v, label: v + 's' }))} />
+                    <RecSegRow label="Frame rate" value={settings.fps} disabled={recording}
+                        onChange={setField('fps')}
+                        options={[15, 20, 25].map((v) => ({ value: v, label: String(v) }))} />
+                    <RecSegRow label="Dithering" value={settings.dither} disabled={recording}
+                        onChange={setField('dither')}
+                        options={[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
+                    <RecSegRow label="Transparent" value={settings.transparent} disabled={recording}
+                        onChange={setField('transparent')}
+                        options={[{ value: true, label: 'On' }, { value: false, label: 'Off' }]} />
+                    <div className="mtlx-rec-hint">{frameCount} frames, about {outWidth}×{outHeight} px</div>
+                    {settings.transparent && (
+                        <div className="mtlx-rec-hint">Records with the None backdrop and restores your backdrop afterwards.</div>
+                    )}
+                    {recording && (
+                        <React.Fragment>
+                            <div className="mtlx-rec-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+                                <div className="mtlx-rec-progress-fill" style={{ width: pct + '%' }} />
+                            </div>
+                            <div className="mtlx-rec-progress-text">{progressText}</div>
+                            <canvas ref={previewRef} className="mtlx-rec-preview" />
+                        </React.Fragment>
+                    )}
+                    {state === 'error' && <div className="mtlx-rec-error">{error}</div>}
+                    {state === 'done' && savedMB && <div className="mtlx-rec-success">Saved {savedMB} MB</div>}
+                </div>
+                <div className="mtlx-rec-footer">
+                    <button className="mtlx-rec-btn" onClick={handleClose}>Cancel</button>
+                    <button
+                        className={'mtlx-rec-btn ' + (recording ? 'mtlx-rec-btn--danger' : 'mtlx-rec-btn--primary')}
+                        disabled={!recording && !canRecord}
+                        onClick={recording ? handleStop : handleRecord}
+                    >{recording ? 'Stop' : 'Record'}</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // Curated example docs for the "Presets" button. Entries have either
 // `path` (relative to MTLX_PRESETS_BASE, the MaterialX repo examples) or
 // `src` (a site-relative URL to one of this repo's own examples/).
@@ -911,9 +1162,12 @@ const openInGraphEditor = ({ xml, name, files, select }) => {
 // alongside a document's XML, as opposed to the .mtlx itself.
 const looseFilesFrom = (fileMap) => {
     const files = {};
+    let skipped = 0;
     Object.keys(fileMap || {}).forEach((k) => {
+        if (window.isHiddenSideFile && window.isHiddenSideFile(k)) { skipped++; return; }
         if (!/\.mtlx$/i.test(k)) files[k] = fileMap[k];
     });
+    if (skipped) console.info('looseFilesFrom: skipped ' + skipped + ' side file(s)');
     return files;
 };
 
@@ -1001,15 +1255,32 @@ const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }
 // Absolute loading overlay shown over a viewport while (re)generating.
 // Defaults match node-preview.jsx's markup; viewer-app.jsx overrides
 // className/labelClassName/barWidthClass to reproduce its own markup.
-const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass }) => {
+// `fraction` (0..1 or null/undefined) is additive: a number switches the
+// bar to a determinate fill, default (undefined) keeps every existing
+// caller's indeterminate mtlx-loading-bar unchanged. `testId`/`children`
+// are additive too (the USD Scene Viewer's progress test id and its
+// in-overlay Cancel pill).
+const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass, fraction, testId, children }) => {
     if (!show) return null;
     const wrapCls = className || 'absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 z-10 bg-gray-900/80';
     const labelCls = labelClassName || 'animate-pulse';
+    const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
     const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
     return (
-        <div className={wrapCls}>
+        <div className={wrapCls} data-testid={testId}>
             {label && <span className={labelCls}>{label}</span>}
-            <div className={barCls} />
+            {hasFraction ? (
+                <div
+                    role="progressbar" aria-label={typeof label === 'string' ? label : undefined}
+                    aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Math.max(0, Math.min(1, fraction)) * 100)}
+                    className={(barWidthClass || 'w-48') + ' h-1.5 rounded-full bg-gray-700 overflow-hidden'}
+                >
+                    <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: (Math.max(0, Math.min(1, fraction)) * 100) + '%' }} />
+                </div>
+            ) : (
+                <div role="progressbar" aria-label={typeof label === 'string' ? label : undefined} aria-valuemin="0" aria-valuemax="100" className={barCls} />
+            )}
+            {children}
         </div>
     );
 };
@@ -1491,6 +1762,9 @@ function FilePickerField({
     // Mono typography is opt-in: only the graph editor's and node specs'
     // parameter-editing rows want it. Everyone else gets the app's sans.
     mono = false,
+    // Additive: a data-testid for the hidden native file input (the
+    // onChoose branch has no such input, so this only applies below).
+    inputTestId,
 }) {
     const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-gray-700 rounded-r-md bg-gray-800 hover:bg-gray-700 text-[11px] px-2 text-gray-300 whitespace-nowrap'
         + (mono ? ' font-mono' : '');
@@ -1552,6 +1826,7 @@ function FilePickerField({
                     {buttonLabel}
                     <input
                         type="file" accept={accept} multiple={multiple} className="hidden" disabled={disabled}
+                        data-testid={inputTestId}
                         onChange={(e) => {
                             if (onFiles) onFiles(e.target.files);
                             // Clear so re-picking the SAME file still fires a change event.
@@ -1588,6 +1863,10 @@ const ViewportControls = ({
     // Hides the screenshot button. Additive — every existing caller omits
     // this and keeps today's always-shown behavior.
     showScreenshot = true,
+    onRecord,
+    // Record (360° turntable GIF) button: shown only when the caller
+    // also passes onRecord, so existing callers see no new button.
+    showRecord = true,
     isFullscreen, onToggleFullscreen,
     children,
     trailingChildren,
@@ -1800,6 +2079,18 @@ const ViewportControls = ({
                         {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
                     </button>
                 ) : null;
+            case 'record':
+                return (showRecord && onRecord) ? (
+                    <button
+                        key="record"
+                        onClick={onRecord}
+                        title="Record a 360° turntable GIF"
+                        className={buttonClassName(false)}
+                    >
+                        <MtlxIcon name="player-record" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Record</span>}
+                    </button>
+                ) : null;
             case 'settings':
                 return showSettings ? (
                     <button
@@ -1830,7 +2121,7 @@ const ViewportControls = ({
         }
     };
 
-    const FLAT_ORDER = ['geom', 'rotate', 'cameraReset', 'env', 'screenshot'];
+    const FLAT_ORDER = ['geom', 'rotate', 'cameraReset', 'env', 'screenshot', 'record'];
     const TAIL_ORDER = ['settings', 'fullscreen'];
     const tail = typeof trailingChildren === 'function' ? trailingChildren(showLabels) : trailingChildren;
     const body = clusters
@@ -2126,6 +2417,42 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
 // colorspaces, geometry, and more). Portaled to fullscreenPortalRoot():
 // native fullscreen, and ancestor backdrop-blur mispositions position:fixed.
 const SELECT_POP_W = 190, SELECT_POP_ROW_H = 26; // ROW_H: measurement fallback only, see reposition()
+// Fit-to-text caps: a trigger/popover grows with its longest label but
+// never past these (about 28rem / 32rem at the default 16px root).
+const SELECT_TRIGGER_MAX_PX = 448;
+const SELECT_POP_MAX_PX = 512;
+
+// One cached offscreen canvas for text measurement (module-level so every
+// MtlxSelect instance shares it instead of allocating its own).
+let __mtlxSelectMeasureCanvas = null;
+const measureLabelWidth = (text, font) => {
+    if (!text) return 0;
+    if (!__mtlxSelectMeasureCanvas) __mtlxSelectMeasureCanvas = document.createElement('canvas');
+    const ctx = __mtlxSelectMeasureCanvas.getContext('2d');
+    if (!ctx) return 0;
+    ctx.font = font || '11px sans-serif';
+    return ctx.measureText(String(text)).width;
+};
+
+// Approximate chrome (padding, gaps, chevron, optional icon/dot) added
+// around the trigger's label so the fit-to-text width isn't razor-thin.
+const selectTriggerChromePx = (size, hasIcon, hasDot) => {
+    const pad = size === 'lg' ? 20 : 16; // horizontal padding, both sides
+    let px = pad + 4 /* gap */ + 12 /* chevron */ + 6 /* rounding slack */;
+    if (hasIcon) px += 18;
+    if (hasDot) px += 12;
+    return px;
+};
+
+// Same idea for a popover row: check gutter, padding, gaps, optional
+// icon/badge.
+const selectRowChromePx = (hasIcon, hasDot, hasBadge) => {
+    let px = 20 /* padding */ + 14 /* check gutter */ + 8 /* gap */ + 8 /* rounding slack */;
+    if (hasIcon) px += 14 + 8;
+    if (hasDot) px += 8 + 8;
+    if (hasBadge) px += 40 + 8;
+    return px;
+};
 
 // NUL-prefixed so no real option value can ever collide with it; keeps
 // selected-row lookups and openPopover's findIndex inert for this row.
@@ -2271,7 +2598,7 @@ const normalizeSelectOptions = (options, labels, extras) => {
 const MtlxSelect = ({
     value, options, labels = {}, badges, dots, defValue, onChange, title, className, popWidth,
     icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
-    size = 'sm', variant = 'toolbar', block, font,
+    size = 'sm', variant = 'toolbar', block, font, maxWidth,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
     // Optional integrated model-picker footer: a selectable row once a
@@ -2326,9 +2653,40 @@ const MtlxSelect = ({
         }]);
     }, [options, labels, icons, titles, disabledOptions, badges, dots, defValue, emptyOption, placeholder, modelFooter]);
 
-    // Wider popover when badge pills share the rows with the labels,
-    // unless the caller knows its content is narrower and overrides it.
-    const popW = popWidth || (badges ? 240 : SELECT_POP_W);
+    // Re-measure once after mount: Tailwind Play's async CSS injection can
+    // change the trigger's resolved font after the first paint (the same
+    // reason reposition() takes a second RAF pass below).
+    const [measureTick, setMeasureTick] = React.useState(0);
+    React.useEffect(() => {
+        const raf = window.requestAnimationFrame(() => setMeasureTick((t) => t + 1));
+        return () => window.cancelAnimationFrame(raf);
+    }, []);
+
+    // Longest label pixel width at the trigger's actual computed font, so
+    // the trigger and popover can both size to fit instead of truncating.
+    const longestLabelPx = React.useMemo(() => {
+        const font = btnRef.current ? window.getComputedStyle(btnRef.current).font : undefined;
+        let max = 0;
+        normalized.forEach((o) => { if (!o.isFooter) max = Math.max(max, measureLabelWidth(o.label, font)); });
+        if (placeholder) max = Math.max(max, measureLabelWidth(placeholder, font));
+        return max;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [normalized, placeholder, measureTick]);
+
+    const hasIcon = !!icon;
+    const hasRowIcon = normalized.some((o) => o.icon);
+    const hasDot = normalized.some((o) => o.dot);
+    const hasBadge = normalized.some((o) => o.badge);
+    // Fit-to-text popover width before the trigger rect is known (capped
+    // at the viewport too); reposition() below widens this to at least
+    // the trigger's own rect.width once the popover is actually open.
+    const popFitWidth = Math.min(
+        Math.max(longestLabelPx + selectRowChromePx(hasRowIcon, hasDot, hasBadge), badges ? 240 : SELECT_POP_W),
+        SELECT_POP_MAX_PX,
+        Math.max(0, window.innerWidth - 16),
+    );
+    // Explicit popWidth prop always wins (version pickers, USD root list).
+    const popPreMeasureWidth = popWidth || popFitWidth;
 
     // Next/previous ENABLED row from `from`, walking in `dir` (+1/-1),
     // clamped at the array ends without wrapping. Returns null when every
@@ -2363,10 +2721,13 @@ const MtlxSelect = ({
         // there's more room above, otherwise stay below and clamp.
         const flip = desired > spaceBelow && spaceAbove > spaceBelow;
         const maxHeight = Math.max(0, Math.min(desired, flip ? spaceAbove : spaceBelow));
-        const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+        // Grows past the trigger's own width up to the fit-to-text cap; an
+        // explicit popWidth prop always wins (version pickers, USD root).
+        const width = popWidth || Math.max(rect.width, popFitWidth);
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
         setPos(flip
-            ? { left, bottom: window.innerHeight - rect.top + 4, maxHeight }
-            : { left, top: rect.bottom + 4, maxHeight });
+            ? { left, bottom: window.innerHeight - rect.top + 4, maxHeight, width }
+            : { left, top: rect.bottom + 4, maxHeight, width });
     };
     // A ref mirror so the scroll/resize effect (subscribed once per open,
     // not per render) always calls the LATEST reposition closure.
@@ -2533,9 +2894,11 @@ const MtlxSelect = ({
     // drops justify-between so icon+label pack flush left; the chevron
     // gets ml-auto below to stay pinned at the right edge instead.
     const alignLeft = align === 'left';
+    // `block` always means full width now, regardless of `align`; the
+    // "centered" justify-between split still applies unless align="left".
     const triggerClassName = [
         chrome, 'inline-flex items-center gap-1',
-        block && (alignLeft ? 'w-full' : 'justify-between'),
+        block && ('w-full' + (alignLeft ? '' : ' justify-between')),
         fontCls,
         disabled && 'opacity-50 pointer-events-none',
         className,
@@ -2552,12 +2915,31 @@ const MtlxSelect = ({
             : (triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE),
         borderColor: MXS_BORDER,
     };
-    const triggerStyle = Object.assign({}, defaultChromeStyle, selectThemeStyle(theme), fontStyle);
+    // Fit-to-text sizing, skipped for `block` triggers (w-full already
+    // owns their width) and for callers that already declare their own
+    // `max-w-*` utility: an inline style attribute always beats a class
+    // in the cascade, so setting our own inline max-width here would
+    // silently override a caller's (e.g. the graph document picker's
+    // narrow-viewport `max-w-[10rem]`) instead of deferring to it.
+    const triggerCap = typeof maxWidth === 'number' ? maxWidth : SELECT_TRIGGER_MAX_PX;
+    const hasCallerMaxW = typeof className === 'string' && /(^|\s)max-w-/.test(className);
+    // size="lg" is already full-width via SELECT_SIZE_CLS (sidebar
+    // fields): the plan keeps those at their container's width, only
+    // letting the LIST widen past them.
+    const fitStyle = (block || size === 'lg' || hasCallerMaxW) ? undefined : {
+        minWidth: Math.min(longestLabelPx + selectTriggerChromePx(size, hasIcon, hasDot), triggerCap),
+        maxWidth: triggerCap,
+    };
+    const triggerStyle = Object.assign({}, defaultChromeStyle, fitStyle, selectThemeStyle(theme), fontStyle);
 
     const selected = normalized.find((o) => o.value === value);
     const selectedLabel = selected ? selected.label : (labels[value] || value);
     const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
     const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
+    // Tooltip: always includes the full selected label (a truncated
+    // trigger otherwise has no way to reveal it), plus the caller's own
+    // `title` when one is set.
+    const triggerTitle = [title, selectedLabel].filter((s) => s != null && s !== '').join('\n') || undefined;
 
     // POPOVER font: explicit font prop or theme.font wins; else the
     // ambient value captured off the trigger (fixes the portal losing
@@ -2566,9 +2948,12 @@ const MtlxSelect = ({
     const popFontFamily = font === 'mono' ? undefined
         : (explicitFont || 'var(--mx-select-font, ' + ambientFont + ')');
 
+    // Before reposition() has measured the trigger rect, fall back to the
+    // fit-to-text estimate (or the legacy fallback when there's no text
+    // yet to measure) so the hidden probe render is already close.
     const popStyle = Object.assign(
         {
-            position: 'fixed', zIndex: 9999, width: popW,
+            position: 'fixed', zIndex: 9999, width: pos ? pos.width : popPreMeasureWidth,
             visibility: pos ? 'visible' : 'hidden',
             maxHeight: pos ? pos.maxHeight : 'none',
             overflowY: 'auto',
@@ -2607,7 +2992,7 @@ const MtlxSelect = ({
                         type="button"
                         role="option"
                         aria-selected={rowSelected}
-                        title={o.title}
+                        title={o.title ? (o.title + '\n' + o.label) : o.label}
                         aria-disabled={o.disabled || undefined}
                         onMouseEnter={() => { if (!o.disabled) setHi(i); }}
                         onClick={() => commitRow(o)}
@@ -2707,7 +3092,7 @@ const MtlxSelect = ({
                 aria-haspopup="listbox"
                 aria-expanded={open}
                 aria-controls={listboxId}
-                title={title}
+                title={triggerTitle}
                 disabled={!!disabled}
                 aria-disabled={disabled || undefined}
                 aria-label={ariaLabel}
@@ -3098,6 +3483,7 @@ Object.assign(window, {
     GROUP_HEADER_CLASS,
     ICON_BTN_SM, ICON_BTN_SM_PRIMARY, ICON_BTN_SM_DANGER,
     DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    RecordGifDialog,
     presetDocUrl, presetKey,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
     TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile, CustomModelTile, FilePickerField,

@@ -246,6 +246,11 @@
     border-bottom-color: var(--site-blue-500);
     color: var(--site-blue-300);
 }
+/* A top-level tab's own Experimental/Coming-soon pill (e.g. Scene Viewer),
+   distinct from the group-menu items which get their spacing from flex gap. */
+.mtlx-tab .mtlx-menu-badge {
+    margin-left: 6px;
+}
 
 /* Dropdown-trigger tabs (Learn/Integrate groups): a <button> styled like
    the <a> tabs above (.mtlx-tab supplies padding/border-bottom, the

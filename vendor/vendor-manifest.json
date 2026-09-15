@@ -14,6 +14,24 @@
       "bytes": 1106
     },
     {
+      "path": "basis-encoder/basis_encoder.js",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.js",
+      "sha256": "d225ce1e7012609bcfbe338351c8778d95eb1c19d404314d513b2b2df94a6ffb",
+      "bytes": 103878
+    },
+    {
+      "path": "basis-encoder/basis_encoder.wasm",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.wasm",
+      "sha256": "48d4e39ccaa1e290a17d00c13b353a728227bb439108d5e6c944fe6ab80552db",
+      "bytes": 3287321
+    },
+    {
+      "path": "basis-encoder/LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE",
+      "sha256": "065fcf48d6af21c0b75e23be5ed5753aee75c892e1c2cf178fa6736305614a5c",
+      "bytes": 11347
+    },
+    {
       "path": "dagre/dagre.min.js",
       "source": "dagre@0.8.5",
       "sha256": "62eb9787ccfdbdf4148d4d99d31dbf9ee4770eafee81e637d759b52aac22cd51",
@@ -194,6 +212,18 @@
       "bytes": 1107
     },
     {
+      "path": "pako/LICENSE.txt",
+      "source": "pako@1.0.11",
+      "sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539",
+      "bytes": 1104
+    },
+    {
+      "path": "pako/pako_inflate.min.js",
+      "source": "pako@1.0.11",
+      "sha256": "2ca27e9a8dae569cdeac42752ed1aed1afeff7f19282d3cc12c0aaa54a08bc04",
+      "bytes": 22682
+    },
+    {
       "path": "react/LICENSE.txt",
       "source": "react@18.3.1",
       "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
@@ -240,6 +270,18 @@
       "source": "https://cdn.tailwindcss.com/3.4.17",
       "sha256": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15",
       "bytes": 407279
+    },
+    {
+      "path": "three/basis/basis_transcoder.js",
+      "source": "three@0.128.0",
+      "sha256": "b352d4fb1b2b5f66877a37c418d061693cee99245bdaf38e6b6ba17c9f34a964",
+      "bytes": 62997
+    },
+    {
+      "path": "three/basis/basis_transcoder.wasm",
+      "source": "three@0.128.0",
+      "sha256": "e7dcac729b9e38208a1382f17da3d64a3108a8390e95c912d24bd95b7bc2fb5b",
+      "bytes": 440267
     },
     {
       "path": "three/draco/draco_decoder.wasm",
@@ -306,6 +348,30 @@
       "source": "three@0.128.0",
       "sha256": "9274bbcec8d96168626c732b5d31c775aa8cfb7eaa0599bec0c175908a2c1ce2",
       "bytes": 603445
+    },
+    {
+      "path": "usd-webview-bindings/LICENSE",
+      "source": "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/LICENSE",
+      "sha256": "b70fc166eeff7a2dc9694fbdc8e7dc205d6f6ff86b4ae6972c074f631988dac8",
+      "bytes": 1522
+    },
+    {
+      "path": "usd-webview-bindings/usdWebViewBindings.js",
+      "source": "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/public/usd-webview-bindings/usdWebViewBindings.js",
+      "sha256": "1bd9d2349526e1fbb21a5f31ca2736efeeee04617c825e4e8f2c7094f9bcb6fc",
+      "bytes": 9429
+    },
+    {
+      "path": "usd-webview-bindings/usdWebViewBindingsModule.js",
+      "source": "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/public/usd-webview-bindings/usdWebViewBindingsModule.js",
+      "sha256": "c6965098c59563c8023f4ba6771254fe98ee84cf2255594b8790973600768fce",
+      "bytes": 114189
+    },
+    {
+      "path": "usd-webview-bindings/usdWebViewBindingsModule.wasm",
+      "source": "https://raw.githubusercontent.com/usd-wg/usd-wg-webview/b050c3731d1854a5980b6b4fe55ec1725dc18f51/public/usd-webview-bindings/usdWebViewBindingsModule.wasm",
+      "sha256": "0f2f5f978655a7bfc0fe03c9ab2906f4bf9a97626d15384e5812296d3710f5de",
+      "bytes": 19733084
     },
     {
       "path": "utif/LICENSE.txt",

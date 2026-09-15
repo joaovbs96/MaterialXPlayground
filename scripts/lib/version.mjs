@@ -49,6 +49,8 @@ export async function extractVersionFromWasm() {
       ].join("\n")
     );
   }
+  // The 1.39.5 glue is an ES module (export default) inside a plain .js
+  // file with no type: module, so it needs Node's syntax detection (22.12+).
   const mod = await import(pathToFileURL(jsPath));
   const mx = await mod.default({
     // .wasm and .data live next to the .js.

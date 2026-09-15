@@ -15,6 +15,7 @@ const HOME_CARDS = [
     { id: 'viewer', group: 'tools', href: '#!viewer', icon: 'camera', title: 'Material Viewer', desc: 'Drop in a .mtlx (with textures, a folder, or a .zip) or pick a preset, and see it rendered in real time with image-based lighting.', img: 'images/preview-material.jpg', cta: 'Open Material Viewer' },
     { id: 'compare', group: 'tools', href: '#!compare', icon: 'compare', title: 'Material Comparison', desc: 'Render two MaterialX documents side by side, with a swipe slider or a difference heatmap and SSIM/RMSE stats.', img: 'images/preview-compare.jpg', cta: 'Open Material Comparison' },
     { id: 'graph', group: 'tools', href: '#!graph', icon: 'share', title: 'Node Graph Editor', desc: 'Build MaterialX graphs visually, with nested nodegraphs, a live 3D preview, validation, and .mtlx export.', img: 'images/preview-nodegraph.jpg', cta: 'Open Node Graph Editor' },
+    { id: 'scene', group: 'tools', href: '#!scene', icon: 'cube', title: 'Scene Viewer', badge: 'Experimental', desc: 'Drop a USD stage with MaterialX materials and render the whole scene: stage lights, shadows, ambient occlusion, and a double-click material preview.', img: 'images/preview-scene.jpg', cta: 'Open Scene Viewer' },
     { id: 'whatIsMaterialx', group: 'learn', href: '#!what-is-materialx', icon: 'world', iconImg: 'images/materialx-logo.svg', title: 'What is MaterialX?', desc: 'A guided introduction to the MaterialX standard: what it is, why it exists, and how its node graphs describe a material.', img: 'images/preview-what.jpg', cta: 'Read the introduction' },
     { id: 'gallery', group: 'learn', href: '#!gallery', icon: 'layout-grid', title: 'Material Gallery', desc: 'Browse, search, and preview every example material shipped with MaterialX plus our own showcase pieces, then reopen any of them in the Viewer or Graph Editor.', img: 'images/preview-gallery.jpg', cta: 'Browse materials' },
     { id: 'docs', group: 'learn', href: '#!docs', icon: 'file-code', title: 'Node Specs', desc: 'Every standard MaterialX node, with per-signature docs, port tables, live 3D previews, and shareable permalinks.', img: 'images/preview-docs.jpg', cta: 'Browse Node Specs' },
@@ -28,6 +29,7 @@ const HOME_FEATURED = [
     { card: 'whatIsMaterialx', kicker: 'Start here' },
     { card: 'gallery', kicker: 'New: browse every MaterialX example' },
     { card: 'graph', kicker: 'Build visually' },
+    { card: 'scene', kicker: 'New: render a whole USD scene' },
     { card: 'builder', kicker: 'Embed anywhere' },
 ];
 const FEATURED_MS = 10000;

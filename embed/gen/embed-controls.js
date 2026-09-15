@@ -5,7 +5,7 @@
 
 // Below EMBED_CTL_ICON_BELOW: icons only, no labels. Below
 // EMBED_CTL_HIDE_BELOW: no strip at all (a strip that doesn't fit is
-// worse than none). Keeps all seven controls usable down to 200px wide.
+// worse than none). Keeps all eight controls usable down to 200px wide.
 const EMBED_CTL_HIDE_BELOW = 150;
 const EMBED_CTL_ICON_BELOW = 480;
 
@@ -52,6 +52,8 @@ const EmbedControls = ({
   viewEpoch,
   onScreenshot,
   showScreenshot,
+  onRecord,
+  showRecord,
   showSettings,
   isFullscreen,
   onToggleFullscreen,
@@ -168,7 +170,15 @@ const EmbedControls = ({
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "camera",
     className: "mtlx-ec-icon"
-  }), !compact && /*#__PURE__*/React.createElement("span", null, "Screenshot")), showSettings && /*#__PURE__*/React.createElement("button", {
+  }), !compact && /*#__PURE__*/React.createElement("span", null, "Screenshot")), showRecord && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "mtlx-ec-btn",
+    onClick: onRecord,
+    title: "Record a 360\xB0 turntable GIF"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "player-record",
+    className: "mtlx-ec-icon"
+  }), !compact && /*#__PURE__*/React.createElement("span", null, "Record")), showSettings && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: 'mtlx-ec-btn' + (openPanel === 'settings' ? ' is-active' : ''),
     onClick: () => togglePanel('settings'),

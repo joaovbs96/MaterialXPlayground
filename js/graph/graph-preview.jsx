@@ -343,6 +343,17 @@
                 previewGeometry = 'shaderball-scene',
                 previewTextures,
                 previewName,
+                // Opt-in: skips the width-based auto-collapse below so a
+                // narrow host (e.g. a floating panel) still opens expanded.
+                // Default false keeps every existing caller's behavior.
+                previewExpanded = false,
+                // Opt-in: draggable divider between the graph and the
+                // preview column instead of a fixed w-64/w-72 rail.
+                // Default false keeps every existing caller unchanged.
+                previewResizable = false,
+                previewMinWidth = 220,
+                previewSplitStorageKey,
+                onPreviewSplitChange,
                 label,
                 onReady,
                 onError,
@@ -398,8 +409,9 @@
             const [rootWidth, setRootWidth] = React.useState(0);
             const [previewCollapsed, setPreviewCollapsed] = React.useState(false);
             // Set on the first manual toggle, so auto-collapse never fights
-            // a visitor's explicit choice on a later resize.
-            const previewUserSetRef = React.useRef(false);
+            // a visitor's explicit choice on a later resize. previewExpanded
+            // seeds this the same way, so the width-based effect never fires.
+            const previewUserSetRef = React.useRef(!!previewExpanded);
             // Sticky, never reset: once the viewer was ever eligible to exist,
             // later collapses hide it with CSS instead of unmounting it, so
             // <materialx-viewer> and its iframe survive every toggle.
@@ -477,6 +489,45 @@
             const togglePreviewCollapsed = () => {
                 previewUserSetRef.current = true;
                 setPreviewCollapsed((c) => !c);
+            };
+
+            // Resizable preview column width (previewResizable opt-in only).
+            // Seeded from the storage key when the caller supplies one, else
+            // the fixed rail's own default so the initial layout matches.
+            const [previewWidth, setPreviewWidth] = React.useState(() => {
+                if (previewSplitStorageKey) {
+                    try {
+                        const n = Number(localStorage.getItem(previewSplitStorageKey));
+                        if (Number.isFinite(n) && n > 0) return n;
+                    } catch (e) { /* storage unavailable */ }
+                }
+                return 288;
+            });
+            const dividerDragRef = React.useRef(null);
+            const commitPreviewWidth = (width) => {
+                if (previewSplitStorageKey) {
+                    try { localStorage.setItem(previewSplitStorageKey, String(width)); } catch (e) { /* storage unavailable */ }
+                }
+                if (onPreviewSplitChange) onPreviewSplitChange(width);
+            };
+            const onDividerPointerDown = (e) => {
+                if (e.button !== undefined && e.button !== 0) return;
+                try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* unsupported */ }
+                dividerDragRef.current = { startX: e.clientX, startWidth: previewWidth };
+            };
+            const onDividerPointerMove = (e) => {
+                const drag = dividerDragRef.current;
+                if (!drag) return;
+                const dx = e.clientX - drag.startX;
+                // Dragging left (negative dx) grows the preview column.
+                const maxWidth = rootWidth ? Math.max(previewMinWidth, rootWidth - 200 - 6) : (drag.startWidth - dx);
+                const next = Math.max(previewMinWidth, Math.min(maxWidth, drag.startWidth - dx));
+                setPreviewWidth(next);
+            };
+            const onDividerPointerUp = (e) => {
+                dividerDragRef.current = null;
+                try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (err) { /* unsupported */ }
+                commitPreviewWidth(previewWidth);
             };
 
             // Lazy first mount: flips only once expanded AND shouldLoad has
@@ -868,14 +919,27 @@
             if (chrome === 'card') rowClassNames.push('border', 'border-gray-700', 'rounded-lg', 'overflow-hidden');
             if (!isTransparent) rowClassNames.push('bg-gray-900');
 
+            const previewColumnStyle = previewResizable ? { width: previewWidth } : undefined;
+            const previewColumnClass = previewResizable ? 'relative flex-none' : 'relative flex-none w-64 sm:w-72';
             return (
                 <div ref={rootRef} className={rowClassNames.join(' ')}>
                     {graphBox}
+                    {previewResizable && previewColumnMounted && !previewCollapsed && (
+                        <div
+                            data-testid="mtlx-graph-preview-divider"
+                            role="separator"
+                            aria-orientation="vertical"
+                            className="flex-none w-1.5 cursor-col-resize touch-none bg-gray-700 hover:bg-gray-500"
+                            onPointerDown={onDividerPointerDown}
+                            onPointerMove={onDividerPointerMove}
+                            onPointerUp={onDividerPointerUp}
+                        />
+                    )}
                     {previewColumnMounted && (
                         // No self-start/aspect-square: flush, full row height.
                         // `hidden` (not unmounting) keeps GraphPreviewViewer
                         // alive underneath once previewEverLoaded is set.
-                        <div className={'relative flex-none w-64 sm:w-72' + (previewCollapsed ? ' hidden' : '')}>
+                        <div className={previewColumnClass + (previewCollapsed ? ' hidden' : '')} style={previewColumnStyle}>
                             {!previewCollapsed && previewToggleBtn}
                             {previewEverLoaded && (
                                 <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} materialRequest={previewMaterialRequest} />
