@@ -138,6 +138,12 @@ in-page, for reference while you work.</p>
 <td>Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as <code>transparent</code> above. See <a href="#force-transparency">Force transparency</a>.</td>
 </tr>
 <tr>
+<td><code>accumulation</code></td>
+<td>boolean</td>
+<td><em>(on, or the visitor&#39;s last Settings choice)</em></td>
+<td>While the view is still, progressively averages up to 32 sub-pixel jittered frames to smooth edges, fine detail and per-pixel speckle; resumes the direct render the moment the camera, material or environment changes.</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td>CSS color</td>
 <td><code>#3b82f6</code></td>
@@ -464,6 +470,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>accumulation</code></td>
+<td><code>.accumulation</code></td>
+<td>boolean</td>
+<td>on</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td><code>.accent</code></td>
 <td>CSS color</td>
@@ -612,7 +625,7 @@ calling these.</p>
 <tr>
 <td><code>mtlx-error</code></td>
 <td><code>{ message: string }</code></td>
-<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, a failed or unsupported <code>geometryUrl</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code> value.</td>
+<td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, a failed or unsupported <code>geometryUrl</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code>/<code>accumulation</code> value.</td>
 </tr>
 </tbody></table>
 <pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);

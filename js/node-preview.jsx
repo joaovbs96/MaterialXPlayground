@@ -251,6 +251,20 @@
                 window.addEventListener('mtlx-gl-context', onGlContext);
                 return () => window.removeEventListener('mtlx-gl-context', onGlContext);
             }, []);
+            // Experimental heighttonormal flag (js/mtlx-engine.js) bakes
+            // into generated fragment source, same as viewer-app.jsx's
+            // copy, so a flip must force the build effect below to rerun.
+            const [heightToNormalTexel, setHeightToNormalTexel] = React.useState(
+                () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel())
+            );
+            React.useEffect(() => {
+                const onSettingsChanged = (e) => {
+                    if (!e.detail || e.detail.key !== 'heightToNormalTexel') return;
+                    setHeightToNormalTexel(!!e.detail.value);
+                };
+                window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+                return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            }, []);
             React.useEffect(() => {
                 const flush = () => {
                     // hashchange fires before/around the shell's display:none class
@@ -1526,7 +1540,7 @@
                         deleteMxHandles([ed.instance, ...(ed.created || []), ed.doc]);
                     });
                 };
-            }, [identKey, enabled, geom, overrides, compareOn, customGeomEpochKey, glEpoch]);
+            }, [identKey, enabled, geom, overrides, compareOn, customGeomEpochKey, glEpoch, heightToNormalTexel]);
 
             // Groups params by uifolder: un-foldered render first; foldered
             // ones bucket under a collapsible header, in first-appearance

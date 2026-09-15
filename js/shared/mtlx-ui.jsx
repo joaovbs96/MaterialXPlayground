@@ -603,7 +603,7 @@ const fullscreenPortalRoot = () => (document.fullscreenElement || document.body)
 // math below. Height is a safe over-estimate covering the built-in
 // Display + Force Transparency blocks plus one caller-supplied `children`
 // block; the cog sits at the top of the strip so the flip branch effectively never fires.
-const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 300;
+const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 420;
 
 // Settings popover (cogwheel button in ViewportControls): mounted once
 // there so it's shared across docs/viewer/graph with zero per-app wiring.
@@ -637,6 +637,26 @@ function SettingsDialog({ anchorRef, open, onClose, children }) {
         setDisplayTransformState(mode);
         if (window.setDisplayTransform) window.setDisplayTransform(mode);
     };
+    // Accumulate frames + texel-space bump: resync on open, plus a live
+    // listener since another open dialog/tool can flip either and every
+    // mounted popover should stay in step (mtlx-settings-changed).
+    const [accumOn, setAccumOn] = React.useState(() => !!(window.getAccumulationEnabled && window.getAccumulationEnabled()));
+    const [texelOn, setTexelOn] = React.useState(() => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel()));
+    React.useEffect(() => {
+        if (!open) return;
+        if (window.getAccumulationEnabled) setAccumOn(!!window.getAccumulationEnabled());
+        if (window.getHeightToNormalTexel) setTexelOn(!!window.getHeightToNormalTexel());
+    }, [open]);
+    React.useEffect(() => {
+        const onSettingsChanged = (e) => {
+            const d = e && e.detail;
+            if (!d) return;
+            if (d.key === 'accumulation') setAccumOn(!!d.value);
+            if (d.key === 'heightToNormalTexel') setTexelOn(!!d.value);
+        };
+        window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+        return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+    }, []);
     const popRef = React.useRef(null);
     const [pos, setPos] = React.useState(null);
 
@@ -715,6 +735,51 @@ function SettingsDialog({ anchorRef, open, onClose, children }) {
                     </div>
                     <div className="mt-1 text-[11px] text-gray-400">
                         Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
+                    </div>
+                </div>
+                <div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-gray-200">Accumulate frames</span>
+                        <button
+                            onClick={() => {
+                                const next = !accumOn;
+                                setAccumOn(next);
+                                window.setAccumulationEnabled && window.setAccumulationEnabled(next);
+                            }}
+                            title={accumOn ? 'Disable frame accumulation' : 'Enable frame accumulation'}
+                            className={`h-5 px-2 rounded border transition-colors shrink-0 ${
+                                accumOn ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                            }`}
+                        >
+                            {accumOn ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        While the view is still, averages 32 slightly offset frames to smooth edges, fine detail and speckle. Screenshots wait for all 32.
+                    </div>
+                </div>
+                <div>
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-gray-200">
+                            Texel-space bump
+                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                        </span>
+                        <button
+                            onClick={() => {
+                                const next = !texelOn;
+                                setTexelOn(next);
+                                window.setHeightToNormalTexel && window.setHeightToNormalTexel(next);
+                            }}
+                            title={texelOn ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'}
+                            className={`h-5 px-2 rounded border transition-colors shrink-0 ${
+                                texelOn ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                            }`}
+                        >
+                            {texelOn ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">
+                        Computes heighttonormal slopes per texel instead of per screen pixel, removing speckle on high resolution height maps. Differs from the official MaterialX viewer.
                     </div>
                 </div>
                 {children}
@@ -995,7 +1060,7 @@ const useViewEnum = (viewRef, method, initial) => {
 // `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
 // view.snapshot() returns a plain data: URL, so there's no URL to revoke.
 const downloadSnapshot = (view, baseName) => {
-    const url = view.snapshot();
+    const url = view.snapshot({ accumulated: true });
     if (!url) return;
     const a = document.createElement('a');
     a.download = baseName.replace(/[^\w.-]+/g, '_') + '.png';

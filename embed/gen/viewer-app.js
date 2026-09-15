@@ -1107,6 +1107,18 @@ function MaterialViewerApp({
   // only): local mirror of the engine's persisted value, replacing
   // the old HUD settings popover's only built-in block.
   const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+  const [accumulation, setAccumulation] = React.useState(() => !!(window.getAccumulationEnabled && window.getAccumulationEnabled()));
+  // Live listener, unlike forceTransparency above: another open
+  // Settings dialog (or the embed HUD) can flip this, so the
+  // Rendering card's toggle must stay in sync, same as heightToNormalTexel.
+  React.useEffect(() => {
+    const onSettingsChanged = e => {
+      if (!e.detail || e.detail.key !== 'accumulation') return;
+      setAccumulation(!!e.detail.value);
+    };
+    window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+    return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+  }, []);
 
   // Scene card's custom-model import row (browser only) plus the
   // hidden HUD input below (VS Code, no sidebar). Mirrors the
@@ -1541,7 +1553,35 @@ function MaterialViewerApp({
     }
   })), /*#__PURE__*/React.createElement("div", {
     className: "mt-1 text-[11px] text-gray-400"
-  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.")), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews."), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center justify-between cursor-pointer",
+    title: accumulation ? 'Disable frame accumulation' : 'Enable frame accumulation'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium text-gray-400"
+  }, "Accumulate frames"), /*#__PURE__*/React.createElement(Toggle, {
+    checked: accumulation,
+    onChange: next => {
+      setAccumulation(next);
+      window.setAccumulationEnabled && window.setAccumulationEnabled(next);
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-1 text-[11px] text-gray-400"
+  }, "While the view is still, averages 32 slightly offset frames to smooth edges, fine detail and speckle. Screenshots wait for all 32."), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center justify-between cursor-pointer",
+    title: heightToNormalTexel ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "inline-flex items-center gap-1.5 text-xs font-medium text-gray-400"
+  }, "Texel-space bump", /*#__PURE__*/React.createElement("span", {
+    className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
+  }, "Experimental")), /*#__PURE__*/React.createElement(Toggle, {
+    checked: heightToNormalTexel,
+    onChange: next => {
+      setHeightToNormalTexelState(next);
+      window.setHeightToNormalTexel && window.setHeightToNormalTexel(next);
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-1 text-[11px] text-gray-400"
+  }, "Computes heighttonormal slopes per texel instead of per screen pixel, removing speckle on high resolution height maps. Differs from the official MaterialX viewer.")), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "alert-triangle",
     title: "Textures",
     summary: texReport.missing.length + ' unresolved',

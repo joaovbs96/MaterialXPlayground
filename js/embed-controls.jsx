@@ -52,6 +52,10 @@ const EmbedControls = ({
         () => (typeof initialEnvExposure === 'number' ? initialEnvExposure : 1.0));
     const [forceT, setForceT] = React.useState(
         () => !!(window.getForceTransparency && window.getForceTransparency()));
+    const [accumOn, setAccumOn] = React.useState(
+        () => !!(window.getAccumulationEnabled && window.getAccumulationEnabled()));
+    const [texelOn, setTexelOn] = React.useState(
+        () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel()));
     const [displayTransform, setDisplayTransformState] = React.useState(
         () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb'));
 
@@ -96,6 +100,16 @@ const EmbedControls = ({
         const next = !forceT;
         setForceT(next);
         if (window.setForceTransparency) window.setForceTransparency(next);
+    };
+    const toggleAccumulation = () => {
+        const next = !accumOn;
+        setAccumOn(next);
+        if (window.setAccumulationEnabled) window.setAccumulationEnabled(next);
+    };
+    const toggleTexelBump = () => {
+        const next = !texelOn;
+        setTexelOn(next);
+        if (window.setHeightToNormalTexel) window.setHeightToNormalTexel(next);
     };
     const pickDisplayTransform = (mode) => {
         setDisplayTransformState(mode);
@@ -275,6 +289,36 @@ const EmbedControls = ({
                     <div className="mtlx-ec-desc">
                         Render opacity/transmission with real alpha blending. When off, the preview
                         matches the standard MaterialX viewer (opaque).
+                    </div>
+                    <div className="mtlx-ec-panel-row">
+                        <span>Accumulate frames</span>
+                        <button
+                            type="button"
+                            className={'mtlx-ec-toggle' + (accumOn ? ' is-on' : '')}
+                            onClick={toggleAccumulation}
+                            title={accumOn ? 'Disable frame accumulation' : 'Enable frame accumulation'}
+                        >
+                            {accumOn ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mtlx-ec-desc">
+                        While the view is still, averages 32 slightly offset frames to smooth edges,
+                        fine detail and speckle. Screenshots wait for all 32.
+                    </div>
+                    <div className="mtlx-ec-panel-row">
+                        <span>Texel-space bump</span>
+                        <button
+                            type="button"
+                            className={'mtlx-ec-toggle' + (texelOn ? ' is-on' : '')}
+                            onClick={toggleTexelBump}
+                            title={texelOn ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'}
+                        >
+                            {texelOn ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mtlx-ec-desc">
+                        Computes heighttonormal slopes per texel instead of per screen pixel, removing
+                        speckle on high resolution height maps. Differs from the official MaterialX viewer.
                     </div>
                 </div>
             )}

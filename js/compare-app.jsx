@@ -220,7 +220,7 @@ const useCompareSlot = () => {
 // (Re)builds one slot's render view whenever its chosen document/material
 // or the shared geometry changes — mirrors viewer-app.jsx's render effect,
 // called once per slot from the app component below.
-const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch, displayTransform) => {
+const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch, displayTransform, heightToNormalTexel) => {
     React.useEffect(() => {
         const loaded = slot.loadedRef.current;
         if (!loaded || !loaded.renderables.length) return undefined;
@@ -312,7 +312,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch, displayTransform]);
+    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
 };
 
 // Window-wide drag & drop, split into two zones (Document A / Document B)
@@ -556,6 +556,15 @@ function MaterialCompareApp({ active = true } = {}) {
     const [forceTransparency, setForceTransparency] = React.useState(
         () => !!(window.getForceTransparency && window.getForceTransparency())
     );
+    const [accumulation, setAccumulation] = React.useState(
+        () => !!(window.getAccumulationEnabled && window.getAccumulationEnabled())
+    );
+    // Experimental heighttonormal flag: bakes into generated fragment
+    // source, same as viewer-app.jsx's own copy, so a flip must force
+    // both slots' render effect to rerun (see its use below).
+    const [heightToNormalTexel, setHeightToNormalTexelState] = React.useState(
+        () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel())
+    );
     // Extract key light toggle: local mirror of the engine-wide
     // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js), one
     // setting shared by both slots. Degrades to disabled like EnvDialog's
@@ -618,8 +627,8 @@ function MaterialCompareApp({ active = true } = {}) {
     // on screen) should rebuild either slot; imports made while some OTHER
     // geom is selected must not, so this stays 0 unless geom is 'custom'.
     const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform, heightToNormalTexel);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform, heightToNormalTexel);
 
     // Restore re-inits GL state but not render-target contents, so a
     // glEpoch bump forces that slot's build effect to dispose and fully
@@ -992,9 +1001,16 @@ function MaterialCompareApp({ active = true } = {}) {
     // gives both views time to repaint before it recomputes.
     React.useEffect(() => {
         const onSettingsChanged = (e) => {
-            if (!e.detail || e.detail.key !== 'forceTransparency') return;
-            statsDirtyRef.current = true;
-            diffDirtyRef.current = true;
+            const d = e && e.detail;
+            if (!d) return;
+            if (d.key === 'forceTransparency' || d.key === 'accumulation') {
+                statsDirtyRef.current = true;
+                diffDirtyRef.current = true;
+            }
+            // Keeps the Rendering card's toggle in sync when another open
+            // Settings dialog (or the embed HUD) flips the setting.
+            if (d.key === 'accumulation') setAccumulation(!!d.value);
+            if (d.key === 'heightToNormalTexel') setHeightToNormalTexelState(!!d.value);
         };
         window.addEventListener('mtlx-settings-changed', onSettingsChanged);
         return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
@@ -1775,6 +1791,41 @@ function MaterialCompareApp({ active = true } = {}) {
                             </label>
                             <div className="mt-1 text-[11px] text-gray-400">
                                 Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
+                            </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={accumulation ? 'Disable frame accumulation' : 'Enable frame accumulation'}
+                            >
+                                <span className="text-xs font-medium text-gray-400">Accumulate frames</span>
+                                <Toggle
+                                    checked={accumulation}
+                                    onChange={(next) => {
+                                        setAccumulation(next);
+                                        window.setAccumulationEnabled && window.setAccumulationEnabled(next);
+                                    }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                While the view is still, averages 32 slightly offset frames to smooth edges, fine detail and speckle. Screenshots wait for all 32.
+                            </div>
+                            <label
+                                className="flex items-center justify-between cursor-pointer"
+                                title={heightToNormalTexel ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'}
+                            >
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                    Texel-space bump
+                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                </span>
+                                <Toggle
+                                    checked={heightToNormalTexel}
+                                    onChange={(next) => {
+                                        setHeightToNormalTexelState(next);
+                                        window.setHeightToNormalTexel && window.setHeightToNormalTexel(next);
+                                    }}
+                                />
+                            </label>
+                            <div className="mt-1 text-[11px] text-gray-400">
+                                Computes heighttonormal slopes per texel instead of per screen pixel, removing speckle on high resolution height maps. Differs from the official MaterialX viewer.
                             </div>
                         </SectionCard>
                     </div>

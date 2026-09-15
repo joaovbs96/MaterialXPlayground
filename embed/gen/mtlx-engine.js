@@ -169,7 +169,24 @@ let HEIGHT_TO_NORMAL_TEXEL=(()=>{try{const qs=new URLSearchParams(window.locatio
 let SPECULAR_ENV_METHOD=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('specularEnv'))return qs.get('specularEnv')==='fis'?'fis':'prefilter';return localStorage.getItem('mtlx_specular_env')==='fis'?'fis':'prefilter';}catch(e){return'prefilter';}})();const getSpecularEnvMethod=()=>SPECULAR_ENV_METHOD;const getHeightToNormalTexel=()=>HEIGHT_TO_NORMAL_TEXEL;const setHeightToNormalTexel=(v,{persist=true}={})=>{HEIGHT_TO_NORMAL_TEXEL=!!v;if(persist){try{localStorage.setItem('mtlxHeightToNormalTexel',HEIGHT_TO_NORMAL_TEXEL?'1':'0');}catch(e){/* best-effort */}}// Generation-affecting: existing compiled sources bake in the old
 // rewrite decision, so every live view must recompile its materials,
 // mirroring how forceTransparency's setter above nudges live views.
-try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'heightToNormalTexel',value:HEIGHT_TO_NORMAL_TEXEL}}));}catch(e){/* best-effort */}};// Nearest transparent layers the peel loop resolves before giving up on
+try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'heightToNormalTexel',value:HEIGHT_TO_NORMAL_TEXEL}}));}catch(e){/* best-effort */}};// Progressive jittered-frame accumulation (Settings dialog, default on).
+// While a preview view's image is unchanged, createMtlxRenderView's
+// animate() feeds one sub-pixel-jittered sample into a shared
+// accumulator (createFrameAccumulator below) instead of the direct
+// render; once converged the averaged image is presented and drawing
+// stops. A `?accumulation=1|0` URL param seeds the flag for a page load
+// without touching localStorage, same style as heightToNormalTexel.
+let ACCUMULATION_ENABLED=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('accumulation'))return qs.get('accumulation')==='1';const v=localStorage.getItem('mtlxAccumulation');return v===null?true:v==='1';}catch(e){return true;}})();const getAccumulationEnabled=()=>ACCUMULATION_ENABLED;const setAccumulationEnabled=(v,{persist=true}={})=>{ACCUMULATION_ENABLED=!!v;if(persist){try{localStorage.setItem('mtlxAccumulation',ACCUMULATION_ENABLED?'1':'0');}catch(e){/* best-effort */}}// Every live view resets its accumulator (or frees it when turned
+// off), mirroring forceTransparency's setter above.
+LIVE_VIEWS.forEach(view=>{try{view.refreshAccumulation&&view.refreshAccumulation();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'accumulation',value:ACCUMULATION_ENABLED}}));}catch(e){/* best-effort */}};// Sample budget for one converged accumulation pass. Index 0 is always
+// the unjittered sample, so the direct path and the accumulator agree
+// at rest (see accumulationJitter below).
+const ACCUMULATION_SAMPLES=32;const getAccumulationSampleCount=()=>ACCUMULATION_SAMPLES;// Radical-inverse term of the Halton sequence in the given prime base,
+// the standard low-discrepancy building block for jittered sampling.
+const haltonRadicalInverse=(index,base)=>{let result=0,f=1/base,i=index;while(i>0){result+=f*(i%base);i=Math.floor(i/base);f/=base;}return result;};// Sub-pixel jitter in pixels, within [-0.5, 0.5]. Index 0 is {0,0} so a
+// single accumulated sample matches the unjittered direct frame; 1..31
+// come from Halton(2, 3) recentered on the pixel.
+const accumulationJitter=index=>{if(index===0)return{x:0,y:0};return{x:haltonRadicalInverse(index,2)-0.5,y:haltonRadicalInverse(index,3)-0.5};};// Nearest transparent layers the peel loop resolves before giving up on
 // farther fragments, ample for the single-mesh shaderball preview this
 // targets. Each layer costs a full extra raster+composite pass, so this
 // is a fixed small constant rather than "peel until empty".
@@ -2121,7 +2138,33 @@ const saved=new Map();for(const m of meshes){const mat=m.material;if(saved.has(m
 // above), disabled explicitly anyway for defensiveness.
 mat.depthTest=false;}renderer.setRenderTarget(peel.accumRT);renderer.render(scene,camera);saved.forEach((state,mat)=>{Object.assign(mat,state);mat.uniforms.u_peelMode.value=0;});hidden.forEach(o=>{o.visible=true;});hidden.length=0;// 5. composite accum (+opaqueRT, linear mode) onto the caller's target.
 restoreRenderDestination(renderer,outputDestination);peel.quadMesh.material=peel.finalMat;peel.finalMat.uniforms.tAccum.value=peel.accumRT.texture;if(peelLinearOk){peel.finalMat.uniforms.tOpaque.value=peel.opaqueRT.texture;peel.finalMat.uniforms.u_displayTransform.value=opts.outputLinear?2:displayTransformId(getDT());peel.finalMat.uniforms.u_displayExposure.value=opts.outputLinear?1:getExposure();}renderer.render(peel.quadScene,peel.quadCam);}finally{// restore GL state even if a pass above threw
-restoreRenderDestination(renderer,outputDestination);renderer.autoClear=prevAutoClear;renderer.setClearColor(prevClearColor,prevClearAlpha);renderer.shadowMap.autoUpdate=prevShadowAutoUpdate;meshes.forEach(m=>{if(m.material.uniforms&&m.material.uniforms.u_peelMode)m.material.uniforms.u_peelMode.value=0;});linearUniforms.forEach((value,uniform)=>{uniform.value=value;});if(hidden.length){hidden.forEach(o=>{o.visible=true;});hidden.length=0;}}};return{render,setMeshMode:applyPeelMaterialMode,peelLinearOk,dispose:()=>{freePeel();}};};const createMtlxRenderView=async({canvas,mx,gen,genContext,renderable,lightData,label,needsLighting,geomName,autoRotate=true,envBackground=false,// Background switch: 'studio' | 'studio-dark' | 'environment' |
+restoreRenderDestination(renderer,outputDestination);renderer.autoClear=prevAutoClear;renderer.setClearColor(prevClearColor,prevClearAlpha);renderer.shadowMap.autoUpdate=prevShadowAutoUpdate;meshes.forEach(m=>{if(m.material.uniforms&&m.material.uniforms.u_peelMode)m.material.uniforms.u_peelMode.value=0;});linearUniforms.forEach((value,uniform)=>{uniform.value=value;});if(hidden.length){hidden.forEach(o=>{o.visible=true;});hidden.length=0;}}};return{render,setMeshMode:applyPeelMaterialMode,peelLinearOk,dispose:()=>{freePeel();}};};// createFrameAccumulator(renderer): shared progressive jittered-frame
+// accumulator. Owns a sample target plus a ping-pong pair of running-
+// average targets, sized to whatever destination is bound when
+// beginSample() is called (the drawing buffer, or a caller's own
+// render target, mirroring createPeelPipeline's own sizing rule).
+// createMtlxRenderView's animate() is the first consumer; the USD Scene
+// render loop (package S) reuses this same factory.
+//
+// Usage per still frame: `const jitter = acc.beginSample()` (binds the
+// sample target and returns the jitter for THIS sample), apply the
+// jitter to the camera, render the scene as usual, then `acc.endSample()`
+// folds the sample into the running average. Once `acc.samples` reaches
+// the target count, `acc.present()` blits the average to the destination
+// that was bound before beginSample (a raw copy, no re-encoding: the
+// generated MaterialX fragment shader already writes final display-
+// encoded color, and RawShaderMaterial shaders skip three.js's own
+// output-encoding/tone-mapping chunk entirely regardless of which
+// target is bound, verified against vendor/three/three.min.js's
+// WebGLProgram isRawShaderMaterial branch).
+const createFrameAccumulator=renderer=>{let w=0,h=0;let sampleRT=null,historyA=null,historyB=null;let current=null;// the newest running-average target, null before the first endSample
+let sampleCount=0;let savedDest=null;let mixMat=null,copyMat=null,quadScene=null,quadCam=null,quad=null;const quadVertex='in vec3 position;\n'+'in vec2 uv;\n'+'out vec2 vUv;\n'+'void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}\n';// HalfFloat when the driver can render to it (keeps sub-8-bit
+// precision across up to 32 folded samples); UnsignedByte otherwise,
+// matching the canvas backbuffer precision the direct path already uses.
+const rtType=()=>renderer.extensions.get('EXT_color_buffer_float')?THREE.HalfFloatType:THREE.UnsignedByteType;const makeRT=(ww,hh)=>new THREE.WebGLRenderTarget(Math.max(1,ww),Math.max(1,hh),{type:rtType(),format:THREE.RGBAFormat,minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter,depthBuffer:true,stencilBuffer:false});const ensureQuad=()=>{if(quad)return;quadScene=new THREE.Scene();quadCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);mixMat=new THREE.RawShaderMaterial({glslVersion:THREE.GLSL3,vertexShader:quadVertex,fragmentShader:'precision highp float; in vec2 vUv; out vec4 o;\n'+'uniform sampler2D u_history; uniform sampler2D u_sample; uniform float u_weight;\n'+'void main(){vec4 h=texture(u_history,vUv);vec4 s=texture(u_sample,vUv);o=mix(h,s,u_weight);}\n',uniforms:{u_history:{value:null},u_sample:{value:null},u_weight:{value:1}},blending:THREE.NoBlending,depthTest:false,depthWrite:false});copyMat=new THREE.RawShaderMaterial({glslVersion:THREE.GLSL3,vertexShader:quadVertex,fragmentShader:'precision highp float; in vec2 vUv; out vec4 o; uniform sampler2D u_src;\n'+'void main(){o=texture(u_src,vUv);}\n',uniforms:{u_src:{value:null}},blending:THREE.NoBlending,depthTest:false,depthWrite:false});quad=new THREE.Mesh(new THREE.PlaneGeometry(2,2),mixMat);quadScene.add(quad);};const freeTargets=()=>{[sampleRT,historyA,historyB].forEach(rt=>{if(rt)rt.dispose();});sampleRT=historyA=historyB=current=null;};// Public reset(): drops any partial average and frees the GPU
+// targets; the next beginSample() lazily reallocates them (also the
+// path taken after a GL context loss, same as the peel pipeline).
+const reset=()=>{freeTargets();sampleCount=0;};const targetSize=()=>{const bound=renderer.getRenderTarget();if(bound)return{w:bound.width,h:bound.height};const v=renderer.getDrawingBufferSize(new THREE.Vector2());return{w:Math.max(1,Math.round(v.x)),h:Math.max(1,Math.round(v.y))};};const beginSample=()=>{const size=targetSize();if(!sampleRT||size.w!==w||size.h!==h){w=size.w;h=size.h;freeTargets();sampleRT=makeRT(w,h);historyA=makeRT(w,h);historyB=makeRT(w,h);sampleCount=0;}savedDest=snapshotRenderDestination(renderer);renderer.setRenderTarget(sampleRT);return accumulationJitter(sampleCount);};const endSample=()=>{ensureQuad();const weight=1/(sampleCount+1);const dest=current===historyA?historyB:historyA;mixMat.uniforms.u_history.value=current?current.texture:sampleRT.texture;mixMat.uniforms.u_sample.value=sampleRT.texture;mixMat.uniforms.u_weight.value=weight;quad.material=mixMat;renderer.setRenderTarget(dest);renderer.render(quadScene,quadCam);current=dest;sampleCount+=1;if(savedDest)restoreRenderDestination(renderer,savedDest);};const present=()=>{if(!current)return;ensureQuad();copyMat.uniforms.u_src.value=current.texture;quad.material=copyMat;if(savedDest)restoreRenderDestination(renderer,savedDest);else renderer.setRenderTarget(null);renderer.render(quadScene,quadCam);};return{reset,beginSample,endSample,present,get samples(){return sampleCount;},dispose:()=>{freeTargets();sampleCount=0;}};};const createMtlxRenderView=async({canvas,mx,gen,genContext,renderable,lightData,label,needsLighting,geomName,autoRotate=true,envBackground=false,// Background switch: 'studio' | 'studio-dark' | 'environment' |
 // 'none'. No default here (see backdropMode below), undefined lets
 // envBackground's back-compat rule decide the initial mode.
 backdrop,// 'zoom' (default): plain wheel zooms. 'scroll': plain wheel is gated
@@ -2181,7 +2224,18 @@ let viewIsTransparent=false;// Tracks whether the scene's built-in materials are
 let sceneLinearOn=false;// Outer-scope binding for the createPeelPipeline instance (created
 // deep inside the try block below, out of disposePartial's reach):
 // every call site resolves this instead, assigned once it's built.
-let peelPipeline=null;// The radiance texture, kept so the caller can toggle it as the
+let peelPipeline=null;// Progressive accumulation state (see createFrameAccumulator above).
+// accumulator is lazily built on the first still frame; accumForce
+// is set true by invalidateAccumulation()/setters to force a reset
+// check on the NEXT animate() tick even if the digest didn't change
+// (covers async callbacks that fire between frames).
+let accumulator=null;let accumSignature=null;let accumForce=false;let accumConverged=false;// 'disabled' | 'animated' | 'moving' | 'hidden' | null (accumulating
+// or converged), read by the handle's getAccumulationState().
+let accumReason='disabled';// Forces the NEXT animate() tick to treat the image as changed even
+// if its digest happens to match (async changes the digest can't
+// see, e.g. a backdrop switch). Declared this early so setup code
+// below (applyBackdrop et al.) can call it before `handle` exists.
+const invalidateAccumulation=()=>{accumForce=true;accumConverged=false;};// The radiance texture, kept so the caller can toggle it as the
 // visible backdrop (setEnvBackground) via bgMesh below; the IBL
 // uniforms are bound regardless.
 let envBgTexture=null;let envRadSamplerName=null,envIrrSamplerName=null,envRotationRad=0;// See NEUTRAL_ENV_ROTATION_CHUNK's header comment above for the full
@@ -2245,7 +2299,7 @@ try{if(pmremRT)pmremRT.dispose();}catch(e){/* already disposed/invalid */}// set
 try{if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);}catch(e){/* already disposed/invalid */}// Depth-peel render targets/quad materials, owned by the
 // createPeelPipeline instance, this view's OWN GPU resources,
 // same disposal rationale as pmremRT immediately above.
-try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}if(canvas){canvas.removeEventListener('webglcontextlost',onGlLost);canvas.removeEventListener('webglcontextrestored',onGlRestored);}if(renderer)renderer.dispose();};// [mtlx-perf] whole-function total, from shader generation through
+try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}try{if(accumulator)accumulator.dispose();}catch(e){/* already disposed/invalid */}if(canvas){canvas.removeEventListener('webglcontextlost',onGlLost);canvas.removeEventListener('webglcontextrestored',onGlRestored);}if(renderer)renderer.dispose();};// [mtlx-perf] whole-function total, from shader generation through
 // the GL compile. See the finer-grained timers further down for a
 // breakdown (gen.generate / WebGLRenderer init / GL compile).
 const __totalPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{// Generates the shader from the renderable surface node.
@@ -2401,7 +2455,10 @@ const applySize=(w,h)=>{renderer.setSize(w,h,false);// Depth-peel render targets
 // free them here; renderFrame() lazily reallocates at
 // the new size on its next peeling frame, so a resize
 // with peeling OFF costs nothing extra.
-if(peelPipeline)peelPipeline.dispose();if(flat2d){// OrthographicCamera has no .aspect/.fov, the
+if(peelPipeline)peelPipeline.dispose();// Same lazy-reallocation rule as peelPipeline above:
+// just free the targets, the digest also catches the
+// size change next animate() tick regardless.
+if(accumulator)accumulator.reset();invalidateAccumulation();if(flat2d){// OrthographicCamera has no .aspect/.fov, the
 // frustum/quad/UV fit tracks the aspect instead
 // (fitQuadToAspect updates the projection itself).
 fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene only: resize can flip which side of the
@@ -2475,7 +2532,7 @@ if(studioPolarApplied){controls.maxPolarAngle=Math.PI;studioPolarApplied=false;}
 // and again by the handle's setBackdrop()/setEnvBackground().
 const applyBackdrop=mode=>{backdropMode=normalizeBackdropMode(mode);if(bgMesh)bgMesh.visible=backdropMode==='environment';if(studioGroup)studioGroup.visible=isStudioBackdrop(backdropMode);// Live variant swap: rewrite the gradient uniforms for
 // the now-active variant (light vs dark).
-if(studioMesh){applyStudioVariantUniforms(studioMesh.material,backdropMode==='studio-dark');}if(studioCatcher){studioCatcher.material.opacity=backdropMode==='studio-dark'?STUDIO_SHADOW_OPACITY_DARK:STUDIO_SHADOW_OPACITY;}applyStudioPolarClamp();};applyBackdrop(backdropMode);// Non-MaterialX materials (skybox + GLB clones), fixed
+if(studioMesh){applyStudioVariantUniforms(studioMesh.material,backdropMode==='studio-dark');}if(studioCatcher){studioCatcher.material.opacity=backdropMode==='studio-dark'?STUDIO_SHADOW_OPACITY_DARK:STUDIO_SHADOW_OPACITY;}applyStudioPolarClamp();invalidateAccumulation();};applyBackdrop(backdropMode);// Non-MaterialX materials (skybox + GLB clones), fixed
 // for this shell's lifetime, so cached once. setSceneLinear
 // detones them for the merged linear-opaque pass (sRGB needs
 // no flag: the RT's own texture.encoding gates that, r128-verified).
@@ -2514,7 +2571,32 @@ let fitCenter=null,fitRadius=null;if(mesh){mesh.updateMatrixWorld(true);const bb
 controls.saveState();}const vp=new THREE.Matrix4();// Hoisted above the first material apply: applyMaterialInternal
 // calls this after every swap, and animate() calls it every
 // frame. The guard is defensive only.
-const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();uniforms.u_worldMatrix.value.copy(mesh.matrixWorld);vp.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);uniforms.u_viewProjectionMatrix.value.copy(vp);uniforms.u_worldInverseTransposeMatrix.value.copy(mesh.matrixWorld).invert().transpose();camera.getWorldPosition(uniforms.u_viewPosition.value);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// ------------------------------------------------------
+const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();uniforms.u_worldMatrix.value.copy(mesh.matrixWorld);vp.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);uniforms.u_viewProjectionMatrix.value.copy(vp);uniforms.u_worldInverseTransposeMatrix.value.copy(mesh.matrixWorld).invert().transpose();camera.getWorldPosition(uniforms.u_viewPosition.value);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// Flattens one uniform value into `out` for the digest
+// below: numbers/booleans directly, textures by identity
+// (uuid), vectors/matrices/colors by their components,
+// arrays/typed-arrays element-wise (light data, shadow atlases).
+const digestAccumValue=(v,out)=>{if(v==null)return;if(typeof v==='number'){out.push(v);return;}if(typeof v==='boolean'){out.push(v?1:0);return;}if(v.isTexture){out.push(v.uuid);return;}if(v.isVector2||v.isVector3||v.isVector4){out.push(v.toArray().join(','));return;}if(v.isMatrix3||v.isMatrix4){out.push(v.elements.join(','));return;}if(v.isColor){out.push(v.r+','+v.g+','+v.b);return;}if(Array.isArray(v)||ArrayBuffer.isView(v)){for(let i=0;i<v.length;i++)digestAccumValue(v[i],out);}};// Cheap per-frame signature of everything that should
+// reset an in-progress accumulation: camera pose/
+// projection (orbit, zoom, view offset already cleared by
+// the time this runs), drawing buffer size/pixel ratio,
+// every uniform value (catches the Graph Editor's
+// tryFastUniformUpdate poking `uniforms` directly, and a
+// texture finishing its async load and getting swapped
+// in), plus the module/shell flags whose change isn't
+// otherwise visible through a uniform. Order-independent,
+// string-joined; called once per animate() tick, not hot
+// enough to warrant a smarter hash.
+const computeAccumSignature=()=>{const out=[];out.push(camera.matrixWorld.elements.join(','));out.push(camera.projectionMatrix.elements.join(','));if(mesh)out.push(mesh.matrixWorld.elements.join(','),mesh.visible?1:0);const size=renderer.getDrawingBufferSize(new THREE.Vector2());out.push(size.x+'x'+size.y+'@'+renderer.getPixelRatio());out.push(FORCE_TRANSPARENCY?1:0,HEIGHT_TO_NORMAL_TEXEL?1:0,backdropMode);out.push(material?material.uuid:'',mesh&&mesh.geometry?mesh.geometry.uuid:'');if(uniforms)Object.keys(uniforms).sort().forEach(k=>digestAccumValue(uniforms[k].value,out));return out.join('|');};// Repaints the canvas with the converged/in-progress
+// average right after a plain (unjittered) render+readback
+// call (snapshot/snapshotPixels/captureFrame), so a caller
+// that polls those on a timer (Compare's 200ms stats/diff
+// ticker) never sees the direct frame linger for even one
+// tick before the next animate() re-presents it. A no-op
+// whenever the digest shows the image actually changed
+// (the direct frame IS correct then) or there aren't
+// enough samples yet. Never invalidates: that would
+// restart accumulation on every call.
+const restoreAccumulatedPresentation=()=>{if(!accumulator||accumulator.samples<4||accumForce)return;if(computeAccumSignature()!==accumSignature)return;accumulator.present();};// ------------------------------------------------------
 // bindMaterialUniforms: builds a FRESH uniforms object
 // for ONE material apply, reading the shell-level env
 // state fetched once above rather than re-fetching. Returns
@@ -2652,7 +2734,11 @@ if(oldMaterial)oldMaterial.dispose();// Land the new material in the correct ren
 // Transparency setting take effect immediately
 // without waiting for a toggle event from the
 // Settings dialog.
-syncMeshMaterialMode();};// First build: routes through the exact same helper every
+syncMeshMaterialMode();// New material/uniforms object: the digest already
+// catches this next tick via material.uuid, invalidate
+// explicitly too so a snapshot() called immediately
+// after an apply never reads a stale average.
+invalidateAccumulation();};// First build: routes through the exact same helper every
 // later applyMaterial() call uses, throwing the same styled
 // Error on failure, identical to today's first-build path.
 applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices},label);// Contact-shadow casters, only when a studioGroup exists
@@ -2684,10 +2770,17 @@ applyStudioPolarClamp();controls.update();// damping + autoRotate
 // maxDistance is the only OrbitControls-native limit.
 if(sceneOrbitClampBox&&!sceneOrbitClampBox.containsPoint(camera.position)){sceneOrbitClampBox.clampPoint(camera.position,camera.position);camera.lookAt(controls.target);}}// Paused views must still track camera input (drag/damping);
 // compare's diff mode reads pixels on demand, not via this render.
-if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
+if(!isActive()){accumConverged=false;accumReason='hidden';return;}if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
 // Spins the WHOLE assembled scene when present,
 // rotating just `mesh` would leave the backdrop static.
-(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}const handle={uniforms,introspected,vs,fs,controls,renderer,notices:notices||[],isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
+(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();// Animated materials (the clock is advancing and the
+// program reads it) never accumulate: every frame is
+// a genuinely new image by definition.
+const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const sig=computeAccumSignature();const changed=accumForce||sig!==accumSignature;accumSignature=sig;accumForce=false;if(!ACCUMULATION_ENABLED||!mesh){if(accumulator&&accumulator.samples)accumulator.reset();accumConverged=false;accumReason='disabled';renderFrame();return;}if(animatedMaterial){if(accumulator&&accumulator.samples)accumulator.reset();accumConverged=false;accumReason='animated';renderFrame();return;}if(changed){if(accumulator)accumulator.reset();accumConverged=false;accumReason='moving';renderFrame();// direct path while the image is settling
+return;}if(accumConverged){accumReason=null;return;}// 32 samples already presented, canvas holds it
+const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(bufSize.x<1||bufSize.y<1){renderFrame();return;}// not laid out yet
+if(!accumulator)accumulator=createFrameAccumulator(renderer);if(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);renderFrame();}finally{if(camera.clearViewOffset)camera.clearViewOffset();}accumulator.endSample();}accumReason=null;if(accumulator.samples<4){renderFrame();return;}// no aliasing flash below the threshold
+accumulator.present();if(accumulator.samples>=ACCUMULATION_SAMPLES)accumConverged=true;};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}const handle={uniforms,introspected,vs,fs,controls,renderer,notices:notices||[],isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
 // full-scene mode by contract: every caller hides the rotate
 // button there, and fallbackSpin would rotate the authored scene.
 // Same contract for flat2d: no controls, and fallbackSpin
@@ -2748,14 +2841,21 @@ if(sceneGroup){sceneGroup.traverse(obj=>{if(obj.isMesh&&obj!==mesh&&obj.material
 // GPU resources the moment peeling is no longer active,
 // renderFrame() lazily reallocates them (allocPeel) next
 // time they're needed.
-refreshRenderMode:()=>{syncMeshMaterialMode();const peelOn=viewIsTransparent&&FORCE_TRANSPARENCY;if(!peelOn&&peelPipeline)peelPipeline.dispose();},// Camera exposure is a uniform (see ACES_SRGB_GLSL), so this costs
+refreshRenderMode:()=>{syncMeshMaterialMode();const peelOn=viewIsTransparent&&FORCE_TRANSPARENCY;if(!peelOn&&peelPipeline)peelPipeline.dispose();},// Setting-changed broadcast target for setAccumulationEnabled
+// (LIVE_VIEWS loop): resets the in-progress average, and frees
+// its GPU targets outright when the setting was turned off.
+refreshAccumulation:()=>{if(accumulator){if(!ACCUMULATION_ENABLED)accumulator.dispose();else accumulator.reset();}accumConverged=false;accumForce=true;},// Async/explicit invalidation for changes the per-frame digest
+// can't see on its own (see computeAccumSignature's header).
+invalidateAccumulation:()=>{invalidateAccumulation();},// Snapshot for the USD Scene package (S) and this view's own
+// Settings dialog readout; samples is 0 while inactive.
+getAccumulationState:()=>({enabled:ACCUMULATION_ENABLED,active:!accumReason&&!!accumulator&&accumulator.samples>0,samples:accumulator?accumulator.samples:0,target:ACCUMULATION_SAMPLES,converged:accumConverged,reason:accumReason}),// Camera exposure is a uniform (see ACES_SRGB_GLSL), so this costs
 // one write instead of the full regeneration a transform change
 // needs. Broadcast by setDisplayExposure through LIVE_VIEWS, which
 // is what keeps the docs node previews in sync too.
 refreshDisplaySettings:()=>{const scale=displayExposureScale();const id=displayTransformId(getDisplayTransform());const push=u=>{if(!u)return;if(u.u_displayExposure)u.u_displayExposure.value=scale;if(u.u_displayTransform)u.u_displayTransform.value=id;};push(uniforms);sceneOwnedMaterials.forEach(m=>push(m.uniforms));if('toneMappingExposure'in renderer)renderer.toneMappingExposure=scale;applyThreeToneMappingChunk(getDisplayTransform());scene.traverse(obj=>{if(obj.material&&obj.material.toneMapped)obj.material.needsUpdate=true;});renderFrame();},// Live-swaps the environment without a shader rebuild, used
 // by the Environment dialog's Import/Reset. Also regenerates
 // scene-mode's PMREM. No-op on views with no lighting/env.
-setEnvironment:env=>{if(!env)return;ensurePrefilteredEnv(renderer,env);if(envRadSamplerName&&uniforms[envRadSamplerName])uniforms[envRadSamplerName].value=envRadianceForShading(env);if(envIrrSamplerName&&uniforms[envIrrSamplerName])uniforms[envIrrSamplerName].value=env.irradiance;if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
+setEnvironment:env=>{if(!env)return;invalidateAccumulation();ensurePrefilteredEnv(renderer,env);if(envRadSamplerName&&uniforms[envRadSamplerName])uniforms[envRadSamplerName].value=envRadianceForShading(env);if(envIrrSamplerName&&uniforms[envIrrSamplerName])uniforms[envIrrSamplerName].value=env.irradiance;if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
 // current material's uniforms, otherwise a future swap
 // silently reverts to the stale env.
 envRadiance=envRadianceForShading(env);envIrradiance=env.irradiance;envMips=env.mips;envBgTexture=env.background;// New env => possibly a new (or no) key light; refresh the
@@ -2801,7 +2901,14 @@ if(warmResult==='bailed'||!isMounted()||stopped)return null;applyMaterialInterna
 handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;handle.notices=srcs.notices||[];handle.isTransparent=!!srcs.transparent;if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// PNG snapshot of the CURRENT view. The drawing buffer isn't
 // preserved between frames (preserveDrawingBuffer:false), so
 // render synchronously right before reading it back.
-snapshot:()=>{setUniforms();renderFrame();return renderer.domElement.toDataURL('image/png');},// Reads back the current view at caller-chosen dimensions:
+// opts.accumulated (with the setting on, a still, unanimated
+// mesh): synchronously folds in whatever samples are still
+// needed to reach 32 (continuing an in-progress accumulation
+// rather than restarting it), presents the average, and reads
+// THAT back. Otherwise identical to the plain snapshot.
+snapshot:opts=>{setUniforms();const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(opts&&opts.accumulated&&ACCUMULATION_ENABLED&&mesh&&!animatedMaterial&&bufSize.x>=1&&bufSize.y>=1){if(!accumulator)accumulator=createFrameAccumulator(renderer);while(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);renderFrame();}finally{if(camera.clearViewOffset)camera.clearViewOffset();}accumulator.endSample();}accumulator.present();accumConverged=true;accumReason=null;// Matches what the next animate() tick would compute,
+// so it sees "unchanged" and keeps this average on screen.
+accumSignature=computeAccumSignature();return renderer.domElement.toDataURL('image/png');}renderFrame();const url=renderer.domElement.toDataURL('image/png');restoreAccumulatedPresentation();return url;},// Reads back the current view at caller-chosen dimensions:
 // syncs a render first, then resamples through a 2D canvas
 // so two compare views can be read at identical sizes.
 // The canvas/context are cached in the closure and only
@@ -2809,15 +2916,18 @@ snapshot:()=>{setUniforms();renderFrame();return renderer.domElement.toDataURL('
 snapshotPixels:(w,h)=>{setUniforms();renderFrame();if(!__snapshotCanvas){__snapshotCanvas=document.createElement('canvas');__snapshotCtx=__snapshotCanvas.getContext('2d',{willReadFrequently:true});}if(__snapshotCanvas.width!==w||__snapshotCanvas.height!==h){__snapshotCanvas.width=w;__snapshotCanvas.height=h;}// Source is alpha:true, so drawImage's source-over would
 // blend it onto whatever this reused canvas held last,
 // only a size change reallocates (and thus clears) it.
-__snapshotCtx.clearRect(0,0,w,h);__snapshotCtx.drawImage(renderer.domElement,0,0,w,h);return __snapshotCtx.getImageData(0,0,w,h);},// Cheap same-frame render (no readback), used by camera sync
+__snapshotCtx.clearRect(0,0,w,h);__snapshotCtx.drawImage(renderer.domElement,0,0,w,h);const data=__snapshotCtx.getImageData(0,0,w,h);// Compare's 200ms diff ticker polls this continuously;
+// without this the canvas would show the direct frame
+// this call just drew until the next animate() tick.
+restoreAccumulatedPresentation();return data;},// Cheap same-frame render (no readback), used by camera sync
 // to remove one-frame lag between two mirrored views. Optional
 // ts: pass the driving rAF timestamp so several views read one tick.
-renderNow:ts=>{clockTick(ts);setUniforms();renderFrame();},// Fixed-resolution capture mode for the turntable recorder:
+renderNow:ts=>{clockTick(ts);setUniforms();invalidateAccumulation();renderFrame();},// Fixed-resolution capture mode for the turntable recorder:
 // syncSize's buffer pinned to width x height, canvas hidden.
 // Returns false if the view is gone or already capturing.
 beginCapture:({width,height})=>{if(stopped||captureState)return false;captureState={prevPixelRatio:renderer.getPixelRatio(),prevVisibility:canvas.style.visibility,width,height};resizeSuspended=true;renderer.setPixelRatio(1);applySize(width,height);canvas.style.visibility='hidden';return true;},// Renders one frame at the capture resolution and reads it
 // back as ImageData, same cached-canvas path as snapshotPixels.
-captureFrame:()=>{if(!captureState)throw new Error('captureFrame() called with no active beginCapture().');setUniforms();renderFrame();const{width:w,height:h}=captureState;if(!__captureCanvas){__captureCanvas=document.createElement('canvas');__captureCtx=__captureCanvas.getContext('2d',{willReadFrequently:true});}if(__captureCanvas.width!==w||__captureCanvas.height!==h){__captureCanvas.width=w;__captureCanvas.height=h;}__captureCtx.clearRect(0,0,w,h);__captureCtx.drawImage(renderer.domElement,0,0,w,h);return __captureCtx.getImageData(0,0,w,h);},// Leaves capture mode: restores on-screen visibility, pixel
+captureFrame:()=>{if(!captureState)throw new Error('captureFrame() called with no active beginCapture().');setUniforms();renderFrame();const{width:w,height:h}=captureState;if(!__captureCanvas){__captureCanvas=document.createElement('canvas');__captureCtx=__captureCanvas.getContext('2d',{willReadFrequently:true});}if(__captureCanvas.width!==w||__captureCanvas.height!==h){__captureCanvas.width=w;__captureCanvas.height=h;}__captureCtx.clearRect(0,0,w,h);__captureCtx.drawImage(renderer.domElement,0,0,w,h);const data=__captureCtx.getImageData(0,0,w,h);restoreAccumulatedPresentation();return data;},// Leaves capture mode: restores on-screen visibility, pixel
 // ratio and layout-driven sizing. Idempotent, safe to call twice.
 endCapture:()=>{if(!captureState)return;canvas.style.visibility=captureState.prevVisibility;renderer.setPixelRatio(captureState.prevPixelRatio);captureState=null;resizeSuspended=false;syncSizeRef();},// Reads the live `uniforms` closure binding (same one setUniforms
 // uses), so a material swap is reflected without a stale copy.
@@ -2881,4 +2991,4 @@ const watchFullscreen=cb=>{const h=()=>cb(fullscreenElement());document.addEvent
 (()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
 // site's dark gray-900/800 + blue-400 palette. Background is explicitly
 // transparent so it doesn't paint over the dialog's own panel.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,loadBoundedBitmapTexture,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,ensurePrefilteredEnv,getSpecularEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getHeightToNormalTexel,setHeightToNormalTexel,getAccumulationEnabled,setAccumulationEnabled,getAccumulationSampleCount,accumulationJitter,createFrameAccumulator,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,loadBoundedBitmapTexture,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,ensurePrefilteredEnv,getSpecularEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});

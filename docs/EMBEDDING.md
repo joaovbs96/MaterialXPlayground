@@ -58,6 +58,7 @@ in-page, for reference while you work.
 | `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `backdrop` is `environment`) the visible backdrop; the current `env`/`exposure`/`backdrop` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of whatever `backdrop` would otherwise show (the studio room, by default). See [Transparent background](#transparent-background). |
 | `forcetransparency` | boolean | *(off, or the visitor's last Settings choice)* | Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as `transparent` above. See [Force transparency](#force-transparency). |
+| `accumulation` | boolean | *(on, or the visitor's last Settings choice)* | While the view is still, progressively averages up to 32 sub-pixel jittered frames to smooth edges, fine detail and per-pixel speckle; resumes the direct render the moment the camera, material or environment changes. |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -206,6 +207,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `geometryurl` | `.geometryUrl` | URL string (`.obj`/`.glb`/`.gltf`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `forcetransparency` | `.forceTransparency` | boolean | off | Yes |
+| `accumulation` | `.accumulation` | boolean | on | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
@@ -268,7 +270,7 @@ Dispatched as `CustomEvent`s on the element itself:
 | --- | --- | --- |
 | `mtlx-ready` | `{ version: string \| null }` | The MaterialX engine finished loading inside the iframe (once per iframe activation). |
 | `mtlx-renderables` | `[{ name, type }, ...]`, the array itself is the `detail` | A document finished parsing; lists its renderable materials/shaders. Fires for the page's own initial document and for every later `load()` call alike. When it's answering a `load()`, the underlying `postMessage` reply carries that call's correlation id on the wire (that's what settles `load()`'s returned promise); the event's own `detail` is unaffected, still just the plain array. |
-| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, a failed or unsupported `geometryUrl`, or an unrecognized `wheel`/`version`/`backdrop`/`forcetransparency` value. |
+| `mtlx-error` | `{ message: string }` | A load/parse/compile failure, a `postMessage` error, a client-side error (e.g. `base` couldn't be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized `geometry`, an unknown `controls` name, `transparent` requested against a geometry that can't support it, an `accent`/`surface`/`text`/`radius` value that failed validation, an unresolved `material`, a malformed `camera` pose, a failed or unsupported `envmap`, a failed or unsupported `geometryUrl`, or an unrecognized `wheel`/`version`/`backdrop`/`forcetransparency`/`accumulation` value. |
 
 ```js
 const el = document.querySelector('materialx-viewer');

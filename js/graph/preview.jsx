@@ -1121,6 +1121,20 @@
                 window.addEventListener('mtlx-gl-context', onGlContext);
                 return () => window.removeEventListener('mtlx-gl-context', onGlContext);
             }, []);
+            // Experimental heighttonormal flag (js/mtlx-engine.js) bakes
+            // into generated fragment source, same as the docs/viewer
+            // copies, so a flip must force the build effect below to rerun.
+            const [heightToNormalTexel, setHeightToNormalTexel] = React.useState(
+                () => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel())
+            );
+            React.useEffect(() => {
+                const onSettingsChanged = (e) => {
+                    if (!e.detail || e.detail.key !== 'heightToNormalTexel') return;
+                    setHeightToNormalTexel(!!e.detail.value);
+                };
+                window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+                return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            }, []);
             // Flushes stashed geometry/restore work once this view becomes
             // visible again (docked view switch via the shell's hashchange).
             React.useEffect(() => {
@@ -1503,7 +1517,7 @@
                 return () => {
                     mounted = false;
                 };
-            }, [parsed, target, docRev, fileMap, geomMode, compoundRoot, customGeomEpochKey, glEpoch]);
+            }, [parsed, target, docRev, fileMap, geomMode, compoundRoot, customGeomEpochKey, glEpoch, heightToNormalTexel]);
 
             // Row-1 geometry dropdown, built HERE (not a ViewportControls
             // built-in slot) so it's the single geometry control for the

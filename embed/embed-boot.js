@@ -14,7 +14,7 @@
 //
 // Inbound (host -> iframe): load, setGeometry, setGeometryUrl,
 // setEnvRotation, setEnvExposure, setEnvBackground, setBackdrop, setEnvMap,
-// setTransparent, setForceTransparency, setTheme, resetCamera, snapshot,
+// setTransparent, setForceTransparency, setAccumulation, setTheme, resetCamera, snapshot,
 // setMaterial, setCamera, getCamera.
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera.
 (function () {
@@ -295,6 +295,22 @@
     var initialForceTransparency = parseForceTransparency(qs.get('forcetransparency'));
     if (initialForceTransparency !== undefined && typeof window.setForceTransparency === 'function') {
         window.setForceTransparency(initialForceTransparency, { persist: false });
+    }
+
+    // `accumulation` drives the shared engine's progressive jittered-frame
+    // accumulation flag, same persist:false/error-on-unknown contract as
+    // forcetransparency above.
+    function parseAccumulation(v) {
+        if (v == null || v === '') return undefined;
+        var s = String(v).trim().toLowerCase();
+        if (TRUE_WORDS.indexOf(s) !== -1) return true;
+        if (FALSE_WORDS.indexOf(s) !== -1) return false;
+        post('error', { message: 'Unknown `accumulation` value "' + v + '". Valid values: 1, true, yes, on, 0, false, no, off.' });
+        return undefined;
+    }
+    var initialAccumulation = parseAccumulation(qs.get('accumulation'));
+    if (initialAccumulation !== undefined && typeof window.setAccumulationEnabled === 'function') {
+        window.setAccumulationEnabled(initialAccumulation, { persist: false });
     }
 
     // Live env state, tracked here (not just handed to the engine once) so
@@ -592,6 +608,11 @@
         if (typeof window.setForceTransparency === 'function') window.setForceTransparency(!!msg.on, { persist: false });
     }
 
+    // Live `accumulation` update: same shape/contract as forceTransparency above.
+    function handleSetAccumulation(msg) {
+        if (typeof window.setAccumulationEnabled === 'function') window.setAccumulationEnabled(!!msg.on, { persist: false });
+    }
+
     // Live theme update (LIVE_ATTRS): re-validates before applying, same
     // as the initial query-param pass, so a bad live value still can't
     // reach the stylesheet.
@@ -672,6 +693,7 @@
         setEnvMap: handleSetEnvMap,
         setTransparent: handleSetTransparent,
         setForceTransparency: handleSetForceTransparency,
+        setAccumulation: handleSetAccumulation,
         setTheme: handleSetTheme,
         resetCamera: handleResetCamera,
         snapshot: handleSnapshot,

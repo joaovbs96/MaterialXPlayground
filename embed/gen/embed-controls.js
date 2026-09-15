@@ -66,6 +66,8 @@ const EmbedControls = ({
   const [envRotation, setEnvRotationState] = React.useState(() => typeof initialEnvRotation === 'number' ? initialEnvRotation : 0);
   const [envExposure, setEnvExposureState] = React.useState(() => typeof initialEnvExposure === 'number' ? initialEnvExposure : 1.0);
   const [forceT, setForceT] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+  const [accumOn, setAccumOn] = React.useState(() => !!(window.getAccumulationEnabled && window.getAccumulationEnabled()));
+  const [texelOn, setTexelOn] = React.useState(() => !!(window.getHeightToNormalTexel && window.getHeightToNormalTexel()));
   const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
 
   // Adopts a display transform change made elsewhere (e.g. this same
@@ -105,6 +107,16 @@ const EmbedControls = ({
     const next = !forceT;
     setForceT(next);
     if (window.setForceTransparency) window.setForceTransparency(next);
+  };
+  const toggleAccumulation = () => {
+    const next = !accumOn;
+    setAccumOn(next);
+    if (window.setAccumulationEnabled) window.setAccumulationEnabled(next);
+  };
+  const toggleTexelBump = () => {
+    const next = !texelOn;
+    setTexelOn(next);
+    if (window.setHeightToNormalTexel) window.setHeightToNormalTexel(next);
   };
   const pickDisplayTransform = mode => {
     setDisplayTransformState(mode);
@@ -255,7 +267,25 @@ const EmbedControls = ({
     title: forceT ? 'Disable forced transparency' : 'Enable forced transparency'
   }, forceT ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-desc"
-  }, "Render opacity/transmission with real alpha blending. When off, the preview matches the standard MaterialX viewer (opaque).")));
+  }, "Render opacity/transmission with real alpha blending. When off, the preview matches the standard MaterialX viewer (opaque)."), /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-ec-panel-row"
+  }, /*#__PURE__*/React.createElement("span", null, "Accumulate frames"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: 'mtlx-ec-toggle' + (accumOn ? ' is-on' : ''),
+    onClick: toggleAccumulation,
+    title: accumOn ? 'Disable frame accumulation' : 'Enable frame accumulation'
+  }, accumOn ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-ec-desc"
+  }, "While the view is still, averages 32 slightly offset frames to smooth edges, fine detail and speckle. Screenshots wait for all 32."), /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-ec-panel-row"
+  }, /*#__PURE__*/React.createElement("span", null, "Texel-space bump"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: 'mtlx-ec-toggle' + (texelOn ? ' is-on' : ''),
+    onClick: toggleTexelBump,
+    title: texelOn ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'
+  }, texelOn ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-ec-desc"
+  }, "Computes heighttonormal slopes per texel instead of per screen pixel, removing speckle on high resolution height maps. Differs from the official MaterialX viewer.")));
 };
 window.EmbedControls = EmbedControls;
 })();

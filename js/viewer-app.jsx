@@ -1026,6 +1026,20 @@
             const [forceTransparency, setForceTransparency] = React.useState(
                 () => !!(window.getForceTransparency && window.getForceTransparency())
             );
+            const [accumulation, setAccumulation] = React.useState(
+                () => !!(window.getAccumulationEnabled && window.getAccumulationEnabled())
+            );
+            // Live listener, unlike forceTransparency above: another open
+            // Settings dialog (or the embed HUD) can flip this, so the
+            // Rendering card's toggle must stay in sync, same as heightToNormalTexel.
+            React.useEffect(() => {
+                const onSettingsChanged = (e) => {
+                    if (!e.detail || e.detail.key !== 'accumulation') return;
+                    setAccumulation(!!e.detail.value);
+                };
+                window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+                return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+            }, []);
 
             // Scene card's custom-model import row (browser only) plus the
             // hidden HUD input below (VS Code, no sidebar). Mirrors the
@@ -1465,6 +1479,41 @@
                         </label>
                         <div className="mt-1 text-[11px] text-gray-400">
                             Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
+                        </div>
+                        <label
+                            className="flex items-center justify-between cursor-pointer"
+                            title={accumulation ? 'Disable frame accumulation' : 'Enable frame accumulation'}
+                        >
+                            <span className="text-xs font-medium text-gray-400">Accumulate frames</span>
+                            <Toggle
+                                checked={accumulation}
+                                onChange={(next) => {
+                                    setAccumulation(next);
+                                    window.setAccumulationEnabled && window.setAccumulationEnabled(next);
+                                }}
+                            />
+                        </label>
+                        <div className="mt-1 text-[11px] text-gray-400">
+                            While the view is still, averages 32 slightly offset frames to smooth edges, fine detail and speckle. Screenshots wait for all 32.
+                        </div>
+                        <label
+                            className="flex items-center justify-between cursor-pointer"
+                            title={heightToNormalTexel ? 'Disable texel-space heighttonormal' : 'Enable texel-space heighttonormal'}
+                        >
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
+                                Texel-space bump
+                                <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                            </span>
+                            <Toggle
+                                checked={heightToNormalTexel}
+                                onChange={(next) => {
+                                    setHeightToNormalTexelState(next);
+                                    window.setHeightToNormalTexel && window.setHeightToNormalTexel(next);
+                                }}
+                            />
+                        </label>
+                        <div className="mt-1 text-[11px] text-gray-400">
+                            Computes heighttonormal slopes per texel instead of per screen pixel, removing speckle on high resolution height maps. Differs from the official MaterialX viewer.
                         </div>
                     </SectionCard>
 
