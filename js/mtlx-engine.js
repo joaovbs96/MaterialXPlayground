@@ -8478,6 +8478,20 @@ const createFrameAccumulator = (renderer) => {
             historyB = makeRT(w, h);
             sampleCount = 0;
         }
+        // Non-raw materials in the same scene (studio backdrop/floor,
+        // shaderball-scene's neutral glTF parts: MeshStandard/MeshBasic,
+        // toneMapped) pick linearToOutputTexel from the BOUND render
+        // target's texture.encoding, not renderer.outputEncoding, when
+        // one is bound (WebGLPrograms getParameters, verified against
+        // vendor/three/three.min.js: `outputEncoding: null!==A?v(A.texture)
+        // :t.outputEncoding`). Left at the WebGLRenderTarget default
+        // (LinearEncoding) this silently drops their sRGB encode and
+        // renders them too dark once accumulated. Our own RawShaderMaterial
+        // quad passes (mix/copy) are unaffected either way, confirmed in
+        // the same file: isRawShaderMaterial skips that chunk entirely.
+        // toneMapping is NOT target-dependent (keyed on material.toneMapped
+        // + renderer.toneMapping only), so no equivalent fix is needed there.
+        sampleRT.texture.encoding = renderer.outputEncoding;
         savedDest = snapshotRenderDestination(renderer);
         renderer.setRenderTarget(sampleRT);
         return accumulationJitter(sampleCount);

@@ -318,3 +318,56 @@ test('Force Transparency on: accumulation still converges and the snapshot is no
     await context.close();
   }
 });
+
+// Regression for the accumulator darkening every non-raw three.js
+// material (studio backdrop/floor, shaderball-scene's neutral glTF
+// parts: MeshStandard/MeshBasic, toneMapped). Those pick their output
+// encoding from the BOUND render target's texture.encoding when one is
+// bound, not renderer.outputEncoding (WebGLPrograms getParameters,
+// vendor/three/three.min.js); left at the WebGLRenderTarget default
+// (LinearEncoding) this silently dropped their sRGB encode inside the
+// accumulator's offscreen sample target. The MaterialX RawShaderMaterial
+// surface itself is unaffected either way (it does its own encoding in
+// GLSL and skips three's encodings chunk), which is why the plain
+// sphere/interior checks elsewhere in this file never caught this.
+test('shaderball-scene studio backdrop is not darkened by accumulation', async ({ browser, embedURL }) => {
+  const { context, page } = await loadSphereView(browser, embedURL, OPAQUE_MTLX, { geom: 'shaderball-scene' });
+  try {
+    await expect.poll(() => page.evaluate(() => window.__mtlxViewerHandle.getAccumulationState()),
+      { timeout: WAIT_TIMEOUT }).toMatchObject({ samples: 32, converged: true });
+
+    const [directUrl, accUrl] = await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      return [h.snapshot(), h.snapshot({ accumulated: true })];
+    });
+    const direct = decodePNG(Buffer.from(directUrl.split(',')[1], 'base64'));
+    const accumulated = decodePNG(Buffer.from(accUrl.split(',')[1], 'base64'));
+    expect(accumulated.width).toBe(direct.width);
+    expect(accumulated.height).toBe(direct.height);
+
+    const meanAbsDiff = (x0, y0, boxW, boxH) => {
+      let sum = 0, n = 0;
+      for (let y = y0; y < y0 + boxH; y++) {
+        for (let x = x0; x < x0 + boxW; x++) {
+          const a = direct.getPixel(x, y), b = accumulated.getPixel(x, y);
+          sum += Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+          n += 3;
+        }
+      }
+      return sum / n;
+    };
+
+    // Backdrop-only box in a corner: far from the shaderball's own
+    // silhouette (so no edge-AA pixels) and far from the MaterialX
+    // surface itself, pure studio-room/glTF built-in material.
+    const cornerBox = Math.max(8, Math.floor(Math.min(direct.width, direct.height) * 0.08));
+    expect(meanAbsDiff(4, 4, cornerBox, cornerBox)).toBeLessThanOrEqual(2);
+
+    // The MaterialX surface's own interior box still holds too.
+    const ibox = Math.floor(Math.min(direct.width, direct.height) * 0.12);
+    expect(meanAbsDiff(Math.floor((direct.width - ibox) / 2), Math.floor((direct.height - ibox) / 2), ibox, ibox))
+      .toBeLessThanOrEqual(2);
+  } finally {
+    await context.close();
+  }
+});
