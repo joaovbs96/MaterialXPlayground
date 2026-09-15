@@ -6313,7 +6313,7 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null }) => {
     // Sampler-budget drops, requested only by compileMtlxSceneMaterial's
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
@@ -6508,7 +6508,180 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // generation. Loop-local `st` handles are left for FinalizationRegistry.
     try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported };
+    // Displacement is generated as its own tiny standalone program, never
+    // let a failure here break the surface material; any problem becomes
+    // a notice on the returned sources instead of a throw.
+    let displacement = null;
+    try {
+        displacement = generateDisplacementSourcesUnlocked({ mx, gen, genContext, renderable, materialName });
+        if (displacement && displacement.notices && displacement.notices.length) {
+            notices.push(...displacement.notices);
+        }
+    } catch (e) {
+        notices.push('Displacement skipped: ' + (e && e.message ? e.message : String(e)));
+        displacement = null;
+    }
+
+    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, displacement };
+};
+
+// Follows one displacementshader-typed input to the element to generate
+// from: the connected node, or the connected nodegraph's Output element
+// when the input names a nodegraph and output.
+const mxFollowDisplacementInput = (input, doc) => {
+    if (!input) return null;
+    const nodeName = mxElAttr(input, 'nodename');
+    if (nodeName) return mxSafe(() => input.getConnectedNode(), null);
+    const graphName = mxElAttr(input, 'nodegraph');
+    if (graphName) {
+        const ng = mxSafe(() => doc.getNodeGraph(graphName), null);
+        const outName = mxElAttr(input, 'output');
+        return ng && outName ? mxSafe(() => ng.getOutput(outName), null) : null;
+    }
+    return null;
+};
+
+// resolveDisplacementSource: finds the element to generate the standalone
+// displacement program from. Must run inside the existing mxExclusive lock.
+// `notices`, when given, gets a note when more than one distinct connection is found.
+const resolveDisplacementSource = ({ mx, renderable, materialName, notices = null }) => {
+    if (!renderable) return null;
+    if (mxElType(renderable) === 'displacementshader') return renderable;
+    const doc = mxSafe(() => renderable.getDocument(), null);
+    if (!doc) return null;
+    if (materialName) {
+        const matNode = mxSafe(() => doc.getNode(materialName), null);
+        if (matNode && mxElType(matNode) === 'material') {
+            const el = mxFollowDisplacementInput(mxSafe(() => matNode.getInput('displacementshader'), null), doc);
+            if (el) return el;
+        }
+    }
+    const renderableName = mxElName(renderable);
+    let allNodes = [];
+    try { allNodes = vecToArray(doc.getNodes ? doc.getNodes() : null); } catch (e) { allNodes = []; }
+    let found = null;
+    const distinct = new Set();
+    for (const n of allNodes) {
+        if (mxElType(n) !== 'material') continue;
+        const surfInput = mxSafe(() => n.getInput('surfaceshader'), null);
+        if (!surfInput || mxElAttr(surfInput, 'nodename') !== renderableName) continue;
+        const el = mxFollowDisplacementInput(mxSafe(() => n.getInput('displacementshader'), null), doc);
+        if (!el) continue;
+        distinct.add(mxElName(el) + '|' + mxElCat(el));
+        if (!found) found = el;
+    }
+    if (found && distinct.size > 1 && notices) {
+        notices.push('Multiple materials connect a different displacement to "' + renderableName + '"; using the first one found');
+    }
+    return found;
+};
+
+// detectDisplacementMode: a `displacement` node's own input type; a `mix`
+// of displacementshader recurses into fg/bg; a nodegraph output recurses
+// into its connected node; anything else is `auto`.
+const detectDisplacementMode = (element) => {
+    if (!element) return 'auto';
+    const category = mxElCat(element);
+    if (category === 'displacement') {
+        const t = mxElType(mxSafe(() => element.getInput('displacement'), null));
+        return t === 'float' || t === 'vector3' ? t : 'auto';
+    }
+    if (category === 'mix' && mxElType(element) === 'displacementshader') {
+        const fgMode = detectDisplacementMode(mxSafe(() => { const i = element.getInput('fg'); return i ? i.getConnectedNode() : null; }, null));
+        const bgMode = detectDisplacementMode(mxSafe(() => { const i = element.getInput('bg'); return i ? i.getConnectedNode() : null; }, null));
+        if (fgMode === 'float' && bgMode === 'float') return 'float';
+        if (fgMode === 'vector3' || bgMode === 'vector3') return 'vector3'; // mixed float+vector3 treated as tangent-space vector
+        return 'auto';
+    }
+    const connected = mxSafe(() => (element.getConnectedNode ? element.getConnectedNode() : null), null);
+    return connected && connected !== element ? detectDisplacementMode(connected) : 'auto';
+};
+
+// FNV-1a over a UTF-16 JS string, good enough for a change-detection key
+// (not cryptographic). Returns an 8-char hex string.
+const fnv1aHex = (str) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+};
+
+// generateDisplacementSourcesUnlocked: generates the standalone displacement
+// program (see evaluateDisplacement for how it's used). Must run inside the
+// existing lock; every failure is caught and turned into a notice, never a throw.
+const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, materialName }) => {
+    const notices = [];
+    const source = resolveDisplacementSource({ mx, renderable, materialName, notices });
+    if (!source) return null;
+    const mode = detectDisplacementMode(source);
+    let prevHwTransparency;
+    let hadHwTransparency = true;
+    try { prevHwTransparency = genContext.getOptions().hwTransparency; } catch (e) { hadHwTransparency = false; }
+    let shader = null;
+    try {
+        try { genContext.getOptions().hwTransparency = false; } catch (e) { /* option absent */ }
+        try {
+            shader = gen.generate('mtlx_displacement', source, genContext);
+        } catch (genErr) {
+            const msg = mxErr(mx, genErr);
+            if (/mix/i.test(msg) && /implementation/i.test(msg)) {
+                throw new Error('Displacement mixing is not supported by the MaterialX shader generator.');
+            }
+            throw new Error('shader generation failed (' + msg.slice(0, 160) + ')');
+        }
+        const VERTEX_STAGE = (mx.Stage && mx.Stage.VERTEX) || 'vertex';
+        const PIXEL_STAGE = (mx.Stage && mx.Stage.PIXEL) || 'pixel';
+        let vs = stripVersion(shader.getSourceCode(VERTEX_STAGE));
+        let fs = stripVersion(shader.getSourceCode(PIXEL_STAGE));
+        let introspected = [];
+        for (const stageName of [VERTEX_STAGE, PIXEL_STAGE]) {
+            let st = null;
+            try { st = shader.getStage(stageName); } catch (e) { /* stage absent */ }
+            if (st) introspected = introspected.concat(collectMxUniforms(st));
+        }
+        introspected = introspected.map(plainizeMxUniformData);
+
+        // Pixel splice: retarget the discarded final assignment into a
+        // little-endian floatBitsToUint pack of one offset*scale component.
+        const outMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
+        const structMatches = [...fs.matchAll(/displacementshader\s+(\w+)\s*=/g)];
+        const outVar = outMatch ? outMatch[1] : null;
+        const structVar = structMatches.length ? structMatches[structMatches.length - 1][1] : null;
+        let psSpliced = false;
+        if (outVar && structVar) {
+            const finalRe = new RegExp('\\b' + outVar + '\\s*=\\s*vec4\\(\\s*0\\.0\\s*,\\s*0\\.0\\s*,\\s*0\\.0\\s*,\\s*1\\.0\\s*\\)\\s*;(?=\\s*\\})');
+            if (finalRe.test(fs)) {
+                const pack = '{\n'
+                    + '        uint dispBits = floatBitsToUint((' + structVar + '.offset * ' + structVar + '.scale)[u_dispComponent]);\n'
+                    + '        ' + outVar + ' = vec4(float(dispBits & 0xFFu), float((dispBits >> 8u) & 0xFFu), '
+                    + 'float((dispBits >> 16u) & 0xFFu), float((dispBits >> 24u) & 0xFFu)) / 255.0;\n'
+                    + '    }';
+                fs = fs.replace(finalRe, pack);
+                fs = fs.replace(/\bvoid\s+main\s*\(/, 'uniform int u_dispComponent;\nvoid main(');
+                psSpliced = true;
+            }
+        }
+        // Vertex splice: rasterize into a readback grid instead of the view.
+        const vsAnchorRe = /gl_Position\s*=\s*u_viewProjectionMatrix\s*\*\s*hPositionWorld\s*;/;
+        let vsSpliced = false;
+        if (vsAnchorRe.test(vs)) {
+            vs = vs.replace(vsAnchorRe, 'gl_Position = vec4(i_dispTexel, 0.0, 1.0);\n    gl_PointSize = 1.0;');
+            vs = vs.replace(/\bvoid\s+main\s*\(/, 'in vec2 i_dispTexel;\nvoid main(');
+            vsSpliced = true;
+        }
+        if (!psSpliced || !vsSpliced) {
+            mtlxWarn('mtlx-engine: displacement splice anchor missing, ' + (!vsSpliced ? 'vertex: ' + vs.slice(0, 200) : 'pixel: ' + fs.slice(0, 200)));
+            throw new Error('generated shader anchors not found (vertex or pixel); MaterialX codegen changed');
+        }
+        const key = fnv1aHex(vs + String.fromCharCode(0) + fs + String.fromCharCode(0)
+            + JSON.stringify(introspected.map((u) => ({ name: u.name, type: u.type, data: u.data }))));
+        return { vs, fs, introspected, mode, key, notices };
+    } finally {
+        if (hadHwTransparency) { try { genContext.getOptions().hwTransparency = prevHwTransparency; } catch (e) { /* option absent */ } }
+        try { shader && shader.delete && shader.delete(); } catch (e) { /* already deleted */ }
+    }
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
@@ -6997,6 +7170,144 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
         const slot = uniforms[u.name];
         if (!samplerHoldsDefault(slot)) continue;
         slot.value = getFilenameDefaultTexture(introspected, u.name);
+    }
+};
+
+// evaluateDisplacement: draws one THREE.Points per vertex into an RGBA8
+// readback grid, one pass per x/y/z component, and decodes the little-endian
+// bit pack generateDisplacementSourcesUnlocked spliced into the pixel stage.
+const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMatrix, fileMap, textureCache, isAlive, time = 0 }) => {
+    if (!renderer || !displacement || !geometry) return null;
+    const notices = [];
+    const mode = displacement.mode || 'auto';
+    if (typeof window !== 'undefined' && window.__mtlxForceDisplacementFailure === true) {
+        notices.push('Displacement evaluation forced to fail (test hook)');
+        return { offsets: null, mode, notices };
+    }
+    const alive = () => typeof isAlive !== 'function' || isAlive();
+    let evalGeometry = null, material = null, target = null;
+    try {
+        let baseGeometry = geometry;
+        if (!baseGeometry.getAttribute('i_position')) baseGeometry = prepGeometry(baseGeometry);
+        const position = baseGeometry.getAttribute('position');
+        if (!position) {
+            notices.push('Displacement evaluation failed: geometry has no position attribute');
+            return { offsets: null, mode, notices };
+        }
+        const N = position.count;
+        const gl = renderer.getContext();
+        const W = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+        const H = Math.ceil(N / W);
+        if (H > W) {
+            notices.push('Displacement evaluation failed: ' + N + ' vertices exceed the readback grid limit');
+            return { offsets: null, mode, notices };
+        }
+        const texel = new Float32Array(N * 2);
+        for (let i = 0; i < N; i++) {
+            texel[i * 2] = ((i % W) + 0.5) / W * 2 - 1;
+            texel[i * 2 + 1] = (Math.floor(i / W) + 0.5) / H * 2 - 1;
+        }
+        evalGeometry = new THREE.BufferGeometry();
+        for (const name of Object.keys(baseGeometry.attributes)) {
+            evalGeometry.setAttribute(name, baseGeometry.attributes[name]);
+        }
+        evalGeometry.setAttribute('i_dispTexel', new THREE.BufferAttribute(texel, 2));
+
+        const uniforms = {};
+        applyIntrospectedUniformDefaults(uniforms, displacement.introspected || []);
+        const declared = parseUniforms(displacement.vs).concat(parseUniforms(displacement.fs));
+        const has = (n) => declared.some((d) => d.name === n);
+        const wm = worldMatrix || new THREE.Matrix4();
+        if (has('u_worldMatrix')) uniforms.u_worldMatrix = { value: wm };
+        const normalMatName = has('u_worldInverseTransposeMatrix') ? 'u_worldInverseTransposeMatrix'
+            : (declared.find((d) => /normal.*matrix|matrix.*normal|inversetranspose/i.test(d.name)) || {}).name;
+        if (normalMatName) uniforms[normalMatName] = { value: new THREE.Matrix3().getNormalMatrix(wm) };
+        if (has('u_viewProjectionMatrix')) uniforms.u_viewProjectionMatrix = { value: new THREE.Matrix4() };
+        if (has('u_time')) uniforms.u_time = { value: time };
+        if (has('u_frame')) uniforms.u_frame = { value: 0 };
+        uniforms.u_dispComponent = { value: 0 };
+
+        if (fileMap && (displacement.introspected || []).some((u) => u.type === 'filename')) {
+            const bindResult = bindDroppedTextures(
+                { uniforms, introspected: displacement.introspected, textureCache: textureCache || TEXTURE_CACHE, isAlive, notices },
+                fileMap
+            );
+            if (bindResult.missing.length) {
+                notices.push('Displacement: texture not found for ' + bindResult.missing.join(', ') + ', using the node default');
+            }
+            if (bindResult.pending.length) await Promise.all(bindResult.pending);
+        }
+        if (!alive()) return null;
+
+        material = new THREE.RawShaderMaterial({
+            vertexShader: displacement.vs, fragmentShader: displacement.fs, glslVersion: THREE.GLSL3,
+            uniforms, depthTest: false, depthWrite: false,
+        });
+        const points = new THREE.Points(evalGeometry, material);
+        points.frustumCulled = false;
+        const scene = new THREE.Scene();
+        scene.add(points);
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        target = new THREE.WebGLRenderTarget(W, H, {
+            type: THREE.UnsignedByteType, format: THREE.RGBAFormat,
+            depthBuffer: false, magFilter: THREE.NearestFilter, minFilter: THREE.NearestFilter,
+        });
+
+        // Save/restore pattern shared with ensurePrefilteredEnv.
+        const previousTarget = renderer.getRenderTarget();
+        const previousClearColor = renderer.getClearColor(new THREE.Color());
+        const previousClearAlpha = renderer.getClearAlpha();
+        const previousAutoClear = renderer.autoClear;
+        const previousViewport = renderer.getViewport(new THREE.Vector4());
+        const restore = () => {
+            renderer.setRenderTarget(previousTarget);
+            renderer.setClearColor(previousClearColor, previousClearAlpha);
+            renderer.autoClear = previousAutoClear;
+            renderer.setViewport(previousViewport);
+        };
+
+        // Restore on every exit: a throw from compile, render or readback must
+        // never leave the live view bound to this disposed target.
+        try {
+            compileFilteringDriverNoise(renderer, scene, camera);
+            const badProg = (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
+            if (badProg) {
+                const d = badProg.diagnostics;
+                const log = (d.programLog || '') + (d.fragmentShader && d.fragmentShader.log ? ' FRAG: ' + d.fragmentShader.log : '');
+                notices.push('Displacement evaluation failed: ' + (log.split('\n')[0] || 'program not runnable').slice(0, 200));
+                return { offsets: null, mode, notices };
+            }
+
+            const offsets = new Float32Array(N * 3);
+            const pixels = new Uint8Array(W * H * 4);
+            const byteView = new DataView(new ArrayBuffer(4));
+            renderer.autoClear = false;
+            renderer.setViewport(0, 0, W, H);
+            for (let c = 0; c < 3; c++) {
+                uniforms.u_dispComponent.value = c;
+                renderer.setRenderTarget(target);
+                renderer.setClearColor(0x000000, 0);
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+                renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+                for (let i = 0; i < N; i++) {
+                    const p = i * 4;
+                    byteView.setUint8(0, pixels[p]); byteView.setUint8(1, pixels[p + 1]);
+                    byteView.setUint8(2, pixels[p + 2]); byteView.setUint8(3, pixels[p + 3]);
+                    offsets[i * 3 + c] = byteView.getFloat32(0, true);
+                }
+            }
+            return { offsets, mode, notices };
+        } finally {
+            restore();
+        }
+    } catch (error) {
+        notices.push('Displacement evaluation failed: ' + (error && error.message ? error.message : String(error)));
+        return { offsets: null, mode, notices };
+    } finally {
+        if (target) target.dispose();
+        if (material) material.dispose();
+        if (evalGeometry) evalGeometry.dispose();
     }
 };
 
@@ -10400,6 +10711,7 @@ Object.assign(window, {
     getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms, createLightTransportUniforms,
     generatePreviewSources, generatePreviewSourcesWithinBudget,
+    evaluateDisplacement, generateDisplacementSourcesUnlocked, detectDisplacementMode,
     ensurePrefilteredEnv, getSpecularEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
