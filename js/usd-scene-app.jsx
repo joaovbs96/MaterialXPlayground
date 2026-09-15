@@ -469,7 +469,6 @@
     // popover markup below.
     const SCENE_KNOWN_ISSUES = [
         'A malformed prim can crash the USD runtime.',
-        'USD over edits on referenced MaterialX nodes are ignored.',
         'UsdPreviewSurface is only flattened to basic constants and textures, not converted to MaterialX.',
         'Reloading stages many times in one session has hung twice.',
     ];
