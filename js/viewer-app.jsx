@@ -380,6 +380,25 @@
                 if (onErrorRef.current) onErrorRef.current(msg);
             };
             const [texReport, setTexReport] = React.useState(null);
+            // "Loading textures\u2026" badge while bindDroppedTextures' async
+            // loads are in flight. texLoadGenRef guards races: a newer
+            // call always wins over a stale one settling later.
+            const [texturesLoading, setTexturesLoading] = React.useState(false);
+            const texLoadGenRef = React.useRef(0);
+            const aliveRef = React.useRef(true);
+            React.useEffect(() => () => { aliveRef.current = false; }, []);
+            const trackTexReport = React.useCallback((report) => {
+                setTexReport(report);
+                const gen = ++texLoadGenRef.current;
+                if (report && report.pending && report.pending.length) {
+                    setTexturesLoading(true);
+                    Promise.allSettled(report.pending).then(() => {
+                        if (aliveRef.current && texLoadGenRef.current === gen) setTexturesLoading(false);
+                    });
+                } else {
+                    setTexturesLoading(false);
+                }
+            }, []);
             const [materialNotices, setMaterialNotices] = React.useState(null);
             const [dragOver, setDragOver] = React.useState(false);
             // Compact-mode threshold: drives the toolbar's label/icon switch
@@ -549,7 +568,9 @@
                     loadedRef.current = null;
                     setRenderables([]);
                     setChosenMat(0);
+                    texLoadGenRef.current++;
                     setTexReport(null);
+                    setTexturesLoading(false);
                     setMaterialNotices(null);
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
@@ -573,7 +594,7 @@
                     else setStatus('This drop contains several .mtlx files — pick one in the Files panel.');
                 } else if (chosenMtlx && viewRef.current) {
                     // Textures added to a live view: rebind without regenerating.
-                    setTexReport(bindDroppedTextures(viewRef.current, merged));
+                    trackTexReport(bindDroppedTextures(viewRef.current, merged));
                     setStatus(null);
                 } else if (chosenMtlx) {
                     loadDocument(chosenMtlx, merged);
@@ -946,7 +967,9 @@
                         if (onViewRef.current) onViewRef.current(null);
                     }
                     setError(null);
+                    texLoadGenRef.current++;
                     setTexReport(null);
+                    setTexturesLoading(false);
                     setMaterialNotices(null);
                     setBusy(true);
                     setStatus('Generating shader…');
@@ -993,7 +1016,7 @@
                         setRenderedMtlx(loaded.path);
                         setRenderedVersion(loaded.version);
                         const report = bindDroppedTextures(view, fileMapRef.current);
-                        setTexReport(report);
+                        trackTexReport(report);
                         setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
                         if (chromeless && view.notices && view.notices.length) {
                             view.notices.forEach((n) => console.info('[mtlx] ' + n));
@@ -1308,7 +1331,7 @@
                                     variant="field"
                                     block
                                 />
-                                {chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && (
+                                {error && !busy && chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && (
                                     <div className="text-[11px] text-amber-300/90 mt-1.5">
                                         Showing {renderedMtlx.split('/').pop()} (last successful load)
                                     </div>
@@ -1524,6 +1547,17 @@
                                     labelClassName="text-sm text-gray-300 animate-pulse"
                                     barWidthClass="w-56"
                                 />
+                                {/* Top-left is free of other overlays in every layout.
+                                    Inline styles: this also renders in chromeless
+                                    embeds, which lack embed.css utilities. */}
+                                {texturesLoading && !busy && !error && (
+                                    <div style={{
+                                        position: 'absolute', top: '8px', left: '8px', zIndex: 10,
+                                        fontSize: '11px', padding: '2px 6px', borderRadius: '4px',
+                                        background: 'rgba(17,24,39,0.8)', color: '#d1d5db',
+                                        pointerEvents: 'none',
+                                    }}>{'Loading textures\u2026'}</div>
+                                )}
                                 {/* Rendered even with nothing loaded (browser only) so
                                     the Presets button stays reachable if the default-material
                                     fetch failed. IN_VSCODE keeps the original renderables-only gate.

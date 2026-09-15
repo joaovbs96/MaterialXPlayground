@@ -433,6 +433,27 @@ function MaterialViewerApp({
     if (onErrorRef.current) onErrorRef.current(msg);
   };
   const [texReport, setTexReport] = React.useState(null);
+  // "Loading textures\u2026" badge while bindDroppedTextures' async
+  // loads are in flight. texLoadGenRef guards races: a newer
+  // call always wins over a stale one settling later.
+  const [texturesLoading, setTexturesLoading] = React.useState(false);
+  const texLoadGenRef = React.useRef(0);
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => () => {
+    aliveRef.current = false;
+  }, []);
+  const trackTexReport = React.useCallback(report => {
+    setTexReport(report);
+    const gen = ++texLoadGenRef.current;
+    if (report && report.pending && report.pending.length) {
+      setTexturesLoading(true);
+      Promise.allSettled(report.pending).then(() => {
+        if (aliveRef.current && texLoadGenRef.current === gen) setTexturesLoading(false);
+      });
+    } else {
+      setTexturesLoading(false);
+    }
+  }, []);
   const [materialNotices, setMaterialNotices] = React.useState(null);
   const [dragOver, setDragOver] = React.useState(false);
   // Compact-mode threshold: drives the toolbar's label/icon switch
@@ -612,7 +633,9 @@ function MaterialViewerApp({
       loadedRef.current = null;
       setRenderables([]);
       setChosenMat(0);
+      texLoadGenRef.current++;
       setTexReport(null);
+      setTexturesLoading(false);
       setMaterialNotices(null);
     } else {
       merged = Object.assign({}, fileMapRef.current, map);
@@ -635,7 +658,7 @@ function MaterialViewerApp({
       if (pick) loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.');
     } else if (chosenMtlx && viewRef.current) {
       // Textures added to a live view: rebind without regenerating.
-      setTexReport(bindDroppedTextures(viewRef.current, merged));
+      trackTexReport(bindDroppedTextures(viewRef.current, merged));
       setStatus(null);
     } else if (chosenMtlx) {
       loadDocument(chosenMtlx, merged);
@@ -1024,7 +1047,9 @@ function MaterialViewerApp({
         if (onViewRef.current) onViewRef.current(null);
       }
       setError(null);
+      texLoadGenRef.current++;
       setTexReport(null);
+      setTexturesLoading(false);
       setMaterialNotices(null);
       setBusy(true);
       setStatus('Generating shader…');
@@ -1076,7 +1101,7 @@ function MaterialViewerApp({
         setRenderedMtlx(loaded.path);
         setRenderedVersion(loaded.version);
         const report = bindDroppedTextures(view, fileMapRef.current);
-        setTexReport(report);
+        trackTexReport(report);
         setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
         if (chromeless && view.notices && view.notices.length) {
           view.notices.forEach(n => console.info('[mtlx] ' + n));
@@ -1380,7 +1405,7 @@ function MaterialViewerApp({
     size: "lg",
     variant: "field",
     block: true
-  }), chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
+  }), error && !busy && chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-amber-300/90 mt-1.5"
   }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
     label: "Or pick a preset"
@@ -1592,7 +1617,20 @@ function MaterialViewerApp({
     className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
     labelClassName: "text-sm text-gray-300 animate-pulse",
     barWidthClass: "w-56"
-  }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
+  }), texturesLoading && !busy && !error && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: '8px',
+      left: '8px',
+      zIndex: 10,
+      fontSize: '11px',
+      padding: '2px 6px',
+      borderRadius: '4px',
+      background: 'rgba(17,24,39,0.8)',
+      color: '#d1d5db',
+      pointerEvents: 'none'
+    }
+  }, 'Loading textures\u2026'), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
   /*#__PURE__*/
   // Purpose-built compact strip (js/embed-controls.jsx):
   // no portals, own CSS, degrades with width. See that

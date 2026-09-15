@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <image name="img_tif" type="color3">
+    <input name="file" type="filename" value="quadA.tif" colorspace="srgb_texture" />
+  </image>
+  <surface_unlit name="tif_surface" type="surfaceshader">
+    <input name="emission_color" type="color3" nodename="img_tif" />
+  </surface_unlit>
+  <surfacematerial name="tif_material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="tif_surface" />
+  </surfacematerial>
+</materialx>

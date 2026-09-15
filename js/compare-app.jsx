@@ -84,6 +84,25 @@ const useCompareSlot = () => {
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
     const [texReport, setTexReport] = React.useState(null);
+    // "Loading textures\u2026" badge while bindDroppedTextures' async loads are
+    // in flight. texLoadGenRef guards races: a newer call always wins
+    // over a stale one settling later.
+    const [texturesLoading, setTexturesLoading] = React.useState(false);
+    const texLoadGenRef = React.useRef(0);
+    const aliveRef = React.useRef(true);
+    React.useEffect(() => () => { aliveRef.current = false; }, []);
+    const trackTexReport = React.useCallback((report) => {
+        setTexReport(report);
+        const gen = ++texLoadGenRef.current;
+        if (report && report.pending && report.pending.length) {
+            setTexturesLoading(true);
+            Promise.allSettled(report.pending).then(() => {
+                if (aliveRef.current && texLoadGenRef.current === gen) setTexturesLoading(false);
+            });
+        } else {
+            setTexturesLoading(false);
+        }
+    }, []);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const viewRef = React.useRef(null);
     const canvasRef = React.useRef(null);
@@ -106,7 +125,9 @@ const useCompareSlot = () => {
         const ver = versionArg || version;
         const id = ++runRef.current;
         setError(null);
+        texLoadGenRef.current++;
         setTexReport(null);
+        setTexturesLoading(false);
         setBusy(true);
         setStatus('Parsing ' + path + '…');
         try {
@@ -163,7 +184,9 @@ const useCompareSlot = () => {
             loadedRef.current = null;
             setRenderables([]);
             setChosenMat(0);
+            texLoadGenRef.current++;
             setTexReport(null);
+            setTexturesLoading(false);
         } else {
             merged = Object.assign({}, fileMapRef.current, map);
         }
@@ -181,7 +204,7 @@ const useCompareSlot = () => {
             if (pick) loadDocument(pick, merged);
             else setStatus('This drop contains several .mtlx files — pick one below.');
         } else if (chosenMtlx && viewRef.current) {
-            setTexReport(bindDroppedTextures(viewRef.current, merged));
+            trackTexReport(bindDroppedTextures(viewRef.current, merged));
             setStatus(null);
         } else if (chosenMtlx) {
             loadDocument(chosenMtlx, merged);
@@ -211,7 +234,7 @@ const useCompareSlot = () => {
         renderables, chosenMat, setChosenMat,
         version, setVersion, renderedVersion, setRenderedVersion,
         busy, setBusy, status, setStatus, error, setError,
-        texReport, setTexReport,
+        texReport, setTexReport, texturesLoading, setTexturesLoading, trackTexReport, texLoadGenRef,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
         ingest, onPickFiles, onPickFileList, loadDocument,
     };
@@ -232,7 +255,9 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
         const run = async () => {
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
             slot.setError(null);
+            slot.texLoadGenRef.current++;
             slot.setTexReport(null);
+            slot.setTexturesLoading(false);
             slot.setBusy(true);
             slot.setStatus('Generating shader…');
             try {
@@ -295,7 +320,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                 // whose pixels aren't the ones rendered.
                 slot.setRenderedVersion(loaded.version);
                 const report = bindDroppedTextures(view, slot.fileMapRef.current);
-                slot.setTexReport(report);
+                slot.trackTexReport(report);
                 slot.setStatus(null);
                 slot.setBusy(false);
             } catch (e2) {
@@ -1264,6 +1289,14 @@ function MaterialCompareApp({ active = true } = {}) {
             {slot.error && (
                 <div className="absolute top-2 left-2 right-2 z-20 bg-red-950/90 border border-red-800/60 text-red-200 text-xs rounded-lg px-3 py-2 break-words shadow-lg">
                     {slot.error}
+                </div>
+            )}
+            {/* Per-slot texture-loading badge. top-2 left-2 is free of the
+                shared HUD (top-right/bottom-left of the whole stage) and
+                the doc-name chip (top-12, centered). */}
+            {slot.texturesLoading && !slot.busy && !slot.error && (
+                <div className="absolute top-2 left-2 z-20 text-[11px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">
+                    {'Loading textures\u2026'}
                 </div>
             )}
             {!slot.chosenMtlx && !slot.busy && !slot.error && (

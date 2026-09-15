@@ -171,8 +171,13 @@
         // Native USD can repeat the same failed asset once per composed prim.
         // Collapse that noisy form to a useful path while retaining the raw
         // diagnostic below a disclosure for debugging.
+        const assetMatch = /Could not open asset @([^@]+)@/i.exec(raw);
+        if (assetMatch) {
+            const path = assetMatch[1].replace(/\\/g, '/');
+            return { key: 'missing-asset:' + path.toLowerCase(), label: 'Missing referenced file: ' + path, raw };
+        }
         const pathMatch = /(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.(?:usd|usda|usdc|usdz)\b/i.exec(raw);
-        if (pathMatch && /(?:open|read|reference|layer)/i.test(raw)) {
+        if (pathMatch && /(?:open|read|reference|layer)/i.test(raw) && !/too large/i.test(raw)) {
             const path = pathMatch[0].replace(/\\/g, '/');
             return { key: 'missing-layer:' + path.toLowerCase(), label: 'Missing referenced layer: ' + path, raw };
         }
