@@ -391,3 +391,44 @@ test('@scene accumulation smooths a high-frequency procedural MaterialX material
     await teardown(page, context);
   }
 });
+
+// Regression: snapshot({accumulated:true}) presented the accumulator's
+// already-converged average verbatim, ignoring accumForce/the digest.
+// A state change right before the call (here: a camera move) never
+// reaches invalidateAccumulation()'s consumer (the animate() loop, which
+// this call bypasses), so the stale 32-sample average of the OLD camera
+// pose got returned instead of a fresh one for the new pose.
+test('@scene snapshot({accumulated:true}) reflects a camera move immediately, not the stale converged image', async ({ browser, embedURL }) => {
+  const { context, page } = await setup(browser, embedURL);
+  try {
+    await expect.poll(() => page.evaluate(() => window.__accumTestHandle.getAccumulationState()),
+      { timeout: WAIT_TIMEOUT }).toMatchObject({ samples: 32, converged: true });
+
+    const oldUrl = await page.evaluate(() => window.__accumTestHandle.snapshot({ accumulated: true }));
+    const old = decodePNG(Buffer.from(oldUrl.split(',')[1], 'base64'));
+    const cx = Math.floor(old.width / 2), cy = Math.floor(old.height / 2);
+    const oldCenter = old.getPixel(cx, cy);
+
+    await page.evaluate(() => window.__accumTestHandle.setCamera({ position: [-3, 0.6, -3], target: [0, 0.5, 0] }));
+
+    const [accUrl, freshDirectUrl] = await page.evaluate(() => {
+      const h = window.__accumTestHandle;
+      const a = h.snapshot({ accumulated: true });
+      const d = h.snapshot();
+      return [a, d];
+    });
+    const accumulated = decodePNG(Buffer.from(accUrl.split(',')[1], 'base64'));
+    const freshDirect = decodePNG(Buffer.from(freshDirectUrl.split(',')[1], 'base64'));
+    const accCenter = accumulated.getPixel(cx, cy);
+    const freshCenter = freshDirect.getPixel(cx, cy);
+
+    // Not the stale (old camera pose) image any more.
+    expect(Math.abs(accCenter.r - oldCenter.r) + Math.abs(accCenter.g - oldCenter.g) + Math.abs(accCenter.b - oldCenter.b))
+      .toBeGreaterThan(20);
+    // Matches a fresh direct snapshot of the NEW camera pose.
+    expect(Math.abs(accCenter.r - freshCenter.r) + Math.abs(accCenter.g - freshCenter.g) + Math.abs(accCenter.b - freshCenter.b))
+      .toBeLessThanOrEqual(6);
+  } finally {
+    await teardown(page, context);
+  }
+});

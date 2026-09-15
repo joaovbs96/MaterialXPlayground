@@ -10335,6 +10335,11 @@ const createMtlxRenderView = async ({
                 if (opts && opts.accumulated && ACCUMULATION_ENABLED && mesh && !animatedMaterial
                     && bufSize.x >= 1 && bufSize.y >= 1) {
                     if (!accumulator) accumulator = createFrameAccumulator(renderer);
+                    // A pending invalidateAccumulation() or a changed signature means the
+                    // held samples belong to an older image (this call bypasses animate()),
+                    // so reset and rebuild the average from the current state.
+                    if (accumForce || computeAccumSignature() !== accumSignature) accumulator.reset();
+                    accumForce = false;
                     while (accumulator.samples < ACCUMULATION_SAMPLES) {
                         const jitter = accumulator.beginSample();
                         try {

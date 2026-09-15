@@ -2930,7 +2930,10 @@ handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs
 // needed to reach 32 (continuing an in-progress accumulation
 // rather than restarting it), presents the average, and reads
 // THAT back. Otherwise identical to the plain snapshot.
-snapshot:opts=>{setUniforms();const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(opts&&opts.accumulated&&ACCUMULATION_ENABLED&&mesh&&!animatedMaterial&&bufSize.x>=1&&bufSize.y>=1){if(!accumulator)accumulator=createFrameAccumulator(renderer);while(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);// Refreshes u_viewProjectionMatrix etc. with the
+snapshot:opts=>{setUniforms();const animatedMaterial=!!(uniforms&&(uniforms.u_time||uniforms.u_frame));const bufSize=renderer.getDrawingBufferSize(new THREE.Vector2());if(opts&&opts.accumulated&&ACCUMULATION_ENABLED&&mesh&&!animatedMaterial&&bufSize.x>=1&&bufSize.y>=1){if(!accumulator)accumulator=createFrameAccumulator(renderer);// A pending invalidateAccumulation() or a changed signature means the
+// held samples belong to an older image (this call bypasses animate()),
+// so reset and rebuild the average from the current state.
+if(accumForce||computeAccumSignature()!==accumSignature)accumulator.reset();accumForce=false;while(accumulator.samples<ACCUMULATION_SAMPLES){const jitter=accumulator.beginSample();try{if(camera.setViewOffset)camera.setViewOffset(bufSize.x,bufSize.y,jitter.x,jitter.y,bufSize.x,bufSize.y);// Refreshes u_viewProjectionMatrix etc. with the
 // jittered projection, same as animate()'s own
 // sampling loop: the MaterialX uniforms are a
 // plain JS object, not read live from the

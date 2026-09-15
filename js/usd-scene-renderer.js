@@ -5957,6 +5957,11 @@ const createMtlxSceneView = async ({
                     const bufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
                     if (bufSize.x >= 1 && bufSize.y >= 1) {
                         if (!accumulator) accumulator = window.createFrameAccumulator(renderer);
+                        // A pending invalidateAccumulation() or a changed signature means the
+                        // held samples belong to an older image (this call bypasses the loop),
+                        // so reset and rebuild the average from the current state.
+                        if (accumForce || computeAccumSignature() !== accumSignature) accumulator.reset();
+                        accumForce = false;
                         const target = window.getAccumulationSampleCount ? window.getAccumulationSampleCount() : 32;
                         while (accumulator.samples < target) {
                             const jitter = accumulator.beginSample();

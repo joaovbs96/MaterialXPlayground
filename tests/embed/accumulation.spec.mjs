@@ -26,6 +26,22 @@ const OPAQUE_MTLX = `<?xml version="1.0"?>
   </surfacematerial>
 </materialx>`;
 
+// Zero specular: no grazing-angle Fresnel rim, so a silhouette pixel's
+// color stays close to the flat interior color regardless of viewing
+// angle. Used only where a test needs to compare edge color against
+// interior color without that legitimate shading gradient confounding it.
+const FLAT_MTLX = `<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <standard_surface name="SR_accum_flat" type="surfaceshader">
+    <input name="base" type="float" value="0.8" />
+    <input name="base_color" type="color3" value="0.6, 0.2, 0.2" />
+    <input name="specular" type="float" value="0.0" />
+  </standard_surface>
+  <surfacematerial name="FlatMat" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_accum_flat" />
+  </surfacematerial>
+</materialx>`;
+
 const GLASS_MTLX = `<?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
   <standard_surface name="SR_accum_glass" type="surfaceshader">
@@ -472,6 +488,179 @@ test('accumulation smooths a high-frequency procedural material (not just built-
     expect(directFraction).toBeGreaterThan(0.05);
     expect(accFraction).toBeLessThan(directFraction * 0.85);
     expect(directFraction - accFraction).toBeGreaterThan(0.1);
+  } finally {
+    await context.close();
+  }
+});
+
+// Proves per-sample jitter reaches the rasterized silhouette itself (not
+// just shading): two individual raw samples of a constant-color,
+// backdrop-less sphere at jitter (0,0) and (0.5,0.5), read back through
+// the real present() path, must disagree on coverage (alpha) at more
+// than a handful of edge pixels. Alpha-only on purpose: it isolates
+// coverage from any color-readback nuance.
+test('a single raw accumulator sample at jitter (0.5,0.5) has different silhouette coverage than jitter (0,0)', async ({ browser, embedURL }) => {
+  const { context, page } = await loadSphereView(browser, embedURL, OPAQUE_MTLX, { geom: 'sphere' });
+  try {
+    await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      if (h.setBackdrop) h.setBackdrop('none');
+      if (h.setAutoRotate) h.setAutoRotate(false);
+    });
+    await page.waitForTimeout(300);
+
+    const result = await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      const { renderer, camera } = h.__debug();
+      const canvas = renderer.domElement;
+      const w = canvas.width, ht = canvas.height;
+      const readCanvas = () => {
+        const c = document.createElement('canvas'); c.width = w; c.height = ht;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(canvas, 0, 0);
+        return ctx.getImageData(0, 0, w, ht).data;
+      };
+      // Renders exactly ONE accumulator sample at an explicit jitter and
+      // reads it back through present(), i.e. through the exact path a
+      // real accumulation cycle uses for every fold.
+      const renderOneSamplePresented = (jx, jy) => {
+        const acc = window.createFrameAccumulator(renderer);
+        acc.beginSample();
+        try {
+          if (camera.setViewOffset) camera.setViewOffset(w, ht, jx, jy, w, ht);
+          h.renderNow();
+        } finally {
+          if (camera.clearViewOffset) camera.clearViewOffset();
+        }
+        acc.endSample();
+        acc.present();
+        const px = readCanvas();
+        acc.dispose();
+        h.invalidateAccumulation();
+        return px;
+      };
+      const a = renderOneSamplePresented(0, 0);
+      const b = renderOneSamplePresented(0.5, 0.5);
+      let changedCoverage = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        // Coverage flip: alpha crosses from background(0) to foreground(255) or vice versa.
+        if ((a[i + 3] < 40) !== (b[i + 3] < 40)) changedCoverage++;
+      }
+      return { changedCoverage, w, ht };
+    });
+    expect(result.changedCoverage).toBeGreaterThan(50);
+  } finally {
+    await context.close();
+  }
+});
+
+// Transparent-embed correctness: canvas pixels outside the sphere are
+// (0,0,0,0), so straight-alpha mixing of a foreground sample (c, 1) and
+// a background sample (0,0,0,0) yields (c*k, k) at a partial-coverage
+// pixel, exactly the premultiplied value an MSAA resolve would also
+// write; the browser's unpremultiplied PNG readback then divides RGB
+// back by k, correctly recovering ~c. present() must write that value
+// RAW (no extra premultiply pass): re-premultiplying darkens every
+// partial-alpha pixel on a transparent background, which this catches.
+test('accumulated snapshot keeps silhouette RGB close to the sphere color after unpremultiplied readback', async ({ browser, embedURL }) => {
+  const { context, page } = await loadSphereView(browser, embedURL, FLAT_MTLX, { geom: 'sphere' });
+  try {
+    await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      if (h.setBackdrop) h.setBackdrop('none');
+      if (h.setAutoRotate) h.setAutoRotate(false);
+    });
+    await page.waitForTimeout(300);
+    await expect.poll(() => page.evaluate(() => window.__mtlxViewerHandle.getAccumulationState()),
+      { timeout: WAIT_TIMEOUT }).toMatchObject({ samples: 32, converged: true });
+
+    const accUrl = await page.evaluate(() => window.__mtlxViewerHandle.snapshot({ accumulated: true }));
+    const accumulated = decodePNG(Buffer.from(accUrl.split(',')[1], 'base64'));
+
+    // Reference color per partial-alpha pixel: its own row's NEAREST
+    // fully-opaque neighbor (scanning outward a few pixels either way),
+    // not the frame center, so the sphere's own local shading gradient
+    // (still present even at specular=0, from the irradiance falloff
+    // toward the silhouette) never gets counted as readback error.
+    const nearestOpaqueColor = (x, y) => {
+      for (let d = 1; d <= 6; d++) {
+        for (const nx of [x - d, x + d]) {
+          if (nx < 0 || nx >= accumulated.width) continue;
+          const q = accumulated.getPixel(nx, y);
+          if (q.a >= 250) return q;
+        }
+      }
+      return null;
+    };
+    let partialCount = 0, maxDist = 0, sumDist = 0;
+    for (let y = 0; y < accumulated.height; y++) {
+      for (let x = 0; x < accumulated.width; x++) {
+        const p = accumulated.getPixel(x, y);
+        if (p.a <= 40 || p.a >= 215) continue;
+        const ref = nearestOpaqueColor(x, y);
+        if (!ref) continue;
+        const dist = Math.max(Math.abs(p.r - ref.r), Math.abs(p.g - ref.g), Math.abs(p.b - ref.b));
+        partialCount++;
+        sumDist += dist;
+        maxDist = Math.max(maxDist, dist);
+      }
+    }
+    expect(partialCount).toBeGreaterThan(20);
+    expect(sumDist / partialCount).toBeLessThan(12);
+  } finally {
+    await context.close();
+  }
+});
+
+// Regression: snapshot({accumulated:true}) presented the accumulator's
+// already-converged average verbatim, ignoring accumForce/the digest.
+// A uniform poke right before the call (mirrors the Graph Editor's
+// tryFastUniformUpdate) never reaches invalidateAccumulation()'s
+// consumer (animate() ticks), so the stale 32-sample average of the OLD
+// color got returned instead of the new one.
+test('snapshot({accumulated:true}) reflects a uniform poke immediately, not the stale converged image', async ({ browser, embedURL }) => {
+  const { context, page } = await loadSphereView(browser, embedURL, OPAQUE_MTLX, { geom: 'sphere' });
+  try {
+    await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      if (h.setBackdrop) h.setBackdrop('none');
+      if (h.setAutoRotate) h.setAutoRotate(false);
+    });
+    await page.waitForTimeout(300);
+    await expect.poll(() => page.evaluate(() => window.__mtlxViewerHandle.getAccumulationState()),
+      { timeout: WAIT_TIMEOUT }).toMatchObject({ samples: 32, converged: true });
+
+    const oldUrl = await page.evaluate(() => window.__mtlxViewerHandle.snapshot({ accumulated: true }));
+    const old = decodePNG(Buffer.from(oldUrl.split(',')[1], 'base64'));
+    const cx = Math.floor(old.width / 2), cy = Math.floor(old.height / 2);
+    const oldCenter = old.getPixel(cx, cy);
+
+    // Poke a uniform directly, same pattern as the "camera orbit and a
+    // uniform poke" test above: changes the sphere's own rendered color
+    // without going through applyMaterial/a view rebuild.
+    await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      const u = h.uniforms;
+      const key = Object.keys(u).find((k) => k.indexOf('base_color') !== -1);
+      if (key && u[key].value && typeof u[key].value.x === 'number') u[key].value.set(0.05, 0.9, 0.05);
+    });
+
+    const [accUrl, freshDirectUrl] = await page.evaluate(() => {
+      const h = window.__mtlxViewerHandle;
+      const a = h.snapshot({ accumulated: true });
+      const d = h.snapshot();
+      return [a, d];
+    });
+    const accumulated = decodePNG(Buffer.from(accUrl.split(',')[1], 'base64'));
+    const freshDirect = decodePNG(Buffer.from(freshDirectUrl.split(',')[1], 'base64'));
+    const accCenter = accumulated.getPixel(cx, cy);
+    const freshCenter = freshDirect.getPixel(cx, cy);
+
+    // Not the stale (old, red) image any more.
+    expect(Math.abs(accCenter.r - oldCenter.r) + Math.abs(accCenter.g - oldCenter.g)).toBeGreaterThan(40);
+    // Matches a fresh direct snapshot of the NEW (green) state.
+    expect(Math.abs(accCenter.r - freshCenter.r) + Math.abs(accCenter.g - freshCenter.g) + Math.abs(accCenter.b - freshCenter.b))
+      .toBeLessThanOrEqual(4);
   } finally {
     await context.close();
   }
