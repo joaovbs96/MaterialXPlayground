@@ -6766,7 +6766,7 @@ const generatePreviewSourcesWithinBudget = async (args) => {
 // instances for each object that uses that source.
 const DEFAULT_UNIFORM_VECTOR_BUDGET = 1024;
 
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
     // Test-only override wins over the caller's live GL limit, so a headless
     // spec can force a tight budget without a real ANGLE context.
@@ -6781,7 +6781,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     for (let attempt = 0; ; attempt++) {
         const sceneFeatureOptions = {};
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
-        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions });
+        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, materialName, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions });
         if (!srcs) return null;
         samplerInfo = countFragmentSamplers(srcs.fs);
         if (samplerInfo.count <= budget) break;

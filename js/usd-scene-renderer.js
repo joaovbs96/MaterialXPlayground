@@ -429,6 +429,30 @@ const setStoredSceneSubdivisionLevel = (level) => {
     }
 };
 
+// Displacement subdivision override: 'follow' reuses the worker's mesh (or
+// the authored one), a number re-subdivides the pre-subdivision cage at
+// that level, independent of the plain Subdivision setting above.
+const SCENE_DISPLACEMENT_SUBDIVISION_KEY = 'mtlx_scene_displacement_subdivision';
+const SCENE_DISPLACEMENT_SUBDIVISION_VALUES = ['follow', 0, 1, 2, 3];
+const SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT = 'follow';
+
+const storedSceneDisplacementSubdivision = () => {
+    if (window.top !== window) return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_DISPLACEMENT_SUBDIVISION_KEY);
+        if (raw === null || raw.trim() === '') return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+        if (raw === 'follow') return 'follow';
+        const stored = Number(raw);
+        return SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+    } catch (e) { return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT; /* privacy mode */ }
+};
+
+const setStoredSceneDisplacementSubdivision = (value) => {
+    if (window.top === window) {
+        try { localStorage.setItem(SCENE_DISPLACEMENT_SUBDIVISION_KEY, String(value)); } catch (e) { /* privacy mode */ }
+    }
+};
+
 const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
 
 const sceneFileMap = (files, stage) => {
@@ -1200,6 +1224,7 @@ const createMtlxSceneView = async ({
     // and reserve against the single textureMaxBytes budget (see
     // planTextureSize/reserveTexture below). udimMaxTiles stays a sanity cap.
     udimMaxBytes = 256 * 1024 * 1024, textureMaxSize, textureMaxBytes,
+    displacementSubdivision,
 }) => {
     if (!container) throw new Error('USD scene view requires a container.');
     if (!stage || !Array.isArray(stage.meshes)) throw new Error('USD scene snapshot is missing meshes.');
@@ -1656,6 +1681,14 @@ const createMtlxSceneView = async ({
         // budgets); persistence still only happens for the 1/2/4 GiB steps.
         textureMaxBytes: (Number(textureMaxBytes) > 0) ? Number(textureMaxBytes) : storedSceneTextureBudgetBytes(),
     };
+    // 'follow' reuses the worker-subdivided mesh; a number re-subdivides the
+    // pre-subdivision cage at that level, only for displaced materials.
+    let displacementSubdivisionOverride = SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(displacementSubdivision)
+        ? displacementSubdivision : storedSceneDisplacementSubdivision();
+    // Bumped on every geometry mutation (displacement apply/restore/rebuild)
+    // so shadowReceiverCache's uuid/visible/count key cannot alias stale
+    // sample points from before the mutation.
+    let geometryRevision = 0;
     const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0, ktx2Substituted: 0 };
     let samplerReport = [];
     const textureReservations = new Set();
@@ -1943,7 +1976,7 @@ const createMtlxSceneView = async ({
 
     const loadRenderable = async (record) => {
         if (record && (record.renderable || record.node)) {
-            return { node: record.renderable || record.node, document: null };
+            return { node: record.renderable || record.node, document: null, materialName: (record && record.materialName) || null };
         }
         const source = sceneNormPath(record && record.sourceAsset);
         const blob = source && fileMap[source];
@@ -1988,7 +2021,7 @@ const createMtlxSceneView = async ({
                 if (matches.length === 1) {
                     await window.mxExclusive(() => applyUsdOverrides(doc, matches[0].node, record, usdaDir));
                     await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
-                    return { node: matches[0].node, document: doc };
+                    return { node: matches[0].node, document: doc, materialName: matches[0].name };
                 }
             }
             // A composed alias can differ from the sole authored renderable
@@ -1998,7 +2031,7 @@ const createMtlxSceneView = async ({
             if (renderables.length === 1 && !explicitName) {
                 await window.mxExclusive(() => applyUsdOverrides(doc, renderables[0].node, record, usdaDir));
                 await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
-                return { node: renderables[0].node, document: doc };
+                return { node: renderables[0].node, document: doc, materialName: renderables[0].name };
             }
             throw new Error('MaterialX source has no unambiguous renderable for ' + (record.materialName || record.subIdentifier || source));
         } catch (error) {
@@ -2053,6 +2086,7 @@ const createMtlxSceneView = async ({
             const loaded = await loadRenderable(record);
             const renderable = loaded.node;
             sourceDocument = loaded.document;
+            const materialName = loaded.materialName || null;
             let samplerBudget = null;
             let uniformVectorBudget = null;
             try {
@@ -2062,7 +2096,7 @@ const createMtlxSceneView = async ({
             } catch (e) { /* keep the engine's fallback defaults */ }
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
+                renderable, label, materialName, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
             });
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
@@ -2096,7 +2130,7 @@ const createMtlxSceneView = async ({
                     try {
                         const transferSrcs = await window.compileMtlxSceneMaterial({
                             mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                            renderable, label: label + ' (transmittance)', isMounted, document: sourceDocument,
+                            renderable, label: label + ' (transmittance)', materialName, isMounted, document: sourceDocument,
                             lightTransport: 4, samplerBudget,
                         });
                         if (transferSrcs && transferSrcs.lightTransportSupported) {
@@ -2567,6 +2601,262 @@ const createMtlxSceneView = async ({
                 });
             }
             return parts;
+        };
+
+        // ---- Displacement (P9) ----
+        const materialIsDisplaced = (path) => {
+            const info = byPath.get(String(path || ''));
+            return !!(info && info.compiled && info.compiled.displacement);
+        };
+        const materialDisplacement = (material) => {
+            const compiled = material && material.userData && material.userData.mtlxSceneCompiled;
+            return compiled && compiled.displacement ? compiled.displacement : null;
+        };
+        // Material paths referenced by a record (its own materialPath, or
+        // one per group) that carry a MaterialX displacement network.
+        const recordDisplacedPaths = (record) => {
+            const groups = sceneArray(record.groups);
+            const paths = groups.length ? groups.map((g) => g && (g.materialPath || record.materialPath)) : [record.materialPath];
+            return new Set(paths.filter((p) => materialIsDisplaced(p)).map((p) => String(p || '')));
+        };
+        const DISPLACEMENT_MESH_TRIANGLE_LIMIT = 600000;
+        const DISPLACEMENT_STAGE_TRIANGLE_LIMIT = 6000000;
+        let displacementStageTriangleTotal = 0;
+        // Resolves the requested numeric override against the per-mesh and
+        // whole-stage triangle budgets, lowering it (never below 0) until it
+        // fits; returns the level actually used plus whether it was capped.
+        const resolveDisplacementLevel = (record, requestedLevel) => {
+            const cage = record.cage;
+            const base = cage || record;
+            const cornerCount = base.indices ? base.indices.length : (base.positions ? base.positions.length / 3 : 0);
+            const originalTriangles = Math.floor(cornerCount / 3);
+            let level = Math.max(0, Math.min(3, Math.round(Number(requestedLevel) || 0)));
+            let capped = false;
+            while (level > 0 && originalTriangles * (4 ** level) > DISPLACEMENT_MESH_TRIANGLE_LIMIT) { level--; capped = true; }
+            while (level > 0 && displacementStageTriangleTotal + originalTriangles * (4 ** level) > DISPLACEMENT_STAGE_TRIANGLE_LIMIT) { level--; capped = true; }
+            displacementStageTriangleTotal += originalTriangles * (4 ** level);
+            return { level, capped };
+        };
+        // Re-subdivides the PRE-subdivision cage (or the authored mesh, when
+        // the worker never subdivided it) at `level`, instead of the
+        // worker's own subdivision. Never mutates `record` or `record.cage`.
+        const buildDisplacementEffectiveRecord = (record, level) => {
+            const cage = record.cage;
+            const base = cage || record;
+            const baseGroups = cage ? (Array.isArray(cage.subsets) ? cage.subsets : undefined) : sceneArray(record.groups);
+            if (level <= 0) {
+                return Object.assign({}, record, {
+                    positions: base.positions, indices: base.indices, normals: base.normals, uvs: base.uvs,
+                    groups: baseGroups && baseGroups.length ? baseGroups : undefined,
+                });
+            }
+            const meshIn = { positions: base.positions, indices: base.indices, normals: base.normals, uvs: base.uvs };
+            const subdivided = window.MtlxMeshSubdivision.subdivideMesh(meshIn, level, {});
+            if (!subdivided) return record;
+            const welded = window.MtlxMeshSubdivision.weldMesh(subdivided);
+            const scale = 4 ** level;
+            const scaledGroups = baseGroups && baseGroups.length
+                ? baseGroups.map((g) => (g ? Object.assign({}, g, { start: (Number(g.start) || 0) * scale, count: (Number(g.count) || 0) * scale }) : g))
+                : undefined;
+            return Object.assign({}, record, {
+                positions: welded.positions, indices: welded.indices, normals: welded.normals, uvs: welded.uvs,
+                groups: scaledGroups,
+            });
+        };
+        // For a UDIM tile material, substitutes the resolved tile blob under
+        // the displacement program's own <UDIM>-patterned uniform key, so
+        // bindDroppedTextures resolves THIS tile instead of the first one.
+        const buildDisplacementFileMap = (material, displacement) => {
+            const tileCode = material && material.userData && material.userData.mtlxSceneUdimTile;
+            if (tileCode == null) return fileMap;
+            const filenameUniforms = (displacement.introspected || [])
+                .filter((u) => u.type === 'filename' && typeof u.data === 'string' && /<UDIM>/i.test(u.data));
+            if (!filenameUniforms.length) return fileMap;
+            const override = Object.assign({}, fileMap);
+            for (const u of filenameUniforms) {
+                const tiles = sceneUdimTiles(u.data, fileMap);
+                const hit = tiles.get(Number(tileCode));
+                if (hit) override[u.data] = hit.blob;
+            }
+            return override;
+        };
+        // Restores position/normal/tangent/bitangent from the copies
+        // displaceRecordParts stashed before displacing. Returns false when
+        // there is nothing to restore (never displaced, or already restored).
+        const restoreDisplacementSource = (geometry) => {
+            const src = geometry.userData && geometry.userData.mtlxDisplacementSource;
+            if (!src) return false;
+            geometry.setAttribute('position', new THREE.BufferAttribute(src.positions.slice(), 3));
+            geometry.setAttribute('normal', new THREE.BufferAttribute(src.normals.slice(), 3));
+            if (src.tangents) {
+                const stride = Math.round(src.tangents.length / (src.positions.length / 3));
+                geometry.setAttribute('i_tangent', new THREE.BufferAttribute(src.tangents.slice(), stride));
+            }
+            if (src.bitangents) geometry.setAttribute('i_bitangent', new THREE.BufferAttribute(src.bitangents.slice(), 3));
+            geometry.computeBoundingBox();
+            geometry.computeBoundingSphere();
+            geometryRevision++;
+            return true;
+        };
+        // Evaluates each displaced (part, material) pair once, then welds and
+        // averages the results BY POSITION across every part of the record
+        // so material/UDIM borders stay closed; failures warn and skip.
+        const displaceRecordParts = async (record, parts, worldMatrix) => {
+            parts.forEach((part) => { restoreDisplacementSource(part.geometry); });
+            const ranges = [];
+            parts.forEach((part, partIndex) => {
+                const geometry = part.geometry;
+                const posAttr = geometry.getAttribute('position');
+                if (!posAttr) return;
+                const index = geometry.getIndex();
+                const cornerCount = index ? index.count : posAttr.count;
+                const materialArray = Array.isArray(part.material) ? part.material : null;
+                const groups = geometry.groups && geometry.groups.length ? geometry.groups : null;
+                if (groups && materialArray) {
+                    groups.forEach((g) => {
+                        const material = materialArray[g.materialIndex];
+                        const disp = materialDisplacement(material);
+                        if (disp) ranges.push({ partIndex, material, disp, start: g.start, count: g.count });
+                    });
+                } else {
+                    const material = materialArray ? materialArray[0] : part.material;
+                    const disp = materialDisplacement(material);
+                    if (disp) ranges.push({ partIndex, material, disp, start: 0, count: cornerCount });
+                }
+            });
+            if (!ranges.length) return;
+
+            const evalResults = new Map();
+            for (const range of ranges) {
+                const key = range.partIndex + '|' + range.material.uuid;
+                if (evalResults.has(key)) continue;
+                const geometry = parts[range.partIndex].geometry;
+                const label = (range.material.userData && range.material.userData.mtlxSceneSourceAsset) || range.material.name || 'material';
+                const dispFileMap = buildDisplacementFileMap(range.material, range.disp);
+                let result;
+                try {
+                    result = await window.evaluateDisplacement({
+                        renderer, displacement: range.disp, geometry, worldMatrix,
+                        fileMap: dispFileMap, textureCache, isAlive: () => !stopped,
+                    });
+                } catch (e) {
+                    result = { offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] };
+                }
+                evalResults.set(key, result);
+                for (const notice of (result && result.notices) || []) {
+                    warnings.push('Displacement: ' + label + ': ' + notice);
+                }
+            }
+
+            let totalVertices = 0, totalCorners = 0;
+            const partVertexOffset = [];
+            parts.forEach((part) => {
+                const posAttr = part.geometry.getAttribute('position');
+                const index = part.geometry.getIndex();
+                partVertexOffset.push(totalVertices);
+                totalVertices += posAttr ? posAttr.count : 0;
+                totalCorners += index ? index.count : (posAttr ? posAttr.count : 0);
+            });
+            if (!totalVertices) return;
+            const hasTangents = parts.every((p) => p.geometry.getAttribute('i_tangent'));
+            const hasBitangents = hasTangents && parts.every((p) => p.geometry.getAttribute('i_bitangent'));
+            const positionsAll = new Float32Array(totalVertices * 3);
+            const normalsAll = new Float32Array(totalVertices * 3);
+            const tangentsAll = hasTangents ? new Float32Array(totalVertices * 3) : null;
+            const bitangentsAll = hasBitangents ? new Float32Array(totalVertices * 3) : null;
+            const indicesAll = new Uint32Array(totalCorners);
+            const offsetsAll = new Float32Array(totalVertices * 3);
+            const vertexMask = new Uint8Array(totalVertices);
+            let cornerCursor = 0;
+            parts.forEach((part, partIndex) => {
+                const geometry = part.geometry;
+                const posAttr = geometry.getAttribute('position');
+                const normAttr = geometry.getAttribute('normal');
+                const tanAttr = hasTangents ? geometry.getAttribute('i_tangent') : null;
+                const bitanAttr = hasBitangents ? geometry.getAttribute('i_bitangent') : null;
+                const index = geometry.getIndex();
+                const vOff = partVertexOffset[partIndex];
+                const n = posAttr ? posAttr.count : 0;
+                for (let v = 0; v < n; v++) {
+                    positionsAll[(vOff + v) * 3] = posAttr.getX(v);
+                    positionsAll[(vOff + v) * 3 + 1] = posAttr.getY(v);
+                    positionsAll[(vOff + v) * 3 + 2] = posAttr.getZ(v);
+                    if (normAttr) {
+                        normalsAll[(vOff + v) * 3] = normAttr.getX(v);
+                        normalsAll[(vOff + v) * 3 + 1] = normAttr.getY(v);
+                        normalsAll[(vOff + v) * 3 + 2] = normAttr.getZ(v);
+                    }
+                    if (tanAttr) {
+                        tangentsAll[(vOff + v) * 3] = tanAttr.getX(v);
+                        tangentsAll[(vOff + v) * 3 + 1] = tanAttr.getY(v);
+                        tangentsAll[(vOff + v) * 3 + 2] = tanAttr.getZ(v);
+                    }
+                    if (bitanAttr) {
+                        bitangentsAll[(vOff + v) * 3] = bitanAttr.getX(v);
+                        bitangentsAll[(vOff + v) * 3 + 1] = bitanAttr.getY(v);
+                        bitangentsAll[(vOff + v) * 3 + 2] = bitanAttr.getZ(v);
+                    }
+                }
+                const cornerCount = index ? index.count : n;
+                for (let c = 0; c < cornerCount; c++) indicesAll[cornerCursor + c] = (index ? index.getX(c) : c) + vOff;
+                cornerCursor += cornerCount;
+            });
+            let anyValid = false;
+            for (const range of ranges) {
+                const key = range.partIndex + '|' + range.material.uuid;
+                const result = evalResults.get(key);
+                if (!result || !result.offsets) continue;
+                const geometry = parts[range.partIndex].geometry;
+                const index = geometry.getIndex();
+                const vOff = partVertexOffset[range.partIndex];
+                for (let c = range.start; c < range.start + range.count; c++) {
+                    const v = index ? index.getX(c) : c;
+                    const gv = vOff + v;
+                    if (vertexMask[gv]) continue;
+                    offsetsAll[gv * 3] = result.offsets[v * 3];
+                    offsetsAll[gv * 3 + 1] = result.offsets[v * 3 + 1];
+                    offsetsAll[gv * 3 + 2] = result.offsets[v * 3 + 2];
+                    vertexMask[gv] = 1;
+                    anyValid = true;
+                }
+            }
+            if (!anyValid) return;
+            const mode = ranges[0].disp.mode || 'auto';
+            const computed = window.MtlxMeshDisplacement.computeDisplacedAttributes({
+                positions: positionsAll, normals: normalsAll, tangents: tangentsAll, bitangents: bitangentsAll,
+                indices: indicesAll, offsets: offsetsAll, mode, vertexMask,
+            });
+            parts.forEach((part, partIndex) => {
+                const geometry = part.geometry;
+                const posAttr = geometry.getAttribute('position');
+                if (!posAttr) return;
+                const n = posAttr.count;
+                const vOff = partVertexOffset[partIndex];
+                let touched = false;
+                for (let v = 0; v < n; v++) { if (vertexMask[vOff + v]) { touched = true; break; } }
+                if (!touched) return;
+                const normAttr = geometry.getAttribute('normal');
+                const tanAttr = geometry.getAttribute('i_tangent');
+                const bitanAttr = geometry.getAttribute('i_bitangent');
+                geometry.userData.mtlxDisplacementSource = {
+                    positions: posAttr.array.slice(),
+                    normals: normAttr ? normAttr.array.slice() : new Float32Array(n * 3),
+                    tangents: tanAttr ? tanAttr.array.slice() : null,
+                    bitangents: bitanAttr ? bitanAttr.array.slice() : null,
+                };
+                const outPositions = computed.positions.slice(vOff * 3, (vOff + n) * 3);
+                const outNormals = computed.normals.slice(vOff * 3, (vOff + n) * 3);
+                geometry.setAttribute('position', new THREE.BufferAttribute(outPositions, 3));
+                geometry.setAttribute('normal', new THREE.BufferAttribute(outNormals, 3));
+                geometry.getAttribute('position').needsUpdate = true;
+                geometry.getAttribute('normal').needsUpdate = true;
+                geometry.deleteAttribute('i_tangent');
+                geometry.deleteAttribute('i_bitangent');
+                if (window.prepGeometry) window.prepGeometry(geometry);
+                geometry.computeBoundingBox();
+                geometry.computeBoundingSphere();
+                geometryRevision++;
+            });
         };
         // A stage dome seeds rotation and exposure so the render matches the
         // authored lighting; the sidebar mirrors these through getDomeLight().
@@ -3143,7 +3433,7 @@ const createMtlxSceneView = async ({
                 meshes.push(o);
                 totalVerts += pos.count;
             });
-            const key = keyParts.join('|');
+            const key = geometryRevision + '|' + keyParts.join('|');
             if (shadowReceiverCache.key === key) {
                 receiverSampleInfo = { count: shadowReceiverCache.points.length, cached: true };
                 return shadowReceiverCache.points;
@@ -4650,96 +4940,113 @@ const createMtlxSceneView = async ({
                 environmentBridge.setEnvExposure(envExposure);
             }
         }
-        for (let i = 0; i < stage.meshes.length; i++) {
-            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
-            const record = stage.meshes[i];
-            if (!record || !record.positions || record.positions.length < 3) {
-                warnings.push('Skipped mesh without valid positions: ' + String(record && (record.primPath || record.name) || i));
-                continue;
-            }
-            const instanceMatrices = sceneInstanceMatrices(record.instanceMatrices);
-            if (record.instanceMatricesInvalid) {
-                warnings.push('Skipped PointInstancer mesh with invalid instance matrices: ' + String(record.primPath || record.name || i));
-                continue;
-            }
-            if (record.instanceMatrices != null && !instanceMatrices.length) continue;
-            const parts = meshParts(record, materialForPath);
-            if (!parts.length) { warnings.push('Skipped mesh without triangle faces: ' + String(record.primPath || record.name || i)); continue; }
-            // An explicit empty matrix array means the PointInstancer has no
-            // visible instances.  Only ordinary meshes with the field absent
-            // get the single parent-matrix draw.
-            const drawMatrices = record.instanceMatrices != null ? instanceMatrices : [null];
-            const parentMatrix = sceneMatrix(record.matrix);
-            parts.forEach((part, partIndex) => {
-                geometries.add(part.geometry);
-                const partMaterials = Array.isArray(part.material) ? part.material : [part.material];
-                partMaterials.forEach((material) => materials.add(material));
-                if (window.bindGeompropAttributes) {
-                    const seen = new Map();
-                    for (const material of partMaterials) {
-                        const compiled = material.userData && material.userData.mtlxSceneCompiled;
-                        for (const gp of (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
-                    }
-                    if (seen.size) {
-                        window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (text) => {
-                            if (!warnings.includes(text)) warnings.push(text);
-                        });
-                    }
+        let stageBox = new THREE.Box3();
+        // Builds (or rebuilds) every mesh record into sceneRoot: density
+        // override + displacement, then meshParts + one THREE.Mesh per
+        // instance. Removing old prims/geometries first makes this re-callable.
+        const buildSceneMeshes = async () => {
+            prims.forEach((object) => sceneRoot.remove(object));
+            prims.length = 0;
+            geometries.forEach((g) => { try { g.dispose(); } catch (e) {} });
+            geometries.clear();
+            displacementStageTriangleTotal = 0;
+            for (let i = 0; i < stage.meshes.length; i++) {
+                if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+                const record = stage.meshes[i];
+                if (!record || !record.positions || record.positions.length < 3) {
+                    warnings.push('Skipped mesh without valid positions: ' + String(record && (record.primPath || record.name) || i));
+                    continue;
                 }
-                if (part.material.userData && part.material.userData.mtlxScenePendingTextures) {
-                    pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
-                    delete part.material.userData.mtlxScenePendingTextures;
+                const instanceMatrices = sceneInstanceMatrices(record.instanceMatrices);
+                if (record.instanceMatricesInvalid) {
+                    warnings.push('Skipped PointInstancer mesh with invalid instance matrices: ' + String(record.primPath || record.name || i));
+                    continue;
                 }
-                drawMatrices.forEach((instanceMatrix, instanceIndex) => {
-                    const object = new THREE.Mesh(part.geometry, part.material);
-                    const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
-                    const instanceSuffix = instanceMatrix ? '-instance-' + instanceIndex : '';
-                    object.name = String(record.name || record.primPath || ('mesh-' + i)) + partSuffix + instanceSuffix;
-                    // The generated MeshUpdate path identifies the prototype
-                    // geometry.  Use the owner path for selection and retain
-                    // the generated path/index for diagnostics and picking.
-                    object.userData.primPath = String(record.instanceOwnerPath || record.primPath || '');
-                    object.userData.geometryPath = String(record.primPath || '');
-                    object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
-                    object.userData.materialPath = String(record.materialPath || '');
-                    object.matrixAutoUpdate = false;
-                    const worldMatrix = parentMatrix.clone();
-                    if (instanceMatrix) worldMatrix.multiply(sceneMatrix(instanceMatrix));
-                    object.matrix.copy(worldMatrix);
-                    object.castShadow = true;
-                    object.receiveShadow = true;
-                    object.updateMatrixWorld(true);
-                    object.onBeforeRender = () => {
-                        const currentMaterials = Array.isArray(object.material) ? object.material : [object.material];
-                        currentMaterials.forEach((material) => applyObjectUniforms(material, object));
-                        if (applyObjectThickness) applyObjectThickness(object, currentMaterials);
-                    };
-                    sceneRoot.add(object);
-                    prims.push(object);
+                if (record.instanceMatrices != null && !instanceMatrices.length) continue;
+                const displacedPaths = recordDisplacedPaths(record);
+                let effectiveRecord = record;
+                if (displacedPaths.size && window.getDisplacementEnabled && window.getDisplacementEnabled() && displacementSubdivisionOverride !== 'follow') {
+                    const { level, capped } = resolveDisplacementLevel(record, displacementSubdivisionOverride);
+                    if (capped) {
+                        warnings.push('Displacement subdivision capped at level ' + level + ' for '
+                            + String(record.primPath || record.name || 'mesh') + ' to stay under the triangle budget');
+                    }
+                    effectiveRecord = buildDisplacementEffectiveRecord(record, level);
+                }
+                const parts = meshParts(effectiveRecord, materialForPath);
+                if (!parts.length) { warnings.push('Skipped mesh without triangle faces: ' + String(record.primPath || record.name || i)); continue; }
+                // An explicit empty matrix array means the PointInstancer has no
+                // visible instances.  Only ordinary meshes with the field absent
+                // get the single parent-matrix draw.
+                const drawMatrices = record.instanceMatrices != null ? instanceMatrices : [null];
+                const parentMatrix = sceneMatrix(record.matrix);
+                if (displacedPaths.size && window.getDisplacementEnabled && window.getDisplacementEnabled()) {
+                    // World-position displacement networks do not vary per
+                    // instance, so only the first instance's world matrix
+                    // is evaluated (documented above displaceRecordParts).
+                    const firstWorld = parentMatrix.clone();
+                    if (drawMatrices[0]) firstWorld.multiply(sceneMatrix(drawMatrices[0]));
+                    await displaceRecordParts(effectiveRecord, parts, firstWorld);
+                }
+                parts.forEach((part, partIndex) => {
+                    geometries.add(part.geometry);
+                    const partMaterials = Array.isArray(part.material) ? part.material : [part.material];
+                    partMaterials.forEach((material) => materials.add(material));
+                    if (window.bindGeompropAttributes) {
+                        const seen = new Map();
+                        for (const material of partMaterials) {
+                            const compiled = material.userData && material.userData.mtlxSceneCompiled;
+                            for (const gp of (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
+                        }
+                        if (seen.size) {
+                            window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (text) => {
+                                if (!warnings.includes(text)) warnings.push(text);
+                            });
+                        }
+                    }
+                    if (part.material.userData && part.material.userData.mtlxScenePendingTextures) {
+                        pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
+                        delete part.material.userData.mtlxScenePendingTextures;
+                    }
+                    drawMatrices.forEach((instanceMatrix, instanceIndex) => {
+                        const object = new THREE.Mesh(part.geometry, part.material);
+                        const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
+                        const instanceSuffix = instanceMatrix ? '-instance-' + instanceIndex : '';
+                        object.name = String(record.name || record.primPath || ('mesh-' + i)) + partSuffix + instanceSuffix;
+                        // The generated MeshUpdate path identifies the prototype
+                        // geometry.  Use the owner path for selection and retain
+                        // the generated path/index for diagnostics and picking.
+                        object.userData.primPath = String(record.instanceOwnerPath || record.primPath || '');
+                        object.userData.geometryPath = String(record.primPath || '');
+                        object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
+                        object.userData.materialPath = String(record.materialPath || '');
+                        object.matrixAutoUpdate = false;
+                        const worldMatrix = parentMatrix.clone();
+                        if (instanceMatrix) worldMatrix.multiply(sceneMatrix(instanceMatrix));
+                        object.matrix.copy(worldMatrix);
+                        object.castShadow = true;
+                        object.receiveShadow = true;
+                        object.updateMatrixWorld(true);
+                        object.onBeforeRender = () => {
+                            const currentMaterials = Array.isArray(object.material) ? object.material : [object.material];
+                            currentMaterials.forEach((material) => applyObjectUniforms(material, object));
+                            if (applyObjectThickness) applyObjectThickness(object, currentMaterials);
+                        };
+                        sceneRoot.add(object);
+                        prims.push(object);
+                    });
                 });
-            });
-            const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
-            report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
-        }
-        await awaitTextureJobs(pendingTextures);
-        if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
-        const stageBox = new THREE.Box3().setFromObject(sceneRoot);
-        if (!stageBox.isEmpty()) {
-            sceneRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
-            // Materials were built during the geometry pass, before real
-            // bounds existed; applyMaterialEnvironment's copy filter does not
-            // reach this uniform, so push it onto every material directly.
-            for (const material of materials) {
-                if (material.uniforms && material.uniforms.u_sceneRadius) material.uniforms.u_sceneRadius.value = sceneRadius;
+                const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
+                report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
             }
-        }
-        if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
-            environmentBridge.updateBounds(stageBox);
-        }
-        // Now that the stage has real bounds, redo the light split with the
-        // distances it needs. The info lines from the first pass are already
-        // deduped by primPath, so this only adds ones that actually changed.
-        if (!stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
+            await awaitTextureJobs(pendingTextures);
+            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+            geometryRevision++;
+        };
+        await buildSceneMeshes();
+        // Stage box, bounds, sky/AO bakes and the shadow map: factored so a
+        // later displacement-subdivision-override rebuild can redo them
+        // without repeating the mesh pass; lights convert on the first build only.
         // Geometry and lights are final here, so draw the map once before the
         // first frame rather than leaving the opening frames unshadowed.
         // Materials were built during the geometry pass, before the volume
@@ -4750,14 +5057,34 @@ const createMtlxSceneView = async ({
             rendererStepIndex += 1;
             report({ phase: 'renderer', status: 'step', step, index: rendererStepIndex, total: rendererStepTotal });
         };
-        reportRendererStep('sky-visibility');
-        const skyBakeResult = buildSkyVisibilityVolume(stageBox);
-        applySkyVisibility();
-        reportRendererStep('occlusion-volume');
-        buildAoVolume(stageBox, skyBakeResult);
-        applyAoVolume();
-        if (shadowsEnabled) { reportRendererStep('shadow-atlas'); updateShadowMap(); }
-        applyMaterialEnvironment();
+        const rebuildGeometryDerivedState = (convertLightsOnce, emitProgress) => {
+            stageBox = new THREE.Box3().setFromObject(sceneRoot);
+            if (!stageBox.isEmpty()) {
+                sceneRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
+                // Materials were built during the geometry pass, before real
+                // bounds existed; applyMaterialEnvironment's copy filter does not
+                // reach this uniform, so push it onto every material directly.
+                for (const material of materials) {
+                    if (material.uniforms && material.uniforms.u_sceneRadius) material.uniforms.u_sceneRadius.value = sceneRadius;
+                }
+            }
+            if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
+                environmentBridge.updateBounds(stageBox);
+            }
+            // Now that the stage has real bounds, redo the light split with the
+            // distances it needs. The info lines from the first pass are already
+            // deduped by primPath, so this only adds ones that actually changed.
+            if (convertLightsOnce && !stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
+            if (emitProgress) reportRendererStep('sky-visibility');
+            const skyBakeResult = buildSkyVisibilityVolume(stageBox);
+            applySkyVisibility();
+            if (emitProgress) reportRendererStep('occlusion-volume');
+            buildAoVolume(stageBox, skyBakeResult);
+            applyAoVolume();
+            if (shadowsEnabled) { if (emitProgress) reportRendererStep('shadow-atlas'); updateShadowMap(); }
+            applyMaterialEnvironment();
+        };
+        rebuildGeometryDerivedState(true, true);
         const resize = () => {
             if (!renderer || !container || resizeSuspended) return;
             const w = Math.max(1, container.clientWidth || 640);
@@ -5564,6 +5891,43 @@ const createMtlxSceneView = async ({
             return sceneOptions.textureMaxBytes;
         };
         const getTextureBudgetBytes = () => sceneOptions.textureMaxBytes;
+        // Rebuilds every mesh and its geometry-derived state from the
+        // already-loaded `stage` in memory: no worker round trip. Used by
+        // setDisplacementSubdivisionOverride below.
+        const requestSceneRebuild = async () => {
+            if (stopped) return;
+            await buildSceneMeshes();
+            rebuildGeometryDerivedState(false, false);
+            invalidateTransparentMeshCache();
+            renderFrame();
+        };
+        const getDisplacementSubdivisionOverride = () => displacementSubdivisionOverride;
+        // Changes the Scene's own displacement-subdivision override and
+        // rebuilds through requestSceneRebuild (never the plain Subdivision
+        // setting's full worker reload).
+        const setDisplacementSubdivisionOverride = (value) => {
+            const next = value === 'follow' || SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(Number(value))
+                ? (value === 'follow' ? 'follow' : Number(value)) : SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+            if (next === displacementSubdivisionOverride) return displacementSubdivisionOverride;
+            displacementSubdivisionOverride = next;
+            setStoredSceneDisplacementSubdivision(next);
+            requestSceneRebuild();
+            return displacementSubdivisionOverride;
+        };
+        // Called by setDisplacementEnabled/setPreviewSubdivisionLevel through
+        // LIVE_VIEWS; Scene ignores previewSubdivision (its own select
+        // covers that) and only acts on the shared enabled flag.
+        const refreshDisplacement = () => {
+            if (stopped) return;
+            if (displacementSubdivisionOverride !== 'follow') { requestSceneRebuild(); return; }
+            if (!(window.getDisplacementEnabled && window.getDisplacementEnabled())) {
+                geometries.forEach((geometry) => restoreDisplacementSource(geometry));
+                rebuildGeometryDerivedState(false, false);
+                renderFrame();
+                return;
+            }
+            requestSceneRebuild();
+        };
         if (textureStats.ktx2Substituted > 0) {
             warnings.push('[info] ' + textureStats.ktx2Substituted + ' texture' + (textureStats.ktx2Substituted === 1 ? '' : 's')
                 + ' loaded from KTX2 sibling' + (textureStats.ktx2Substituted === 1 ? '' : 's'));
@@ -5597,6 +5961,9 @@ const createMtlxSceneView = async ({
             setTextureMaxSize,
             getTextureBudgetBytes,
             setTextureBudgetBytes,
+            getDisplacementSubdivisionOverride,
+            setDisplacementSubdivisionOverride,
+            refreshDisplacement,
             getTextureStats: () => ({
                 textureMaxSize: sceneOptions.textureMaxSize,
                 plannedTextureSize,
