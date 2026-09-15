@@ -1433,7 +1433,7 @@ async function load(request) {
           for (const line of textLayer.split(/\r?\n/)) {
             if (/\binputs:[A-Za-z_][\w]*\.connect\s*=/.test(line)) {
               scanWarnings.push(
-                "USD shader connections are not exposed by the MaterialX importer; source graph connections are preserved and authored rewires are not resolved (" + file.path + ")"
+                "USD connections are not supported yet: " + file.path + " connects shader inputs in USD, which is ignored. Materials keep the connections from their MaterialX files; input values set in USD still apply."
               );
               break;
             }

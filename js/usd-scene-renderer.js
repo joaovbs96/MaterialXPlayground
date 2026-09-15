@@ -1721,10 +1721,14 @@ const createMtlxSceneView = async ({
         plannedTextureSize = chosen;
         const udimTileCount = dims.length ? Array.from(entries.keys()).filter((path) => /\.(\d{4})\./.test(path) || /1[0-9]{3}/.test(path)).length : 0;
         if (chosen < requested) {
-            const requestedLabel = requested === Infinity ? 'Original' : requested + ' px';
-            warnings.push('Texture budget: ' + textureCount + ' textures (' + udimTileCount + ' UDIM tiles) loaded at ' + chosen
-                + ' px; requested ' + requestedLabel + ' needs ' + formatGB(fullBytes)
-                + ', planned ' + formatMB(plannedBytes) + ' of the ' + formatGB(sceneOptions.textureMaxBytes) + ' budget');
+            const requestedLabel = requested === Infinity ? 'their original size' : requested + ' px';
+            const counted = textureCount + ' textures' + (udimTileCount ? ' (' + udimTileCount + ' UDIM tiles)' : '');
+            const fits = plannedBytes <= sceneOptions.textureMaxBytes;
+            warnings.push('Texture memory: ' + counted + ' need ' + formatGB(fullBytes) + ' at ' + requestedLabel
+                + ', more than the ' + formatGB(sceneOptions.textureMaxBytes) + ' Texture memory setting, so they load at '
+                + chosen + ' px instead (' + formatMB(plannedBytes) + ').'
+                + (fits ? ' Raise Texture memory for sharper textures.'
+                    : ' They still do not fit at 512 px: textures past the limit are skipped (their inputs use default values and UDIM tiles show neutral grey).'));
         }
         return chosen;
     };
@@ -2070,16 +2074,18 @@ const createMtlxSceneView = async ({
             // Keep source-node qualification beside the detached shader data.
             compiled.mtlxSceneSurfaceMetadata = sceneMaterialSurfaceMetadata(renderable);
             if (compiled.samplerBudget && compiled.samplerBudget.dropped.length) {
-                warnings.push('Sampler budget: ' + label + ' dropped ' + compiled.samplerBudget.dropped.join(', ')
-                    + ' to fit ' + compiled.samplerBudget.count + '/' + compiled.samplerBudget.limit + ' texture image units');
+                const effects = compiled.samplerBudget.droppedLabels || compiled.samplerBudget.dropped;
+                const list = effects.length <= 1 ? effects.join('') : effects.slice(0, -1).join(', ') + ' and ' + effects[effects.length - 1];
+                warnings.push('Texture slots: ' + label + ' uses more textures than this GPU allows (' + compiled.samplerBudget.limit
+                    + '), so ' + list + (effects.length > 1 ? ' are' : ' is') + ' turned off for this material');
             }
             if (compiled.samplerOverBudget) {
-                warnings.push('Sampler budget exceeded for ' + label + ': ' + compiled.samplerBudget.count
-                    + ' samplers over the ' + compiled.samplerBudget.limit + '-unit limit; material kept as compiled (may not draw on this GPU)');
+                warnings.push('Texture slots: ' + label + ' needs ' + compiled.samplerBudget.count + ' textures but this GPU allows '
+                    + compiled.samplerBudget.limit + ', and nothing more can be turned off; it may not draw on this GPU');
             }
             if (compiled.fragmentUniformOverBudget) {
-                warnings.push('Fragment uniform budget exceeded for ' + label + ': ' + compiled.fragmentUniformVectors.estimate
-                    + ' vectors over the ' + compiled.fragmentUniformVectors.limit + '-vector limit; material kept as compiled (may not draw on this GPU)');
+                warnings.push('Shader size: ' + label + ' needs about ' + compiled.fragmentUniformVectors.estimate + ' shader parameters but this GPU allows '
+                    + compiled.fragmentUniformVectors.limit + '; it may not draw on this GPU');
             }
             // Compile the transfer (light-transport) variant for a material
             // that could qualify as a shadow transmittance caster. Per-object
@@ -2232,7 +2238,7 @@ const createMtlxSceneView = async ({
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, false, bytes)) {
-                            warnings.push('Texture preview budget exceeded for ' + hit.path);
+                            warnings.push('Texture memory full: skipped ' + hit.path + ' (its input uses the default value)');
                             tex.dispose && tex.dispose();
                             return;
                         }
@@ -2240,7 +2246,7 @@ const createMtlxSceneView = async ({
                     }, (error) => ({ error })));
                     continue;
                 }
-                if (!reserveTexture(hit.path)) { warnings.push('Texture preview budget exceeded for ' + hit.path); continue; }
+                if (!reserveTexture(hit.path)) { warnings.push('Texture memory full: skipped ' + hit.path + ' (its input uses the default value)'); continue; }
                 const binding = window.bindDroppedTextures({
                 uniforms,
                 introspected: [u],
@@ -2369,7 +2375,7 @@ const createMtlxSceneView = async ({
             const key = String(info.cacheKey || label) + '|' + code;
             if (udimVariantByMaterial.has(key)) return udimVariantByMaterial.get(key);
             if (textureStats.udimTiles >= sceneOptions.udimMaxTiles) {
-                const warning = 'UDIM preview budget exceeded for ' + label + ' tile ' + code;
+                const warning = 'Too many UDIM tiles (limit ' + sceneOptions.udimMaxTiles + '): ' + label + ' tile ' + code + ' shows neutral grey';
                 if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                 const fallback = sceneNeutralMaterial(label + ' UDIM budget');
                 materials.add(fallback);
@@ -2393,7 +2399,7 @@ const createMtlxSceneView = async ({
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) return false;
                 return !reserveTexture(hit.path, true);
             })) {
-                const warning = 'UDIM preview budget exceeded for ' + label + ' tile ' + code;
+                const warning = 'Texture memory full: ' + label + ' UDIM tile ' + code + ' shows neutral grey';
                 if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                 const fallback = sceneNeutralMaterial(label + ' UDIM budget');
                 materials.add(fallback);
@@ -2450,7 +2456,7 @@ const createMtlxSceneView = async ({
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, true, bytes)) {
-                            const warning = 'UDIM preview budget exceeded for ' + label + ' tile ' + code;
+                            const warning = 'Texture memory full: ' + label + ' UDIM tile ' + code + ' shows neutral grey';
                             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                             tex.dispose && tex.dispose();
                             return;

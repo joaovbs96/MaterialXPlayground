@@ -1369,13 +1369,13 @@
                             labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
                             onChange={pickTextureMaxSize} defValue={2048} size="sm" disabled={busy} />
                     }
-                    description="Higher resolutions sharpen normal and roughness maps, at the cost of memory and load time." />
+                    description="The largest size textures load at. Higher values sharpen normal and roughness maps but use more memory and load slower; textures load smaller when the scene would go over Texture memory." />
                 <SelectRow label="Texture memory"
                     control={
                         <MtlxSelect value={textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
                             onChange={pickTextureBudgetGib} defValue={1} size="sm" disabled={busy} />
                     }
-                    description="Higher values can exhaust GPU memory and lose the WebGL context on smaller GPUs." />
+                    description="Total memory for scene textures. When a scene needs more, every texture loads at a lower resolution until they fit; if they still do not fit at 512 px, the remaining textures are skipped. High values can run out of GPU memory on smaller GPUs." />
                 <SelectRow label="Subdivision"
                     control={
                         <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}

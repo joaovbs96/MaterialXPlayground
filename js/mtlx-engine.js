@@ -6439,14 +6439,17 @@ const DEFAULT_SAMPLER_BUDGET = 16;
 // Drop order when a program exceeds the sampler budget; each { key, label }
 // is a sceneFeatureOptions flag of generatePreviewSourcesUnlocked. Append
 // future samplers here.
+// "a", "a and b", "a, b and c" for user-facing lists.
+const joinWithAnd = (items) => (items.length <= 1 ? items.join('')
+    : items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1]);
 const SAMPLER_BUDGET_DROP_ORDER = [
     // Parked with screen-space reflections (always skipped for now).
     // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
-    { key: 'skipAoVolume', label: 'occlusion volume (u_aoVolumeMap)' },
-    { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)' },
-    { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)' },
-    { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)' },
-    { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)' },
+    { key: 'skipAoVolume', label: 'occlusion volume (u_aoVolumeMap)', userLabel: 'ambient occlusion' },
+    { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)', userLabel: 'sky visibility' },
+    { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)', userLabel: 'transmission thickness' },
+    { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)', userLabel: 'colored shadows through transparent materials' },
+    { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)', userLabel: 'refraction' },
 ];
 
 // Viewer-path generation with the same sampler budget as the Scene: drops
@@ -6468,9 +6471,10 @@ const generatePreviewSourcesWithinBudget = async (args) => {
     }
     if (dropped.length) {
         const count = countFragmentSamplers(srcs.fs).count;
-        srcs.notices = (srcs.notices || []).concat(['Sampler budget: dropped ' + dropped.map((d) => d.label).join(', ')
-            + ' to fit ' + count + '/' + budget + ' texture image units']);
-        srcs.samplerBudget = { limit: budget, count, dropped: dropped.map((d) => d.label) };
+        const effects = joinWithAnd(dropped.map((d) => d.userLabel));
+        srcs.notices = (srcs.notices || []).concat(['Texture slots: this material uses more textures than this GPU allows ('
+            + budget + '), so ' + effects + (dropped.length > 1 ? ' are' : ' is') + ' turned off for it']);
+        srcs.samplerBudget = { limit: budget, count, dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel) };
     }
     return srcs;
 };
