@@ -1642,7 +1642,7 @@
                         )}
                         {dispNotices.length > 0 && !loading && !notice && !error && (
                             // Non-blocking displacement diagnostics (subdivision
-                            // cap/drop, evaluation failure) \u2014 a corner badge, not
+                            // cap/drop, evaluation failure) as a corner badge, not
                             // a full overlay, so the rendered mesh stays visible.
                             <div
                                 className="absolute bottom-1 left-1 z-10 max-w-[70%] text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-amber-300 pointer-events-none truncate"

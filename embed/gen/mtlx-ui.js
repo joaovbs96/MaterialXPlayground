@@ -772,10 +772,9 @@ const fullscreenPortalRoot = () => document.fullscreenElement || document.body;
 const SETTINGS_DIALOG_W = 288,
   SETTINGS_DIALOG_H = 420;
 
-// Displacement + Subdivision rows, styled like SettingsDialog's own Force
-// Transparency block. Local state resyncs from the live mtlx-settings-changed
-// broadcast so every open instance (dialog, Viewer/Compare Rendering cards)
-// stays in step with a change made elsewhere.
+// Displacement + Subdivision rows, styled like SettingsDialog's Force Transparency
+// block; local state follows mtlx-settings-changed so every open instance
+// (dialog, Viewer and Compare Rendering cards) reflects a change made elsewhere.
 const DISPLACEMENT_SUBDIV_LABELS = {
   0: 'Off',
   1: '1',

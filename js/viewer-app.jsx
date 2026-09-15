@@ -1021,10 +1021,9 @@
                 };
             }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
 
-            // Displacement notices (subdivision cap/drop, evaluation
-            // failures) land on the live handle asynchronously (settings
-            // toggle, slow first-build eval); re-read the merged notices
-            // whenever this view's status changes.
+            // Displacement notices (subdivision cap/drop, evaluation failures) land
+            // on the live handle asynchronously; re-read the merged notices whenever
+            // this view's displacement status changes.
             React.useEffect(() => {
                 const onDispStatus = (e) => {
                     const view = viewRef.current;
