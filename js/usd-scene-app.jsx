@@ -549,7 +549,7 @@
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
-        const [presentation, setPresentation] = React.useState({ enabled: true, bloom: true, strength: 0.25, threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4, debugView: 'final', supported: true });
+        const [presentation, setPresentation] = React.useState({ enabled: true, bloom: false, strength: 0.25, threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4, debugView: 'final', supported: true });
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
@@ -1004,6 +1004,26 @@
                 </div>
             );
         };
+        // Warnings that name a render setting link straight to its tab in the popover;
+        // the text must match the path the renderer writes into the warning.
+        const SETTING_LINKS = [{ text: 'Render settings > Geometry and Textures > Texture memory', tab: 'geometry' }];
+        const renderWarningText = (label) => {
+            const link = SETTING_LINKS.find((entry) => label.indexOf(entry.text) !== -1);
+            if (!link) return label;
+            const at = label.indexOf(link.text);
+            return (
+                <React.Fragment>
+                    {label.slice(0, at)}
+                    <button type="button" data-testid="usd-scene-warning-setting-link"
+                        onClick={() => { setRenderTab(link.tab); setRenderSettingsOpen(true); }}
+                        title="Open this setting"
+                        className="underline decoration-dotted underline-offset-2 hover:text-amber-100 text-left break-all">
+                        {link.text}
+                    </button>
+                    {label.slice(at + link.text.length)}
+                </React.Fragment>
+            );
+        };
         const stripTag = (text) => String(text || '').replace(/^\[(?:info|error|warning)\]\s*/, '');
         const grouped = { error: [], warning: [], info: [] };
         warningDetails.forEach((record) => {
@@ -1369,13 +1389,13 @@
                             labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
                             onChange={pickTextureMaxSize} defValue={2048} size="sm" disabled={busy} />
                     }
-                    description="The largest size textures load at. Higher values sharpen normal and roughness maps but use more memory and load slower; textures load smaller when the scene would go over Texture memory." />
+                    description="The maximum size each texture loads at. Higher values show finer detail in color, normal and roughness maps, but loading takes longer and uses more memory. If all textures together would go over Texture memory, they load smaller than this." />
                 <SelectRow label="Texture memory"
                     control={
                         <MtlxSelect value={textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
                             onChange={pickTextureBudgetGib} defValue={1} size="sm" disabled={busy} />
                     }
-                    description="Total memory for scene textures. When a scene needs more, every texture loads at a lower resolution until they fit; if they still do not fit at 512 px, the remaining textures are skipped. High values can run out of GPU memory on smaller GPUs." />
+                    description="How much memory all scene textures may use together. If the scene needs more, every texture loads at a lower resolution (down to 512 px) until they fit, so textures look blurrier. If they still do not fit, textures past the limit are left out: those inputs use their default values and UDIM tiles turn neutral grey. Higher values keep textures sharp, but going beyond what your GPU has can lose the WebGL context and blank the view." />
                 <SelectRow label="Subdivision"
                     control={
                         <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
@@ -1550,7 +1570,7 @@
                                             lines={records.map((record) => record.label)}
                                         >
                                             {records.map((record, i) => (
-                                                <div key={severity + i} className={'font-mono text-xs break-all ' + style.text}>{record.label}</div>
+                                                <div key={severity + i} className={'font-mono text-xs break-all ' + style.text}>{renderWarningText(record.label)}</div>
                                             ))}
                                         </DiagGroup>
                                     );

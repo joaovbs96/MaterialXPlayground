@@ -13,7 +13,7 @@
 (function (root) {
     'use strict';
     const VERSION = 'hdr-presentation-m3-20260911';
-    const DEFAULTS = Object.freeze({ enabled: true, bloom: true, strength: 0.25,
+    const DEFAULTS = Object.freeze({ enabled: true, bloom: false, strength: 0.25,
         threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4 });
     // These are inspection outputs, rather than creative looks. They must
     // never become a surprise persisted presentation choice on a later load.

@@ -403,6 +403,8 @@ const setStoredSceneTextureBudgetBytes = (bytes) => {
 
 const formatGB = (bytes) => (bytes / GIB).toFixed(2) + ' GB';
 const formatMB = (bytes) => Math.round(bytes / (1024 * 1024)) + ' MB';
+// MB below 1 GB, GB above, so small scenes and limits never print as 0.00 GB.
+const formatSize = (bytes) => (bytes >= GIB ? formatGB(bytes) : formatMB(bytes));
 
 // Loop subdivision level for catmullClark/loop meshes, persisted the same
 // way as the texture size cap above.
@@ -1724,11 +1726,14 @@ const createMtlxSceneView = async ({
             const requestedLabel = requested === Infinity ? 'their original size' : requested + ' px';
             const counted = textureCount + ' textures' + (udimTileCount ? ' (' + udimTileCount + ' UDIM tiles)' : '');
             const fits = plannedBytes <= sceneOptions.textureMaxBytes;
-            warnings.push('Texture memory: ' + counted + ' need ' + formatGB(fullBytes) + ' at ' + requestedLabel
-                + ', more than the ' + formatGB(sceneOptions.textureMaxBytes) + ' Texture memory setting, so they load at '
-                + chosen + ' px instead (' + formatMB(plannedBytes) + ').'
-                + (fits ? ' Raise Texture memory for sharper textures.'
-                    : ' They still do not fit at 512 px: textures past the limit are skipped (their inputs use default values and UDIM tiles show neutral grey).'));
+            // The setting path below is matched by the Scene app to render it as a link.
+            const settingPath = 'Render settings > Geometry and Textures > Texture memory';
+            warnings.push('Texture memory: ' + counted + ' need ' + formatSize(fullBytes) + ' at ' + requestedLabel
+                + ', more than the ' + formatSize(sceneOptions.textureMaxBytes) + ' limit, so they load at '
+                + chosen + ' px instead (' + formatSize(plannedBytes) + ').'
+                + (fits ? ' For sharper textures, raise ' + settingPath + '.'
+                    : ' They still do not fit at 512 px: textures past the limit are skipped (their inputs use default values and UDIM tiles show neutral grey). Raise '
+                        + settingPath + ' to load them.'));
         }
         return chosen;
     };
