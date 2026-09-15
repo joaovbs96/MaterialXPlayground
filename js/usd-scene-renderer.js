@@ -1950,10 +1950,40 @@ const createMtlxSceneView = async ({
         });
     };
 
+    // The UsdShade-to-MaterialX bridge can emit a material's connected
+    // shader node with the wrong type (an open_pbr_surface tagged "float",
+    // say), which leaves no nodedef match. Retype the connected node to
+    // whatever its surfaceshader/displacementshader/volumeshader input
+    // declares, so generation finds the real nodedef.
+    const fixShaderNodeTypes = (doc, label) => {
+        const shaderInputTypes = ['surfaceshader', 'displacementshader', 'volumeshader'];
+        let matNodes = window.vecToArray(window.mxSafe(() => doc.getNodes(), []));
+        if (!matNodes.length) matNodes = window.vecToArray(window.mxSafe(() => doc.getMaterialNodes(), []));
+        matNodes = matNodes.filter((n) => window.mxSafe(() => String(n.getType()), '') === 'material');
+        for (const matNode of matNodes) {
+            const inputs = window.vecToArray(window.mxSafe(() => matNode.getInputs(), []));
+            for (const input of inputs) {
+                const inputType = window.mxSafe(() => String(input.getType()), '');
+                if (!shaderInputTypes.includes(inputType)) continue;
+                const nodeName = window.mxSafe(() => (input.getNodeName ? input.getNodeName() : ''), '');
+                if (!nodeName) continue;
+                let connected = window.mxSafe(() => (typeof input.getConnectedNode === 'function' ? input.getConnectedNode() : null), null);
+                if (!connected) connected = window.mxSafe(() => doc.getNode(nodeName), null);
+                if (!connected) continue;
+                const connectedType = window.mxSafe(() => String(connected.getType()), '');
+                if (!connectedType || connectedType === inputType) continue;
+                if (!window.mxSafe(() => { connected.setType(inputType); return true; }, false)) continue;
+                const warning = '[info] Fixed shader node type for "' + nodeName + '" (was ' + connectedType + ') in ' + label;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+            }
+        }
+    };
+
     const loadRenderable = async (record) => {
         if (record && (record.renderable || record.node)) {
             return { node: record.renderable || record.node, document: null };
         }
+        const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
         const source = sceneNormPath(record && record.sourceAsset);
         const blob = source && fileMap[source];
         if (!blob) throw new Error('MaterialX source asset is unavailable: ' + (record && record.sourceAsset || 'unknown'));
@@ -1971,6 +2001,7 @@ const createMtlxSceneView = async ({
                 await mxEnv.mx.readFromXmlString(doc, resolved);
                 if (doc.setDataLibrary) doc.setDataLibrary(mxEnv.stdlib);
                 else if (doc.importLibrary) doc.importLibrary(mxEnv.stdlib);
+                fixShaderNodeTypes(doc, label);
             });
             documents.add(doc);
             sourceXmlByRecord.set(record, raw);
@@ -2342,6 +2373,44 @@ const createMtlxSceneView = async ({
             }
             return sceneNeutralMaterial(key || label || 'unbound');
         };
+        // Material paths any mesh actually binds to (mesh.materialPath plus
+        // each group's own override). Empty means the stage carried no
+        // binding data at all, so nothing below is treated as unbound.
+        const referencedMaterialPaths = new Set();
+        for (const mesh of sceneArray(stage.meshes)) {
+            if (!mesh) continue;
+            if (mesh.materialPath) referencedMaterialPaths.add(String(mesh.materialPath));
+            for (const group of sceneArray(mesh.groups)) {
+                if (group && group.materialPath) referencedMaterialPaths.add(String(group.materialPath));
+            }
+        }
+        const hasBindingData = referencedMaterialPaths.size > 0;
+        const materialHasSource = (record) => !!(record && (record.renderable || record.node || record.sourceAsset
+            || (record.materialX && record.materialX.path)));
+        const noSourceWarned = new Set();
+        // A record with no MaterialX network at all (a flattened
+        // UsdPreviewSurface, or a network the worker could not read) can
+        // never compile; skip it instead of failing loadRenderable every
+        // time. An unbound record like that (no mesh uses it) needs neither
+        // a neutral material nor a warning. A record WITH a source keeps
+        // compiling even when unbound, since the material panel and picker
+        // still expect its document.
+        const skipMaterialCompile = (record) => {
+            if (materialHasSource(record)) return false;
+            const path = String((record && record.path) || '');
+            const referenced = !hasBindingData || referencedMaterialPaths.has(path);
+            if (!referenced) return true;
+            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+            if (path && !noSourceWarned.has(path)) {
+                noSourceWarned.add(path);
+                warnings.push(record && record.shaderId === 'UsdPreviewSurface'
+                    ? path + ' is a UsdPreviewSurface material, which the Scene cannot render yet; it shows neutral grey'
+                    : path + ' has no MaterialX network the Scene can read; it shows neutral grey');
+            }
+            byPath.set(path, { material: sceneNeutralMaterial(label), compiled: null });
+            materialRecords.set(path, record);
+            return true;
+        };
         // Compile every material first (cheap on the second pass below, since
         // it just hits compiledByPath) so the ordinary-texture size tier can
         // be planned from the full reference count before any texture binds.
@@ -2350,6 +2419,7 @@ const createMtlxSceneView = async ({
         for (let i = 0; i < materialList.length; i += 1) {
             const record = materialList[i];
             const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+            if (skipMaterialCompile(record)) continue;
             report({ phase: 'material', status: 'start', index: i + 1, total: materialList.length, label });
             const ensured = await ensureCompiledMaterial(record);
             report({ phase: 'material', status: (ensured && ensured.compiled) ? 'ready' : 'error', index: i + 1, total: materialList.length, label });
@@ -2362,6 +2432,7 @@ const createMtlxSceneView = async ({
         for (let i = 0; i < materialList.length; i += 1) {
             const record = materialList[i];
             const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+            if (!materialHasSource(record)) continue; // handled in the first pass
             const result = await makeMtlxMaterial(record);
             if (result) {
                 byPath.set(String(record.path || ''), result);

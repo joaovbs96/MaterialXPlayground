@@ -11,9 +11,25 @@ let runtimePromise;
 let activeStage;
 const nativeWarnings = [];
 const originalConsoleError = console.error.bind(console);
+const originalConsoleWarn = console.warn.bind(console);
+// Bounded copy of the native runtime's console output (Emscripten binds
+// console.error/warn), so load() can read diagnostics openStage does not
+// return, such as an asset path it failed to resolve.
+const STDERR_BUFFER_MAX = 500;
+const stderrBuffer = [];
+function pushStderrLine(args) {
+  const line = args.map(value => String(value)).join(" ");
+  stderrBuffer.push(line);
+  if (stderrBuffer.length > STDERR_BUFFER_MAX) stderrBuffer.shift();
+}
 console.error = (...args) => {
   nativeWarnings.push(args.map(value => String(value)).join(" "));
+  pushStderrLine(args);
   originalConsoleError(...args);
+};
+console.warn = (...args) => {
+  pushStderrLine(args);
+  originalConsoleWarn(...args);
 };
 
 function runtime() {
@@ -743,7 +759,7 @@ function decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath) {
 // override-only prim has none, even though getPrimAttributes resolves it
 // directly once its path is known). The Scene applies the composed
 // attribute values onto the resolved MaterialX document.
-function collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, materialPath) {
+function collectMaterialOverrides(api, root, usdaLayers, mtlxTexts, materialPath) {
   const overrides = [];
   if (!materialPath) return overrides;
   const leafName = materialPath.split("/").filter(Boolean).pop();
@@ -752,8 +768,8 @@ function collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, materialPath)
   for (const mtlxText of mtlxTexts) {
     for (const name of collectMtlxElementNames(mtlxText)) childNames.add(name);
   }
-  for (const usdaText of usdaTexts) {
-    const body = findNamedBlockBodyWithInputs(usdaText, leafName);
+  for (const layer of usdaLayers) {
+    const body = findNamedBlockBodyWithInputs(layer.text, leafName);
     if (!body) continue;
     for (const name of collectNamedChildren(body)) childNames.add(name);
   }
@@ -769,6 +785,490 @@ function collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, materialPath)
   readInto(materialPath, null);
   for (const name of childNames) readInto(materialPath + "/" + name, name);
   return overrides;
+}
+
+// UsdShade network to MaterialX: the native payload drops vector2 connections
+// and skips networks nested in a NodeGraph, so rebuild them from USD text
+// layers (connections) and composed attribute values.
+
+function xmlEscape(value) {
+  return String(value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function sanitizeMtlxName(name) {
+  let value = String(name ?? "").replace(/[^A-Za-z0-9_]/g, "_");
+  if (!/^[A-Za-z_]/.test(value)) value = "_" + value;
+  return value || "_node";
+}
+
+// Body of the first `def`/`over` block named `name` in `scopeText`; unlike
+// findNamedBlockBodyWithInputs it accepts containers without inputs.
+function findNamedBlockBody(scopeText, name) {
+  const openRe = new RegExp('(?:\\bdef\\b|\\bover\\b)\\s+(?:\\w+\\s+)?"' + escapeRegExp(name) + '"[^{]*\\{', "g");
+  let match;
+  while ((match = openRe.exec(scopeText))) {
+    const braceStart = match.index + match[0].length - 1;
+    let depth = 0;
+    for (let i = braceStart; i < scopeText.length; i++) {
+      const c = scopeText[i];
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) return scopeText.slice(braceStart + 1, i);
+      }
+    }
+  }
+  return null;
+}
+
+// Resolves a Material's block body by walking its full path (Scope/Xform
+// ancestors included) through nested def/over blocks, so the correct prim is
+// found even when an unrelated sibling shares the Material's leaf name.
+function findMaterialBlockBody(usdaText, materialPath) {
+  const segments = String(materialPath ?? "").split("/").filter(Boolean);
+  if (!segments.length) return null;
+  let scope = usdaText;
+  for (const segment of segments) {
+    const body = findNamedBlockBody(scope, segment);
+    if (body == null) return null;
+    scope = body;
+  }
+  return scope;
+}
+
+// Direct child `def`/`over` blocks of `body` with their spans, so callers can
+// recurse into children or strip them to read a prim's own attributes.
+function extractChildBlocks(body) {
+  const results = [];
+  const re = /\b(?:def|over)\s+(?:(\w+)\s+)?"([^"]+)"[^{]*\{/g;
+  let match;
+  while ((match = re.exec(body))) {
+    const typeName = match[1] || null;
+    const name = match[2];
+    const braceStart = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = -1;
+    for (let i = braceStart; i < body.length; i++) {
+      const c = body[i];
+      if (c === "{") depth++;
+      else if (c === "}") { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end < 0) break;
+    results.push({ name, typeName, body: body.slice(braceStart + 1, end), start: match.index, end: end + 1 });
+    re.lastIndex = end + 1;
+  }
+  return results;
+}
+
+function stripChildBlocks(body, childBlocks) {
+  let result = "";
+  let cursor = 0;
+  for (const child of childBlocks) {
+    result += body.slice(cursor, child.start);
+    cursor = child.end;
+  }
+  result += body.slice(cursor);
+  return result;
+}
+
+function extractAngleTarget(value) {
+  const match = String(value ?? "").match(/<([^>]+)>/);
+  return match ? match[1] : null;
+}
+
+// A prim's own info:id, inputs and outputs (children stripped), line by line
+// so an attribute's trailing metadata block (colorSpace) can be read.
+function parseShadeAttrs(bodyText) {
+  const childBlocks = extractChildBlocks(bodyText);
+  const ownText = stripChildBlocks(bodyText, childBlocks);
+  const lines = ownText.split(/\r?\n/);
+  const inputs = new Map();
+  const outputs = new Map();
+  let id = null;
+  const idRe = /\binfo:id\s*=\s*"([^"]+)"/;
+  const declOnlyRe = /^\s*(?:uniform\s+)?(\w[\w:]*)\s+outputs:([\w:]+)\s*$/;
+  const attrRe = /^\s*(?:uniform\s+)?(\w[\w:]*)\s+(inputs|outputs):([\w:]+)(\.connect)?\s*=\s*(.*)$/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const idMatch = line.match(idRe);
+    if (idMatch) { id = idMatch[1]; continue; }
+    const declMatch = line.match(declOnlyRe);
+    if (declMatch) {
+      if (!outputs.has(declMatch[2])) outputs.set(declMatch[2], { usdType: declMatch[1], isConnect: false });
+      continue;
+    }
+    const attrMatch = line.match(attrRe);
+    if (!attrMatch) continue;
+    const [, usdType, kind, name, connectFlag, rawRest] = attrMatch;
+    const isConnect = !!connectFlag;
+    let rest = rawRest.trim();
+    let colorSpace;
+    if (!isConnect && rest.endsWith("(")) {
+      // A dangling open paren means the value's own metadata block starts
+      // here (an asset input's colorSpace); scan forward to the close.
+      rest = rest.slice(0, -1).trim();
+      let j = i + 1;
+      const metaLines = [];
+      while (j < lines.length && !lines[j].includes(")")) { metaLines.push(lines[j]); j++; }
+      if (j < lines.length) metaLines.push(lines[j].slice(0, lines[j].indexOf(")")));
+      const metaText = metaLines.join("\n");
+      const csMatch = metaText.match(/colorSpace\s*=\s*"([^"]+)"/);
+      if (csMatch) colorSpace = csMatch[1];
+      i = j;
+    }
+    const entry = {
+      usdType,
+      isConnect,
+      connect: isConnect ? extractAngleTarget(rest) : undefined,
+      value: isConnect ? undefined : rest,
+      colorSpace,
+    };
+    if (kind === "inputs") inputs.set(name, entry);
+    else outputs.set(name, entry);
+  }
+  return { id, inputs, outputs };
+}
+
+function parseUsdShadeConnectTarget(raw) {
+  const match = String(raw ?? "").match(/^(.*)\.(outputs|inputs):([\w:]+)$/);
+  if (!match) return null;
+  return { path: match[1], kind: match[2], port: match[3] };
+}
+
+// Follows a connection through NodeGraph outputs and interface inputs to the
+// originating shader node output, or to a plain value authored on the
+// NodeGraph itself. Returns null on any unresolved hop (a genuine gap).
+function resolveShadeConnection(rawTarget, shaders, nodeGraphs, depth = 0) {
+  if (!rawTarget || depth > 32) return null;
+  const parsed = parseUsdShadeConnectTarget(rawTarget);
+  if (!parsed) return null;
+  if (shaders.has(parsed.path)) return { kind: "node", path: parsed.path, port: parsed.port };
+  const graph = nodeGraphs.get(parsed.path);
+  if (!graph) return null;
+  const bucket = parsed.kind === "inputs" ? graph.attrs.inputs : graph.attrs.outputs;
+  const entry = bucket.get(parsed.port);
+  if (!entry) return null;
+  if (entry.isConnect) return resolveShadeConnection(entry.connect, shaders, nodeGraphs, depth + 1);
+  if (entry.value !== undefined && entry.value !== "") {
+    return { kind: "value", usdType: entry.usdType, value: entry.value, colorSpace: entry.colorSpace, path: graph.path, port: parsed.port };
+  }
+  return null;
+}
+
+const USD_TO_MTLX_TYPE = {
+  float: "float", double: "float",
+  float2: "vector2", texCoord2f: "vector2",
+  float3: "vector3", normal3f: "vector3", vector3f: "vector3", point3f: "vector3",
+  color3f: "color3",
+  color4f: "color4",
+  float4: "vector4",
+  int: "integer",
+  bool: "boolean",
+  string: "string", token: "string",
+  asset: "filename",
+  matrix3d: "matrix33",
+  matrix4d: "matrix44",
+};
+
+const MTLX_TYPE_SUFFIXES = [
+  "_surfaceshader", "_displacementshader", "_volumeshader", "_material",
+  "_matrix33", "_matrix44", "_boolean", "_integer", "_filename", "_string",
+  "_color4", "_color3", "_vector4", "_vector3", "_vector2", "_float",
+].sort((a, b) => b.length - a.length);
+
+// MaterialX category and type from `info:id` (strip ND_ and a type suffix);
+// ids without a suffix (1.38 ND_normalmap) take the USD output type.
+function resolveNodeCategoryAndType(id, declaredOutputUsdType) {
+  const base = id.startsWith("ND_") ? id.slice(3) : id;
+  for (const suffix of MTLX_TYPE_SUFFIXES) {
+    if (base.endsWith(suffix) && base.length > suffix.length) {
+      return { category: base.slice(0, -suffix.length), type: suffix.slice(1) };
+    }
+  }
+  return { category: base, type: USD_TO_MTLX_TYPE[declaredOutputUsdType] || "float" };
+}
+
+function primaryOutput(attrs) {
+  if (attrs.outputs.has("out")) return { name: "out", ...attrs.outputs.get("out") };
+  const first = attrs.outputs.entries().next();
+  return first.done ? null : { name: first.value[0], ...first.value[1] };
+}
+
+function mapColorSpace(value) {
+  if (!value) return undefined;
+  if (value === "sRGB") return "srgb_texture";
+  if (value === "raw") return "none";
+  return value;
+}
+
+// Anchors an asset value (already stripped of its @...@ delimiters) relative
+// to the USD layer that authored it, matching normalizePath's join style so
+// the result reads root-relative like the native inline payload does.
+function anchorAssetPath(layerPath, assetValue) {
+  if (/^[A-Za-z][\w+.-]*:\/\//.test(assetValue) || assetValue.startsWith("/")) return normalizePath(assetValue);
+  const dir = normalizePath(layerPath ?? "").split("/").slice(0, -1).join("/");
+  return normalizePath(dir ? dir + "/" + assetValue : assetValue);
+}
+
+function formatShadeValue(rawValue, usdType) {
+  let value = String(rawValue ?? "").trim();
+  if (usdType === "asset") return value.replace(/^@/, "").replace(/@$/, "").trim();
+  if (value.startsWith("(") && value.endsWith(")")) value = value.slice(1, -1).trim();
+  if (usdType === "bool") return (value === "1" || value.toLowerCase() === "true") ? "true" : "false";
+  return value;
+}
+
+// MaterialX 1.39 document for the UsdShade network under `materialPath`
+// (direct shaders or inside NodeGraphs). Returns null on any gap, which keeps
+// the native payload.
+function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers) {
+  try {
+    let materialBody = null;
+    let layerPath = null;
+    for (const layer of usdaLayers) {
+      const body = findMaterialBlockBody(layer.text, materialPath);
+      if (body != null) { materialBody = body; layerPath = layer.path; break; }
+    }
+    if (materialBody == null) {
+      const leaf = materialPath.split("/").filter(Boolean).pop();
+      if (leaf) {
+        for (const layer of usdaLayers) {
+          const body = findNamedBlockBodyWithInputs(layer.text, leaf) ?? findNamedBlockBody(layer.text, leaf);
+          if (body != null) { materialBody = body; layerPath = layer.path; break; }
+        }
+      }
+    }
+    if (materialBody == null) return null;
+
+    const shaders = new Map();
+    const nodeGraphs = new Map();
+    const walk = (body, basePath, parentGraphName) => {
+      for (const child of extractChildBlocks(body)) {
+        const childPath = basePath + "/" + child.name;
+        const attrs = parseShadeAttrs(child.body);
+        if (attrs.id) {
+          shaders.set(childPath, { name: child.name, path: childPath, id: attrs.id, attrs, parentGraphName });
+        } else {
+          nodeGraphs.set(childPath, { name: child.name, path: childPath, attrs });
+          walk(child.body, childPath, child.name);
+        }
+      }
+    };
+    walk(materialBody, materialPath, null);
+    if (!shaders.size) return null;
+
+    const materialAttrs = parseShadeAttrs(materialBody);
+    const surfaceEntry = materialAttrs.outputs.get("mtlx:surface");
+    if (!surfaceEntry?.isConnect) return null;
+    const surfaceResolved = resolveShadeConnection(surfaceEntry.connect, shaders, nodeGraphs);
+    if (!surfaceResolved || surfaceResolved.kind !== "node" || !shaders.has(surfaceResolved.path)) return null;
+
+    const displacementEntry = materialAttrs.outputs.get("mtlx:displacement");
+    const volumeEntry = materialAttrs.outputs.get("mtlx:volume");
+    const displacementResolved = displacementEntry?.isConnect
+      ? resolveShadeConnection(displacementEntry.connect, shaders, nodeGraphs) : null;
+    const volumeResolved = volumeEntry?.isConnect
+      ? resolveShadeConnection(volumeEntry.connect, shaders, nodeGraphs) : null;
+
+    // Display names: the shader's own leaf name, prefixed with its parent
+    // NodeGraph's name only when two shaders in different graphs collide.
+    const leafCounts = new Map();
+    for (const path of shaders.keys()) {
+      const leaf = path.split("/").pop();
+      leafCounts.set(leaf, (leafCounts.get(leaf) || 0) + 1);
+    }
+    const displayNames = new Map();
+    const usedNames = new Set();
+    for (const [path, node] of shaders) {
+      const leaf = path.split("/").pop();
+      const base = sanitizeMtlxName(
+        leafCounts.get(leaf) > 1 && node.parentGraphName ? `${node.parentGraphName}_${leaf}` : leaf
+      );
+      let candidate = base;
+      let suffix = 1;
+      while (usedNames.has(candidate)) candidate = `${base}_${suffix++}`;
+      usedNames.add(candidate);
+      displayNames.set(path, candidate);
+    }
+
+    // Composed values (readPrimAttrMap) win over the text, which may be a
+    // weaker layer's opinion.
+    const attrMapCache = new Map();
+    const composedValue = (primPath, inputName, fallback) => {
+      let map = attrMapCache.get(primPath);
+      if (!map) { map = readPrimAttrMap(api, root, primPath); attrMapCache.set(primPath, map); }
+      const record = map.get("inputs:" + inputName);
+      const composed = record ? text(record.value) : undefined;
+      return composed !== undefined && composed !== "" ? composed : fallback;
+    };
+
+    let gapFound = false;
+    const nodeBlocks = [];
+    for (const [path, node] of shaders) {
+      const output = primaryOutput(node.attrs);
+      const { category, type } = resolveNodeCategoryAndType(node.id, output?.usdType);
+      const displayName = displayNames.get(path);
+      const inputLines = [];
+      for (const [inputName, entry] of node.attrs.inputs) {
+        const mtlxType = USD_TO_MTLX_TYPE[entry.usdType] || entry.usdType;
+        if (entry.isConnect) {
+          const resolved = resolveShadeConnection(entry.connect, shaders, nodeGraphs);
+          if (!resolved) { gapFound = true; break; }
+          if (resolved.kind === "node") {
+            const targetNode = shaders.get(resolved.path);
+            if (!targetNode) { gapFound = true; break; }
+            const targetOutputName = primaryOutput(targetNode.attrs)?.name || "out";
+            const outputAttr = resolved.port && resolved.port !== targetOutputName
+              ? ` output="${xmlEscape(resolved.port)}"` : "";
+            inputLines.push(
+              `    <input name="${xmlEscape(sanitizeMtlxName(inputName))}" type="${xmlEscape(mtlxType)}" nodename="${xmlEscape(displayNames.get(resolved.path))}"${outputAttr}/>`
+            );
+          } else {
+            const rawValue = composedValue(resolved.path, resolved.port, resolved.value);
+            const formatted = formatShadeValue(rawValue, resolved.usdType);
+            inputLines.push(buildShadeInputTag(inputName, mtlxType, formatted, resolved.colorSpace, layerPath));
+          }
+        } else {
+          if (entry.value === undefined || entry.value === "") continue;
+          const rawValue = composedValue(path, inputName, entry.value);
+          const formatted = formatShadeValue(rawValue, entry.usdType);
+          inputLines.push(buildShadeInputTag(inputName, mtlxType, formatted, entry.colorSpace, layerPath));
+        }
+      }
+      if (gapFound) break;
+      nodeBlocks.push(
+        `  <${category} name="${xmlEscape(displayName)}" type="${xmlEscape(type)}">\n${inputLines.join("\n")}${inputLines.length ? "\n" : ""}  </${category}>`
+      );
+    }
+    if (gapFound) return null;
+
+    const materialLeaf = sanitizeMtlxName(materialPath.split("/").filter(Boolean).pop());
+    const materialXName = `M_${materialLeaf}_usdshade`;
+    const materialInputs = [
+      `    <input name="surfaceshader" type="surfaceshader" nodename="${xmlEscape(displayNames.get(surfaceResolved.path))}"/>`,
+    ];
+    if (displacementResolved?.kind === "node" && shaders.has(displacementResolved.path)) {
+      materialInputs.push(`    <input name="displacementshader" type="displacementshader" nodename="${xmlEscape(displayNames.get(displacementResolved.path))}"/>`);
+    }
+    if (volumeResolved?.kind === "node" && shaders.has(volumeResolved.path)) {
+      materialInputs.push(`    <input name="volumeshader" type="volumeshader" nodename="${xmlEscape(displayNames.get(volumeResolved.path))}"/>`);
+    }
+    const materialBlock = `  <surfacematerial name="${xmlEscape(materialXName)}" type="material">\n${materialInputs.join("\n")}\n  </surfacematerial>`;
+
+    const xml = [
+      '<?xml version="1.0"?>',
+      '<materialx version="1.39">',
+      ...nodeBlocks,
+      materialBlock,
+      "</materialx>",
+      "",
+    ].join("\n");
+    return { xml, materialName: materialXName };
+  } catch {
+    return null;
+  }
+}
+
+function buildShadeInputTag(inputName, mtlxType, formattedValue, colorSpace, layerPath) {
+  let value = formattedValue;
+  let colorSpaceAttr = "";
+  if (mtlxType === "filename") {
+    value = anchorAssetPath(layerPath, value);
+    const mapped = mapColorSpace(colorSpace);
+    if (mapped) colorSpaceAttr = ` colorspace="${xmlEscape(mapped)}"`;
+  }
+  return `    <input name="${xmlEscape(sanitizeMtlxName(inputName))}" type="${xmlEscape(mtlxType)}" value="${xmlEscape(value)}"${colorSpaceAttr}/>`;
+}
+
+// True when `materialPath`'s own USD block (in any layer) authors an
+// `inputs:<name>.connect` line; used to warn once per layer file that a real
+// external .mtlx material's USD-side connections are ignored.
+function findUsdConnectionLayer(usdaLayers, materialPath) {
+  const leaf = materialPath.split("/").filter(Boolean).pop();
+  for (const layer of usdaLayers) {
+    const body = findMaterialBlockBody(layer.text, materialPath)
+      ?? (leaf ? findNamedBlockBodyWithInputs(layer.text, leaf) : null);
+    if (body != null && /inputs:[A-Za-z_]\w*\.connect\s*=/.test(body)) return layer.path;
+  }
+  return null;
+}
+
+// Input names per top-level node of a flat MaterialX document (the native
+// inline payload), to spot inputs whose USD connection was dropped.
+function collectInlineMtlxNodeInputs(mtlxText) {
+  const nodeOpens = [];
+  const re = /<([A-Za-z_][\w.]*)\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>/g;
+  let match;
+  while ((match = re.exec(mtlxText))) {
+    if (MTLX_NON_TARGET_TAGS.has(match[1])) continue;
+    nodeOpens.push({ name: match[2], start: match.index, end: re.lastIndex });
+  }
+  const result = new Map();
+  for (let i = 0; i < nodeOpens.length; i++) {
+    const start = nodeOpens[i].end;
+    const end = i + 1 < nodeOpens.length ? nodeOpens[i + 1].start : mtlxText.length;
+    const chunk = mtlxText.slice(start, end);
+    const inputs = new Set();
+    const inputRe = /<input\s+name="([^"]+)"/g;
+    let inputMatch;
+    while ((inputMatch = inputRe.exec(chunk))) inputs.add(inputMatch[1]);
+    result.set(nodeOpens[i].name, inputs);
+  }
+  return result;
+}
+
+// For a kept native inline payload: "<node>.<input>" labels of inputs that
+// are connected in USD (authored, no value) but missing from the document.
+function collectInlineConnectionGaps(api, root, material, usdaLayers) {
+  try {
+    const data = material?.materialX?.data;
+    if (!data) return [];
+    let mtlxText;
+    try { mtlxText = new TextDecoder().decode(data); } catch { return []; }
+    const nodeInputs = collectInlineMtlxNodeInputs(mtlxText);
+    let materialBody = null;
+    for (const layer of usdaLayers) {
+      materialBody = findMaterialBlockBody(layer.text, material.path);
+      if (materialBody != null) break;
+    }
+    if (materialBody == null) {
+      const leaf = material.path.split("/").filter(Boolean).pop();
+      if (leaf) {
+        for (const layer of usdaLayers) {
+          materialBody = findNamedBlockBodyWithInputs(layer.text, leaf);
+          if (materialBody != null) break;
+        }
+      }
+    }
+    if (materialBody == null) return [];
+    const shaders = new Map();
+    const walk = (body, basePath) => {
+      for (const child of extractChildBlocks(body)) {
+        const childPath = basePath + "/" + child.name;
+        const attrs = parseShadeAttrs(child.body);
+        if (attrs.id) shaders.set(childPath, { name: child.name, path: childPath });
+        else walk(child.body, childPath);
+      }
+    };
+    walk(materialBody, material.path);
+    const gaps = [];
+    for (const node of shaders.values()) {
+      const declaredInputs = nodeInputs.get(node.name);
+      if (!declaredInputs) continue;
+      let attrMap;
+      try { attrMap = readPrimAttrMap(api, root, node.path); } catch { continue; }
+      for (const [name, record] of attrMap) {
+        if (!name.startsWith("inputs:") || !record?.isAuthored) continue;
+        if (text(record.value)) continue; // has a value, not a dropped connection
+        const inputName = name.slice("inputs:".length);
+        if (!declaredInputs.has(inputName)) gaps.push(`${node.name}.${inputName}`);
+      }
+    }
+    return gaps;
+  } catch {
+    return [];
+  }
 }
 
 // Walks a prim's ancestor chain and accumulates the world matrix, returning
@@ -1333,6 +1833,74 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   return warnings;
 }
 
+// A .mtlx referenced with a Windows backslash path fails to compose and the
+// draw binds some other material; from the "Could not open asset" line, add
+// the uploaded file as the bound material and repoint the mesh (no recompose).
+function resolveBackslashMaterialReferences(api, root, result, stderrLines, uploadedPaths, graph) {
+  try {
+    if (!stderrLines?.length || typeof api.inspectPrimRelationships !== "function") return;
+    const graphPaths = new Set(arrayItems(graph).map(entry => text(entry?.path)).filter(Boolean));
+    const lineRe = /Could not open asset @([^@]+)@ for [^\n]*? introduced by @([^@]+)@(<[^>]+>)/;
+    const seen = new Set();
+    for (const line of stderrLines) {
+      const match = line.match(lineRe);
+      if (!match) continue;
+      const [, assetRef, layerRef, primToken] = match;
+      if (!assetRef.includes("\\") || !/\.mtlx$/i.test(assetRef)) continue;
+      const primPath = primToken.slice(1, -1);
+      const dedupeKey = assetRef + "|" + layerRef + "|" + primPath;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const layerDir = normalizePath(layerRef).split("/").slice(0, -1).join("/");
+      const candidate1 = normalizePath(layerDir ? layerDir + "/" + assetRef : assetRef);
+      const candidate2 = normalizePath(assetRef);
+      const resolvedPath = [candidate1, candidate2].find(candidate => uploadedPaths.has(candidate));
+      if (!resolvedPath) continue;
+      const parentPath = primPath.split("/").slice(0, -1).join("/");
+      const candidateMeshes = result.meshes.filter(mesh =>
+        mesh.primPath === parentPath || (mesh.primPath && mesh.primPath.startsWith(parentPath + "/")));
+      let resolvedAny = false;
+      for (const mesh of candidateMeshes) {
+        let relEntries;
+        try { relEntries = arrayItems(api.inspectPrimRelationships(root, mesh.primPath)); } catch { continue; }
+        const entry = relEntries.find(item => text(item?.path) === mesh.primPath);
+        if (!entry) continue;
+        const bindings = arrayItems(entry.relationships).filter(rel => rel?.isMaterialBinding);
+        const allTargets = bindings.flatMap(rel => arrayItems(rel.targets).map(text)).filter(Boolean);
+        const missingTargets = allTargets.filter(target => target.startsWith(primPath + "/") && !graphPaths.has(target));
+        if (!missingTargets.length) continue;
+        for (const target of missingTargets) {
+          if (!result.materials.some(material => material.path === target)) {
+            result.materials.push({
+              path: target,
+              sourceAsset: resolvedPath,
+              materialName: target.split("/").filter(Boolean).pop(),
+            });
+          }
+        }
+        const target = missingTargets[0];
+        const singleBinding = allTargets.length === 1;
+        const previousFallback = mesh.materialPath;
+        mesh.materialPath = target;
+        if (singleBinding && Array.isArray(mesh.groups)) {
+          for (const group of mesh.groups) {
+            if (group.materialPath === previousFallback) group.materialPath = target;
+          }
+        }
+        resolvedAny = true;
+      }
+      if (resolvedAny) {
+        // The native "Could not open asset" lines for this path are now handled.
+        const marker = "@" + assetRef + "@";
+        result.warnings = result.warnings.filter(warning => !String(warning).includes(marker));
+        result.warnings.push(`[info] Read Windows-style path ${assetRef} as ${resolvedPath}`);
+      }
+    }
+  } catch {
+    // Never let a diagnostics-parsing failure affect the rest of the result.
+  }
+}
+
 function copyStageResult(summary, draw, payloads, cameras, lights, metrics = null) {
   const assets = new Map();
   const materials = new Map();
@@ -1398,7 +1966,9 @@ async function load(request) {
   // never appears there, even though getPrimAttributes still resolves it
   // directly once its path is known.
   const usdaTexts = [];
-  const OVERRIDE_SCAN_MAX_BYTES = 32 * 1024 * 1024;
+  // Only "#usda" text layers are decoded (never crates); the cap only guards
+  // against a string too large for V8.
+  const OVERRIDE_SCAN_MAX_BYTES = 256 * 1024 * 1024;
   const scanWarnings = [];
   const requestedRootPath = normalizePath(request.rootPath);
   let rootMetrics = null;
@@ -1406,6 +1976,7 @@ async function load(request) {
   // native materialX.data payload is unavailable can still fall back to its
   // sourceAsset's own uploaded bytes when enumerating override candidates.
   const mtlxFileTextsByPath = new Map();
+  const uploadedPaths = new Set();
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
     const source = typeof file.data?.arrayBuffer === "function"
@@ -1415,6 +1986,7 @@ async function load(request) {
       ? new Uint8Array(source)
       : arrayCopy(source, Uint8Array);
     if (!data) continue;
+    uploadedPaths.add(normalizePath(file.path));
     if (normalizePath(file.path) === requestedRootPath) rootMetrics = parseRootUsdMetrics(data);
     // Only text layers (#usda magic) under the cap are scanned; a binary
     // crate (PXR-USDC) decoded as a string can exceed V8's limit and kill
@@ -1424,23 +1996,10 @@ async function load(request) {
       if (isTextLayer && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
         try {
           const textLayer = new TextDecoder().decode(data);
-          usdaTexts.push(textLayer);
-          // The native bridge currently exposes the fallback value for an
-          // input but not its composed shader connection. The renderer keeps
-          // source MaterialX connections intact; make authored USD connections
-          // visible as an explicit limitation instead of
-          // guessing at layer strength or rewiring the graph from text.
-          for (const line of textLayer.split(/\r?\n/)) {
-            if (/\binputs:[A-Za-z_][\w]*\.connect\s*=/.test(line)) {
-              scanWarnings.push(
-                "USD connections are not supported yet: " + file.path + " connects shader inputs in USD, which is ignored. Materials keep the connections from their MaterialX files; input values set in USD still apply."
-              );
-              break;
-            }
-          }
+          usdaTexts.push({ path: file.path, text: textLayer });
         } catch { /* skip */ }
       } else if (isTextLayer) {
-        scanWarnings.push(`Override scan skipped for ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
+        scanWarnings.push(`USD text layer too large to read material edits from: ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
       }
     } else if (/\.mtlx$/i.test(String(file.path)) && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
       try { mtlxFileTextsByPath.set(normalizePath(file.path), new TextDecoder().decode(data)); } catch { /* skip */ }
@@ -1459,7 +2018,9 @@ async function load(request) {
   if (activeStage) api.closeStage(activeStage);
   activeStage = root;
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing stage" } });
+  stderrBuffer.length = 0;
   const summary = api.openStage(root, true);
+  const openStageStderrLines = stderrBuffer.slice();
   if (summary?.error) throw new Error(summary.error);
   const stageMetrics = resolveStageMetrics(summary, rootMetrics);
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
@@ -1609,11 +2170,46 @@ async function load(request) {
   const lights = collectLights(api, root, graph, message => lightWarnings.push(message));
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
   result.warnings.push(...stageMetrics.warnings);
+  const connectionWarnedLayers = new Set();
   for (const material of result.materials) {
     const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
     const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path);
     if (overrides.length) material.overrides = overrides;
+
+    const built = buildUsdShadeMaterialX(api, root, material.path, usdaTexts);
+    if (built) {
+      const bytes = new TextEncoder().encode(built.xml);
+      const mtlxPath = `__usdshade_${material.path.split("/").filter(Boolean).pop()}.mtlx`;
+      material.materialX = {
+        path: mtlxPath,
+        mimeType: "application/xml",
+        materialName: built.materialName,
+        data: bytes,
+      };
+      material.sourceAsset = mtlxPath;
+      material.materialName = built.materialName;
+      delete material.subIdentifier;
+      result.assets.push({ path: mtlxPath, data: bytes.buffer });
+      result.transfer.push(bytes.buffer);
+      continue;
+    }
+    const sourceAsset = text(material.sourceAsset) || "";
+    if (sourceAsset.startsWith("__inline_")) {
+      const gaps = collectInlineConnectionGaps(api, root, material, usdaTexts);
+      if (gaps.length) {
+        result.warnings.push(`${material.path}: some USD shader connections could not be read and use default values (${gaps.join(", ")})`);
+      }
+    } else if (sourceAsset && !sourceAsset.startsWith("__usdshade_")) {
+      const layerPath = findUsdConnectionLayer(usdaTexts, material.path);
+      if (layerPath && !connectionWarnedLayers.has(layerPath)) {
+        connectionWarnedLayers.add(layerPath);
+        result.warnings.push(
+          "USD connections are not supported yet: " + layerPath + " connects shader inputs in USD, which is ignored. Materials keep the connections from their MaterialX files; input values set in USD still apply."
+        );
+      }
+    }
   }
+  resolveBackslashMaterialReferences(api, root, result, openStageStderrLines, uploadedPaths, graph);
   result.warnings.push(...cameraWarnings);
   result.warnings.push(...lightWarnings);
   result.warnings.push(...scanWarnings);
