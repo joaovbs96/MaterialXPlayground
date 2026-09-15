@@ -223,7 +223,9 @@
             return failed ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center px-3">
                     <MtlxIcon name="cube" className="w-5 h-5 text-gray-600" />
-                    <span className="text-[11px] text-gray-500">3D preview needs WebGL2</span>
+                    <span className="text-[11px] text-gray-500">
+                        {window.__MTLX_VSCODE__ ? 'Preview unavailable in VS Code' : '3D preview needs WebGL2'}
+                    </span>
                 </div>
             ) : (
                 <>

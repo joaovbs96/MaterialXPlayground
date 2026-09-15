@@ -194,6 +194,10 @@ const VIEW_DEPS = {
         ],
         app: 'js/graph-app.jsx',
         globalName: 'NodeGraphApp',
+        // embed/mtlx-viewer.js drives the session preview column, unused
+        // in the webview (no Presets/autosave there, IN_VSCODE-gated) and
+        // not packaged in the vsix; skipped so it isn't requested there.
+        webviewSkip: ['embed/mtlx-viewer.js'],
     },
     whatIsMaterialx: {
         css: [
@@ -340,8 +344,12 @@ async function loadViewDeps(viewName) {
         // treat isLocal()/repoUrl()/resourcesRoot() as synchronous below.
         await window.MtlxAssets.ready;
         await maybeSelfHeal();
+        // webviewSkip: dep scripts not shipped in the vsix and unused in
+        // the webview (see the 'graph' entry's comment); requesting them
+        // there would 404 and fail the whole view's load.
+        const skip = IN_VSCODE && dep.webviewSkip ? dep.webviewSkip : [];
         for (const href of dep.css) await loadCss(href);
-        for (const src of dep.scripts) await loadScript(src);
+        for (const src of dep.scripts) { if (!skip.includes(src)) await loadScript(src); }
         for (const src of dep.babelScripts) await loadJsxApp(src);
         // Dependency-only bundles (e.g. 'galleryDetail') carry no app or
         // globalName: they exist to be awaited for their scripts, not to

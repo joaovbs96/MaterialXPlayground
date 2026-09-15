@@ -22,9 +22,11 @@ images/preview-*.jpg
 # (DEFAULT_MTLX_VERSION); update this line if that ever changes.
 js/materialx/1.39.4/**
 
-# embed/ (the <materialx-viewer> web-embed bundle: embed/gen/*.js,
-# embed/mtlx-viewer.js, embed/viewer.html, embed/embed.css) is a
-# web-only distribution path. The webview always loads index.html's own
-# view scripts and never references anything under embed/, so bundling
-# it here would just be ~370 KB of dead weight in the .vsix.
+# embed/ (the <materialx-viewer> web-embed bundle) is web-only: the
+# webview skips it (js/shell.jsx VIEW_DEPS.graph.webviewSkip) since the
+# Graph Editor's session preview never runs in VS Code.
 embed/**
+
+# Test suites and their configs never run inside the extension.
+tests/**
+playwright*.config.mjs

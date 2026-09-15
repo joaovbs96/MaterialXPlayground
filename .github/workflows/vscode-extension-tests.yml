@@ -1,0 +1,74 @@
+# Guards the VS Code extension package: every runtime-loaded file must be in the
+# vsix (scripts/check-vsix-files.mjs) and each webview view must boot under the
+# webview CSP (tests/vscode). Rebuilds embed/gen first so tests use current code.
+
+name: VS Code extension tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.vscodeignore'
+      - 'vscode_extension/**'
+      - 'index.html'
+      - 'js/**'
+      - 'embed/**'
+      - 'vendor/**'
+      - 'scripts/build-webview.mjs'
+      - 'scripts/check-vsix-files.mjs'
+      - 'tests/vscode/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/vscode-extension-tests.yml'
+  pull_request:
+    paths:
+      - '.vscodeignore'
+      - 'vscode_extension/**'
+      - 'index.html'
+      - 'js/**'
+      - 'embed/**'
+      - 'vendor/**'
+      - 'scripts/build-webview.mjs'
+      - 'scripts/check-vsix-files.mjs'
+      - 'tests/vscode/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/vscode-extension-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Same pinned image the embed suite and the release workflow's vsce
+    # step use - ships Chromium plus every system library it needs.
+    container: mcr.microsoft.com/playwright:v1.62.1-jammy
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate embed bundles
+        run: node scripts/build.mjs embed
+
+      - name: Check every runtime-loaded file is packaged in the vsix
+        run: node scripts/check-vsix-files.mjs
+
+      - name: Run the VS Code webview simulation suite
+        run: npm run test:vscode
