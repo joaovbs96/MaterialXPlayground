@@ -1395,7 +1395,7 @@
                         <MtlxSelect value={textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
                             onChange={pickTextureBudgetGib} defValue={1} size="sm" disabled={busy} />
                     }
-                    description="How much memory all scene textures may use. Over the limit, textures load at a lower resolution (down to 512 px); if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view." />
+                    description="How much memory all scene textures may use. Over the limit, all textures load at a lower resolution (1024, then 512 px) until they fit; if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view." />
                 <SelectRow label="Subdivision"
                     control={
                         <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
