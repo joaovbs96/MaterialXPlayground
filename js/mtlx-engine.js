@@ -7387,6 +7387,9 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
     // the same hold; this function performs no wasm reads.
     view.introspected = srcs.introspected;
     applyIntrospectedUniformDefaults(view.uniforms, srcs.introspected, { overwrite: true });
+    // Displacement is not part of the surface source, so an edit to its values
+    // reaches the view only through this sync.
+    if (typeof view.syncDisplacementSources === 'function') view.syncDisplacementSources(srcs.displacement || null);
     if (window.MTLX_PERF_LOG) {
         console.log('[mtlx-perf] preview fast-refresh (source unchanged): '
             + (performance.now() - __t).toFixed(1) + 'ms (target: ' + label + ')');
@@ -10664,34 +10667,40 @@ const createMtlxRenderView = async ({
                 materialNotices = srcs.notices || [];
                 syncHandleNotices();
                 handle.isTransparent = !!srcs.transparent;
-                // Displacement (P5): sync geometry to a swapped material's
-                // program; a changed key is debounced (a slider drag
-                // shouldn't re-evaluate on every intermediate value).
-                const newDisplacement = srcs.displacement || null;
-                displacementSources = newDisplacement;
-                if (!newDisplacement) {
-                    if (dispState !== 'none') {
-                        swapMeshGeometry(originalGeometry);
-                        dispState = 'none';
-                        dispKey = null;
-                        dispEvalNotices = [];
-                        dispDispatchStatus();
-                    }
-                } else if (newDisplacement.key !== dispKey) {
-                    dispKey = newDisplacement.key;
-                    const debounceToken = ++applyDispDebounceToken;
-                    setTimeout(() => {
-                        if (debounceToken !== applyDispDebounceToken || stopped) return;
-                        if (flat2d || !getDisplacementEnabled()) return;
-                        if (!baseGeometry) ensureBaseGeometry();
-                        runDisplacement();
-                    }, 150);
-                }
+                handle.syncDisplacementSources(srcs.displacement || null);
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] applyMaterial total: '
                         + (performance.now() - __applyPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
                 }
                 return handle;
+            },
+            // Syncs geometry to a (possibly unchanged) displacement program. Called by
+            // applyMaterial and by tryRefreshRenderView's in-place path; a changed key
+            // is debounced so a slider drag does not re-evaluate every value.
+            syncDisplacementSources: (newDisplacement) => {
+                if (stopped) return;
+                displacementSources = newDisplacement || null;
+                if (!displacementSources) {
+                    applyDispDebounceToken++;
+                    if (dispState !== 'none') {
+                        swapMeshGeometry(originalGeometry);
+                        dispState = 'none';
+                        dispKey = null;
+                        dispEvalNotices = [];
+                        syncHandleNotices();
+                        dispDispatchStatus();
+                    }
+                    return;
+                }
+                if (displacementSources.key === dispKey) return;
+                dispKey = displacementSources.key;
+                const debounceToken = ++applyDispDebounceToken;
+                setTimeout(() => {
+                    if (debounceToken !== applyDispDebounceToken || stopped) return;
+                    if (flat2d || !getDisplacementEnabled()) return;
+                    if (!baseGeometry) ensureBaseGeometry();
+                    runDisplacement();
+                }, 150);
             },
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so

@@ -1816,7 +1816,9 @@ if(srcs.vs!==view.vs||srcs.fs!==view.fs||FORCE_TRANSPARENCY&&!!srcs.transparent!
 // texture onto a reused view does NOT render; force a full rebuild instead.
 const oldFilenames=new Map();for(const u of view.introspected||[]){if(u.type==='filename')oldFilenames.set(u.name,u.data!=null?u.data:null);}const newFilenames=new Map();for(const u of srcs.introspected||[]){if(u.type==='filename')newFilenames.set(u.name,u.data!=null?u.data:null);}const filenameNames=new Set([...oldFilenames.keys(),...newFilenames.keys()]);for(const name of filenameNames){const oldVal=oldFilenames.has(name)?oldFilenames.get(name):null;const newVal=newFilenames.has(name)?newFilenames.get(name):null;if(oldVal!==newVal)return{refreshed:false,srcs,texChange:true};}// Introspection happens inside generatePreviewSourcesUnlocked under
 // the same hold; this function performs no wasm reads.
-view.introspected=srcs.introspected;applyIntrospectedUniformDefaults(view.uniforms,srcs.introspected,{overwrite:true});if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] preview fast-refresh (source unchanged): '+(performance.now()-__t).toFixed(1)+'ms (target: '+label+')');}return{refreshed:true};};// ------------------------------------------------------------------
+view.introspected=srcs.introspected;applyIntrospectedUniformDefaults(view.uniforms,srcs.introspected,{overwrite:true});// Displacement is not part of the surface source, so an edit to its values
+// reaches the view only through this sync.
+if(typeof view.syncDisplacementSources==='function')view.syncDisplacementSources(srcs.displacement||null);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] preview fast-refresh (source unchanged): '+(performance.now()-__t).toFixed(1)+'ms (target: '+label+')');}return{refreshed:true};};// ------------------------------------------------------------------
 // createMtlxRenderView, persistent render-pipeline shell for one
 // preview surface: renderer/scene/camera/env/geometry built ONCE;
 // every edit calls applyMaterial() to swap materials on the SAME shell.
@@ -2901,10 +2903,10 @@ if(!srcs||!isMounted()||stopped)return null;const warmResult=await prewarmShader
 if(warmResult==='bailed'||!isMounted()||stopped)return null;applyMaterialInternal(srcs,label);// Updates the handle's public fields IN PLACE: the
 // object-literal shorthand below captures a snapshot,
 // not a live binding, so every swap must re-assign these.
-handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;// Displacement (P5): sync geometry to a swapped material's
-// program; a changed key is debounced (a slider drag
-// shouldn't re-evaluate on every intermediate value).
-const newDisplacement=srcs.displacement||null;displacementSources=newDisplacement;if(!newDisplacement){if(dispState!=='none'){swapMeshGeometry(originalGeometry);dispState='none';dispKey=null;dispEvalNotices=[];dispDispatchStatus();}}else if(newDisplacement.key!==dispKey){dispKey=newDisplacement.key;const debounceToken=++applyDispDebounceToken;setTimeout(()=>{if(debounceToken!==applyDispDebounceToken||stopped)return;if(flat2d||!getDisplacementEnabled())return;if(!baseGeometry)ensureBaseGeometry();runDisplacement();},150);}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// PNG snapshot of the CURRENT view. The drawing buffer isn't
+handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;handle.syncDisplacementSources(srcs.displacement||null);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// Syncs geometry to a (possibly unchanged) displacement program. Called by
+// applyMaterial and by tryRefreshRenderView's in-place path; a changed key
+// is debounced so a slider drag does not re-evaluate every value.
+syncDisplacementSources:newDisplacement=>{if(stopped)return;displacementSources=newDisplacement||null;if(!displacementSources){applyDispDebounceToken++;if(dispState!=='none'){swapMeshGeometry(originalGeometry);dispState='none';dispKey=null;dispEvalNotices=[];syncHandleNotices();dispDispatchStatus();}return;}if(displacementSources.key===dispKey)return;dispKey=displacementSources.key;const debounceToken=++applyDispDebounceToken;setTimeout(()=>{if(debounceToken!==applyDispDebounceToken||stopped)return;if(flat2d||!getDisplacementEnabled())return;if(!baseGeometry)ensureBaseGeometry();runDisplacement();},150);},// PNG snapshot of the CURRENT view. The drawing buffer isn't
 // preserved between frames (preserveDrawingBuffer:false), so
 // render synchronously right before reading it back.
 snapshot:()=>{setUniforms();renderFrame();return renderer.domElement.toDataURL('image/png');},// Reads back the current view at caller-chosen dimensions:

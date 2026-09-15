@@ -218,6 +218,33 @@ test.describe('displacement wired into createMtlxRenderView', () => {
     expect(third.radius).toBeLessThan(1.05);
   });
 
+  test('tryRefreshRenderView with an unchanged surface still re-evaluates a changed displacement', async ({ page, embedURL }) => {
+    await gotoEngine(page, embedURL);
+    await setupView(page, { xml: SCALE_A_MTLX });
+    await settle(page);
+    const first = await readStats(page);
+    expect(first.radius).toBeLessThan(1.15);
+
+    // Graph Editor edits of a pinned material take this in-place path: the
+    // surface source is identical, only the displacement scale differs.
+    const refreshed = await page.evaluate(async ({ xml }) => {
+      const { view, env } = window.__disp;
+      const doc2 = env.mx.createDocument();
+      await window.mxExclusive(() => env.mx.readFromXmlString(doc2, xml));
+      if (doc2.setDataLibrary) doc2.setDataLibrary(env.stdlib);
+      const { node: renderable2 } = window.listDocRenderables(doc2)[0];
+      const res = await window.tryRefreshRenderView({ view, mx: env.mx, gen: env.gen, genContext: env.genContext, renderable: renderable2, label: 'refresh-scale-b', isMounted: () => true });
+      window.__disp.doc2 = doc2;
+      return res.refreshed;
+    }, { xml: SCALE_B_MTLX });
+    expect(refreshed).toBe(true);
+    await page.waitForTimeout(250);
+    await settle(page);
+    const second = await readStats(page);
+    expect(second.state.state).toBe('applied');
+    expect(second.radius).toBeGreaterThan(first.radius + 0.03);
+  });
+
   test('shaderball-scene: only the surface mesh geometry changes', async ({ page, embedURL }) => {
     await gotoEngine(page, embedURL);
     await setupView(page, { xml: SCALE_A_MTLX, geomName: 'shaderball-scene' });
